@@ -16,10 +16,12 @@ import {
   guardHarnessRequest,
   isUnknownStatus,
   LISTEN_CAP_MS,
+  LISTEN_IDLE_MS,
   runCorpus,
   SETTLE_STREAK,
   summarizeListen,
 } from "./fs-rules-v1/session.mjs";
+import { brief } from "./fs-rules-v1/judge.mjs";
 import { createClock, createWorld } from "./fs-rules-v1/test-world.mjs";
 
 const API_KEY = "AIzaFs3TestKeyNotReal";
@@ -410,7 +412,11 @@ test("a definite refusal of a create (429) stops the run but is not an unknown a
 
 test("the fake refuses write bodies that miss a required field, as production does", async () => {
   const { fetchImpl } = createWorld();
-  const owner = { authorization: "Bearer ya29.x", "content-type": "application/json" };
+  const owner = {
+    authorization: "Bearer ya29.x",
+    "content-type": "application/json",
+    "x-goog-user-project": SANDBOX_PROJECT,
+  };
   const base = `https://firebaserules.googleapis.com/v1/projects/${SANDBOX_PROJECT}`;
   const post = (url, body) =>
     fetchImpl(url, { method: "POST", headers: owner, body: JSON.stringify(body) });
@@ -745,4 +751,254 @@ test("guardHarnessRequest refuses everything but the sandbox project's own resou
   ];
   for (const url of refused)
     assert.throws(() => guardHarnessRequest(url, ctx), /outside the sandbox project/, url);
+});
+
+// ---- what each row asks, through a fake that evaluates the request it gets -------------------
+
+const table = (out) =>
+  PROGRAMS.flatMap((p) =>
+    p.steps.map(
+      (s) => `${p.id.replace("fs-rules-v1/", "")}#${s.id} ${brief(out.results[p.id].steps[s.id])}`,
+    ),
+  );
+
+const GOLDEN_ALLOW = `
+recursive-wildcard/v1#publishes compiled=true
+recursive-wildcard/v1#group-none 200 docs=3
+recursive-wildcard/v1#group-anon 200 docs=3
+recursive-wildcard/v1#group-count-none 200 count=3
+recursive-wildcard/v1#group-count-anon 200 count=3
+recursive-wildcard/v1#group-grpc-none grpc0 msgs=3
+recursive-wildcard/v1#group-count-grpc-none grpc0 msgs=1
+recursive-wildcard/v1#group-listen-none listen[ADD,documentChangex3,CURRENT]
+recursive-wildcard/v1#group-listen-anon listen[ADD,documentChangex3,CURRENT]
+recursive-wildcard/v1#single-none 200 docs=1
+recursive-wildcard/v1#single-anon 200 docs=1
+recursive-wildcard/v1#single-count-none 200 count=1
+recursive-wildcard/v1#nested-none 200 docs=1
+recursive-wildcard/v1#single-listen-none listen[ADD,documentChangex1,CURRENT]
+recursive-wildcard/v1#get-top-none 200
+recursive-wildcard/v1#get-nested-none 200
+recursive-wildcard/v1#kindless-parent-none 200 docs=2
+recursive-wildcard/v1#kindless-parent-anon 200 docs=2
+recursive-wildcard/v1#kindless-root-none 200 docs=4
+recursive-wildcard/v1#kindless-count-parent-none 200 count=2
+recursive-wildcard/v2#publishes compiled=true
+recursive-wildcard/v2#group-none 200 docs=3
+recursive-wildcard/v2#group-anon 200 docs=3
+recursive-wildcard/v2#group-count-none 200 count=3
+recursive-wildcard/v2#group-count-anon 200 count=3
+recursive-wildcard/v2#group-grpc-none grpc0 msgs=3
+recursive-wildcard/v2#group-count-grpc-none grpc0 msgs=1
+recursive-wildcard/v2#group-listen-none listen[ADD,documentChangex3,CURRENT]
+recursive-wildcard/v2#group-listen-anon listen[ADD,documentChangex3,CURRENT]
+recursive-wildcard/v2#single-none 200 docs=1
+recursive-wildcard/v2#single-anon 200 docs=1
+recursive-wildcard/v2#single-count-none 200 count=1
+recursive-wildcard/v2#nested-none 200 docs=1
+recursive-wildcard/v2#single-listen-none listen[ADD,documentChangex1,CURRENT]
+recursive-wildcard/v2#get-top-none 200
+recursive-wildcard/v2#get-nested-none 200
+recursive-wildcard/v2#kindless-parent-none 200 docs=2
+recursive-wildcard/v2#kindless-parent-anon 200 docs=2
+recursive-wildcard/v2#kindless-root-none 200 docs=4
+recursive-wildcard/v2#kindless-count-parent-none 200 count=2
+path-wildcard/v1#publishes compiled=false
+path-wildcard/v1#group-none not-published
+path-wildcard/v1#group-anon not-published
+path-wildcard/v1#group-count-none not-published
+path-wildcard/v1#group-count-anon not-published
+path-wildcard/v1#group-grpc-none not-published
+path-wildcard/v1#group-count-grpc-none not-published
+path-wildcard/v1#group-listen-none not-published
+path-wildcard/v1#group-listen-anon not-published
+path-wildcard/v1#single-none not-published
+path-wildcard/v1#single-anon not-published
+path-wildcard/v1#single-count-none not-published
+path-wildcard/v1#nested-none not-published
+path-wildcard/v1#single-listen-none not-published
+path-wildcard/v1#get-top-none not-published
+path-wildcard/v1#get-nested-none not-published
+path-wildcard/v1#kindless-parent-none not-published
+path-wildcard/v1#kindless-parent-anon not-published
+path-wildcard/v1#kindless-root-none not-published
+path-wildcard/v1#kindless-count-parent-none not-published
+path-wildcard/v2#publishes compiled=true
+path-wildcard/v2#group-none 200 docs=3
+path-wildcard/v2#group-anon 200 docs=3
+path-wildcard/v2#group-count-none 200 count=3
+path-wildcard/v2#group-count-anon 200 count=3
+path-wildcard/v2#group-grpc-none grpc0 msgs=3
+path-wildcard/v2#group-count-grpc-none grpc0 msgs=1
+path-wildcard/v2#group-listen-none listen[ADD,documentChangex3,CURRENT]
+path-wildcard/v2#group-listen-anon listen[ADD,documentChangex3,CURRENT]
+path-wildcard/v2#single-none 403 PERMISSION_DENIED
+path-wildcard/v2#single-anon 403 PERMISSION_DENIED
+path-wildcard/v2#single-count-none 403 PERMISSION_DENIED
+path-wildcard/v2#nested-none 403 PERMISSION_DENIED
+path-wildcard/v2#single-listen-none listen[REMOVE:cause7]
+path-wildcard/v2#get-top-none 403 PERMISSION_DENIED
+path-wildcard/v2#get-nested-none 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-parent-none 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-parent-anon 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-root-none 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-count-parent-none 403 PERMISSION_DENIED
+`
+  .trim()
+  .split("\n");
+
+const GOLDEN_DENY = `
+recursive-wildcard/v1#publishes compiled=true
+recursive-wildcard/v1#group-none 403 PERMISSION_DENIED
+recursive-wildcard/v1#group-anon 403 PERMISSION_DENIED
+recursive-wildcard/v1#group-count-none 403 PERMISSION_DENIED
+recursive-wildcard/v1#group-count-anon 403 PERMISSION_DENIED
+recursive-wildcard/v1#group-grpc-none grpc7
+recursive-wildcard/v1#group-count-grpc-none grpc7
+recursive-wildcard/v1#group-listen-none listen[REMOVE:cause7]
+recursive-wildcard/v1#group-listen-anon listen[REMOVE:cause7]
+recursive-wildcard/v1#single-none 200 docs=1
+recursive-wildcard/v1#single-anon 200 docs=1
+recursive-wildcard/v1#single-count-none 200 count=1
+recursive-wildcard/v1#nested-none 200 docs=1
+recursive-wildcard/v1#single-listen-none listen[ADD,documentChangex1,CURRENT]
+recursive-wildcard/v1#get-top-none 200
+recursive-wildcard/v1#get-nested-none 200
+recursive-wildcard/v1#kindless-parent-none 403 PERMISSION_DENIED
+recursive-wildcard/v1#kindless-parent-anon 403 PERMISSION_DENIED
+recursive-wildcard/v1#kindless-root-none 403 PERMISSION_DENIED
+recursive-wildcard/v1#kindless-count-parent-none 403 PERMISSION_DENIED
+recursive-wildcard/v2#publishes compiled=true
+recursive-wildcard/v2#group-none 200 docs=3
+recursive-wildcard/v2#group-anon 200 docs=3
+recursive-wildcard/v2#group-count-none 200 count=3
+recursive-wildcard/v2#group-count-anon 200 count=3
+recursive-wildcard/v2#group-grpc-none grpc0 msgs=3
+recursive-wildcard/v2#group-count-grpc-none grpc0 msgs=1
+recursive-wildcard/v2#group-listen-none listen[ADD,documentChangex3,CURRENT]
+recursive-wildcard/v2#group-listen-anon listen[ADD,documentChangex3,CURRENT]
+recursive-wildcard/v2#single-none 200 docs=1
+recursive-wildcard/v2#single-anon 200 docs=1
+recursive-wildcard/v2#single-count-none 200 count=1
+recursive-wildcard/v2#nested-none 200 docs=1
+recursive-wildcard/v2#single-listen-none listen[ADD,documentChangex1,CURRENT]
+recursive-wildcard/v2#get-top-none 200
+recursive-wildcard/v2#get-nested-none 200
+recursive-wildcard/v2#kindless-parent-none 200 docs=2
+recursive-wildcard/v2#kindless-parent-anon 200 docs=2
+recursive-wildcard/v2#kindless-root-none 200 docs=4
+recursive-wildcard/v2#kindless-count-parent-none 200 count=2
+path-wildcard/v1#publishes compiled=false
+path-wildcard/v1#group-none not-published
+path-wildcard/v1#group-anon not-published
+path-wildcard/v1#group-count-none not-published
+path-wildcard/v1#group-count-anon not-published
+path-wildcard/v1#group-grpc-none not-published
+path-wildcard/v1#group-count-grpc-none not-published
+path-wildcard/v1#group-listen-none not-published
+path-wildcard/v1#group-listen-anon not-published
+path-wildcard/v1#single-none not-published
+path-wildcard/v1#single-anon not-published
+path-wildcard/v1#single-count-none not-published
+path-wildcard/v1#nested-none not-published
+path-wildcard/v1#single-listen-none not-published
+path-wildcard/v1#get-top-none not-published
+path-wildcard/v1#get-nested-none not-published
+path-wildcard/v1#kindless-parent-none not-published
+path-wildcard/v1#kindless-parent-anon not-published
+path-wildcard/v1#kindless-root-none not-published
+path-wildcard/v1#kindless-count-parent-none not-published
+path-wildcard/v2#publishes compiled=true
+path-wildcard/v2#group-none 200 docs=3
+path-wildcard/v2#group-anon 200 docs=3
+path-wildcard/v2#group-count-none 200 count=3
+path-wildcard/v2#group-count-anon 200 count=3
+path-wildcard/v2#group-grpc-none grpc0 msgs=3
+path-wildcard/v2#group-count-grpc-none grpc0 msgs=1
+path-wildcard/v2#group-listen-none listen[ADD,documentChangex3,CURRENT]
+path-wildcard/v2#group-listen-anon listen[ADD,documentChangex3,CURRENT]
+path-wildcard/v2#single-none 403 PERMISSION_DENIED
+path-wildcard/v2#single-anon 403 PERMISSION_DENIED
+path-wildcard/v2#single-count-none 403 PERMISSION_DENIED
+path-wildcard/v2#nested-none 403 PERMISSION_DENIED
+path-wildcard/v2#single-listen-none listen[REMOVE:cause7]
+path-wildcard/v2#get-top-none 403 PERMISSION_DENIED
+path-wildcard/v2#get-nested-none 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-parent-none 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-parent-anon 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-root-none 403 PERMISSION_DENIED
+path-wildcard/v2#kindless-count-parent-none 403 PERMISSION_DENIED
+`
+  .trim()
+  .split("\n");
+
+test("the rows ask what they claim: every row's effect under a permissive and a refusing v1", async () => {
+  assert.deepEqual(table((await record()).out), GOLDEN_ALLOW);
+  assert.deepEqual(table((await record({ scenario: { v1Group: "deny" } })).out), GOLDEN_DENY);
+});
+
+test("the constants that bound a recording are the ones the presend packet states", () => {
+  assert.equal(SETTLE_STREAK, 30);
+  assert.equal(LISTEN_IDLE_MS, 2000);
+  assert.equal(LISTEN_CAP_MS, 20_000);
+});
+
+/** How long the session reads a Listen whose frames are `frames` from the start, in clock ms. */
+async function listenDuration(frames) {
+  const { fetchImpl, grpc } = createWorld();
+  const clock = createClock();
+  let opened;
+  let closed;
+  grpc.listen = () => {
+    opened = clock.now();
+    return {
+      frames,
+      ended: () => undefined,
+      close: async () => {
+        closed = clock.now();
+      },
+    };
+  };
+  const program = {
+    ...PROGRAMS[1],
+    steps: [PROGRAMS[1].steps[0], PROGRAMS[1].steps.find((s) => s.id === "group-listen-none")],
+  };
+  const ctx = createContext({ run: "1790000000000", startedMs: clock.now(), target: PRODUCTION });
+  await runCorpus(
+    { programs: [program], principals: PRINCIPALS },
+    ctx,
+    { fetchImpl, grpc, sleep: clock.sleep, now: clock.now },
+    ceilings([program]),
+  );
+  return closed - opened;
+}
+
+test("a Listen is read until it has been quiet for two seconds, and a silent one for twenty", async () => {
+  const frame = { at: 1, kind: "targetChange", targetChange: { targetChangeType: "ADD" } };
+  assert.equal(await listenDuration([frame]), 2000);
+  assert.equal(await listenDuration([]), 20_000);
+});
+
+test("a wipe and a seed never send more than 400 writes in one commit", async () => {
+  const { world, fetchImpl, grpc } = createWorld();
+  for (let i = 0; i < 1000; i += 1) world.documents.set(`leftover/d${i}`, {});
+  const clock = createClock();
+  const ctx = createContext({ run: "1790000000000", startedMs: clock.now(), target: PRODUCTION });
+  const program = { ...PROGRAMS[1], steps: [PROGRAMS[1].steps[0]] };
+  const out = await runCorpus(
+    { programs: [program], principals: PRINCIPALS },
+    ctx,
+    { fetchImpl, grpc, sleep: clock.sleep, now: clock.now },
+    ceilings([program]),
+  );
+  assert.equal(out.closureReady, true);
+  assert.equal(world.documents.size, 0);
+  assert.ok(world.commits.length >= 3);
+  assert.ok(
+    Math.max(...world.commits) <= 400,
+    `a commit held ${Math.max(...world.commits)} writes`,
+  );
+  assert.ok(world.commits.filter((n) => n === 400).length >= 2, "and fills the batches it can");
+  const queries = world.log.filter((e) => e.path.endsWith(":runQuery"));
+  assert.ok(queries.length >= 3);
 });

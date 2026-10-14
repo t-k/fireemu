@@ -44,9 +44,11 @@ function fakeDeps(override = {}) {
   const files = new Map();
   const ledger = { text: override.ledgerText ?? "" };
   const state = { fixture: undefined, handler: undefined, warnings: [], logs: [] };
+  // Every effect takes a turn of the event loop, so a call that is not awaited shows.
   const note =
     (name, fn) =>
     async (...args) => {
+      await new Promise((resolve) => setImmediate(resolve));
       calls.push(name);
       return fn(...args);
     };
@@ -469,4 +471,137 @@ test("the preflight reads the ledger: another lane's recent line blocks", async 
   const { problems, report } = await preflight(TARGET, ledger, { now: NOW, fetchImpl });
   assert.deepEqual(report.otherLanesRecently, ["AUTH-X"]);
   assert.equal(problems.length, 1);
+});
+
+// ---- details of the sequence ----------------------------------------------------------------
+
+test("the run directory holds both recordings and the meta, under the private root", async () => {
+  const fake = fakeDeps();
+  fake.deps.recordOnce = async () => recording();
+  await recordProduction(ENV, fake.deps);
+  const names = [...fake.files.keys()].map((k) =>
+    k.replace(/^\/private\/fs3\/fs-rules-v1-[^/]+\//, ""),
+  );
+  assert.deepEqual(names.toSorted(), ["meta.json", "recording-1.json", "recording-2.json"]);
+  const meta = [...fake.files].find(([k]) => k.endsWith("meta.json"))[1];
+  assert.ok(meta.startsWith('{\n  "sha": "' + "a".repeat(40) + '",'));
+  const parsed = JSON.parse(meta);
+  assert.equal(parsed.outcome, "recorded");
+  assert.equal(parsed.harness, "h".repeat(64));
+  assert.equal(parsed.startedAt, new Date(NOW).toISOString());
+  assert.equal(parsed.operatorConfirmation, ENV.FS3_NO_AUTH_RECORDING);
+  assert.equal(parsed.clockOffsetSeconds, 0.01);
+  assert.deepEqual(
+    parsed.programs,
+    PROGRAMS.map((p) => p.id),
+  );
+  assert.equal(Object.keys(parsed.corpusDigests).length, 4);
+  assert.ok([...fake.files.keys()][0].includes("fs-rules-v1-2026-10-14T120000.000Z"));
+});
+
+test("a plain error is aborted, not aborted-fatal, and a thrown string is reported as it is", async () => {
+  for (const [thrown, outcome, error] of [
+    [new Error("plain failure"), "aborted", "plain failure"],
+    [Object.assign(new Error("fatal failure"), { fatal: true }), "aborted-fatal", "fatal failure"],
+    ["a string", "aborted", "a string"],
+  ]) {
+    const fake = fakeDeps();
+    fake.deps.recordOnce = async () => {
+      throw thrown;
+    };
+    const result = await recordProduction(ENV, fake.deps);
+    assert.deepEqual(result, { outcome, exitCode: 1, error });
+    const final = lines(fake.ledger).at(-1);
+    assert.equal(final.error, error);
+    assert.equal(final.closureReady, false, "no recording, nothing was shown to be clean");
+    assert.equal(final.requests, 0);
+  }
+});
+
+test("the ledger line carries unknowns, cleanup errors and the error only when there are some", async () => {
+  const clean = fakeDeps();
+  clean.deps.recordOnce = async () => recording();
+  await recordProduction(ENV, clean.deps);
+  const final = lines(clean.ledger).at(-1);
+  for (const key of ["unknowns", "cleanupErrors", "error"])
+    assert.equal(Object.hasOwn(final, key), false, key);
+
+  const bad = fakeDeps();
+  bad.deps.recordOnce = async () =>
+    recording({
+      cleanupErrors: ["audit: a release remains", "x"],
+      unknowns: [{ call: "delete release", answer: "HTTP 503" }],
+      closureReady: false,
+    });
+  await recordProduction(ENV, bad.deps);
+  const last = lines(bad.ledger).at(-1);
+  assert.deepEqual(last.unknowns, [
+    { call: "delete release", answer: "HTTP 503" },
+    { call: "delete release", answer: "HTTP 503" },
+  ]);
+  assert.deepEqual(last.cleanupErrors, [
+    "audit: a release remains",
+    "x",
+    "audit: a release remains",
+    "x",
+  ]);
+  assert.equal(last.error, undefined);
+  assert.equal(
+    bad.state.warnings[0],
+    [
+      `NOT CLOSURE-READY on ${SANDBOX_PROJECT}:`,
+      "  audit: a release remains",
+      "  x",
+      "  audit: a release remains",
+      "  x",
+      "  unknown answer to delete release: HTTP 503",
+      "  unknown answer to delete release: HTTP 503",
+    ].join("\n"),
+  );
+});
+
+test("a fixture from an earlier recording is kept beside the new programs", async () => {
+  const fake = fakeDeps();
+  fake.state.fixture = JSON.stringify({
+    version: 1,
+    recordedAgainst: {},
+    programs: { "fs-rules-v1/kept/older": { steps: { r: { status: 200 } } } },
+  });
+  fake.deps.recordOnce = async () => recording();
+  await recordProduction(ENV, fake.deps);
+  const fixture = JSON.parse(fake.state.fixture);
+  assert.ok(fixture.programs["fs-rules-v1/kept/older"]);
+  assert.ok(fixture.programs[PROGRAMS[0].id]);
+});
+
+test("the run says what it recorded, and exits 0 only when the outcome is recorded", async () => {
+  const fake = fakeDeps();
+  fake.deps.recordOnce = async () => recording();
+  const result = await recordProduction(ENV, fake.deps);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(JSON.parse(fake.state.logs[0]), {
+    programs: 4,
+    corpusRequests: 76,
+    requests: 752,
+    failures: [],
+  });
+  const failing = fakeDeps();
+  failing.deps.recordOnce = async () => recording({ failures: [{ program: "p", error: "x" }] });
+  assert.equal((await recordProduction(ENV, failing.deps)).exitCode, 1);
+  const shown = JSON.parse(failing.state.logs[0]);
+  assert.deepEqual(shown.failures, [
+    { program: "p", error: "x" },
+    { program: "p", error: "x" },
+  ]);
+});
+
+test("the first recording's files are written before the second starts", async () => {
+  const fake = fakeDeps();
+  let seen;
+  fake.deps.recordOnce = async () => {
+    seen = [...fake.files.keys()].length;
+    return recording();
+  };
+  await recordProduction(ENV, fake.deps);
+  assert.equal(seen, 1, "recording-1.json existed when the second recording began");
 });

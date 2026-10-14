@@ -65,7 +65,7 @@ export async function recordProduction(env, deps) {
   );
 
   const state = { stop: false };
-  deps.installSignals((signal) => {
+  await deps.installSignals((signal) => {
     if (state.stop) {
       deps.warn(
         `${signal} again: cleanup is running and is not interrupted. A kill -9 now leaves a release, rulesets and an anonymous account for hand cleanup (see the private run directory).`,
@@ -156,7 +156,7 @@ export async function recordProduction(env, deps) {
   }
   return {
     outcome,
-    exitCode: error || failures.length || outcome !== "recorded" ? 1 : 0,
+    exitCode: outcome === "recorded" ? 0 : 1,
     ...(error ? { error } : {}),
   };
 }

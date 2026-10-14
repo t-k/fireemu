@@ -85,12 +85,11 @@ const count = (id, as, from, extra = {}) => ({
   ...extra,
 });
 
-const listen = (id, as, from, parent) => ({
+const listen = (id, as, from) => ({
   id,
   as,
   rpc: "listen",
   transport: "grpc",
-  ...(parent ? { parent } : {}),
   query: { from: [from] },
 });
 

@@ -184,12 +184,15 @@ export function fixtureText({ programs, recordings, meta, existing }) {
  */
 export const NONDETERMINISTIC_ROWS = {};
 
-export function classify({ row, stale, production, alternative, fireemu }) {
+export function classify(
+  { row, stale, production, alternative, fireemu },
+  nondeterministic = NONDETERMINISTIC_ROWS,
+) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
   if ([production, alternative, fireemu].some(isTransient)) return "INDETERMINATE";
-  if (alternative && !Object.hasOwn(NONDETERMINISTIC_ROWS, row)) return "INDETERMINATE";
+  if (alternative && !Object.hasOwn(nondeterministic, row)) return "INDETERMINATE";
   // A row whose dependency was refused on both sides never ran: it confirms that refusal only.
   if (production.unresolved !== undefined || fireemu.unresolved !== undefined) {
     const same = production.unresolved === fireemu.unresolved;

@@ -28,6 +28,10 @@ export function createWorld(scenario = {}) {
     accounts: new Map(),
     documents: new Map(),
     counter: 0,
+    /** The number of writes in each commit, in order. */
+    commits: [],
+    /** Every marker write: its label and whether the ruleset in force allowed it. */
+    markerAnswers: [],
     scenario: { v1Group: "allow", pathV1: "refused", ...scenario },
     /** Set by a test to run code before an answer is built. */
     onCall: undefined,
@@ -102,6 +106,7 @@ export function createWorld(scenario = {}) {
     const rel = path.replace(/^projects\/[^/]+\/databases\/\(default\)\/documents\/?/, "");
     if (op === "commit") {
       if (!Array.isArray(body?.writes)) return { code: 3, status: 400 };
+      world.commits.push(body.writes.length);
       for (const write of body.writes) {
         if (write.update)
           world.documents.set(relative(write.update.name), write.update.fields ?? {});
@@ -110,7 +115,10 @@ export function createWorld(scenario = {}) {
       return { code: 0, status: 200, body: { writeResults: body.writes.map(() => ({})) } };
     }
     if (op === "patch") {
-      if (!owner && !markerAllowed(rel)) return { code: 7, status: 403 };
+      const allowed = owner || markerAllowed(rel);
+      if (rel.startsWith("fsr-marker/"))
+        world.markerAnswers.push({ label: rel.split("/")[1], allowed });
+      if (!allowed) return { code: 7, status: 403 };
       world.documents.set(rel, body?.fields ?? {});
       return { code: 0, status: 200, body: { name: names(rel) } };
     }
@@ -148,12 +156,24 @@ export function createWorld(scenario = {}) {
   async function fetchImpl(url, init = {}) {
     const method = init.method ?? "GET";
     const parsed = new URL(url);
-    world.log.push({ method, url, host: parsed.host, path: decodeURIComponent(parsed.pathname) });
-    // A test can replace the answer: `throw` (a transport failure) or `status`. With `applyFirst`
-    // the call takes effect in the world first, as a call whose answer was lost would.
-    const override = world.onCall?.(method, url, world.log.length);
+    world.log.push({
+      method,
+      url,
+      host: parsed.host,
+      path: decodeURIComponent(parsed.pathname),
+      headers: { ...init.headers },
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    // A real network call takes a turn of the event loop and honours its timeout signal.
+    await new Promise((resolve) => setImmediate(resolve));
+    if (init.signal?.aborted) throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+    // A test can replace the answer: `throw` (a transport failure with a cause code),
+    // `rejectWith` (any error) or `status`. With `applyFirst` the call takes effect in the world
+    // first, as a call whose answer was lost would.
+    const override = world.onCall?.(method, url, world.log.length, world);
     if (override) {
       if (override.applyFirst) await handle(method, parsed, init);
+      if (override.rejectWith) throw override.rejectWith;
       if (override.throw)
         throw Object.assign(new Error("fetch failed"), { cause: { code: override.throw } });
       return json(override.status, override.body ?? {});
@@ -161,17 +181,39 @@ export function createWorld(scenario = {}) {
     return handle(method, parsed, init);
   }
 
+  /** What production does before routing: JSON bodies need a JSON content type and parse. */
+  function refuse(init) {
+    if (init.body === undefined) return undefined;
+    if (!String(init.headers?.["content-type"] ?? "").startsWith("application/json"))
+      return json(415, { error: { status: "UNSUPPORTED_MEDIA_TYPE" } });
+    try {
+      JSON.parse(init.body);
+    } catch {
+      return json(400, { error: { status: "INVALID_ARGUMENT" } });
+    }
+    return undefined;
+  }
+
+  /** An owner call (user credentials) must name the sandbox as its quota project. */
+  const ownerRefused = (init) =>
+    init.headers?.["x-goog-user-project"] === PROJECT
+      ? undefined
+      : json(403, { error: { status: "PERMISSION_DENIED", message: "quota project" } });
+
   async function handle(method, parsed, init) {
+    const refused = refuse(init);
+    if (refused) return refused;
     const path = decodeURIComponent(parsed.pathname);
     const body = init.body ? JSON.parse(init.body) : undefined;
     const owner = String(init.headers?.authorization ?? "").startsWith("Bearer ya29.");
+    if (owner && ownerRefused(init)) return ownerRefused(init);
     const mine = `/v1/projects/${PROJECT}`;
 
     if (parsed.host === "firebaserules.googleapis.com") {
       if (!owner) return json(401, {});
       if (method === "POST" && path === `${mine}/rulesets`) {
         const file = body?.source?.files?.[0];
-        if (typeof file?.name !== "string" || typeof file?.content !== "string")
+        if (file?.name !== "firestore.rules" || typeof file?.content !== "string")
           return json(400, { error: { status: "INVALID_ARGUMENT", message: "missing source" } });
         const { path: isPath, v2 } = kind(file.content);
         if (isPath && !v2 && world.scenario.pathV1 === "refused")
@@ -236,7 +278,13 @@ export function createWorld(scenario = {}) {
 
     if (parsed.host === "identitytoolkit.googleapis.com") {
       if (method === "POST" && path === "/v1/accounts:signUp") {
-        if (!parsed.searchParams.get("key")) return json(400, {});
+        if (
+          parsed.searchParams.get("key") !==
+          (world.scenario.apiKey ?? parsed.searchParams.get("key"))
+        )
+          return json(400, { error: { message: "API key not valid" } });
+        if (!parsed.searchParams.get("key") || body?.returnSecureToken !== true)
+          return json(400, { error: { message: "INVALID_REQUEST" } });
         world.counter += 1;
         const localId = `uid${world.counter}`;
         world.accounts.set(localId, {});
@@ -256,7 +304,11 @@ export function createWorld(scenario = {}) {
 
     if (parsed.host === "firestore.googleapis.com") {
       if (path === `${mine}/databases`)
-        return json(200, { databases: [{ name: `projects/${PROJECT}/databases/(default)` }] });
+        return json(200, {
+          databases: ["(default)", ...(world.scenario.extraDatabases ?? [])].map((id) => ({
+            name: `projects/${PROJECT}/databases/${id}`,
+          })),
+        });
       const match =
         /^\/v1\/(projects\/[^/]+\/databases\/\(default\)\/documents.*?)(?::(\w+))?$/.exec(path);
       if (!match) return json(404, {});

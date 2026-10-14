@@ -62,7 +62,9 @@ export function guardHarnessRequest(url, ctx) {
       throw new Error(`local request left loopback: ${parsed.origin}`);
     return;
   }
-  const project = escapeRegex(ctx.project);
+  // The sandbox is a constant here, not whatever the context says: a context that names another
+  // project must not widen what the guard allows.
+  const project = escapeRegex(SANDBOX_PROJECT);
   const allowed = {
     [PRODUCTION.firestore]: [
       new RegExp(`^/v1/projects/${project}/databases$`),
@@ -581,9 +583,12 @@ export function createSession(
       const { json } = await admin("GET", "rules", `v1/${releaseResource()}`);
       if (json?.rulesetName !== rulesetName) throw fatal("the release did not read back");
     }
-    const settled = await settle(label, active);
-    previousLabel = active;
+    // From here the release holds this ruleset, settled or not: a stop or a failure while it
+    // settles must still wait for it to be refused once the release is deleted.
+    const superseded = active;
+    previousLabel = superseded;
     active = label;
+    const settled = await settle(label, superseded);
     publications.push({ label, previous: previousLabel, ...settled });
     log(`release: ${label} (${settled.polls} polls, ${settled.settleMs} ms)`);
     return { recorded: { compiled: true } };

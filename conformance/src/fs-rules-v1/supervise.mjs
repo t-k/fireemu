@@ -4,7 +4,7 @@
 
 import { spawn } from "node:child_process";
 
-const GRACE_MS = 8000;
+export const GRACE_MS = 8000;
 
 /** Signals the group of `child` and resolves once the leader is gone (SIGKILL after a grace). */
 export async function terminateGroup(child, graceMs = GRACE_MS) {

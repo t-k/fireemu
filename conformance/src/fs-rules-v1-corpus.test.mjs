@@ -240,3 +240,18 @@ test("the aggregation rows ask for a COUNT named n, which the console and the ju
 test("the one principal is an anonymous sign-up", () => {
   assert.deepEqual(PRINCIPALS, { anon: { provider: "anonymous" } });
 });
+
+test("the request cap is inclusive: exactly REQUEST_CAP rows pass and one more does not", () => {
+  const full = Array.from({ length: 6 }, (_, i) => ({
+    ...structuredClone(PROGRAMS[0]),
+    id: `fs-rules-v1/many/p${i}`,
+  }));
+  const rest = (count) => ({
+    ...structuredClone(PROGRAMS[0]),
+    id: "fs-rules-v1/many/rest",
+    steps: PROGRAMS[0].steps.slice(0, count + 1),
+  });
+  assert.equal(REQUEST_CAP, 120);
+  assert.equal(validateCorpus([...full, rest(6)]), 120);
+  assert.throws(() => validateCorpus([...full, rest(7)]), /request cap \(121 > 120\)/);
+});

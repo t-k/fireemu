@@ -695,6 +695,7 @@ test("a signal to the supervising process stops the child's group, and the handl
     import { runSupervised } from ${JSON.stringify(join(import.meta.dirname, "fs-rules-v1/supervise.mjs"))};
     const before = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
     setTimeout(() => process.kill(process.pid, process.argv[1]), 400);
+    const startedAt = Date.now();
     const result = await runSupervised({
       command: process.execPath,
       args: ["-e", "setTimeout(() => process.exit(0), 15000)", process.argv[2]],
@@ -704,7 +705,7 @@ test("a signal to the supervising process stops the child's group, and the handl
       stdio: ["ignore", "ignore", "inherit"],
     });
     const after = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
-    console.log(JSON.stringify({ before, after, timedOut: result.timedOut, exitCode: result.exitCode, pid: result.pid }));
+    console.log(JSON.stringify({ before, after, timedOut: result.timedOut, exitCode: result.exitCode, pid: result.pid, seconds: (Date.now() - startedAt) / 1000 }));
   `;
   for (const signal of ["SIGINT", "SIGTERM"]) {
     const done = spawnSync(process.execPath, ["--input-type=module", "-e", script, signal, MARK], {
@@ -715,6 +716,8 @@ test("a signal to the supervising process stops the child's group, and the handl
     assert.equal(done.status, 0, done.stderr);
     const result = JSON.parse(done.stdout.trim().split("\n").at(-1));
     assert.equal(result.timedOut, false, signal);
+    assert.notEqual(result.exitCode, 0, "the child was stopped, it did not run out its time");
+    assert.ok(result.seconds < 8, `${signal}: stopped after ${result.seconds} s`);
     assert.deepEqual(result.after, result.before, "the signal handlers are removed");
     assert.equal(await groupGone(result.pid), true);
   }

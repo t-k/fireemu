@@ -1520,3 +1520,31 @@ test("the Listen is closed before the next request is made", async () => {
   assert.equal(early, undefined, `a request was made before the Listen was closed: ${early}`);
   assert.equal(closedFlag, true);
 });
+
+test("a release refusal's text is cut at 600 characters too, and the audit joins its findings", async () => {
+  const long = `${"x".repeat(590)}${SANDBOX_PROJECT}${"y".repeat(100)}`;
+  const cut = await run({
+    programs: [PROGRAMS[2]],
+    scenario: { pathV1: "compiles" },
+    onCall: (method, url) =>
+      method === "POST" && url.endsWith("/releases")
+        ? { status: 400, body: { error: { message: long } } }
+        : undefined,
+  });
+  assert.equal(cut.out.diagnostics["path-v1"].stage, "release");
+  assert.equal(
+    cut.out.diagnostics["path-v1"].message,
+    `${"x".repeat(590)}${SANDBOX_PROJECT.slice(0, 10)}`,
+  );
+  const left = await run({
+    programs: [PROGRAMS[0]],
+    onCall: (method, url) =>
+      method === "DELETE" && url.endsWith("/releases/cloud.firestore")
+        ? { status: 200, body: {} }
+        : undefined,
+  });
+  assert.ok(
+    left.out.cleanupErrors.includes("audit: a release remains; 1 ruleset(s) remain"),
+    left.out.cleanupErrors.join("|"),
+  );
+});

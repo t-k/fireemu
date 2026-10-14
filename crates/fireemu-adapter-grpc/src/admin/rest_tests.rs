@@ -17,8 +17,17 @@ fn state() -> (RestState, Arc<Mutex<VirtualClock>>) {
     state_with_limits(true)
 }
 
-fn state_with_limits(enforce_limits: bool) -> (RestState, Arc<Mutex<VirtualClock>>) {
-    state_with(enforce_limits, IndexValidationPolicy::Production)
+/// The strict profile (`true`) or the emulator profile (`false`): the profile decides the
+/// limits on writes, `firestore.enforceLimits` only the query limits.
+fn state_with_limits(strict: bool) -> (RestState, Arc<Mutex<VirtualClock>>) {
+    state_with(
+        strict,
+        if strict {
+            IndexValidationPolicy::Production
+        } else {
+            IndexValidationPolicy::Emulator
+        },
+    )
 }
 
 fn state_with(
@@ -663,6 +672,400 @@ fn an_index_definition_is_refused_as_production_refuses_it() {
     assert_eq!(status, 404);
 }
 
+/// The shape rules of the index file apply to `indexes.create` too (FS-11), and the shapes
+/// production deployed (`conformance/fs-query-index.indexes.json`) are accepted (FS-1).
+#[test]
+fn an_index_create_applies_the_index_file_shape_rules() {
+    let (state, _clock) = state();
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=idxdb",
+        native(),
+    );
+    let group = "/v1/projects/p/databases/idxdb/collectionGroups/items/indexes";
+    let asc = |path: &str| json!({"fieldPath": path, "order": "ASCENDING"});
+    let contains = |path: &str| json!({"fieldPath": path, "arrayConfig": "CONTAINS"});
+    let name_desc = json!({"fieldPath": "__name__", "order": "DESCENDING"});
+    for (label, fields) in [
+        (
+            "a field and a descending name",
+            json!([asc("n"), name_desc.clone()]),
+        ),
+        ("a descending name alone", json!([name_desc.clone()])),
+        (
+            "a single vector",
+            json!([{"fieldPath": "emb", "vectorConfig": {"dimension": 3, "flat": {}}}]),
+        ),
+    ] {
+        let (status, answer) = call(
+            &state,
+            "POST",
+            group,
+            json!({"queryScope": "COLLECTION", "fields": fields}),
+        );
+        assert_eq!(status, 200, "{label}: {answer}");
+    }
+    let too_many = (0..101).map(|i| asc(&format!("f{i}"))).collect::<Vec<_>>();
+    for (label, fields, message) in [
+        (
+            "two array fields",
+            json!([contains("a"), contains("b")]),
+            "a composite index may contain only one array field",
+        ),
+        (
+            "101 fields",
+            json!(too_many),
+            "FS-LIMIT-FIELDS-PER-COMPOSITE-INDEX: maximum 100 fields",
+        ),
+        (
+            "a single field",
+            json!([asc("a")]),
+            "this index is not necessary, configure using single field index controls",
+        ),
+    ] {
+        let (status, answer) = call(
+            &state,
+            "POST",
+            group,
+            json!({"queryScope": "COLLECTION_GROUP", "fields": fields}),
+        );
+        assert_eq!(
+            (status, answer["error"]["message"].as_str()),
+            (400, Some(message)),
+            "{label}"
+        );
+    }
+}
+
+/// FS-11: the index file's composite indexes and the ones created at run time count
+/// together against the 200 of a database.
+#[test]
+fn composite_indexes_of_the_file_and_of_the_run_count_together() {
+    use fireemu_core_firestore::index::{
+        IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope,
+    };
+    let (state, _clock) = state();
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=capdb",
+        native(),
+    );
+    let configured: Vec<IndexDefinition> = (0..199)
+        .map(|i| IndexDefinition {
+            collection_group: fireemu_core_types::ids::CollectionId::try_new(format!("c{i}"))
+                .unwrap(),
+            query_scope: IndexQueryScope::Collection,
+            fields: ["a", "b"]
+                .into_iter()
+                .map(|path| IndexField {
+                    path: fireemu_core_firestore::field_path::FieldPath::parse(path).unwrap(),
+                    mode: IndexFieldMode::Ascending,
+                })
+                .collect(),
+        })
+        .collect();
+    let mut set = IndexSet::default();
+    for definition in configured {
+        set.add_composite(definition);
+    }
+    assert!(state.local.replace_database_indexes("capdb", set));
+    let create = |group: &str| {
+        call(
+            &state,
+            "POST",
+            &format!("/v1/projects/p/databases/capdb/collectionGroups/{group}/indexes"),
+            json!({"queryScope": "COLLECTION", "fields": [
+                {"fieldPath": "x", "order": "ASCENDING"},
+                {"fieldPath": "y", "order": "ASCENDING"}
+            ]}),
+        )
+    };
+    let (status, answer) = create("one");
+    assert_eq!(status, 200, "the 200th index is accepted: {answer}");
+    let (status, answer) = create("two");
+    assert_eq!(status, 429, "the 201st is refused: {answer}");
+    assert_eq!(answer["error"]["status"], "RESOURCE_EXHAUSTED");
+    // A duplicate of an existing index is still ALREADY_EXISTS, not a capacity refusal.
+    let (status, answer) = create("one");
+    assert_eq!(status, 409, "{answer}");
+}
+
+const OPEN_RULES: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }";
+
+/// A strict REST surface whose `(default)` database has open Security Rules, with the
+/// virtual clock the Admin cooldown reads.
+fn state_with_open_default_rules() -> (RestState, Arc<Mutex<VirtualClock>>) {
+    let (mut state, clock) = state();
+    let auth = Arc::new(Mutex::new(fireemu_core_auth::store::AuthStore::new(
+        "p",
+        fireemu_core_types::determinism::SplitMix64::new(3),
+        fireemu_core_auth::mfa::TotpPolicy::default(),
+    )));
+    let rules = Arc::new(fireemu_core_rules::runtime::RulesetSlot::new(
+        fireemu_core_rules::runtime::LoadedRules::from_source(OPEN_RULES).unwrap(),
+    ));
+    state.rules = Some(Arc::new(
+        crate::rules::RulesEnforcer::new(rules, auth, Arc::clone(&clock))
+            .with_refusal_without_ruleset(true),
+    ));
+    (state, clock)
+}
+
+fn call_anonymous(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value) {
+    let response = state.handle(&RestRequest {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        query: String::new(),
+        authorization: None,
+        app_check: Vec::new(),
+        body,
+        origin: None,
+        remote_peer: false,
+        browser_metadata: false,
+        batch_field_order: Vec::new(),
+    });
+    (response.status, response.body)
+}
+
+/// The capacity is checked where the index is inserted: of many concurrent creates at the edge,
+/// exactly as many succeed as there is room for.
+#[test]
+fn concurrent_index_creates_never_pass_the_capacity() {
+    use crate::admin::indexes::{CreateRefusal, IndexRegistry};
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::index::{
+        IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope,
+    };
+    let definition = |i: usize| IndexDefinition {
+        collection_group: fireemu_core_types::ids::CollectionId::try_new(format!("c{i}")).unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: ["a", "b"]
+            .into_iter()
+            .map(|path| IndexField {
+                path: FieldPath::parse(path).unwrap(),
+                mode: IndexFieldMode::Ascending,
+            })
+            .collect(),
+    };
+    let configured: Vec<IndexDefinition> = (0..3).map(|i| definition(1000 + i)).collect();
+    for room in [0usize, 1, 3] {
+        let registry = Arc::new(IndexRegistry::default());
+        let capacity = configured.len() + room;
+        let results: Vec<_> = (0..8)
+            .map(|i| {
+                let registry = Arc::clone(&registry);
+                let configured = configured.clone();
+                let definition = definition(i);
+                std::thread::spawn(move || {
+                    registry.create_within(
+                        "p",
+                        "d",
+                        definition,
+                        LogicalInstant::UNIX_EPOCH,
+                        format!("op{i}"),
+                        Some((&configured, capacity)),
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            room,
+            "room {room}"
+        );
+        assert!(results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|refusal| *refusal == CreateRefusal::Full));
+        assert_eq!(registry.list("p", "d").len(), room);
+    }
+}
+
+/// The route that loads one database's rules takes the admission of the project route
+/// (`privileged_browser_guard`): a remote peer, a page from a foreign origin and a page without
+/// the control token are refused before the path is read, and a process request is admitted.
+#[test]
+fn the_database_rules_route_is_guarded_like_the_project_route() {
+    let (mut state, _clock) = state_with_open_default_rules();
+    state.control_token = Some("run-token".to_owned());
+    let body = json!({"rules": {"files": [{"name": "firestore.rules", "content": OPEN_RULES}]}});
+    let put = |path: &str, mutate: &dyn Fn(&mut RestRequest)| {
+        let mut request = RestRequest {
+            method: "PUT".to_owned(),
+            path: path.to_owned(),
+            query: String::new(),
+            authorization: None,
+            app_check: Vec::new(),
+            body: body.clone(),
+            origin: None,
+            remote_peer: false,
+            browser_metadata: false,
+            batch_field_order: Vec::new(),
+        };
+        mutate(&mut request);
+        let response = state.handle(&request);
+        (
+            response.status,
+            response.body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    };
+    for path in [
+        "/emulator/v1/projects/p:securityRules",
+        "/emulator/v1/projects/p/databases/other:securityRules",
+    ] {
+        let remote = put(path, &|r| r.remote_peer = true);
+        assert_eq!(remote.0, 403, "{path}: {remote:?}");
+        assert!(remote.1.contains("loopback"), "{path}: {remote:?}");
+        let foreign = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("https://evil.example".to_owned());
+        });
+        assert_eq!(
+            (foreign.0, foreign.1.as_str()),
+            (403, "FORBIDDEN_ORIGIN"),
+            "{path}"
+        );
+        let tokenless = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("http://localhost:4000".to_owned());
+        });
+        assert!(
+            tokenless.1.starts_with("CONTROL_TOKEN_REQUIRED"),
+            "{path}: {tokenless:?}"
+        );
+        let wrong = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("http://localhost:4000".to_owned());
+            r.authorization = Some("Bearer not-the-token".to_owned());
+        });
+        assert!(
+            wrong.1.starts_with("CONTROL_TOKEN_REQUIRED"),
+            "{path}: {wrong:?}"
+        );
+        assert_eq!(
+            put(path, &|_| {}).0,
+            200,
+            "{path}: a process request is admitted"
+        );
+        let paged = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("http://localhost:4000".to_owned());
+            r.authorization = Some("Bearer run-token".to_owned());
+        });
+        assert_eq!(paged.0, 200, "{path}: {paged:?}");
+    }
+}
+
+/// FS-2: production governs a database only by its own `cloud.firestore` release
+/// (`fs-rules/named-database/releases`), so a database created at run time refuses client
+/// requests until rules are set for it, whatever the `(default)` rules say.
+#[test]
+fn a_database_created_at_run_time_has_no_rules_until_some_are_set_for_it() {
+    let (state, clock) = state_with_open_default_rules();
+    state.local.admin().set_deleted_id_cooldown(0);
+    let fields = json!({"fields": {"n": {"integerValue": "1"}}});
+    let docs = "/v1/projects/p/databases/other/documents/items";
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=other",
+        native(),
+    );
+
+    let (status, answer) = call_anonymous(
+        &state,
+        "POST",
+        &format!("{docs}?documentId=a"),
+        fields.clone(),
+    );
+    assert_eq!(status, 403, "{answer}");
+    let (status, answer) = call(
+        &state,
+        "POST",
+        &format!("{docs}?documentId=a"),
+        fields.clone(),
+    );
+    assert_eq!(
+        status, 200,
+        "the owner credential is not governed by rules: {answer}"
+    );
+    assert_eq!(
+        call_anonymous(
+            &state,
+            "GET",
+            "/v1/projects/p/databases/(default)/documents/items/a",
+            Value::Null
+        )
+        .0,
+        404,
+        "the (default) database keeps its own open rules"
+    );
+
+    // Rules set for the database apply to it alone.
+    let set_rules = |path: &str, source: &str| {
+        call_anonymous(
+            &state,
+            "PUT",
+            path,
+            json!({"rules": {"files": [{"name": "firestore.rules", "content": source}]}}),
+        )
+    };
+    let (status, answer) = set_rules(
+        "/emulator/v1/projects/p/databases/other:securityRules",
+        OPEN_RULES,
+    );
+    assert_eq!((status, &answer), (200, &json!({})));
+    assert_eq!(
+        call_anonymous(&state, "GET", &format!("{docs}/a"), Value::Null).0,
+        200
+    );
+
+    // A route naming no valid database, or a source that does not compile, changes nothing.
+    for path in [
+        "/emulator/v1/projects/p/databases/ab:securityRules",
+        "/emulator/v1/projects/p/databases/other/extra:securityRules",
+    ] {
+        assert_eq!(set_rules(path, OPEN_RULES).0, 400, "{path}");
+    }
+    let (status, _) = set_rules(
+        "/emulator/v1/projects/p/databases/other:securityRules",
+        "service cloud.firestore {",
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        call_anonymous(&state, "GET", &format!("{docs}/a"), Value::Null).0,
+        200
+    );
+
+    // Deleting the database gives up its rules: a database created again under the id has none.
+    let (status, _) = call(
+        &state,
+        "DELETE",
+        "/v1/projects/p/databases/other",
+        Value::Null,
+    );
+    assert_eq!(status, 200);
+    advance(&clock, 3600);
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=other",
+        native(),
+    );
+    assert_eq!(
+        call_anonymous(&state, "GET", &format!("{docs}/a"), Value::Null).0,
+        403
+    );
+}
+
 /// Keeps what an export wrote and hands it back to an import, the way a bucket would.
 #[derive(Default)]
 struct MemoryStorage {
@@ -783,6 +1186,56 @@ fn export_answers_production_operations() {
         json!({"completedWork": "1"})
     );
     assert_eq!(done["response"]["outputUriPrefix"], "gs://run-bucket/x/all");
+}
+
+/// FS-13: an export or import names at most 100 collection ids.
+#[test]
+fn export_and_import_take_at_most_a_hundred_collection_ids() {
+    let state = exporting_state();
+    let ids = |count: usize| (0..count).map(|i| format!("c{i}")).collect::<Vec<_>>();
+    for (path, field) in [
+        (
+            "/v1/projects/p/databases/srcdb:exportDocuments",
+            "outputUriPrefix",
+        ),
+        (
+            "/v1/projects/p/databases/dstdb:importDocuments",
+            "inputUriPrefix",
+        ),
+    ] {
+        let (status, answer) = call(
+            &state,
+            "POST",
+            path,
+            json!({field: "gs://run-bucket/x/all", "collectionIds": ids(101)}),
+        );
+        assert_eq!(status, 400, "{path}: {answer}");
+        assert!(
+            answer["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("at most 100 collection IDs"),
+            "{answer}"
+        );
+        let (_, answer) = call(
+            &state,
+            "POST",
+            path,
+            json!({field: "gs://run-bucket/x/all", "collectionIds": ids(100)}),
+        );
+        assert!(
+            !answer.to_string().contains("at most 100 collection IDs"),
+            "{path}: 100 are accepted: {answer}"
+        );
+    }
+    // The count wins over the bucket check, as a request validation does.
+    let (status, answer) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/srcdb:exportDocuments",
+        json!({"outputUriPrefix": "gs://missing/x", "collectionIds": ids(101)}),
+    );
+    assert_eq!(status, 400, "{answer}");
 }
 
 #[test]

@@ -953,8 +953,16 @@ fn firestore_no_rules_warning(event: NoticeEvent<'_>) -> String {
             )
         }
     };
+    // `firestore.rules`, `rules.source` and `PUT /v1/rules` all load the `(default)` database's
+    // ruleset; another database needs its own.
+    let how_to_load = if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
+        "set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules"
+            .to_owned()
+    } else {
+        format!("declare the database with its own rules file in the firestore array of firebase.json, or PUT /emulator/v1/projects/{{project}}/databases/{database}:securityRules")
+    };
     format!(
-        "warning: firestore: a client request to database {database:?} was refused with PERMISSION_DENIED because no Security Rules are loaded for it (the strict profile refuses client requests without rules, as production does); set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules. Reported once per database."
+        "warning: firestore: a client request to database {database:?} was refused with PERMISSION_DENIED because no Security Rules are loaded for it (the strict profile refuses client requests without rules, as production does); {how_to_load}. Reported once per database."
     )
 }
 
@@ -1842,9 +1850,22 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 cfg.clock_start.to_rfc3339().unwrap_or_default()
             ));
         }
+        // A database `firebase.json` declares must have an id production could create, which
+        // only `databases.create` checked until now. The official emulator takes any name, so the
+        // `emulator` profile does not.
+        if cfg.profile == crate::config::CompatibilityProfile::Strict {
+            for database in cfg.firestore_databases.keys() {
+                if !fireemu_adapter_grpc::admin::rest::valid_database_id(database) {
+                    return Err(format!(
+                        "firebase.json: the Firestore database {database:?} cannot exist in production: {}",
+                        fireemu_adapter_grpc::admin::rest::DATABASE_ID_RULE
+                    ));
+                }
+            }
+        }
         // The index file declares the query-planning indexes and the TTL policies together.
         let (default_indexes, default_ttl_policies) = match &cfg.index_file {
-            Some(path) => control::load_index_file(path)?,
+            Some(path) => control::load_index_file(path, cfg.index_file_checks())?,
             None => Default::default(),
         };
         let gateway = Gateway {
@@ -1913,7 +1934,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
-                    let (indexes, ttl_policies) = control::load_index_file(path)?;
+                    let (indexes, ttl_policies) =
+                        control::load_index_file(path, cfg.index_file_checks())?;
                     backend.replace_database_indexes(database, indexes);
                     backend.replace_shared_ttl_catalog(database, ttl_policies);
                 }
@@ -2453,6 +2475,23 @@ mod tests {
         ] {
             assert!(line.starts_with(what), "{line}");
         }
+    }
+
+    /// A named database is not unblocked by the `(default)` database's three ways of loading
+    /// rules, so its warning names its own route and the `firebase.json` entry.
+    #[test]
+    fn the_no_rules_warning_of_a_named_database_names_its_own_route() {
+        use super::{firestore_no_rules_warning, NoticeEvent};
+        let default = firestore_no_rules_warning(NoticeEvent::First("(default)"));
+        assert!(default.contains("PUT /v1/rules"), "{default}");
+        assert!(!default.contains("/databases/"), "{default}");
+        let named = firestore_no_rules_warning(NoticeEvent::First("reports"));
+        assert!(
+            named.contains("PUT /emulator/v1/projects/{project}/databases/reports:securityRules")
+                && named.contains("firestore array of firebase.json")
+                && !named.contains("PUT /v1/rules"),
+            "{named}"
+        );
     }
 
     #[test]

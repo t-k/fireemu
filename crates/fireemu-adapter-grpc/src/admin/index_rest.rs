@@ -2,11 +2,13 @@
 //! delete composite indexes, answered in production's shapes.
 
 use fireemu_core_firestore::field_path::FieldPath;
-use fireemu_core_firestore::index::{IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope};
+use fireemu_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, MAX_COMPOSITE_INDEXES,
+};
 use fireemu_core_types::ids::CollectionId;
 use serde_json::{json, Value};
 
-use super::indexes::{scope_name, with_implied_name, IndexState, RuntimeIndex};
+use super::indexes::{scope_name, with_implied_name, CreateRefusal, IndexState, RuntimeIndex};
 use super::rest::error;
 use crate::encode::encode_instant;
 use crate::rest::json::timestamp_to_json;
@@ -197,20 +199,6 @@ fn parse_index(group: &str, body: &Value) -> Result<IndexDefinition, RestRespons
         };
         fields.push(IndexField { path, mode });
     }
-    let vector = fields
-        .iter()
-        .any(|f| matches!(f.mode, IndexFieldMode::Vector { .. }));
-    let named: Vec<&IndexField> = fields
-        .iter()
-        .filter(|f| !f.path.is_document_name())
-        .collect();
-    if named.len() < 2 && !vector {
-        return Err(error(
-            tonic::Code::InvalidArgument,
-            "this index is not necessary, configure using single field index controls",
-            None,
-        ));
-    }
     let Ok(collection_group) = CollectionId::try_new(group) else {
         return Err(error(
             tonic::Code::InvalidArgument,
@@ -218,11 +206,94 @@ fn parse_index(group: &str, body: &Value) -> Result<IndexDefinition, RestRespons
             None,
         ));
     };
-    Ok(IndexDefinition {
+    let definition = IndexDefinition {
         collection_group,
         query_scope: scope,
         fields,
-    })
+    };
+    // The shape rules are the index file's (`firestore.indexes.json`): the field and array
+    // caps (UNRECORDED texts) and the recorded "not necessary" refusal of a single field.
+    if let Err(shape) = definition
+        .check_capacity()
+        .and_then(|()| definition.check_necessary())
+    {
+        return Err(error(
+            tonic::Code::InvalidArgument,
+            &shape.to_string(),
+            None,
+        ));
+    }
+    Ok(definition)
+}
+
+/// `POST collectionGroups/{g}/indexes`: starts building an index.
+fn create_index(
+    state: &RestState,
+    (project, database, group): (&str, &str, &str),
+    body: &Value,
+) -> RestResponse {
+    let configured = state.local.configured_composites(project, database);
+    let registry = state.local.admin().indexes();
+    let now = state.local.admin_now();
+    let definition = match parse_index(group, body) {
+        Ok(definition) => definition,
+        Err(response) => return response,
+    };
+    // An index the index file declares is an existing index like any other.
+    if let Some(existing) = registry
+        .view(project, database, &configured)
+        .into_iter()
+        .find(|i| i.definition == definition)
+    {
+        return error(
+            tonic::Code::AlreadyExists,
+            &format!("index already exists with index ID = {}", existing.id),
+            None,
+        );
+    }
+    let operation = super::operations::reserve_id(state, project, database);
+    // The index file's indexes and the ones created here count together, checked where
+    // the index is inserted. The code and text are UNRECORDED: the limit is the
+    // documented 200 of a billing-disabled plan.
+    match registry.create_within(
+        project,
+        database,
+        definition,
+        now,
+        operation.clone(),
+        Some((&configured, MAX_COMPOSITE_INDEXES)),
+    ) {
+        Err(CreateRefusal::Full) => error(
+            tonic::Code::ResourceExhausted,
+            "Maximum number of composite indexes for a database: 200",
+            None,
+        ),
+        Err(CreateRefusal::Exists(existing)) => error(
+            tonic::Code::AlreadyExists,
+            &format!("index already exists with index ID = {existing}"),
+            None,
+        ),
+        Ok(index) => {
+            let name = format!("projects/{project}/databases/{database}/operations/{operation}");
+            let initial = operation_json(
+                project,
+                database,
+                &name,
+                &index,
+                IndexState::Creating,
+                (0, now),
+            );
+            super::operations::record_index(
+                state,
+                project,
+                database,
+                &operation,
+                &index.id,
+                initial.clone(),
+            );
+            ok(initial)
+        }
+    }
 }
 
 /// Routes `collectionGroups/{g}/indexes[/{id}]` of a live Standard database.
@@ -239,53 +310,7 @@ pub(crate) fn route(
     let registry = state.local.admin().indexes();
     let now = state.local.admin_now();
     match (method, rest) {
-        ("POST", []) => {
-            let definition = match parse_index(group, body) {
-                Ok(definition) => definition,
-                Err(response) => return response,
-            };
-            // An index the index file declares is an existing index like any other.
-            if let Some(existing) = registry
-                .view(project, database, &configured)
-                .into_iter()
-                .find(|i| i.definition == definition)
-            {
-                return error(
-                    tonic::Code::AlreadyExists,
-                    &format!("index already exists with index ID = {}", existing.id),
-                    None,
-                );
-            }
-            let operation = super::operations::reserve_id(state, project, database);
-            match registry.create(project, database, definition, now, operation.clone()) {
-                Err(existing) => error(
-                    tonic::Code::AlreadyExists,
-                    &format!("index already exists with index ID = {existing}"),
-                    None,
-                ),
-                Ok(index) => {
-                    let name =
-                        format!("projects/{project}/databases/{database}/operations/{operation}");
-                    let initial = operation_json(
-                        project,
-                        database,
-                        &name,
-                        &index,
-                        IndexState::Creating,
-                        (0, now),
-                    );
-                    super::operations::record_index(
-                        state,
-                        project,
-                        database,
-                        &operation,
-                        &index.id,
-                        initial.clone(),
-                    );
-                    ok(initial)
-                }
-            }
-        }
+        ("POST", []) => create_index(state, (project, database, group), body),
         ("GET", []) => {
             let indexes: Vec<Value> = registry
                 .view(project, database, &configured)

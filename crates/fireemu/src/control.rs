@@ -45,8 +45,71 @@ pub fn load_text_indexes(
     Ok(set)
 }
 
+/// Which refusals of `firebase deploy` an index file is checked against when it loads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexFileChecks {
+    /// What the official emulator needs: the caps and the entry grammar. The official emulator
+    /// never reads the index file, so the `emulator` profile adds nothing to them.
+    Emulator,
+    /// Also what `firebase deploy` refuses before or while it creates the indexes (the `strict`
+    /// profile): a composite index with a single field, an entry without `fields`, a field
+    /// override without `indexes`.
+    Deploy,
+}
+
+/// One field of a composite index entry, in the current or the older (`mode`) format.
+fn parse_index_field(f: &Value) -> Result<IndexField, String> {
+    let path = f
+        .get("fieldPath")
+        .and_then(Value::as_str)
+        .ok_or("index field without fieldPath")?;
+    // The v1beta1 `mode` stands for `order` or `arrayConfig` when the field has neither
+    // (`upgradeOldSpec`).
+    let legacy = |wanted: &str| {
+        f.get("order").is_none()
+            && f.get("arrayConfig").is_none()
+            && f.get("vectorConfig").is_none()
+            && f.get("mode").and_then(Value::as_str) == Some(wanted)
+    };
+    let mode = match (
+        f.get("order")
+            .and_then(Value::as_str)
+            .or_else(|| legacy("ASCENDING").then_some("ASCENDING"))
+            .or_else(|| legacy("DESCENDING").then_some("DESCENDING")),
+        f.get("arrayConfig")
+            .and_then(Value::as_str)
+            .or_else(|| legacy("ARRAY_CONTAINS").then_some("CONTAINS")),
+        f.get("vectorConfig"),
+    ) {
+        (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
+        (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
+        (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
+        (None, None, Some(config)) => {
+            let dimension = config
+                .get("dimension")
+                .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|dimension| (1..=2048).contains(dimension))
+                .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be an integer from 1 through 2048"))?;
+            if !config.get("flat").is_some_and(Value::is_object) {
+                return Err(format!("index field {path}: vectorConfig.flat is required"));
+            }
+            IndexFieldMode::Vector { dimension }
+        }
+        _ => {
+            return Err(format!(
+                "index field {path}: exactly one order, arrayConfig, or vectorConfig is required"
+            ))
+        }
+    };
+    Ok(IndexField {
+        path: FieldPath::parse(path).map_err(|e| e.to_string())?,
+        mode,
+    })
+}
+
 /// Parses one `firestore.indexes.json` generation already read by a reload supervisor.
-pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
+pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<IndexSet, String> {
     let json: Value = serde_json::from_str(text).map_err(|e| format!("{path}: {e}"))?;
     for key in ["indexes", "fieldOverrides"] {
         if json
@@ -58,85 +121,62 @@ pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
         }
     }
     let mut set = IndexSet::default();
-    for idx in json
+    for (entry, idx) in json
         .get("indexes")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
-        let collection = idx
-            .get("collectionGroup")
-            .and_then(Value::as_str)
+        // `firebase deploy` upgrades the file before it validates it (firebase-tools 15.28.2,
+        // `upgradeOldSpec`): `collectionId` of the v1beta1 format stands for a missing or empty
+        // `collectionGroup`, and a missing or empty `queryScope` is `COLLECTION`. Neither is
+        // refused.
+        let collection = ["collectionGroup", "collectionId"]
+            .into_iter()
+            .filter_map(|key| idx.get(key).and_then(Value::as_str))
+            .find(|name| !name.is_empty())
             .ok_or("index without collectionGroup")?;
         let scope = match idx
             .get("queryScope")
             .and_then(Value::as_str)
+            .filter(|scope| !scope.is_empty())
             .unwrap_or("COLLECTION")
         {
             "COLLECTION" => IndexQueryScope::Collection,
             "COLLECTION_GROUP" => IndexQueryScope::CollectionGroup,
             other => return Err(format!("unsupported queryScope {other}")),
         };
-        let mut fields = Vec::new();
-        for f in idx
+        // `firebase deploy` refuses an entry without `fields` (`validateIndex`), which is what
+        // a misspelled key looks like.
+        if checks == IndexFileChecks::Deploy && !idx.get("fields").is_some_and(Value::is_array) {
+            return Err(format!(
+                "{path}: indexes[{entry}] (collection group {collection}): Must contain \"fields\" (an array of index fields)"
+            ));
+        }
+        let fields = idx
             .get("fields")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-        {
-            let path = f
-                .get("fieldPath")
-                .and_then(Value::as_str)
-                .ok_or("index field without fieldPath")?;
-            let mode = match (
-                f.get("order").and_then(Value::as_str),
-                f.get("arrayConfig").and_then(Value::as_str),
-                f.get("vectorConfig"),
-            ) {
-                (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
-                (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
-                (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
-                (None, None, Some(config)) => {
-                    let dimension = config
-                        .get("dimension")
-                        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
-                        .and_then(|value| u32::try_from(value).ok())
-                        .filter(|dimension| (1..=2048).contains(dimension))
-                        .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be an integer from 1 through 2048"))?;
-                    if !config.get("flat").is_some_and(Value::is_object) {
-                        return Err(format!("index field {path}: vectorConfig.flat is required"));
-                    }
-                    IndexFieldMode::Vector { dimension }
-                }
-                _ => return Err(format!("index field {path}: exactly one order, arrayConfig, or vectorConfig is required")),
-            };
-            fields.push(IndexField {
-                path: FieldPath::parse(path).map_err(|e| e.to_string())?,
-                mode,
-            });
-        }
-        if fields.len() > 100 {
-            return Err(format!(
-                "{path}: FS-LIMIT-FIELDS-PER-COMPOSITE-INDEX: maximum 100 fields"
-            ));
-        }
-        if fields
-            .iter()
-            .filter(|field| field.mode == IndexFieldMode::Contains)
-            .count()
-            > 1
-        {
-            return Err(format!(
-                "{path}: a composite index may contain only one array field"
-            ));
-        }
-        set.add_composite(IndexDefinition {
+            .map(parse_index_field)
+            .collect::<Result<Vec<_>, _>>()?;
+        let definition = IndexDefinition {
             collection_group: CollectionId::try_new(collection).map_err(|e| e.to_string())?,
             query_scope: scope,
             fields,
-        });
+        };
+        definition
+            .check_capacity()
+            .map_err(|e| format!("{path}: {e}"))?;
+        if checks == IndexFileChecks::Deploy {
+            definition.check_necessary().map_err(|e| {
+                format!("{path}: indexes[{entry}] (collection group {collection}): {e}")
+            })?;
+        }
+        set.add_composite(definition);
     }
-    parse_field_overrides(&json, &mut set)?;
+    parse_field_overrides(path, &json, &mut set, checks)?;
     Ok(set)
 }
 
@@ -186,15 +226,25 @@ pub fn parse_ttl_policies(path: &str, text: &str) -> Result<TtlCatalog, String> 
 
 /// Loads `firestore.indexes.json` as a whole: the query-planning indexes and the time-to-live
 /// policies the same file declares, from one read of the file.
-pub fn load_index_file(path: &str) -> Result<(IndexSet, TtlCatalog), String> {
+pub fn load_index_file(
+    path: &str,
+    checks: IndexFileChecks,
+) -> Result<(IndexSet, TtlCatalog), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    parse_index_file(path, &text)
+    parse_index_file(path, &text, checks)
 }
 
 /// Parses one generation of `firestore.indexes.json`, both halves or neither: a file whose
 /// indexes are valid but whose TTL declaration is not is refused as a whole.
-pub fn parse_index_file(path: &str, text: &str) -> Result<(IndexSet, TtlCatalog), String> {
-    Ok((parse_indexes(path, text)?, parse_ttl_policies(path, text)?))
+pub fn parse_index_file(
+    path: &str,
+    text: &str,
+    checks: IndexFileChecks,
+) -> Result<(IndexSet, TtlCatalog), String> {
+    Ok((
+        parse_indexes(path, text, checks)?,
+        parse_ttl_policies(path, text)?,
+    ))
 }
 
 /// A field override's `ttl`. `firebase deploy` refuses one that is not a boolean.
@@ -206,12 +256,18 @@ fn override_ttl(ov: &Value, field: &str) -> Result<bool, String> {
     }
 }
 
-fn parse_field_overrides(json: &Value, set: &mut IndexSet) -> Result<(), String> {
-    for ov in json
+fn parse_field_overrides(
+    file: &str,
+    json: &Value,
+    set: &mut IndexSet,
+    checks: IndexFileChecks,
+) -> Result<(), String> {
+    for (entry, ov) in json
         .get("fieldOverrides")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
         let collection = ov
             .get("collectionGroup")
@@ -222,9 +278,26 @@ fn parse_field_overrides(json: &Value, set: &mut IndexSet) -> Result<(), String>
             .and_then(Value::as_str)
             .ok_or("fieldOverride without fieldPath")?;
         override_ttl(ov, path)?;
+        // `firebase deploy` refuses an override without `indexes` (`validateField`), also when
+        // it only sets a TTL policy: that needs `\"indexes\": []`.
+        if checks == IndexFileChecks::Deploy && !ov.get("indexes").is_some_and(Value::is_array) {
+            return Err(format!(
+                "{file}: fieldOverrides[{entry}] ({collection}.{path}): Must contain \"indexes\" (an array, empty for a TTL-only override)"
+            ));
+        }
         if let Some(indexes) = ov.get("indexes").and_then(Value::as_array) {
             let mut modes = Vec::new();
             for index in indexes {
+                // `firebase deploy` asserts exactly one of `arrayConfig` and `order` on every
+                // override index (`validateField`), so one with only `vectorConfig` is refused;
+                // a single vector field is a composite index.
+                if checks == IndexFileChecks::Deploy
+                    && index.get("arrayConfig").is_none() == index.get("order").is_none()
+                {
+                    return Err(format!(
+                        "{file}: fieldOverrides[{entry}] ({collection}.{path}): Must contain exactly one of \"arrayConfig,order\" in each of its indexes"
+                    ));
+                }
                 let scope = match index
                     .get("queryScope")
                     .and_then(Value::as_str)
@@ -369,12 +442,12 @@ mod tests {
         for count in [200, 201] {
             let config = json!({"indexes": vec![index.clone(); count]});
             assert_eq!(
-                parse_indexes("test", &config.to_string()).is_ok(),
+                parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).is_ok(),
                 count == 200
             );
             let config = json!({"fieldOverrides": vec![json!({"collectionGroup":"tasks", "fieldPath":"a", "indexes":[]}); count]});
             assert_eq!(
-                parse_indexes("test", &config.to_string()).is_ok(),
+                parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).is_ok(),
                 count == 200
             );
         }
@@ -384,10 +457,241 @@ mod tests {
                 .collect::<Vec<_>>();
             let config = json!({"indexes":[{"collectionGroup":"tasks","fields":fields}]});
             assert_eq!(
-                parse_indexes("test", &config.to_string()).is_ok(),
+                parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).is_ok(),
                 count == 100
             );
         }
+    }
+
+    fn deploy(config: &Value) -> Result<IndexSet, String> {
+        parse_indexes(
+            "firestore.indexes.json",
+            &config.to_string(),
+            IndexFileChecks::Deploy,
+        )
+    }
+
+    fn entry(fields: &Value) -> Value {
+        json!({"collectionGroup": "g", "queryScope": "COLLECTION", "fields": fields})
+    }
+
+    fn asc(path: &str) -> Value {
+        json!({"fieldPath": path, "order": "ASCENDING"})
+    }
+
+    /// `conformance/fs-config-lifecycle-production.json` `fs-config/index/lifecycle/composite/steps/single-field`:
+    /// production answers 400 "this index is not necessary, configure using single field index controls".
+    #[test]
+    fn a_single_field_composite_is_refused_like_the_deploy_refuses_it() {
+        for scope in ["COLLECTION", "COLLECTION_GROUP"] {
+            for field in [
+                asc("n"),
+                json!({"fieldPath": "n", "order": "DESCENDING"}),
+                json!({"fieldPath": "tags", "arrayConfig": "CONTAINS"}),
+            ] {
+                let config = json!({"indexes": [
+                    entry(&json!([asc("a"), asc("b")])),
+                    {"collectionGroup": "g", "queryScope": scope, "fields": [field]},
+                ]});
+                let error = deploy(&config).unwrap_err();
+                assert!(
+                    error.contains("indexes[1]")
+                        && error.contains("collection group g")
+                        && error.contains(
+                            "this index is not necessary, configure using single field index controls"
+                        ),
+                    "{error}"
+                );
+                // The emulator profile adds no refusal: the official emulator never reads the file.
+                assert!(parse_indexes("f", &config.to_string(), IndexFileChecks::Emulator).is_ok());
+            }
+        }
+    }
+
+    /// Production deployed `(n ASC, __name__ DESC)`, `(__name__ DESC)` and a single-field
+    /// vector index (`conformance/fs-query-index.indexes.json`), so they are not "necessary"
+    /// refusals.
+    #[test]
+    fn the_recorded_one_field_shapes_stay_accepted() {
+        let config = json!({"indexes": [
+            entry(&json!([asc("n"), {"fieldPath": "__name__", "order": "DESCENDING"}])),
+            entry(&json!([{"fieldPath": "__name__", "order": "DESCENDING"}])),
+            entry(&json!([{"fieldPath": "emb", "vectorConfig": {"dimension": 3, "flat": {}}}])),
+            entry(&json!([asc("a"), asc("b")])),
+        ]});
+        assert_eq!(deploy(&config).unwrap().composites().len(), 4);
+    }
+
+    /// `firebase deploy` fills in a missing `queryScope` with `COLLECTION` before it validates
+    /// (firebase-tools 15.28.2, `upgradeOldSpec`), so a file without one deploys.
+    #[test]
+    fn a_missing_query_scope_is_collection_as_the_deploy_reads_it() {
+        let config = json!({"indexes": [
+            {"collectionGroup": "g", "fields": [asc("a"), asc("b")]}
+        ]});
+        let set = deploy(&config).unwrap();
+        assert_eq!(set.composites()[0].query_scope, IndexQueryScope::Collection);
+    }
+
+    /// firebase-tools `validateIndex` asserts that an entry has `fields`.
+    #[test]
+    fn an_entry_without_fields_is_refused() {
+        for entry in [
+            json!({"collectionGroup": "g", "queryScope": "COLLECTION", "feilds": [asc("a"), asc("b")]}),
+            json!({"collectionGroup": "g", "queryScope": "COLLECTION"}),
+            json!({"collectionGroup": "g", "queryScope": "COLLECTION", "fields": null}),
+            json!({"collectionGroup": "g", "queryScope": "COLLECTION", "fields": {}}),
+        ] {
+            let config = json!({"indexes": [entry_ok(), entry]});
+            let error = deploy(&config).unwrap_err();
+            assert!(
+                error.contains("indexes[1]") && error.contains("fields"),
+                "{error}"
+            );
+            assert!(
+                parse_indexes("f", &config.to_string(), IndexFileChecks::Emulator).is_ok(),
+                "the emulator profile keeps loading it"
+            );
+        }
+    }
+
+    fn entry_ok() -> Value {
+        entry(&json!([asc("a"), asc("b")]))
+    }
+
+    /// firebase-tools `validateField` asserts that a field override has `indexes`.
+    #[test]
+    fn a_field_override_without_indexes_is_refused() {
+        for overrides in [
+            json!([{"collectionGroup": "g", "fieldPath": "t", "ttl": true}]),
+            json!([{"collectionGroup": "g", "fieldPath": "t", "indxes": []}]),
+            json!([{"collectionGroup": "g", "fieldPath": "t", "indexes": null}]),
+        ] {
+            let config = json!({"indexes": [], "fieldOverrides": overrides});
+            let error = deploy(&config).unwrap_err();
+            assert!(
+                error.contains("fieldOverrides[0]") && error.contains("indexes"),
+                "{error}"
+            );
+            assert!(parse_indexes("f", &config.to_string(), IndexFileChecks::Emulator).is_ok());
+        }
+        let config = json!({"indexes": [], "fieldOverrides": [
+            {"collectionGroup": "g", "fieldPath": "t", "ttl": true, "indexes": []}
+        ]});
+        assert!(deploy(&config).is_ok());
+    }
+
+    #[test]
+    fn the_caps_apply_under_both_checks() {
+        let fields = (0..101).map(|i| asc(&format!("f{i}"))).collect::<Vec<_>>();
+        let two_arrays = json!([
+            {"fieldPath": "a", "arrayConfig": "CONTAINS"},
+            {"fieldPath": "b", "arrayConfig": "CONTAINS"}
+        ]);
+        for checks in [IndexFileChecks::Emulator, IndexFileChecks::Deploy] {
+            for fields in [json!(fields), two_arrays.clone()] {
+                let config = json!({"indexes": [entry(&fields)]});
+                assert!(parse_indexes("f", &config.to_string(), checks).is_err());
+            }
+        }
+    }
+
+    /// firebase-tools `upgradeOldSpec` reads the v1beta1 file format before it validates:
+    /// `collectionId` for `collectionGroup`, `mode` for `order` / `arrayConfig`, and an empty
+    /// `queryScope` as `COLLECTION`. The deploy accepts such a file, so neither check refuses it.
+    #[test]
+    fn the_legacy_file_format_loads_as_the_deploy_reads_it() {
+        let config = json!({"indexes": [
+            {"collectionId": "legacy", "queryScope": "",
+             "fields": [{"fieldPath": "a", "mode": "ASCENDING"}, {"fieldPath": "b", "mode": "DESCENDING"}]},
+            {"collectionGroup": "tags", "queryScope": "COLLECTION_GROUP",
+             "fields": [{"fieldPath": "t", "mode": "ARRAY_CONTAINS"}, {"fieldPath": "b", "order": "ASCENDING"}]},
+            {"collectionGroup": "both", "collectionId": "ignored",
+             "fields": [{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "ASCENDING"}]},
+        ]});
+        for checks in [IndexFileChecks::Emulator, IndexFileChecks::Deploy] {
+            let set = parse_indexes("f", &config.to_string(), checks).unwrap();
+            let composites = set.composites();
+            assert_eq!(composites[0].collection_group.as_str(), "legacy");
+            assert_eq!(composites[0].query_scope, IndexQueryScope::Collection);
+            assert_eq!(
+                composites[0]
+                    .fields
+                    .iter()
+                    .map(|f| f.mode)
+                    .collect::<Vec<_>>(),
+                [IndexFieldMode::Ascending, IndexFieldMode::Descending]
+            );
+            assert_eq!(composites[1].fields[0].mode, IndexFieldMode::Contains);
+            assert_eq!(composites[2].collection_group.as_str(), "both");
+        }
+        // A `mode` the deploy cannot turn into an order is still refused.
+        let config = json!({"indexes": [{"collectionGroup": "g", "fields": [
+            {"fieldPath": "a", "mode": "SIDEWAYS"}, {"fieldPath": "b", "order": "ASCENDING"}]}]});
+        assert!(deploy(&config).is_err());
+        // Without either key there is no collection group.
+        let config = json!({"indexes": [{"fields": [asc("a"), asc("b")]}]});
+        assert!(deploy(&config).is_err());
+    }
+
+    /// firebase-tools `validateField` asserts exactly one of `arrayConfig` and `order` on every
+    /// override index, so a vector-only override is refused by the deploy (a single vector field
+    /// is declared as a composite index, which production deployed).
+    #[test]
+    fn strict_refuses_a_vector_only_override_index() {
+        let config = json!({"indexes": [], "fieldOverrides": [{
+            "collectionGroup": "items", "fieldPath": "embedding",
+            "indexes": [{"queryScope": "COLLECTION", "vectorConfig": {"dimension": 3, "flat": {}}}]
+        }]});
+        let error = deploy(&config).unwrap_err();
+        assert!(
+            error.contains("fieldOverrides[0]")
+                && error.contains("items.embedding")
+                && error.contains("exactly one of"),
+            "{error}"
+        );
+        assert!(parse_indexes("f", &config.to_string(), IndexFileChecks::Emulator).is_ok());
+        let config = json!({"indexes": [], "fieldOverrides": [{
+            "collectionGroup": "items", "fieldPath": "n",
+            "indexes": [{"order": "ASCENDING"}, {"arrayConfig": "CONTAINS", "queryScope": "COLLECTION_GROUP"}]
+        }]});
+        assert!(deploy(&config).is_ok());
+    }
+
+    fn scratch_file(name: &str, text: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "fireemu-control-{name}-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// The reading path the daemon uses (`load_index_file`, `parse_index_file`) carries the
+    /// choice of checks, and refuses the file as a whole.
+    #[test]
+    fn loading_a_file_applies_the_checks_it_is_given() {
+        let bad = json!({"indexes": [entry_ok(), {"collectionGroup": "g", "queryScope": "COLLECTION", "fields": [asc("n")]}]})
+            .to_string();
+        let path = scratch_file("load", &bad);
+        let name = path.display().to_string();
+        let loaded = load_index_file(&name, IndexFileChecks::Deploy);
+        let lenient = load_index_file(&name, IndexFileChecks::Emulator);
+        std::fs::remove_file(&path).unwrap();
+        let error = loaded.unwrap_err();
+        assert!(
+            error.contains("indexes[1]") && error.contains(&name),
+            "{error}"
+        );
+        assert_eq!(lenient.unwrap().0.composites().len(), 2);
+        // Both halves or neither: a bad index half refuses a file whose TTL half is fine.
+        let ttl = json!({"indexes": [{"collectionGroup": "g", "fields": []}], "fieldOverrides": [
+            {"collectionGroup": "s", "fieldPath": "t", "ttl": true, "indexes": []}]})
+        .to_string();
+        assert!(parse_index_file("f", &ttl, IndexFileChecks::Deploy).is_err());
+        let (set, catalog) = parse_index_file("f", &ttl, IndexFileChecks::Emulator).unwrap();
+        assert_eq!(set.composites().len(), 1);
+        assert_eq!(catalog.iter().count(), 1);
     }
 
     #[test]
@@ -399,7 +703,8 @@ mod tests {
                            {"fieldPath": "embedding", "vectorConfig": {"dimension": 2, "flat": {}}}]
             }]
         });
-        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let indexes =
+            parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).unwrap();
         assert_eq!(
             indexes.composites()[0].fields[1].mode,
             IndexFieldMode::Vector { dimension: 2 }
@@ -420,14 +725,15 @@ mod tests {
                     "fields": [{"fieldPath": "embedding", "vectorConfig": vector_config}]
                 }]
             });
-            assert!(parse_indexes("test", &config.to_string()).is_err());
+            assert!(parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).is_err());
         }
     }
 
     #[test]
     fn field_override_preserves_enabled_modes_and_rejects_conflicting_modes() {
         let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"*", "indexes":[]}, {"collectionGroup":"tasks", "fieldPath":"map.x", "indexes":[{"order":"DESCENDING", "queryScope":"COLLECTION_GROUP"}]}]});
-        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let indexes =
+            parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).unwrap();
         let collection = CollectionId::try_new("tasks").unwrap();
         assert!(indexes
             .single_field_modes(&collection, &FieldPath::parse("map.y").unwrap())
@@ -437,7 +743,7 @@ mod tests {
             vec![(IndexQueryScope::CollectionGroup, IndexFieldMode::Descending)]
         );
         let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"a", "indexes":[{"order":"ASCENDING", "arrayConfig":"CONTAINS"}]}]});
-        assert!(parse_indexes("test", &config.to_string()).is_err());
+        assert!(parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).is_err());
     }
 
     fn ttl_fields(config: &Value) -> Result<Vec<(String, String)>, String> {
@@ -471,7 +777,8 @@ mod tests {
         assert_eq!(policy.state, fireemu_core_firestore::ttl::TtlState::Active);
         assert_eq!(policy.expiration_offset, None);
         // The index half of the same override is read as before.
-        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let indexes =
+            parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).unwrap();
         assert_eq!(
             indexes.single_field_modes(
                 &CollectionId::try_new("logs").unwrap(),
@@ -500,7 +807,10 @@ mod tests {
         for ttl in [json!("true"), json!(1), json!(null), json!({})] {
             let config = json!({"fieldOverrides":[{"collectionGroup":"c", "fieldPath":"f", "ttl":ttl, "indexes":[]}]});
             assert!(ttl_fields(&config).is_err(), "{ttl}");
-            assert!(parse_indexes("test", &config.to_string()).is_err(), "{ttl}");
+            assert!(
+                parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).is_err(),
+                "{ttl}"
+            );
         }
     }
 
@@ -563,7 +873,8 @@ mod tests {
             }]
         });
 
-        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let indexes =
+            parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).unwrap();
         let collection = CollectionId::try_new("items").unwrap();
         assert_eq!(
             indexes.single_field_modes(&collection, &FieldPath::parse("embedding").unwrap()),
@@ -592,7 +903,8 @@ mod tests {
                 "indexes": [{"vectorConfig": {"dimension": 2, "flat": {}}}]
             }]
         });
-        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let indexes =
+            parse_indexes("test", &config.to_string(), IndexFileChecks::Emulator).unwrap();
         let context = PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,

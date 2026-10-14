@@ -156,6 +156,28 @@ fn parse_gcs(uri: &str) -> Option<(String, String)> {
 
 const GCS_FORMAT: &str = "Google Cloud Storage resource path must be in format: gs://<bucket-name> or: gs://<bucket-name>/<object-name>";
 
+/// Most collection-ID filters an export or import takes
+/// (`FS-LIMIT-COLLECTION-FILTERS-EXPORT-IMPORT`, documented).
+const MAX_COLLECTION_ID_FILTERS: usize = 100;
+
+/// The refusal of a request that names more than [`MAX_COLLECTION_ID_FILTERS`] collection ids.
+/// The status is the documented hard limit's; the text is fireemu's own (UNRECORDED).
+fn too_many_collection_ids(body: &Json) -> Option<RestResponse> {
+    let count = body
+        .get("collectionIds")
+        .and_then(Json::as_array)
+        .map_or(0, Vec::len);
+    (count > MAX_COLLECTION_ID_FILTERS).then(|| {
+        error(
+            tonic::Code::InvalidArgument,
+            &format!(
+                "collection_ids: at most {MAX_COLLECTION_ID_FILTERS} collection IDs per request, got {count}"
+            ),
+            None,
+        )
+    })
+}
+
 fn strings(body: &Json, key: &str) -> Vec<String> {
     body.get(key)
         .and_then(Json::as_array)
@@ -306,6 +328,9 @@ pub(crate) fn export(
     let Some((bucket, prefix)) = parse_gcs(uri) else {
         return error(tonic::Code::InvalidArgument, GCS_FORMAT, None);
     };
+    if let Some(refusal) = too_many_collection_ids(body) {
+        return refusal;
+    }
     let Some(storage) = state.local.admin().managed_storage() else {
         return error(
             tonic::Code::NotFound,
@@ -420,6 +445,9 @@ pub(crate) fn import(
     let Some((bucket, prefix)) = parse_gcs(uri) else {
         return error(tonic::Code::InvalidArgument, GCS_FORMAT, None);
     };
+    if let Some(refusal) = too_many_collection_ids(body) {
+        return refusal;
+    }
     let collection_ids = strings(body, "collectionIds");
     let namespace_ids = strings(body, "namespaceIds");
     let Some(storage) = state.local.admin().managed_storage() else {

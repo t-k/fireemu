@@ -7,12 +7,14 @@ Fireemu has a clock of its own. Set where it starts and move it, and every servi
 
 ## Set the start time
 
-```json
-{
-  "schemaVersion": 1,
-  "daemon": { "clockStart": "2026-01-31T23:59:00Z" }
-}
+```toml
+schemaVersion = 1
+
+[daemon]
+clockStart = "2026-01-31T23:59:00Z"
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 Configure the time zone, catch-up and overlap behavior of scheduled functions in the `scheduler` section.
 
@@ -35,15 +37,19 @@ Under `strict`, Authentication, Firestore and Storage refuse an ID token issued 
 
 By default your function code sees real time. To make `Date.now()`, timers and Cloud Tasks follow the virtual clock too, set `functions.clock` together with a pinned `daemon.clockStart`:
 
-```json
-{
-  "schemaVersion": 1,
-  "daemon": { "clockStart": "2026-01-31T23:59:00Z" },
-  "functions": {
-    "source": "./functions",
-    "clock": { "date": "virtual", "timers": "real", "tasks": "virtual" }
-  }
-}
+```toml
+schemaVersion = 1
+
+[daemon]
+clockStart = "2026-01-31T23:59:00Z"
+
+[functions]
+source = "./functions"
+
+[functions.clock]
+date = "virtual"
+timers = "real"
+tasks = "virtual"
 ```
 
 Each mode accepts `real` or `virtual`. Virtual timers require virtual `date`.

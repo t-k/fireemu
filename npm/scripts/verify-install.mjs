@@ -144,12 +144,16 @@ step("init creates a strict canonical configuration through the packaged launche
   const initialized = join(base, "initialized project");
   mkdirSync(initialized);
   run(process.execPath, [launcher, "init", "--yes"], { cwd: initialized });
-  const generated = JSON.parse(readFileSync(join(initialized, "fireemu.json"), "utf8"));
-  if (generated.profile !== "strict") {
-    throw new Error(`init selected ${JSON.stringify(generated.profile)} instead of strict`);
+  const text = readFileSync(join(initialized, "fireemu.toml"), "utf8");
+  if (!text.startsWith("#:schema https://fireemu.dev/spec/config/fireemu.schema.json\n")) {
+    throw new Error("init did not write a TOML schema directive");
   }
-  if (generated.firestore?.edition !== "standard" || generated.firestore?.apiMode !== "native") {
-    throw new Error(`init generated an unexpected Firestore mode: ${JSON.stringify(generated)}`);
+  const generated = JSON.parse(run(process.execPath, [launcher, "config", "show", "--json"], { cwd: initialized }).stdout);
+  for (const [key, expected] of [["profile", "strict"], ["firestore.edition", "standard"], ["firestore.apiMode", "native"]]) {
+    const actual = generated.find((row) => row.key === key)?.value;
+    if (actual !== expected) {
+      throw new Error(`init selected ${JSON.stringify(actual)} for ${key} instead of ${expected}`);
+    }
   }
 });
 

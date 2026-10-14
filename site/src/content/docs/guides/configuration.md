@@ -1,23 +1,23 @@
 ---
 title: Configuration files
-description: How Fireemu finds fireemu.json and firebase.json, and what each one holds.
+description: How Fireemu finds fireemu.toml and firebase.json, and what each one holds.
 ---
 
 Fireemu reads two kinds of files:
 
-- **`fireemu.json`** holds Fireemu's own settings, such as the [profile](../profiles/), Authentication project configuration and the clock. It contains `"schemaVersion": 1`. See the [configuration schema](../../reference/configuration/).
+- **`fireemu.toml`** holds Fireemu's own settings, such as the [profile](../profiles/), Authentication project configuration and the clock. It contains `schemaVersion = 1`. See the [configuration schema](../../reference/configuration/).
 - **`firebase.json`** is the file the Firebase CLI uses. Fireemu reads ports, Security Rules, indexes and Functions codebases from it, every time it starts.
 
-Keep Fireemu-specific settings in `fireemu.json` rather than in `firebase.json`. To use both, name the `firebase.json` in `fireemu.json`:
+Keep Fireemu-specific settings in `fireemu.toml` rather than in `firebase.json`. To use both, name the `firebase.json` in `fireemu.toml`:
 
-```json
-{
-  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
-  "schemaVersion": 1,
-  "profile": "strict",
-  "firebaseJson": "firebase.json"
-}
+```toml
+#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+schemaVersion = 1
+profile = "strict"
+firebaseJson = "firebase.json"
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 `npx fireemu init --firebase-json firebase.json` writes this for you.
 
@@ -25,8 +25,8 @@ Keep Fireemu-specific settings in `fireemu.json` rather than in `firebase.json`.
 
 `up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
 
-1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for.
-2. Otherwise, `fireemu.json` in the current directory is loaded. Its `firebaseJson` entry, resolved relative to `fireemu.json`, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.json` without a `firebaseJson` entry is not loaded, and the startup output says so. A `fireemu.json` in a parent directory is not used.
+1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML and every other extension as JSON. `--firebase-json` always reads JSON.
+2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used.
 3. Otherwise, the nearest `firebase.json` is loaded: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. The `.firebaserc` beside it is read too.
 4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
 
@@ -36,7 +36,7 @@ Keep Fireemu-specific settings in `fireemu.json` rather than in `firebase.json`.
 
 A discovered file can name Functions code to run and the rules to enforce, so on Unix the search checks who owns what it finds, as git checks repository ownership. The Firebase CLI does not check this. The trusted owners are you, root, and, when you run as root through `sudo`, the user in `SUDO_UID`.
 
-- A `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped with a warning. Group write is allowed.
+- A `fireemu.toml`, `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped with a warning. Group write is allowed.
 - The search stops before a parent directory whose owner is not trusted or that any user can write, such as `/tmp`.
 - A current directory that any user can write is not searched at all.
 - A discovered file larger than 16 MiB is refused.
@@ -50,6 +50,28 @@ Two common setups run into this rule:
 
 ## Validate your configuration
 
-`fireemu.json` is validated at startup, and a value Fireemu does not accept stops it with an error. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
+`fireemu.toml` is validated at startup, and a value Fireemu does not accept stops it with an error. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
 
 `fireemu capabilities` prints the capability manifest for the profile your configuration resolves to.
+
+## TOML values and JSON null
+
+TOML files use the same JSON Schema, validation and defaults as JSON files. Start a file with `#:schema https://fireemu.dev/spec/config/fireemu.schema.json` to select the schema in Taplo or Even Better TOML. Quote timestamp values: TOML datetimes are refused with the key name because the schema has no datetime type.
+
+TOML has no `null`. For every nullable setting below, omit the key in its containing table; for nullable array items, omit the item. Keep the containing table or array when its presence is intentional. Empty arrays and empty tables retain their existing meaning.
+
+| Nullable JSON keys | Meaning of null and TOML omission |
+|---|---|
+| `limits.queryCatalog`, `firestore.textSearch.visibilityLag` | Accepted with no runtime effect. Omission also removes the explicit value and startup note for these keys. |
+| `limits.firestorePlan.compositeIndexLimitOverride`, `limits.firestorePlan.singleFieldConfigLimitOverride`, `limits.firestorePlan.enterpriseIndexLimitOverride` | No override; non-null overrides are currently refused. |
+| `auth.providers`, `auth.providers.oidc`, `auth.providers.saml` | No provider seed declaration. An empty array explicitly declares an empty replacement and is different from omission. |
+| `auth.providers.oidc[].displayName`, `auth.providers.oidc[].clientSecret`, `auth.providers.saml[].displayName` | No optional provider value. |
+| `auth.authorizedDomains` | No seed; preserve the default domains. An empty array declares no domains. |
+| `auth.authorizedDomains[]` | Ignore this item; leave it out of the TOML array. |
+| `auth.mfa`, `auth.multiTenant`, `auth.tenants` | No declaration; keep the applicable defaults. |
+| `auth.mfa.enabledProviders`, `auth.mfa.providerConfigs` | No providers of this kind in the declared MFA configuration. Keep the `auth.mfa` table if declaring MFA. |
+| `auth.mfa.providerConfigs[].totpProviderConfig` | Ignore this provider entry; omit the key in that entry. |
+| `auth.mfa.providerConfigs[].totpProviderConfig.adjacentIntervals` | Use zero adjacent intervals in the declared TOTP provider; keep its table. |
+| `auth.blockingFunctions.triggers.beforeCreate`, `auth.blockingFunctions.triggers.beforeSignIn` | Disable this trigger in an explicit trigger selection. Keep `[auth.blockingFunctions.triggers]`; omitting that entire table enables discovery instead. |
+| `auth.quota.signUpQuotaConfig` | Clear the temporary quota override, including an imported override. Keep `[auth.quota]` empty; omitting the entire quota table preserves an imported override. |
+| `auth.passwordPolicy.constraints.maxLength`, `auth.passwordPolicyOverrides[].passwordPolicy.constraints.maxLength` | No custom maximum length. |

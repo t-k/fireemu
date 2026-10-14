@@ -43,7 +43,7 @@ await getFirestore().doc('notes/n1').set({ text: 'hello' });
 
 ## Client SDKs
 
-Client SDKs are connected in code, as with the Local Emulator Suite. Use the project ID Fireemu runs with: the `.firebaserc` default, else `daemon.authProject` in `fireemu.json`, else `demo-app`.
+Client SDKs are connected in code, as with the Local Emulator Suite. Use the project ID Fireemu runs with: the `.firebaserc` default, else `daemon.authProject` in `fireemu.toml`, else `demo-app`.
 
 ```js
 import { initializeApp } from 'firebase/app';
@@ -74,5 +74,5 @@ Fireemu takes the project ID from, in order:
 
 1. `--project` (`-P`) on the command line, as an ID or a `.firebaserc` alias;
 2. the default project of the `.firebaserc` next to the loaded `firebase.json`;
-3. `daemon.authProject` in `fireemu.json`;
+3. `daemon.authProject` in `fireemu.toml`;
 4. `demo-app`.

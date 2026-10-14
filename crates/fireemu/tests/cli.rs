@@ -57,6 +57,182 @@ fn run_in(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
 }
 
 #[test]
+fn toml_and_json_configs_have_identical_effective_values() {
+    let dir = scratch("toml-twins");
+    for (toml, json) in [
+        ("schemaVersion = 1\nprofile = 'emulator'\n[firestore]\nedition = 'standard'\napiMode = 'native'\n", r#"{"schemaVersion":1,"profile":"emulator","firestore":{"edition":"standard","apiMode":"native"}}"#),
+        ("schemaVersion = 1\nproductionExact = true\nauth.allowUnsignedIdTokens = true\n[auth.idpSigners]\n[eventarc.oauthCredentials]\n", r#"{"schemaVersion":1,"productionExact":true,"auth":{"allowUnsignedIdTokens":true,"idpSigners":{}},"eventarc":{"oauthCredentials":{}}}"#),
+        ("schemaVersion = 1\n[[auth.tenants]]\ntenantId = 'tenant-a'\ndisplayName = 'First'\n[[auth.tenants]]\ntenantId = 'tenant-b'\ndisplayName = 'Second'\n", r#"{"schemaVersion":1,"auth":{"tenants":[{"tenantId":"tenant-a","displayName":"First"},{"tenantId":"tenant-b","displayName":"Second"}]}}"#),
+    ] {
+        write(&dir, "foo.toml", toml);
+        write(&dir, "foo.json", json);
+        write(&dir, "foo.conf", json);
+        let mut outputs = Vec::new();
+        for path in ["foo.toml", "foo.json", "foo.conf"] {
+            let out = run_in(&dir, &["config", "show", "--json", "--config", path], None);
+            assert!(out.status.success(), "{path}: {}", stderr(&out));
+            outputs.push(out.stdout);
+        }
+        assert_eq!(outputs[0], outputs[1]);
+        assert_eq!(outputs[1], outputs[2]);
+    }
+}
+
+#[test]
+fn toml_errors_name_the_path_position_and_datetime_key() {
+    let dir = scratch("toml-errors");
+    write(&dir, "broken.toml", "schemaVersion = 1\nprofile = [\n");
+    let out = run_in(&dir, &["config", "show", "--config", "broken.toml"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("broken.toml:2:12"),
+        "{}",
+        stderr(&out)
+    );
+    for value in [
+        "1979-05-27T07:32:00Z",
+        "1979-05-27T07:32:00",
+        "1979-05-27",
+        "07:32:00",
+    ] {
+        write(
+            &dir,
+            "date.toml",
+            &format!("schemaVersion = 1\n[time]\nstart = {value}\n"),
+        );
+        let out = run_in(&dir, &["config", "show", "--config", "date.toml"], None);
+        assert_eq!(out.status.code(), Some(1));
+        let error = stderr(&out);
+        assert!(
+            error.contains("date.toml")
+                && error.contains("time.start")
+                && error.contains("datetime"),
+            "{error}"
+        );
+    }
+    write(
+        &dir,
+        "quoted.toml",
+        "schemaVersion = 1\n[daemon]\nclockStart = '1979-05-27T07:32:00Z'\n",
+    );
+    let out = run_in(&dir, &["config", "show", "--config", "quoted.toml"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    write(
+        &dir,
+        "nested.toml",
+        "schemaVersion = 1\n[[auth.tenants]]\ntenantId = 'tenant-a'\ncreatedAt = 1979-05-27\n",
+    );
+    let out = run_in(&dir, &["config", "show", "--config", "nested.toml"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("auth.tenants[0].createdAt"),
+        "{}",
+        stderr(&out)
+    );
+    for value in ["nan", "inf", "-inf"] {
+        write(
+            &dir,
+            "number.toml",
+            &format!("schemaVersion = 1\n[limits]\nqueryCatalog = {value}\n"),
+        );
+        let out = run_in(&dir, &["config", "show", "--config", "number.toml"], None);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(
+            stderr(&out).contains("limits.queryCatalog: non-finite"),
+            "{}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn discovery_loads_toml_and_refuses_both_canonical_files() {
+    let dir = scratch("toml-discovery");
+    write(
+        &dir,
+        "fireemu.toml",
+        "schemaVersion = 1\nprofile = 'emulator'\nbind = '127.0.0.1'\n",
+    );
+    let out = run_in(&dir, &["config", "show"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("profile = \"emulator\" (explicit)"));
+    assert!(
+        stderr(&out).contains("fireemu.toml: bind"),
+        "{}",
+        stderr(&out)
+    );
+    write(&dir, "fireemu.json", r#"{"schemaVersion":1}"#);
+    let out = run_in(&dir, &["config", "show"], None);
+    assert_eq!(out.status.code(), Some(1));
+    let error = stderr(&out);
+    assert!(
+        error.contains("fireemu.toml")
+            && error.contains("fireemu.json")
+            && error.contains("remove one"),
+        "{error}"
+    );
+    let out = run_in(&dir, &["config", "show", "--config", "fireemu.toml"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn firebase_json_flags_keep_json_parsing_for_toml_named_files() {
+    let dir = scratch("firebase-json-extension");
+    write(
+        &dir,
+        "firebase.toml",
+        r#"{"emulators":{"firestore":{"port":8123}}}"#,
+    );
+    let out = run_in(
+        &dir,
+        &[
+            "config",
+            "show",
+            "--firebase-json",
+            "firebase.toml",
+            "--json",
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        rows.iter()
+            .find(|row| row["key"] == "daemon.firestorePort")
+            .unwrap()["value"],
+        8123
+    );
+    write(
+        &dir,
+        "fireemu.toml",
+        "schemaVersion = 1\nfirebaseJson = 'firebase.toml'\n",
+    );
+    let out = run_in(&dir, &["config", "show", "--json"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn init_with_existing_json_does_not_create_toml_even_with_force() {
+    let dir = scratch("init-existing-json");
+    let original = r#"{"schemaVersion":1,"profile":"emulator"}"#;
+    write(&dir, "fireemu.json", original);
+    for args in [vec!["init", "--yes"], vec!["init", "--yes", "--force"]] {
+        let out = run_in(&dir, &args, None);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(stderr(&out).contains("fireemu.json"), "{}", stderr(&out));
+        assert!(!dir.join("fireemu.toml").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("fireemu.json")).unwrap(),
+            original
+        );
+    }
+    let out = run_in(&dir, &["init", "--reference", "--yes"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(dir.join("fireemu.reference.toml").is_file());
+    assert!(!dir.join("fireemu.toml").exists());
+}
+
+#[test]
 fn config_show_reports_effective_values_sources_and_schema_order() {
     let dir = scratch("config-show");
     write(
@@ -260,7 +436,7 @@ fn log_verbosity_quiet_keeps_the_notes_about_keys_without_effect_off_standard_er
 #[test]
 fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() {
     let dir = scratch("config-show-defaults");
-    write(&dir, "fireemu.reference.jsonc", "not a configuration");
+    write(&dir, "fireemu.reference.toml", "not a configuration");
     let out = run_in(&dir, &["config", "show", "--json"], None);
     assert!(out.status.success(), "{}", stderr(&out));
     let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
@@ -348,22 +524,23 @@ fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() 
 }
 
 #[test]
-fn init_reference_is_complete_valid_json_and_preserves_the_minimal_config() {
+fn init_reference_is_complete_valid_toml_and_preserves_the_minimal_config() {
     let dir = scratch("init-reference");
     let out = run_in(&dir, &["init", "--yes", "--reference"], None);
     assert!(out.status.success(), "{}", stderr(&out));
-    let minimal = std::fs::read(dir.join("fireemu.json")).unwrap();
-    let config: serde_json::Value = serde_json::from_slice(&minimal).unwrap();
+    let minimal = std::fs::read(dir.join("fireemu.toml")).unwrap();
+    let config: serde_json::Value = toml::from_str(std::str::from_utf8(&minimal).unwrap()).unwrap();
     assert_eq!(config.as_object().unwrap().len(), 4);
-    let reference = std::fs::read_to_string(dir.join("fireemu.reference.jsonc")).unwrap();
+    let reference = std::fs::read_to_string(dir.join("fireemu.reference.toml")).unwrap();
     assert!(reference.contains("not loaded by fireemu"));
+    assert!(reference.starts_with(&format!("#:schema {}\n", config_schema_url())));
     assert!(reference.contains("makes it explicit"));
     let active = reference
         .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
+        .filter(|line| !line.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
         .join("\n");
-    let parsed: serde_json::Value = serde_json::from_str(&active).unwrap();
+    let parsed: serde_json::Value = toml::from_str(&active).unwrap();
     assert!(parsed.pointer("/auth/allowUnsignedIdTokens").is_none());
     assert!(parsed.pointer("/auth/idpSigners").is_none());
     assert!(parsed.pointer("/eventarc/oauthCredentials").is_none());
@@ -383,16 +560,16 @@ fn init_reference_is_complete_valid_json_and_preserves_the_minimal_config() {
             }
         } else {
             assert!(
-                reference.contains(&format!("// {prefix}:")),
+                reference.contains(&format!("# {prefix}:")),
                 "missing {prefix}"
             );
-            let (_, section) = reference.split_once(&format!("// {prefix}:\n")).unwrap();
-            let name = prefix.rsplit('.').next().unwrap();
+            let (_, section) = reference.split_once(&format!("# {prefix}:\n")).unwrap();
             assert!(
                 section.lines().any(|line| line
                     .trim_start()
-                    .trim_start_matches("// ")
-                    .starts_with(&format!("\"{name}\":"))),
+                    .trim_start_matches("# ")
+                    .trim_start_matches('"')
+                    .starts_with(&prefix)),
                 "missing property {prefix}"
             );
             if let Some(value) = parsed.pointer(&format!("/{}", prefix.replace('.', "/"))) {
@@ -402,13 +579,13 @@ fn init_reference_is_complete_valid_json_and_preserves_the_minimal_config() {
     }
     let out = run_in(&dir, &["init", "--reference"], None);
     assert!(!out.status.success());
-    assert_eq!(std::fs::read(dir.join("fireemu.json")).unwrap(), minimal);
-    std::fs::remove_file(dir.join("fireemu.reference.jsonc")).unwrap();
+    assert_eq!(std::fs::read(dir.join("fireemu.toml")).unwrap(), minimal);
+    std::fs::remove_file(dir.join("fireemu.reference.toml")).unwrap();
     let out = run_in(&dir, &["init", "--reference"], None);
     assert!(out.status.success(), "{}", stderr(&out));
     let out = run_in(&dir, &["init", "--reference", "--force"], None);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(std::fs::read(dir.join("fireemu.json")).unwrap(), minimal);
+    assert_eq!(std::fs::read(dir.join("fireemu.toml")).unwrap(), minimal);
 }
 
 #[test]
@@ -571,20 +748,20 @@ fn init_reference_combines_flags_and_refuses_unsafe_replacement() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     let config: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.join("fireemu.json")).unwrap()).unwrap();
+        toml::from_str(&std::fs::read_to_string(dir.join("fireemu.toml")).unwrap()).unwrap();
     assert_eq!(config["profile"], "emulator");
     assert_eq!(config["firebaseJson"], "project.json");
     let out = run_in(&dir, &["init", "--reference", "--reference"], None);
     assert_eq!(out.status.code(), Some(2));
-    std::fs::remove_file(dir.join("fireemu.reference.jsonc")).unwrap();
-    std::fs::create_dir(dir.join("fireemu.reference.jsonc")).unwrap();
+    std::fs::remove_file(dir.join("fireemu.reference.toml")).unwrap();
+    std::fs::create_dir(dir.join("fireemu.reference.toml")).unwrap();
     let out = run_in(&dir, &["init", "--reference", "--force"], None);
     assert!(!out.status.success());
     #[cfg(unix)]
     {
-        std::fs::remove_dir(dir.join("fireemu.reference.jsonc")).unwrap();
+        std::fs::remove_dir(dir.join("fireemu.reference.toml")).unwrap();
         write(&dir, "keep.json", "keep");
-        std::os::unix::fs::symlink(dir.join("keep.json"), dir.join("fireemu.reference.jsonc"))
+        std::os::unix::fs::symlink(dir.join("keep.json"), dir.join("fireemu.reference.toml"))
             .unwrap();
         let out = run_in(&dir, &["init", "--reference", "--force"], None);
         assert!(!out.status.success());
@@ -598,9 +775,9 @@ fn init_reference_combines_flags_and_refuses_unsafe_replacement() {
 type Obstacle = fn(&Path);
 
 /// A refused `init --reference` leaves nothing behind: the reference destination is checked
-/// before `fireemu.json` is written, with and without `--force`, for each kind of obstacle.
+/// before `fireemu.toml` is written, with and without `--force`, for each kind of obstacle.
 #[test]
-fn init_reference_refusal_leaves_no_fireemu_json_behind() {
+fn init_reference_refusal_leaves_no_fireemu_toml_behind() {
     let init = ["init", "--reference", "--profile", "strict", "--yes"];
     let with_force = [
         "init",
@@ -627,7 +804,7 @@ fn init_reference_refusal_leaves_no_fireemu_json_behind() {
                 "init-reference-atomic-{}-{force}",
                 label.replace(' ', "-")
             ));
-            let reference = dir.join("fireemu.reference.jsonc");
+            let reference = dir.join("fireemu.reference.toml");
             make(&reference);
             let out = run_in(&dir, args, None);
             assert_eq!(
@@ -637,16 +814,16 @@ fn init_reference_refusal_leaves_no_fireemu_json_behind() {
                 stderr(&out)
             );
             assert_eq!(
-                dir.join("fireemu.json").exists(),
+                dir.join("fireemu.toml").exists(),
                 !refused,
-                "{label}, force={force}: fireemu.json must exist only if the command succeeded"
+                "{label}, force={force}: fireemu.toml must exist only if the command succeeded"
             );
         }
     }
-    // An existing fireemu.json is left alone when the reference is what is refused.
+    // An existing fireemu.toml is left alone when the reference is what is refused.
     let dir = scratch("init-reference-atomic-existing-config");
-    write(&dir, "fireemu.json", "keep me");
-    std::fs::create_dir(dir.join("fireemu.reference.jsonc")).unwrap();
+    write(&dir, "fireemu.toml", "keep me");
+    std::fs::create_dir(dir.join("fireemu.reference.toml")).unwrap();
     let out = run_in(
         &dir,
         &[
@@ -661,7 +838,7 @@ fn init_reference_refusal_leaves_no_fireemu_json_behind() {
     );
     assert!(!out.status.success());
     assert_eq!(
-        std::fs::read_to_string(dir.join("fireemu.json")).unwrap(),
+        std::fs::read_to_string(dir.join("fireemu.toml")).unwrap(),
         "keep me"
     );
 }
@@ -803,10 +980,11 @@ fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
 
     let out = run_in(&dir, &["init", "--yes"], None);
     assert!(out.status.success(), "{}", stderr(&out));
-    let path = dir.join("fireemu.json");
+    let path = dir.join("fireemu.toml");
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.ends_with('\n'));
-    let generated: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(text.starts_with(&format!("#:schema {}\n", config_schema_url())));
+    let generated: serde_json::Value = toml::from_str(&text).unwrap();
     assert_eq!(generated["$schema"], config_schema_url());
     assert_eq!(generated["schemaVersion"], 1);
     assert_eq!(generated["profile"], "strict");
@@ -814,7 +992,7 @@ fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
     assert_eq!(generated["firestore"]["edition"], "standard");
     assert_eq!(generated["firestore"]["apiMode"], "native");
     assert!(String::from_utf8_lossy(&out.stdout)
-        .contains("next: fireemu up (fireemu.json in this directory is loaded automatically)"));
+        .contains("next: fireemu up (fireemu.toml in this directory is loaded automatically)"));
 
     let before = std::fs::read(&path).unwrap();
     let out = run_in(&dir, &["init", "--yes"], None);
@@ -854,9 +1032,9 @@ fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
         stdout.contains("loaded again on every fireemu start"),
         "{stdout}"
     );
-    assert!(stdout.contains("Create fireemu.json? [Y/n]"), "{stdout}");
+    assert!(stdout.contains("Create fireemu.toml? [Y/n]"), "{stdout}");
     let generated: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
+        toml::from_str(&std::fs::read_to_string(dir.join("fireemu.toml")).unwrap()).unwrap();
     assert_eq!(generated["profile"], "strict");
     assert_eq!(generated["firebaseJson"], "firebase.json");
 
@@ -864,7 +1042,7 @@ fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
     let out = run_in(&dir, &["init", "--interactive"], Some("emulator\n\ny\n"));
     assert!(out.status.success(), "{}", stderr(&out));
     let generated: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
+        toml::from_str(&std::fs::read_to_string(dir.join("fireemu.toml")).unwrap()).unwrap();
     assert_eq!(generated["profile"], "emulator");
     assert!(generated.get("firebaseJson").is_none());
 }
@@ -887,8 +1065,7 @@ fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     let generated: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(explicit.join("fireemu.json")).unwrap())
-            .unwrap();
+        toml::from_str(&std::fs::read_to_string(explicit.join("fireemu.toml")).unwrap()).unwrap();
     assert_eq!(generated["profile"], "emulator");
     assert_eq!(generated["firebaseJson"], "project.json");
     assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
@@ -897,16 +1074,14 @@ fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
     let out = run_in(&strict, &["init", "--yes", "--profile", "strict"], None);
     assert!(out.status.success(), "{}", stderr(&out));
     let generated: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(strict.join("fireemu.json")).unwrap())
-            .unwrap();
+        toml::from_str(&std::fs::read_to_string(strict.join("fireemu.toml")).unwrap()).unwrap();
     assert_eq!(generated["profile"], "strict");
 
     let redirected = scratch("init-redirected");
     let out = run_in(&redirected, &["init"], Some("emulator\nmissing.json\nn\n"));
     assert!(out.status.success(), "{}", stderr(&out));
     let generated: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(redirected.join("fireemu.json")).unwrap())
-            .unwrap();
+        toml::from_str(&std::fs::read_to_string(redirected.join("fireemu.toml")).unwrap()).unwrap();
     assert_eq!(generated["profile"], "strict");
     assert!(generated.get("firebaseJson").is_none());
     assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
@@ -937,7 +1112,7 @@ fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
         let dir = scratch(&format!("init-usage-{}", label.replace(' ', "-")));
         let out = run_in(&dir, &args, None);
         assert_eq!(out.status.code(), Some(2), "{label}: {}", stderr(&out));
-        assert!(!dir.join("fireemu.json").exists(), "{label}");
+        assert!(!dir.join("fireemu.toml").exists(), "{label}");
     }
 
     let dir = scratch("init-usage-control-character");
@@ -950,7 +1125,7 @@ fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
 #[test]
 fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
     let dir = scratch("init-force-validation");
-    let destination = write(&dir, "fireemu.json", "keep this exact content\n");
+    let destination = write(&dir, "fireemu.toml", "keep this exact content\n");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -985,14 +1160,14 @@ fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     let generated: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(destination).unwrap()).unwrap();
+        toml::from_str(&std::fs::read_to_string(destination).unwrap()).unwrap();
     assert_eq!(generated["firebaseJson"], "valid.json");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
 
         assert_eq!(
-            std::fs::metadata(dir.join("fireemu.json"))
+            std::fs::metadata(dir.join("fireemu.toml"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -1009,7 +1184,7 @@ fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
         None,
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(absent.join("fireemu.json").is_file());
+    assert!(absent.join("fireemu.toml").is_file());
 }
 
 #[test]
@@ -1018,7 +1193,7 @@ fn init_force_refuses_missing_canonical_and_directory_sources_or_destinations() 
         ("missing", "missing.json", None, "cannot read"),
         (
             "canonical",
-            "other-fireemu.json",
+            "other-fireemu.toml",
             Some(r#"{"schemaVersion":1}"#),
             "not a firebase.json",
         ),
@@ -1031,7 +1206,7 @@ fn init_force_refuses_missing_canonical_and_directory_sources_or_destinations() 
         let out = run_in(&dir, &["init", "--yes", "--firebase-json", source], None);
         assert_eq!(out.status.code(), Some(1), "{label}: {}", stderr(&out));
         assert!(stderr(&out).contains(fragment), "{label}: {}", stderr(&out));
-        assert!(!dir.join("fireemu.json").exists());
+        assert!(!dir.join("fireemu.toml").exists());
     }
 
     let dir = scratch("init-control-character-source");
@@ -1042,11 +1217,11 @@ fn init_force_refuses_missing_canonical_and_directory_sources_or_destinations() 
     assert!(stderr(&out).contains("\\u{1b}"), "{}", stderr(&out));
 
     let dir = scratch("init-directory-destination");
-    std::fs::create_dir(dir.join("fireemu.json")).unwrap();
+    std::fs::create_dir(dir.join("fireemu.toml")).unwrap();
     let out = run_in(&dir, &["init", "--yes", "--force"], None);
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("not a regular file"));
-    assert!(dir.join("fireemu.json").is_dir());
+    assert!(dir.join("fireemu.toml").is_dir());
 }
 
 #[cfg(unix)]
@@ -1056,7 +1231,7 @@ fn init_force_refuses_a_symlink_destination_without_touching_its_target() {
 
     let dir = scratch("init-symlink");
     let target = write(&dir, "target.json", "keep\n");
-    let destination = dir.join("fireemu.json");
+    let destination = dir.join("fireemu.toml");
     symlink(&target, &destination).unwrap();
 
     let out = run_in(&dir, &["init", "--yes", "--force"], None);

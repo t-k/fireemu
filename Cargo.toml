@@ -62,6 +62,7 @@ missing_panics_doc = "allow"
 proptest = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = { version = "0.9.12", default-features = false, features = ["parse", "serde", "display"] }
 sha2 = "0.10"
 md-5 = "0.10"
 

@@ -956,7 +956,7 @@ fn firestore_no_rules_warning(event: NoticeEvent<'_>) -> String {
     // `firestore.rules`, `rules.source` and `PUT /v1/rules` all load the `(default)` database's
     // ruleset; another database needs its own.
     let how_to_load = if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
-        "set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules"
+        "set firestore.rules in firebase.json, rules.source in fireemu.toml, or PUT /v1/rules"
             .to_owned()
     } else {
         format!("declare the database with its own rules file in the firestore array of firebase.json, or PUT /emulator/v1/projects/{{project}}/databases/{database}:securityRules")
@@ -979,7 +979,7 @@ fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
         }
     };
     format!(
-        "warning: storage: an end-user request on bucket {bucket:?} was refused because no Storage Rules are loaded for it; set storage.rules in firebase.json or fireemu.json. Reported once per bucket."
+        "warning: storage: an end-user request on bucket {bucket:?} was refused because no Storage Rules are loaded for it; set storage.rules in firebase.json or fireemu.toml. Reported once per bucket."
     )
 }
 

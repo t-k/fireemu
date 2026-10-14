@@ -22,7 +22,7 @@ jobs:
 
 Fireemu needs no Java and no download at startup: the npm package installs a native binary for the runner's platform.
 
-To also check what the development defaults let through, such as unsigned test tokens, add a job that runs with a `fireemu.json` that sets [`productionExact`](../profiles/):
+To also check what the development defaults let through, such as unsigned test tokens, add a job that runs with a `fireemu.toml` that sets [`productionExact`](../profiles/):
 
 ```sh
 npx fireemu exec --config fireemu.production-exact.json -- npm test
@@ -30,21 +30,27 @@ npx fireemu exec --config fireemu.production-exact.json -- npm test
 
 ### Container jobs
 
-In a GitHub Actions `container:` job, or any container that runs as root with a bind-mounted checkout, the checkout is owned by a host user that the container's root does not trust, so a discovered `fireemu.json` or `firebase.json` is skipped with a warning. Name the files explicitly, or `chown` the checkout:
+In a GitHub Actions `container:` job, or any container that runs as root with a bind-mounted checkout, the checkout is owned by a host user that the container's root does not trust, so a discovered `fireemu.toml` or `firebase.json` is skipped with a warning. Name the files explicitly, or `chown` the checkout:
 
 ```sh
-npx fireemu exec --config fireemu.json --firebase-json firebase.json -- npm test
+npx fireemu exec --config fireemu.toml --firebase-json firebase.json -- npm test
 ```
 
 See [Configuration files](../configuration/#file-ownership-checks).
 
 ## Serve the emulators from a container
 
-By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.json`, and give the product emulators a host in `firebase.json`:
+By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.toml`, and give the product emulators a host in `firebase.json`:
 
-```json
-{ "schemaVersion": 1, "firebaseJson": "firebase.json", "network": { "allowNonLoopbackHosts": true } }
+```toml
+schemaVersion = 1
+firebaseJson = "firebase.json"
+
+[network]
+allowNonLoopbackHosts = true
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 ```json
 {

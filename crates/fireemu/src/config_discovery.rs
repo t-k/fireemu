@@ -1,7 +1,7 @@
 //! Which configuration files `up` and `exec` load when neither `--config` nor `--firebase-json`
 //! is given.
 //!
-//! A `fireemu.json` is looked for in the working directory only: its paths (`rules.source`,
+//! A `fireemu.toml` or `fireemu.json` is looked for in the working directory only: its paths (`rules.source`,
 //! `storage.rules`, `functions.source`) are read relative to the working directory, so one
 //! found in a parent would point at the wrong files. A `firebase.json` is looked for the way
 //! firebase-tools 15.28.2 finds it (`detectProjectRoot`): in the working directory, then in
@@ -34,7 +34,9 @@
 use std::path::{Path, PathBuf};
 
 /// The canonical configuration file name.
-pub(crate) const CANONICAL_FILE: &str = "fireemu.json";
+pub(crate) const CANONICAL_FILE: &str = "fireemu.toml";
+/// The legacy JSON configuration file name.
+pub(crate) const JSON_FILE: &str = "fireemu.json";
 /// The Firebase project configuration file name.
 pub(crate) const FIREBASE_FILE: &str = "firebase.json";
 /// The Firebase project aliases file name.
@@ -133,7 +135,7 @@ impl Opened {
 /// What the search found. A found file carries the text it was judged by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Discovered {
-    /// `fireemu.json` in the working directory: loaded as `--config` would load it.
+    /// `fireemu.toml` or `fireemu.json` in the working directory: loaded as `--config` would load it.
     Canonical(PathBuf, Result<String, String>),
     /// The nearest `firebase.json`: loaded as `--firebase-json` would load it.
     FirebaseJson(PathBuf, Result<String, String>),
@@ -185,7 +187,7 @@ pub(crate) fn discover(
             }
         }
         let names: &[&str] = if working {
-            &[CANONICAL_FILE, FIREBASE_FILE]
+            &[CANONICAL_FILE, JSON_FILE, FIREBASE_FILE]
         } else {
             &[FIREBASE_FILE]
         };
@@ -209,6 +211,13 @@ pub(crate) fn discover(
             let Some(opened) = open(&candidate).filter(|o| o.stat.is_file) else {
                 continue;
             };
+            if *name == CANONICAL_FILE && open(&dir.join(JSON_FILE)).is_some_and(|o| o.stat.is_file)
+            {
+                return Discovery {
+                    found: Discovered::Canonical(shown, Err(format!("both {CANONICAL_FILE} and {JSON_FILE} exist; remove one or select a file with --config"))),
+                    skipped: None,
+                };
+            }
             if let Some(reason) = untrusted_file(&opened.stat, trust) {
                 return nothing(Some(Skipped {
                     path: shown,
@@ -216,7 +225,7 @@ pub(crate) fn discover(
                 }));
             }
             return Discovery {
-                found: if *name == CANONICAL_FILE {
+                found: if *name == CANONICAL_FILE || *name == JSON_FILE {
                     Discovered::Canonical(shown, opened.read())
                 } else {
                     Discovered::FirebaseJson(shown, opened.read())
@@ -497,6 +506,63 @@ mod tests {
                 PathBuf::from("fireemu.json"),
                 Ok("text of /p/app/fireemu.json".to_owned())
             )
+        );
+    }
+
+    #[test]
+    fn both_canonical_files_are_refused_without_reading_either() {
+        for owner in [ME, OTHER] {
+            let tree = Tree::new(&[
+                ("/p/app/fireemu.toml", file(owner, 0o644)),
+                ("/p/app/fireemu.json", file(ME, 0o644)),
+            ]);
+            let result = discover(
+                Path::new("/p/app"),
+                &USER,
+                |path| tree.0.get(path).copied(),
+                |path| {
+                    tree.0
+                        .get(path)
+                        .copied()
+                        .filter(|stat| stat.is_file)
+                        .map(|stat| {
+                            Opened::new(stat, || panic!("ambiguous configuration must not be read"))
+                        })
+                },
+            );
+            let Discovered::Canonical(_, Err(error)) = result.found else {
+                panic!("both files must be refused: {result:?}");
+            };
+            assert!(
+                error.contains("fireemu.toml")
+                    && error.contains("fireemu.json")
+                    && error.contains("remove one"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn toml_discovery_preserves_trust_checks_and_parent_exclusion() {
+        let tree = Tree::new(&[("/p/app/fireemu.toml", file(ME, 0o644))]);
+        assert_eq!(
+            found(tree.discover("/p/app", &USER)),
+            Discovered::Canonical(
+                PathBuf::from("fireemu.toml"),
+                Ok("text of /p/app/fireemu.toml".to_owned())
+            )
+        );
+        for stat in [file(OTHER, 0o644), file(ME, 0o666)] {
+            let discovery = Tree::new(&[("/p/app/fireemu.toml", stat)]).discover("/p/app", &USER);
+            assert_eq!(discovery.found, Discovered::Nothing);
+            assert_eq!(
+                discovery.skipped.unwrap().path,
+                PathBuf::from("fireemu.toml")
+            );
+        }
+        assert_eq!(
+            found(Tree::new(&[("/p/fireemu.toml", file(ME, 0o644))]).discover("/p/app", &USER)),
+            Discovered::Nothing
         );
     }
 

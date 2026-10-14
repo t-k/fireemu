@@ -17,30 +17,28 @@ Under the `strict` profile the debug-token exchange, the JWKS and the callable t
 
 To enforce App Check for Authentication, Firestore or Storage, or to require registration, enable it and register the app with the SHA-256 digests of its debug tokens. The configuration stores only digests, never a raw token.
 
-```json
-{
-  "schemaVersion": 1,
-  "profile": "strict",
-  "appCheck": {
-    "enabled": true,
-    "apps": [
-      {
-        "projectId": "demo-app",
-        "projectNumber": "1234567890",
-        "appId": "1:1234567890:web:local-test-app",
-        "debugTokenSha256": ["<sha256 of your debug token>"]
-      }
-    ],
-    "services": {
-      "auth": "unenforced",
-      "firestore": "enforced",
-      "storage": "enforced"
-    }
-  }
-}
+```toml
+schemaVersion = 1
+profile = "strict"
+
+[appCheck]
+enabled = true
+
+[[appCheck.apps]]
+projectId = "demo-app"
+projectNumber = "1234567890"
+appId = "1:1234567890:web:local-test-app"
+debugTokenSha256 = ["<sha256 of your debug token>"]
+
+[appCheck.services]
+auth = "unenforced"
+firestore = "enforced"
+storage = "enforced"
 ```
 
-`--only` keeps the verifier a configured baseline needs: with `"firestore": "enforced"`, `--only firestore` still refuses a request without a valid token, and the start banner says that the verifier was included.
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
+
+`--only` keeps the verifier a configured baseline needs: with `appCheck.services.firestore = "enforced"`, `--only firestore` still refuses a request without a valid token, and the start banner says that the verifier was included.
 
 Each service accepts `off`, `unenforced` (tokens are checked and recorded, requests still pass) or `enforced` (requests without a valid token are refused before Security Rules run). A project without a registered app cannot use App Check, so an enforced service refuses every request to it.
 

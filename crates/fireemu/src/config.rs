@@ -1,4 +1,4 @@
-//! Runtime configuration: the canonical JSON config (spec 17) plus command-line overrides.
+//! Runtime configuration: the canonical TOML or JSON config (spec 17) plus command-line overrides.
 //!
 //! Only the keys the daemon currently honours are read; unknown keys are still rejected so
 //! that typos never silently change behaviour (the JSON schema in `spec/config` is the
@@ -2363,7 +2363,7 @@ fn emulator_host(
     if !allow_non_loopback {
         return loopback.map_err(|ConfigError(message)| {
             ConfigError(format!(
-                "{message}; to serve a container or another host, set network.allowNonLoopbackHosts to true in fireemu.json (the control API stays on loopback)"
+                "{message}; to serve a container or another host, set network.allowNonLoopbackHosts to true in fireemu.toml (the control API stays on loopback)"
             ))
         });
     }
@@ -7627,6 +7627,32 @@ mod tests {
     }
 
     #[test]
+    fn toml_examples_match_their_json_twins() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config/examples");
+        let mut loaded = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "toml") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let (toml, canonical) = crate::parse_config_text(&path, &text, true)
+                .unwrap_or_else(|error| panic!("{}", error.message));
+            assert!(canonical, "{}", path.display());
+            let json: Value = serde_json::from_str(
+                &std::fs::read_to_string(path.with_extension("json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(toml, json, "{}", path.display());
+            RuntimeConfig::from_json(&toml)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            loaded += 1;
+        }
+        assert!(loaded >= 7, "the TOML corpus must not silently shrink");
+    }
+
+    #[test]
     fn every_canonical_example_loads_and_the_tenants_example_declares_its_tenants() {
         let dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config/examples");
@@ -9331,10 +9357,13 @@ mod tests {
             for entry in std::fs::read_dir(root.join(directory)).unwrap() {
                 let path = entry.unwrap().path();
                 if path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("auth-authorized-domains")
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+                    && path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("auth-authorized-domains")
                 {
                     let config: Value =
                         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -10448,10 +10477,13 @@ mod provider_seed_tests {
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
                 .filter(|path| {
-                    path.file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .starts_with("auth-providers-")
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                        && path
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("auth-providers-")
                 })
             {
                 let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -10741,10 +10773,13 @@ mod eventarc_authentication_tests {
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
                 .filter(|path| {
-                    path.file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .starts_with("eventarc-authentication-")
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                        && path
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("eventarc-authentication-")
                 })
             {
                 let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

@@ -12,9 +12,12 @@ description: Choose between production behavior and official-emulator behavior, 
 
 The `emulator` profile accepts behavior that production refuses, so a test can pass there and fail against production. Use `strict` for your tests.
 
-```json
-{ "schemaVersion": 1, "profile": "strict" }
+```toml
+schemaVersion = 1
+profile = "strict"
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 ## Where Fireemu departs from production on purpose
 
@@ -24,13 +27,13 @@ For these behaviors, the default in both profiles is a development default that 
 
 To get production's behavior for all of them at once, set `productionExact` to `true` (`strict` profile only). An explicit setting still decides over it:
 
-```json
-{
-  "schemaVersion": 1,
-  "profile": "strict",
-  "productionExact": true,
-  "auth": { "allowUnsignedCustomTokens": true }
-}
+```toml
+schemaVersion = 1
+profile = "strict"
+productionExact = true
+
+[auth]
+allowUnsignedCustomTokens = true
 ```
 
 | Development default | Setting | With `productionExact` |
@@ -72,7 +75,7 @@ These differ from production and are not switched by `productionExact`:
 | Phone verification sends a code to any number with no reCAPTCHA, Play Integrity or APNs proof, which production requires outside test numbers | No setting. Client SDKs run their verifier in emulator mode, so the app path is exercised; a raw REST client that omits the proof passes here |
 | A reCAPTCHA `ENFORCE` state is stored and returned but not enforced, so a sign-in without a reCAPTCHA token is accepted | No setting |
 | `accounts:batchCreate` has no row limit; the Admin SDK checks 1000 users per call before it sends | No setting |
-| Sign-up rate limits (production limits new accounts per IP) are not simulated | Set `auth.quotaSimulation` to `{"mode": "enforce"}` |
+| Sign-up rate limits (production limits new accounts per IP) are not simulated | Set `auth.quotaSimulation` to `auth.quotaSimulation.mode = "enforce"` |
 | Firestore serves a request naming a project other than the daemon's from that project's own empty data, which keeps parallel tests apart; a typo in a `projectId` splits data instead of failing as production's `PERMISSION_DENIED` does | Set `projects.unknownProjects` to `"refuse"` |
 | The Admin SDK's `verifyIdToken` inside a function accepts an unsigned ID token, because the SDK skips signature verification while `FIREBASE_AUTH_EMULATOR_HOST` is set; production refuses it | No setting. See [Auth](../../products/auth/#tokens) |
 | A Pub/Sub push endpoint may be plain `http://` on loopback (`127.0.0.1`, `localhost`, `[::1]`); production requires HTTPS | Use a non-loopback `https://` URL in the subscription; Fireemu delivers push messages only to loopback, so there is no setting that makes it reach one |

@@ -21,9 +21,16 @@ Under `strict`, a request without any credential is accepted, so clients that us
 
 For tests that need a credential, set a local fixture bearer token. The endpoint then accepts only `Authorization: Bearer <token>` with that exact value, and refuses requests without a credential as production does:
 
-```json
-{ "schemaVersion": 1, "pubsub": { "authentication": { "localBearerToken": "fixture-token" } } }
+```toml
+schemaVersion = 1
+
+[pubsub]
+
+[pubsub.authentication]
+localBearerToken = "fixture-token"
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 Use a made-up value; never reuse a production credential. The published configuration schema does not list `pubsub.authentication` yet, so an editor that validates against it flags this key; Fireemu accepts it.
 

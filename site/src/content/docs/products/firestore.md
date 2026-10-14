@@ -7,14 +7,17 @@ Fireemu serves Cloud Firestore over gRPC, REST and the WebChannel transport the 
 
 ## Editions and API modes
 
-Select the database edition and API mode in `fireemu.json`. `fireemu init` writes the Standard edition with the Native API:
+Select the database edition and API mode in `fireemu.toml`. `fireemu init` writes the Standard edition with the Native API:
 
-```json
-{
-  "schemaVersion": 1,
-  "firestore": { "edition": "standard", "apiMode": "native" }
-}
+```toml
+schemaVersion = 1
+
+[firestore]
+edition = "standard"
+apiMode = "native"
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 `edition` accepts `standard` and `enterprise`. The Enterprise Pipeline API supports a limited subset of read operations; see [Limitations](../../compatibility/limitations/).
 
@@ -62,15 +65,16 @@ A test that updates the same documents many times therefore holds many versions 
 
 To use less memory, lower the limits in `firestore.history`:
 
-```json
-{
-  "schemaVersion": 1,
-  "firestore": {
-    "edition": "standard",
-    "apiMode": "native",
-    "history": { "maxVersionsPerPath": 16, "maxBytes": 268435456 }
-  }
-}
+```toml
+schemaVersion = 1
+
+[firestore]
+edition = "standard"
+apiMode = "native"
+
+[firestore.history]
+maxVersionsPerPath = 16
+maxBytes = 268435456
 ```
 
 - `maxVersionsPerPath` (1 to 1,000,000) sets the most versions of one document a database keeps.
@@ -82,7 +86,7 @@ Once any document has more versions than the cap, the database keeps no snapshot
 
 ## Security Rules
 
-Rules are read from the `firestore.rules` file named in `firebase.json`, or from `rules.source` in `fireemu.json`. Under `strict`, a project without rules refuses every client request, as a production project without a rules release does. See [Security Rules](../../guides/security-rules/).
+Rules are read from the `firestore.rules` file named in `firebase.json`, or from `rules.source` in `fireemu.toml`. Under `strict`, a project without rules refuses every client request, as a production project without a rules release does. See [Security Rules](../../guides/security-rules/).
 
 ## Named databases
 

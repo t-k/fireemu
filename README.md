@@ -39,7 +39,7 @@ npx fireemu exec -- <command>
 npx fireemu exec -- npm test
 ```
 
-`up` and `exec` read `fireemu.json` from the current directory, or, when there is none, the nearest `firebase.json` (see [Which configuration files are loaded](#which-configuration-files-are-loaded)). The first lines of the startup output name the files that were loaded and say, for Firestore and Storage, whether Security Rules are loaded.
+`up` and `exec` read `fireemu.toml` (or an existing `fireemu.json`) from the current directory, or, when there is none, the nearest `firebase.json` (see [Which configuration files are loaded](#which-configuration-files-are-loaded)). The first lines of the startup output name the files that were loaded and say, for Firestore and Storage, whether Security Rules are loaded.
 
 Every command documents its options: run `npx fireemu --help` for the commands and `npx fireemu <command> --help` (or `npx fireemu help <command>`) for the options of one, for example `npx fireemu exec --help`. After `--`, `exec` passes `--help` to your command.
 
@@ -177,9 +177,9 @@ The command reports information about the Fireemu binary, UI, Functions runner, 
 
 ### Initial setup and reusing `firebase.json`
 
-`fireemu init --reference` also writes `fireemu.reference.jsonc`, a commented reference generated from the schema. Fireemu never loads this file. The normal `fireemu.json` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment) stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
+`fireemu init --reference` also writes `fireemu.reference.toml`, a commented reference generated from the schema. Fireemu never loads this file. The normal `fireemu.toml` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment) stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
 
-`fireemu init` creates `fireemu.json` in the current directory. The interactive setup lets you choose a compatibility profile and whether to reuse an existing `firebase.json`.
+`fireemu init` creates `fireemu.toml` in the current directory. The interactive setup lets you choose a compatibility profile and whether to reuse an existing `firebase.json`.
 
 When reusing `firebase.json`, Fireemu references the file rather than copying its settings. Rules, indexes, Functions codebases, and emulator ports are read from it each time Fireemu starts.
 
@@ -189,14 +189,14 @@ Use the non-interactive form for CI or scripted setup.
 npx fireemu init --yes
 ```
 
-An existing `fireemu.json` is not overwritten unless `--force` is supplied.
+An existing `fireemu.toml` is not overwritten unless `--force` is supplied. An existing `fireemu.json` is preserved, including with `--force`; remove it before creating `fireemu.toml`.
 
 ### Which configuration files are loaded
 
 `up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
 
-1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for.
-2. Otherwise, `fireemu.json` in the current directory is loaded as if it were passed with `--config`. Its `firebaseJson` entry, resolved relative to `fireemu.json`, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.json` without a `firebaseJson` entry is not loaded, and the startup output says so. A `fireemu.json` in a parent directory is not used, because the paths it contains are relative to the current directory.
+1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML and every other extension as JSON. `--firebase-json` always reads JSON.
+2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded as if it were passed with `--config`. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used, because the paths it contains are relative to the current directory.
 3. Otherwise, the nearest `firebase.json` is loaded as if it were passed with `--firebase-json`: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. Its paths and the `.firebaserc` beside it are read from its directory.
 4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
 
@@ -204,7 +204,7 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
 A discovered file can name Functions code to run and the rules to enforce, so on Unix the search checks who owns what it finds, as git checks repository ownership. The Firebase CLI does not check this. The trusted owners are you (the effective user), root, and, when you run as root through `sudo`, the user in `SUDO_UID`.
 
-- A `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped. Group write is allowed, so files created under a user-private-group umask (002, the Debian and Ubuntu default) are loaded.
+- A `fireemu.toml`, `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped. Group write is allowed, so files created under a user-private-group umask (002, the Debian and Ubuntu default) are loaded.
 - A `.firebaserc` names only project and target aliases, never code or rules, so its owner is not checked. It is skipped only when it, or its directory, can be written by any user.
 - The search stops before a parent directory whose owner is not trusted or that any user can write, such as `/tmp`. It also stops, without a warning, at a parent it cannot inspect, such as one you may not enter.
 - The owner of the current directory is not checked, because you chose to run there. A current directory that any user can write is not searched at all.
@@ -215,18 +215,18 @@ A skipped file or directory is named in a warning, and the run continues as if n
 
 Two common setups run into this rule:
 
-- A root container with a bind-mounted checkout. Examples are GitHub Actions `container:` jobs and `docker run -v "$PWD":/app` as root. The `fireemu.json` and `firebase.json` there are owned by a host user that the container's root does not trust, so they are skipped. Use the explicit flags, or `chown` the checkout. The `.firebaserc` still names the project. Rootless Podman maps your user to the container's root, so it is not affected.
+- A root container with a bind-mounted checkout. Examples are GitHub Actions `container:` jobs and `docker run -v "$PWD":/app` as root. The `fireemu.toml` and `firebase.json` there are owned by a host user that the container's root does not trust, so they are skipped. Use the explicit flags, or `chown` the checkout. The `.firebaserc` still names the project. Rootless Podman maps your user to the container's root, so it is not affected.
 - `sudo`. Files owned by the user that `sudo` names in `SUDO_UID` are trusted.
 
 On Windows, ownership is not checked.
 
-If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.json`.
+If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.toml`.
 
 ### Security Rules that are not loaded
 
 Under the `strict` profile, a project without Security Rules behaves as a production project without a rules release: every client request to Firestore is refused with `PERMISSION_DENIED`, and every end-user request to Storage is refused with production's 400 "bucket has not been set up" answer. The Admin SDK and other owner credentials are not affected. The `emulator` profile allows every Firestore request, and every Storage request for a `demo-*` project, as the official emulator does.
 
-The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket (up to 32 of each) prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
+The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket (up to 32 of each) prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.toml` (`rules.source`, `storage.rules`).
 
 ### Why a request was denied
 
@@ -236,7 +236,7 @@ A Security Rules denial is answered with production's wording (Firestore's `PERM
 note: firestore: Security Rules denied get on "notes/n1" in "database (default)" (request.auth.uid "bob"): no allow statement evaluated to true; line 5:22 `request.auth.uid == resource.data.owner` was false
 ```
 
-- Set `rules.denialLog` to `"off"` in `fireemu.json` to silence these lines (for example in a suite that asserts many denials). The answer to the client is the same either way.
+- Set `rules.denialLog` to `"off"` in `fireemu.toml` to silence these lines (for example in a suite that asserts many denials). The answer to the client is the same either way.
 - When the UI is running, its Rules page lists the decided requests from the start of the run, with what every expression evaluated to. The same trace is served by `GET /v1/sessions/default/rules/requests` on the control API.
 
 ### Compatibility profiles
@@ -252,14 +252,16 @@ Use `strict` for your tests, also when you are moving a project over from the Fi
 
 Fireemu is mostly run by tests, in CI and on a developer's machine. Where production needs setup that a test should not have to do (signed tokens, signing keys, enabling a feature through an Admin API call), the default in both profiles is the development behavior, and each such behavior has its own configuration key. To get production's behavior for all of them at once, set `productionExact` to `true` (strict profile only); an explicit key still decides over it:
 
-```json
-{
-  "schemaVersion": 1,
-  "profile": "strict",
-  "productionExact": true,
-  "auth": { "allowUnsignedCustomTokens": true }
-}
+```toml
+schemaVersion = 1
+profile = "strict"
+productionExact = true
+
+[auth]
+allowUnsignedCustomTokens = true
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 | Development default | Key | With `productionExact` |
 |---|---|---|
@@ -280,47 +282,45 @@ Under the `emulator` profile, a request that names a tenant the project does not
 
 ### Migrating from the Firebase Local Emulator Suite
 
-Keep `"profile": "strict"` (the default of `fireemu init`), and point fireemu at your existing `firebase.json` with `npx fireemu init --firebase-json firebase.json` or `--firebase-json` on the command line. Replace `firebase emulators:exec` with `fireemu exec` and `firebase emulators:start` with `fireemu up`; the official command names `emulators:exec` and `emulators:start` also work.
+Keep `profile = "strict"` (the default of `fireemu init`), and point fireemu at your existing `firebase.json` with `npx fireemu init --firebase-json firebase.json` or `--firebase-json` on the command line. Replace `firebase emulators:exec` with `fireemu exec` and `firebase emulators:start` with `fireemu up`; the official command names `emulators:exec` and `emulators:start` also work.
 
 When a test fails under `strict` but passed on the official emulator, it is usually behavior the application would also meet in production. Fix the test or the application, or relax only the specific setting below instead of switching the whole profile.
 
-- **Unsigned emulator ID tokens** (`@firebase/rules-unit-testing` `authenticatedContext()`, the client SDK's `mockUserToken`) work under `strict` by default. Set `auth.allowUnsignedIdTokens` to `false` to disable their fallback on the Security Rules surfaces. For a refusal test, use the SDK helper's default `iat: 0` / `exp: 3600` with a clock after expiry; fireemu-issued tokens that pass normal verification are still accepted. Use `auth.idTokenSigning: "session-rsa"` to refuse all unsigned ID tokens.
+- **Unsigned emulator ID tokens** (`@firebase/rules-unit-testing` `authenticatedContext()`, the client SDK's `mockUserToken`) work under `strict` by default. Set `auth.allowUnsignedIdTokens` to `false` to disable their fallback on the Security Rules surfaces. For a refusal test, use the SDK helper's default `iat: 0` / `exp: 3600` with a clock after expiry; fireemu-issued tokens that pass normal verification are still accepted. Use `auth.idTokenSigning = "session-rsa"` to refuse all unsigned ID tokens.
 - **Composite indexes** are validated as production does: a query whose index is not defined (or is still building, or was deleted) is refused with `FAILED_PRECONDITION` and the console link to the index. Declare the index a query needs in `firestore.indexes.json`, referenced from `firebase.json`. To run such a query anyway and have each missing index reported once per database on stderr (with production's refusal text and the `firestore.indexes.json` entry), set `firestore.missingIndexes` to `"report"`; `productionExact` does not change this key.
 - **Settings that mirror your production project.** Set them to match it instead of switching the profile:
 
 | Setting | What it does under `strict` |
 |---|---|
 | `auth.improvedEmailPrivacy` | Email enumeration protection, on for a new production project. Set `false` only if your production project turned it off; sign-ins then answer `EMAIL_NOT_FOUND` and `INVALID_PASSWORD` as the official Auth emulator does |
-| `auth.mfa` | Your project's multi-factor configuration (an object, see [Enable multi-factor authentication at start](#enable-multi-factor-authentication-at-start)). `strict` starts with SMS and TOTP enabled as a development default, `productionExact` starts with multi-factor off as a new production project does, and the official emulator has no TOTP at all. A declared block always decides, so `{"state": "DISABLED"}` makes enrollment fail as it does in a project that never enabled it |
+| `auth.mfa` | Your project's multi-factor configuration (an object, see [Enable multi-factor authentication at start](#enable-multi-factor-authentication-at-start)). `strict` starts with SMS and TOTP enabled as a development default, `productionExact` starts with multi-factor off as a new production project does, and the official emulator has no TOTP at all. A declared block always decides, so `auth.mfa.state = "DISABLED"` makes enrollment fail as it does in a project that never enabled it |
 | `firestore.enforceLimits` | Production always enforces the Standard edition query limits. `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` it switches only the query limits |
 
 ### Basic configuration
 
 The initial configuration selects Standard edition Firestore with the Native API.
 
-```json
-{
-  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
-  "schemaVersion": 1,
-  "profile": "strict",
-  "firestore": {
-    "edition": "standard",
-    "apiMode": "native"
-  }
-}
+```toml
+#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+schemaVersion = 1
+profile = "strict"
+
+[firestore]
+edition = "standard"
+apiMode = "native"
 ```
 
 You can also name the configuration file with `--config`.
 
 ```sh
-npx fireemu up --config ./fireemu.json
+npx fireemu up --config ./fireemu.toml
 ```
 
-Keep Fireemu-specific settings in a Fireemu configuration file containing `"schemaVersion": 1`, rather than in `firebase.json`. See the [configuration schema](spec/config/fireemu.schema.json) for all available settings. 
+Keep Fireemu-specific settings in a Fireemu configuration file containing `schemaVersion = 1`, rather than in `firebase.json`. See the [configuration schema](spec/config/fireemu.schema.json) for all available settings.
 
 ### Firebase Authentication (Identity Platform) configuration
 
-The `auth` section of `fireemu.json` lets you configure sign-in methods, password policies, account permissions, and other authentication settings. Match your application’s configuration to test registration, sign-in, and account management behavior.
+The `auth` section of `fireemu.toml` lets you configure sign-in methods, password policies, account permissions, and other authentication settings. Match your application’s configuration to test registration, sign-in, and account management behavior.
 
 | What you can configure | Main settings |
 |---|---|
@@ -345,7 +345,7 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 
 Unsigned custom tokens minted by the Firebase Admin SDK in emulator mode are accepted by default, including with the recommended `strict` profile and with `auth.customTokenSigners` configured. To require signed custom tokens, set `auth.allowUnsignedCustomTokens` to `false` and configure `auth.customTokenSigners` with the service accounts' public JWK sets. The setting applies only to custom-token sign-in; strict claim checks and signed-token verification still apply. In the `emulator` profile, setting it to `false` also disables JSON fake custom tokens.
 
-The unsigned mock ID token of `@firebase/rules-unit-testing` is accepted by default when Firestore and Storage Security Rules are evaluated, including with the `strict` profile. This is the token `authenticatedContext()` and the client SDKs' `mockUserToken` option send (`createMockUserToken` in `@firebase/util`). Normal verification runs first. Only after it fails can the mock-token fallback accept a token. Under `strict` that fallback accepts only the exact SDK shape: a JWT whose header is exactly `{"alg":"none","type":"JWT"}` and whose signature is empty. `request.auth` is built from the token's claims, as the official emulator builds it, when the token names a subject (`sub`) and its audience (`aud`) is the project the request goes to. Its `exp` is not checked, because the SDK sets `iat: 0` and `exp: 3600` by default. Every other token is verified as before, expiry included. That covers the unsigned ID tokens fireemu itself issues (their header carries `typ`, not `type`), and a token that claims a signature that does not verify is still refused. The `emulator` profile accepts any unsigned token, as the official emulator does, and its Storage also accepts another project's token. Set `auth.allowUnsignedIdTokens` to `false` (in either profile) or set `productionExact` to disable this fallback. Neither setting refuses fireemu-issued unsigned ID tokens that pass normal verification. Changing only an issued token's header to the SDK shape can still pass normal verification of its payload; it is not a refusal test. For a refusal test, use `createMockUserToken` with its default `iat: 0` / `exp: 3600`, or construct that exact header and empty signature with those times, a subject and the routed project as audience, and run with a clock after expiry (including Firestore's 30-second allowance). A session with `auth.idTokenSigning: "session-rsa"` accepts no unsigned token. The setting does not affect callable Functions, Identity Toolkit or App Check.
+The unsigned mock ID token of `@firebase/rules-unit-testing` is accepted by default when Firestore and Storage Security Rules are evaluated, including with the `strict` profile. This is the token `authenticatedContext()` and the client SDKs' `mockUserToken` option send (`createMockUserToken` in `@firebase/util`). Normal verification runs first. Only after it fails can the mock-token fallback accept a token. Under `strict` that fallback accepts only the exact SDK shape: a JWT whose header is exactly `{"alg":"none","type":"JWT"}` and whose signature is empty. `request.auth` is built from the token's claims, as the official emulator builds it, when the token names a subject (`sub`) and its audience (`aud`) is the project the request goes to. Its `exp` is not checked, because the SDK sets `iat: 0` and `exp: 3600` by default. Every other token is verified as before, expiry included. That covers the unsigned ID tokens fireemu itself issues (their header carries `typ`, not `type`), and a token that claims a signature that does not verify is still refused. The `emulator` profile accepts any unsigned token, as the official emulator does, and its Storage also accepts another project's token. Set `auth.allowUnsignedIdTokens` to `false` (in either profile) or set `productionExact` to disable this fallback. Neither setting refuses fireemu-issued unsigned ID tokens that pass normal verification. Changing only an issued token's header to the SDK shape can still pass normal verification of its payload; it is not a refusal test. For a refusal test, use `createMockUserToken` with its default `iat: 0` / `exp: 3600`, or construct that exact header and empty signature with those times, a subject and the routed project as audience, and run with a clock after expiry (including Firestore's 30-second allowance). A session with `auth.idTokenSigning = "session-rsa"` accepts no unsigned token. The setting does not affect callable Functions, Identity Toolkit or App Check.
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the format and accepted values of each setting.  
 
@@ -353,62 +353,60 @@ Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to se
 
 An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared. Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain. Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration. The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
 
-Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `"providers": {"oidc": [{"name": "oidc.fixture", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test", "responseType": {"idToken": true}}]}` initializes that provider in both profiles. By default both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget); the emulator profile accepts them whether or not the provider is declared, and the strict profile refuses an `oidc.*` or `saml.*` provider that is not declared (or is disabled), as production does. With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `auth.providers.oidc = [{ name = "oidc.fixture", enabled = true, clientId = "local-client", issuer = "https://issuer.test", responseType = { idToken = true } }]` initializes that provider in both profiles. By default both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget); the emulator profile accepts them whether or not the provider is declared, and the strict profile refuses an `oidc.*` or `saml.*` provider that is not declared (or is disabled), as production does. With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
 
-Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The emulator profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `"schemaVersion": 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
+Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The emulator profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `schemaVersion = 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
 
 #### Example configuration
 
 This example enables email/password and phone sign-in while disabling anonymous sign-in. It requires passwords of at least 12 characters containing uppercase letters, lowercase letters, and numbers, and prevents users from deleting their own accounts. Phone sign-in uses a configured test phone number and verification code.
 
-```json
-{
-  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
-  "schemaVersion": 1,
-  "profile": "strict",
-  "firestore": {
-    "edition": "standard",
-    "apiMode": "native"
-  },
-  "auth": {
-    "signIn": {
-      "allowDuplicateEmails": false,
-      "email": {
-        "enabled": true,
-        "passwordRequired": true
-      },
-      "anonymous": {
-        "enabled": false
-      },
-      "phoneNumber": {
-        "enabled": true,
-        "testPhoneNumbers": {
-          "+16505550101": "123456"
-        }
-      }
-    },
-    "passwordPolicy": {
-      "enforcementState": "ENFORCE",
-      "forceUpgradeOnSignin": true,
-      "constraints": {
-        "minLength": 12,
-        "requireUppercase": true,
-        "requireLowercase": true,
-        "requireNumeric": true
-      }
-    },
-    "client": {
-      "permissions": {
-        "disabledUserSignup": false,
-        "disabledUserDeletion": true
-      }
-    },
-    "improvedEmailPrivacy": true
-  }
-}
+```toml
+#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+schemaVersion = 1
+profile = "strict"
+
+[firestore]
+edition = "standard"
+apiMode = "native"
+
+[auth]
+improvedEmailPrivacy = true
+
+[auth.signIn]
+allowDuplicateEmails = false
+
+[auth.signIn.email]
+enabled = true
+passwordRequired = true
+
+[auth.signIn.anonymous]
+enabled = false
+
+[auth.signIn.phoneNumber]
+enabled = true
+
+[auth.signIn.phoneNumber.testPhoneNumbers]
+"+16505550101" = "123456"
+
+[auth.passwordPolicy]
+enforcementState = "ENFORCE"
+forceUpgradeOnSignin = true
+
+[auth.passwordPolicy.constraints]
+minLength = 12
+requireUppercase = true
+requireLowercase = true
+requireNumeric = true
+
+[auth.client]
+
+[auth.client.permissions]
+disabledUserSignup = false
+disabledUserDeletion = true
 ```
 
-For an existing `fireemu.json`, add the settings you need to its `auth` section. Adjust the values to match your application’s requirements.   
+For an existing `fireemu.toml`, add the settings you need to its `auth` section. Adjust the values to match your application’s requirements.
 
 #### Project- and tenant-specific settings
 
@@ -418,21 +416,22 @@ These settings are separate from creating the project or tenant. Naming a tenant
 
 #### Enable multi-factor authentication at start
 
-Under the `strict` profile, TOTP is enabled only through the project's MFA configuration, as in production, so `auth.totp` alone enables nothing there. By default that configuration is on (SMS and TOTP enabled), so a test needs nothing to enrol a second factor; `productionExact` starts a project with multi-factor off, as production does until it is enabled. Use `auth.mfa` to declare the configuration in the file instead of calling the Admin API in every session, to turn multi-factor off (`{"state": "DISABLED"}`), or to enable only what your production project does. It has the shape Identity Platform uses (`state`, `enabledProviders`, and `providerConfigs` with `totpProviderConfig.adjacentIntervals`):
+Under the `strict` profile, TOTP is enabled only through the project's MFA configuration, as in production, so `auth.totp` alone enables nothing there. By default that configuration is on (SMS and TOTP enabled), so a test needs nothing to enrol a second factor; `productionExact` starts a project with multi-factor off, as production does until it is enabled. Use `auth.mfa` to declare the configuration in the file instead of calling the Admin API in every session, to turn multi-factor off (`auth.mfa.state = "DISABLED"`), or to enable only what your production project does. It has the shape Identity Platform uses (`state`, `enabledProviders`, and `providerConfigs` with `totpProviderConfig.adjacentIntervals`):
 
-```json
-{
-  "schemaVersion": 1,
-  "profile": "strict",
-  "auth": {
-    "mfa": {
-      "state": "ENABLED",
-      "providerConfigs": [
-        { "state": "ENABLED", "totpProviderConfig": { "adjacentIntervals": 1 } }
-      ]
-    }
-  }
-}
+```toml
+schemaVersion = 1
+profile = "strict"
+
+[auth]
+
+[auth.mfa]
+state = "ENABLED"
+
+[[auth.mfa.providerConfigs]]
+state = "ENABLED"
+
+[auth.mfa.providerConfigs.totpProviderConfig]
+adjacentIntervals = 1
 ```
 
 - The configuration applies when the daemon starts, in both profiles, and to every project created afterward (not the default project's current value). It is validated as the Admin API validates an update of `mfa`, and a value production would refuse stops the daemon at startup.
@@ -449,22 +448,23 @@ Multi-tenancy works by default under both profiles: a new project allows tenants
 
 Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`. By default the id can be any readable name that starts with a letter and holds letters, digits and hyphens (up to 63 characters), such as `tenant-a`. With `productionExact` or `auth.tenantIdFormat: "generated"` it must have the form production generates, the display name, a hyphen, and five characters of `a-z0-9`, such as `acme-x7k2q`:
 
-```json
-{
-  "schemaVersion": 1,
-  "profile": "strict",
-  "auth": {
-    "multiTenant": { "allowTenants": true },
-    "tenants": [
-      {
-        "tenantId": "tenant-a",
-        "displayName": "acme",
-        "allowPasswordSignup": true,
-        "mfaConfig": { "state": "ENABLED", "enabledProviders": ["PHONE_SMS"] }
-      }
-    ]
-  }
-}
+```toml
+schemaVersion = 1
+profile = "strict"
+
+[auth]
+
+[auth.multiTenant]
+allowTenants = true
+
+[[auth.tenants]]
+tenantId = "tenant-a"
+displayName = "acme"
+allowPasswordSignup = true
+
+[auth.tenants.mfaConfig]
+state = "ENABLED"
+enabledProviders = ["PHONE_SMS"]
 ```
 
 - A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document. The file is stricter than the route in the `emulator` profile: it also refuses an unknown member and a missing or invalid `displayName`, as production does.
@@ -477,11 +477,13 @@ Instead of creating tenants through the Admin API in every session, declare the 
 
 Use `auth.quotaSimulation` to test sign-up quota-exceeded behavior locally. For example, set `auth.quotaSimulation` to:
 
-```json
-{
-  "mode": "enforce",
-  "defaultQuotaPerHour": 5
-}
+```toml
+
+[auth]
+
+[auth.quotaSimulation]
+mode = "enforce"
+defaultQuotaPerHour = 5
 ```
 
 This is a local fixed-window simulation. It does not reproduce Firebase’s full quota accounting or abuse-prevention systems.  
@@ -508,18 +510,16 @@ Like production, Fireemu keeps every version of a document written in the last h
 
 Versions older than an hour are released by the next commit after the clock passes them. To use less memory, lower the limits in the `firestore.history` section:
 
-```json
-{
-  "schemaVersion": 1,
-  "firestore": {
-    "edition": "standard",
-    "apiMode": "native",
-    "history": {
-      "maxVersionsPerPath": 16,
-      "maxBytes": 268435456
-    }
-  }
-}
+```toml
+schemaVersion = 1
+
+[firestore]
+edition = "standard"
+apiMode = "native"
+
+[firestore.history]
+maxVersionsPerPath = 16
+maxBytes = 268435456
 ```
 
 - `maxVersionsPerPath` (1 to 1,000,000) sets the most versions of one document a database keeps, on either clock, in place of the defaults above.
@@ -541,11 +541,11 @@ To see how much history a running daemon holds, run `fireemu doctor --connect <c
 
 The Storage emulator keeps every object in memory, and by default nothing bounds how much. To cap it, set `storage.maxStoredBytes` (bytes, at least 1). Production has no such limit; it is local to Fireemu:
 
-```json
-{
-  "schemaVersion": 1,
-  "storage": { "maxStoredBytes": 1073741824 }
-}
+```toml
+schemaVersion = 1
+
+[storage]
+maxStoredBytes = 1073741824
 ```
 
 - Each object counts its bytes once, and a copy counts again. Replacing an object counts only the difference in size.
@@ -582,10 +582,14 @@ Like the official emulator, the Storage port reflects the requested object name 
 
 ### Run in a container
 
-By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.json` and give the product emulators a host in `firebase.json`:
+By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.toml` and give the product emulators a host in `firebase.json`:
 
-```json
-{ "schemaVersion": 1, "firebaseJson": "firebase.json", "network": { "allowNonLoopbackHosts": true } }
+```toml
+schemaVersion = 1
+firebaseJson = "firebase.json"
+
+[network]
+allowNonLoopbackHosts = true
 ```
 
 ```json

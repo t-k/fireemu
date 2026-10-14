@@ -8,6 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- fireemu reads its configuration from `fireemu.toml` as well as `fireemu.json`, with the same keys, validation and defaults; `--config <file>.toml` reads TOML and any other extension reads JSON, as before. TOML has no `null`: leave the key out instead. A TOML date or time value is refused with the key's name.
+
+### Changed
+
+- `fireemu init` writes `fireemu.toml` instead of `fireemu.json`, and `--reference` writes `fireemu.reference.toml`; an existing `fireemu.json` is left alone and counts as a configuration. When the working directory has both `fireemu.toml` and `fireemu.json`, `up` and `exec` refuse to start and name both files; remove one or choose one with `--config`. The documentation shows TOML first.
+
 ## [0.20.0] - 2026-10-14
 
 ### Changed

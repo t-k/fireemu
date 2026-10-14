@@ -1,9 +1,9 @@
 ---
 title: Configuration schema
-description: The JSON Schema of fireemu.json.
+description: The JSON Schema of fireemu.toml.
 ---
 
-`fireemu.json` is described by a JSON Schema. Download it from this site, or read it in the repository:
+`fireemu.toml` is described by a JSON Schema. Download it from this site, or read it in the repository:
 
 - [fireemu.schema.json on this site](../../spec/config/fireemu.schema.json)
 - [spec/config/fireemu.schema.json on GitHub](https://github.com/t-k/fireemu/blob/main/spec/config/fireemu.schema.json)

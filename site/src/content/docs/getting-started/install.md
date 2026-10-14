@@ -1,6 +1,6 @@
 ---
 title: Install and run
-description: Install Fireemu from npm, create fireemu.json, and start the emulators.
+description: Install Fireemu from npm, create fireemu.toml, and start the emulators.
 ---
 
 ## Requirements
@@ -22,15 +22,15 @@ Add Fireemu as a development dependency of your project. The package installs a 
 npm install --save-dev fireemu
 ```
 
-## Create `fireemu.json`
+## Create `fireemu.toml`
 
 ```sh
 npx fireemu init
 ```
 
-`init` creates `fireemu.json` in the current directory. Interactively, it asks which [compatibility profile](../../guides/profiles/) to use (`strict`, the default, is recommended) and whether to reuse an existing `firebase.json`. When you reuse it, Fireemu references the file instead of copying it: Security Rules, indexes, Functions codebases and ports are read from it every time Fireemu starts.
+`init` creates `fireemu.toml` in the current directory. Interactively, it asks which [compatibility profile](../../guides/profiles/) to use (`strict`, the default, is recommended) and whether to reuse an existing `firebase.json`. When you reuse it, Fireemu references the file instead of copying it: Security Rules, indexes, Functions codebases and ports are read from it every time Fireemu starts.
 
-For CI or a script, use the non-interactive form. An existing `fireemu.json` is not overwritten unless you pass `--force`.
+For CI or a script, use the non-interactive form. An existing `fireemu.toml` is not overwritten unless you pass `--force`. An existing `fireemu.json` is preserved; remove it before creating `fireemu.toml`.
 
 ```sh
 npx fireemu init --yes
@@ -38,17 +38,17 @@ npx fireemu init --yes
 
 The generated file looks like this:
 
-```json
-{
-  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
-  "schemaVersion": 1,
-  "profile": "strict",
-  "firestore": {
-    "edition": "standard",
-    "apiMode": "native"
-  }
-}
+```toml
+#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+schemaVersion = 1
+profile = "strict"
+
+[firestore]
+edition = "standard"
+apiMode = "native"
 ```
+
+JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
 
 ## Start the emulators
 

@@ -1,0 +1,29 @@
+#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+schemaVersion = 1
+profile = "strict"
+
+[limits]
+catalog = "firestore-standard-2026-08-25"
+queryCatalog = "firestore-standard-query-2026-08-25"
+rulesCatalog = "firebase-rules-2026-08-25"
+
+[firestore]
+edition = "standard"
+apiMode = "native"
+
+[rules]
+executionMode = "admin-bypass"
+
+[auth]
+
+[auth.providers]
+
+[[auth.providers.oidc]]
+name = "oidc.fixture"
+enabled = true
+clientId = "local-client"
+issuer = "https://issuer.test"
+clientSecret = "public-test-secret"
+
+[auth.providers.oidc.responseType]
+code = true

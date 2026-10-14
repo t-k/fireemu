@@ -469,7 +469,7 @@ fn configuration_help_describes_show_and_reference() {
     let text = assert_help(&run(&["init", "--help"]), "init reference");
     for phrase in [
         "--reference",
-        "fireemu.reference.jsonc",
+        "fireemu.reference.toml",
         "does not load",
         "productionExact",
     ] {

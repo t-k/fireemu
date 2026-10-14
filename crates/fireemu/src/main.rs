@@ -276,7 +276,7 @@ fn main() -> ExitCode {
             Ok(path) => {
                 println!("created {}", diagnostic_path(&path));
                 println!(
-                    "next: fireemu up (fireemu.json in this directory is loaded automatically)"
+                    "next: fireemu up (fireemu.toml in this directory is loaded automatically)"
                 );
                 ExitCode::SUCCESS
             }
@@ -995,17 +995,73 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
 /// Reads the file `--config` names. A canonical fireemu configuration always carries
 /// `schemaVersion`; otherwise it is a `firebase.json` unless fireemu-only keys reveal a
 /// missing version. Shared product sections and unrelated Firebase deploy keys remain valid.
-fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> {
+fn read_config_file(path: &Path, is_toml: bool) -> Result<(serde_json::Value, bool), CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path))))?;
-    parse_config_text(path, &text)
+    parse_config_text(path, &text, is_toml)
 }
 
 /// [`read_config_file`] for text already read: from the handle the search judged, when `path`
 /// is the file it found.
-fn parse_config_text(path: &Path, text: &str) -> Result<(serde_json::Value, bool), CliError> {
-    let json: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", diagnostic_path(path))))?;
+#[allow(clippy::too_many_lines)]
+fn parse_config_text(
+    path: &Path,
+    text: &str,
+    is_toml: bool,
+) -> Result<(serde_json::Value, bool), CliError> {
+    let json: serde_json::Value = if is_toml {
+        let value: toml::Value = toml::from_str(text).map_err(|error| {
+            let offset = error.span().map_or(0, |span| span.start).min(text.len());
+            let before = &text[..offset];
+            let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+            let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+            CliError::refused(format!(
+                "{}:{line}:{column}: {}",
+                diagnostic_path(path),
+                error.message()
+            ))
+        })?;
+        let mut pending = vec![(String::new(), &value)];
+        while let Some((key, value)) = pending.pop() {
+            match value {
+                toml::Value::Datetime(_) => {
+                    return Err(CliError::refused(format!(
+                        "{}: {key}: TOML datetime values are not supported; use a quoted string",
+                        diagnostic_path(path)
+                    )))
+                }
+                toml::Value::Float(number) if !number.is_finite() => {
+                    return Err(CliError::refused(format!(
+                        "{}: {key}: non-finite TOML numbers are not supported",
+                        diagnostic_path(path)
+                    )))
+                }
+                toml::Value::Table(table) => pending.extend(table.iter().map(|(name, value)| {
+                    (
+                        if key.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{key}.{name}")
+                        },
+                        value,
+                    )
+                })),
+                toml::Value::Array(array) => pending.extend(
+                    array
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| (format!("{key}[{index}]"), value)),
+                ),
+                _ => {}
+            }
+        }
+        serde_json::to_value(value)
+            .map_err(|error| CliError::refused(format!("{}: {error}", diagnostic_path(path))))?
+    } else {
+        serde_json::from_str(text).map_err(|e| {
+            CliError::refused(format!("{} does not parse: {e}", diagnostic_path(path)))
+        })?
+    };
     let canonical = json.get("schemaVersion").is_some();
     if !canonical {
         // Do not use the filename or reject arbitrary Firebase deployment extensions.
@@ -1049,7 +1105,7 @@ fn parse_config_text(path: &Path, text: &str) -> Result<(serde_json::Value, bool
 
 /// Reads a Firebase project configuration and refuses a canonical fireemu document.
 fn read_firebase_json(path: &Path) -> Result<(serde_json::Value, PathBuf), CliError> {
-    firebase_json_document(path, read_config_file(path)?)
+    firebase_json_document(path, read_config_file(path, false)?)
 }
 
 /// Refuses a canonical fireemu document or a non-object where a `firebase.json` belongs.
@@ -1221,7 +1277,7 @@ enum ConfigOrigin {
 }
 
 /// When neither `--config` nor `--firebase-json` is given, fills the one the working directory
-/// supplies: its `fireemu.json`, else the nearest `firebase.json` (see `config_discovery`).
+/// supplies: its `fireemu.toml` or `fireemu.json`, else the nearest `firebase.json` (see `config_discovery`).
 fn discover_project_config(raw: &mut RawOptions) -> ConfigOrigin {
     if raw.config_path.is_some() || raw.firebase_json.is_some() {
         return ConfigOrigin::Flags;
@@ -1277,9 +1333,18 @@ fn config_document(raw: &RawOptions, path: &Path) -> Result<(serde_json::Value, 
             let text = text.as_ref().map_err(|e| {
                 CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path)))
             })?;
-            parse_config_text(path, text)
+            parse_config_text(
+                path,
+                text,
+                raw.config_path.as_deref() == Some(path)
+                    && path.extension().is_some_and(|ext| ext == "toml"),
+            )
         }
-        _ => read_config_file(path),
+        _ => read_config_file(
+            path,
+            raw.config_path.as_deref() == Some(path)
+                && path.extension().is_some_and(|ext| ext == "toml"),
+        ),
     }
 }
 
@@ -1328,7 +1393,7 @@ fn config_origin_line(origin: &ConfigOrigin, sources: &ConfigSources) -> String 
                     diagnostic_text(&skipped.reason)
                 ),
                 None => format!(
-                    "none found (no fireemu.json in the working directory, no firebase.json in it or the parents the search may enter); {DEFAULTS}"
+                    "none found (no fireemu.toml or fireemu.json in the working directory, no firebase.json in it or the parents the search may enter); {DEFAULTS}"
                 ),
             }
         }
@@ -2799,11 +2864,11 @@ fn print_banner(
                     );
                 } else if cfg.profile == config::CompatibilityProfile::Strict {
                     println!(
-                        "  storage rules:    none loaded, so every end-user request is refused with production's 400 \"bucket has not been set up\" answer; set storage.rules in firebase.json or fireemu.json (the owner credential and the JSON API are unaffected)"
+                        "  storage rules:    none loaded, so every end-user request is refused with production's 400 \"bucket has not been set up\" answer; set storage.rules in firebase.json or fireemu.toml (the owner credential and the JSON API are unaffected)"
                     );
                 } else {
                     println!(
-                        "  storage rules:    none loaded, so every end-user request is denied with 403; set storage.rules in firebase.json or fireemu.json (the owner credential and the JSON API are unaffected)"
+                        "  storage rules:    none loaded, so every end-user request is denied with 403; set storage.rules in firebase.json or fireemu.toml (the owner credential and the JSON API are unaffected)"
                     );
                 }
             }
@@ -3161,7 +3226,7 @@ fn service_admission(
 /// database that has one.
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     const HOW_TO_LOAD: &str =
-        "set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules";
+        "set firestore.rules in firebase.json, rules.source in fireemu.toml, or PUT /v1/rules";
     match (cfg.rules_enforced, loaded) {
         (false, _) => {
             println!("  firestore rules:  disabled by config (every request is allowed)");

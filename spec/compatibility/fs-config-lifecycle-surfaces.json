@@ -39,7 +39,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/mod.rs:339",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1028",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1046",
           "crates/fireemu-core-types/src/edition.rs:12"
         ],
         "status": "implemented"
@@ -367,9 +367,9 @@
       "id": "config.firestoreIndexes",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:189",
-          "crates/fireemu/src/control.rs:81",
-          "crates/fireemu/src/control.rs:209"
+          "crates/fireemu/src/control.rs:205",
+          "crates/fireemu/src/control.rs:103",
+          "crates/fireemu/src/control.rs:235"
         ],
         "status": "implemented"
       },
@@ -381,10 +381,10 @@
       "id": "config.singleFieldExemption",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:209",
-          "crates/fireemu/src/control.rs:277",
-          "crates/fireemu-core-firestore/src/index.rs:134",
-          "crates/fireemu-core-firestore/src/index.rs:153"
+          "crates/fireemu/src/control.rs:235",
+          "crates/fireemu/src/control.rs:316",
+          "crates/fireemu-core-firestore/src/index.rs:214",
+          "crates/fireemu-core-firestore/src/index.rs:233"
         ],
         "status": "implemented"
       },
@@ -580,7 +580,7 @@
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:695",
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:106",
-          "crates/fireemu-core-firestore/src/index.rs:258"
+          "crates/fireemu-core-firestore/src/index.rs:338"
         ],
         "status": "implemented"
       },
@@ -607,7 +607,7 @@
       "dataPlaneConsequence": "An index created through the Admin API is CREATING, then READY and used by the planner; a query that needs it while it builds is refused as production refuses it.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:229",
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:230",
           "crates/fireemu-adapter-grpc/src/admin/indexes.rs:173"
         ],
         "status": "implemented"
@@ -633,7 +633,7 @@
       "dataPlaneConsequence": "An index reads back CREATING then READY, as production reports it, so index-dependent query acceptance is testable against the same contract.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:229",
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:230",
           "crates/fireemu-adapter-grpc/src/admin/indexes.rs:323"
         ],
         "status": "implemented"
@@ -693,8 +693,8 @@
       "dataPlaneConsequence": "A wrong concurrencyMode, databaseEdition or versionRetentionPeriod makes a caller choose transaction, edition and read-time behavior the local runtime will then refuse or accept differently from production.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1013",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1088",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1031",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1106",
           "crates/fireemu-adapter-grpc/src/rest/mod.rs:310"
         ],
         "status": "partial"
@@ -721,9 +721,9 @@
       "dataPlaneConsequence": "A database absent in production but present locally lets a caller address a database that would return NOT_FOUND against the real service.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1013",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1077",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1056"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1031",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1095",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:1074"
         ],
         "status": "partial"
       },
@@ -939,7 +939,7 @@
     {
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/mod.rs:339",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:1028",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:1046",
         "crates/fireemu-adapter-grpc/src/rest/mod.rs:327"
       ],
       "class": "data-plane-contract",
@@ -971,8 +971,8 @@
     {
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
-        "crates/fireemu/src/control.rs:209",
-        "crates/fireemu-core-firestore/src/index.rs:235"
+        "crates/fireemu/src/control.rs:235",
+        "crates/fireemu-core-firestore/src/index.rs:315"
       ],
       "class": "data-plane-contract",
       "fixApplied": true,

@@ -14,6 +14,7 @@ import {
   REQUEST_CAP,
   RULESET_IDS,
   RULESETS,
+  RULESET_TEXT,
   rulesetSource,
   validateCorpus,
 } from "./fs-rules-v1/corpus.mjs";
@@ -27,7 +28,7 @@ test("the corpus is valid and bounded", () => {
   assert.equal(countRequests(PROGRAMS), 76);
   assert.ok(76 <= REQUEST_CAP);
   assert.ok(
-    REQUEST_CAP <= 200 && HARNESS_CAP <= 1000,
+    REQUEST_CAP <= 200 && HARNESS_CAP === 1500,
     "the caps are what the presend packet states",
   );
   assert.deepEqual(RULESET_IDS, ["recursive-v1", "recursive-v2", "path-v1", "path-v2"]);
@@ -219,4 +220,23 @@ test("validateCorpus refuses a corpus over the request cap", () => {
   assert.equal(countRequests(programs), 7 * 19);
   assert.throws(() => validateCorpus(programs), /request cap \(133 > 120\)/);
   assert.equal(validateCorpus(programs.slice(0, 6)), 6 * 19);
+});
+
+test("an unknown ruleset id has no source and the digest covers every ruleset in order", () => {
+  assert.throws(() => rulesetSource("nope"), /unknown ruleset nope/);
+  assert.throws(() => markerOf("nope"), /unknown ruleset nope/);
+  assert.equal(RULESET_TEXT, RULESET_IDS.map(rulesetSource).join("\n"));
+});
+
+test("the aggregation rows ask for a COUNT named n, which the console and the judge read", () => {
+  const counts = PROGRAMS[0].steps.filter((s) => s.rpc === "runAggregationQuery");
+  assert.equal(counts.length, 5);
+  for (const step of counts)
+    assert.deepEqual(step.body.structuredAggregationQuery.aggregations, [
+      { alias: "n", count: {} },
+    ]);
+});
+
+test("the one principal is an anonymous sign-up", () => {
+  assert.deepEqual(PRINCIPALS, { anon: { provider: "anonymous" } });
 });

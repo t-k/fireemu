@@ -43,6 +43,13 @@ export function createWorld(scenario = {}) {
     path: source.includes("match /{path=**}/posts/{d}"),
   });
 
+  /** `pathV1: "release-refused"`: the v1 path form compiles, but a release of it is refused. */
+  const releaseRefused = (rulesetName) => {
+    const source = world.rulesets.get(rulesetName) ?? "";
+    const { path: isPath, v2 } = kind(source);
+    return world.scenario.pathV1 === "release-refused" && isPath && !v2;
+  };
+
   /** Whether the ruleset in force allows a read of this shape for anyone. */
   function readAllowed(shape) {
     const source = active();
@@ -198,6 +205,10 @@ export function createWorld(scenario = {}) {
       if (path === `${mine}/releases` && method === "POST") {
         if (typeof body?.name !== "string" || !world.rulesets.has(body?.rulesetName))
           return json(400, {});
+        if (releaseRefused(body.rulesetName))
+          return json(400, {
+            error: { status: "INVALID_ARGUMENT", message: `release refused in ${PROJECT}` },
+          });
         world.releases.set("cloud.firestore", body.rulesetName);
         return json(200, body);
       }
@@ -209,6 +220,10 @@ export function createWorld(scenario = {}) {
         if (method === "PATCH") {
           if (!world.releases.has("cloud.firestore")) return json(404, {});
           if (!world.rulesets.has(body?.release?.rulesetName)) return json(400, {});
+          if (releaseRefused(body.release.rulesetName))
+            return json(400, {
+              error: { status: "INVALID_ARGUMENT", message: `release refused in ${PROJECT}` },
+            });
           world.releases.set("cloud.firestore", body.release.rulesetName);
           return json(200, body.release);
         }

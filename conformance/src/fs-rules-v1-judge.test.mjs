@@ -36,7 +36,7 @@ test("two recordings stay far below US$1 even at the harness ceiling", () => {
   assert.equal(maxRequests, 76);
   assert.equal(maxHarnessRequests, HARNESS_CAP);
   const worstCase = 2 * (maxRequests + maxHarnessRequests);
-  assert.equal(worstCase, 1952);
+  assert.equal(worstCase, 3152);
   assert.ok(estimatedUsd(worstCase) < 0.05, String(estimatedUsd(worstCase)));
   assert.ok(estimatedUsd(0) > 0, "the figure includes a fixed margin");
   assert.ok(estimatedUsd(100000) > estimatedUsd(1000), "and grows with the requests");

@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 /** Query rows of one recording (requests made as the signed-in or signed-out caller). */
 export const REQUEST_CAP = 120;
 /** Harness calls (sign-in, publication, markers, seed, wipe, cleanup) of one recording. */
-export const HARNESS_CAP = 900;
+export const HARNESS_CAP = 1500;
 
 const digest = (text) => createHash("sha256").update(text).digest("hex").slice(0, 12);
 

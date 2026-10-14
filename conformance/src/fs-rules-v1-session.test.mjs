@@ -119,7 +119,49 @@ test("the default scenario records the finding: v1 lets a group query through", 
     unresolved: "ruleset path-v1 did not compile",
   });
   assert.equal(out.diagnostics["path-v1"].status, 400);
+  assert.equal(out.diagnostics["path-v1"].stage, "ruleset");
   assert.ok(!out.diagnostics["path-v1"].message.includes(SANDBOX_PROJECT));
+});
+
+test("a ruleset whose release is refused (400) is recorded as not compiled and deleted at the end", async () => {
+  const { out, world, error } = await record({ scenario: { pathV1: "release-refused" } });
+  assert.equal(error, undefined);
+  const v1 = out.results["fs-rules-v1/path-wildcard/v1"].steps;
+  assert.deepEqual(v1.publishes, { compiled: false });
+  assert.equal(v1["group-none"].unresolved, "ruleset path-v1 did not compile");
+  assert.equal(out.diagnostics["path-v1"].stage, "release");
+  assert.ok(!out.diagnostics["path-v1"].message.includes(SANDBOX_PROJECT));
+  assert.deepEqual(out.unknowns, []);
+  assert.equal(out.closureReady, true);
+  assert.ok(isEmpty(world), "the refused release's ruleset was deleted");
+  assert.equal(out.requests, 3 * 19);
+});
+
+test("an unknown answer to a release update is unknown, and the run does not read it as a refusal", async () => {
+  const { out, error } = await record({
+    onCall: (method, url) =>
+      method === "PATCH" && url.endsWith("/releases/cloud.firestore") ? { status: 503 } : undefined,
+  });
+  assert.equal(error.fatal, true);
+  assert.deepEqual(out.unknowns, [{ call: "update release", answer: "HTTP 503" }]);
+  assert.equal(out.closureReady, false);
+});
+
+test("a principal that is not an anonymous sign-up is refused before it is created", async () => {
+  const { world, fetchImpl, grpc } = createWorld();
+  const clock = createClock();
+  const ctx = createContext({ run: "1790000000000", startedMs: clock.now(), target: PRODUCTION });
+  await assert.rejects(
+    runCorpus(
+      { programs: [], principals: { x: { provider: "password" } } },
+      ctx,
+      { fetchImpl, grpc, sleep: clock.sleep, now: clock.now },
+      ceilings([]),
+    ),
+    /only anonymous sign-up is supported, not password/,
+  );
+  assert.ok(!world.log.some((e) => e.path.endsWith("/accounts:signUp")));
+  assert.equal(world.accounts.size, 0);
 });
 
 test("a production that refuses group queries under v1 is recorded as it answers", async () => {

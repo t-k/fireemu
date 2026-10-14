@@ -251,7 +251,9 @@ export function createSession(
   // ---- principals ----------------------------------------------------------------------------
 
   /** One anonymous account: a real sign-up, or a mock token on the official emulator. */
-  async function createPrincipal(name) {
+  async function createPrincipal(name, spec) {
+    if (spec?.provider !== "anonymous")
+      throw fatal(`principal ${name}: only anonymous sign-up is supported, not ${spec?.provider}`);
     if (ctx.target.mockToken) {
       const uid = `fsr-${ctx.run}-${name}`;
       principals.set(name, { uid, idToken: ctx.target.mockToken(uid) });
@@ -529,6 +531,7 @@ export function createSession(
       );
       if (created.status === 400) {
         diagnostics[rulesetId] = {
+          stage: "ruleset",
           status: 400,
           message: normalizeString(
             String(created.json?.error?.message ?? "").slice(0, 600),
@@ -542,21 +545,39 @@ export function createSession(
       // Known before anything is sent, so cleanup deletes the release whatever fails after this.
       released = true;
       const rulesetName = created.json.name;
+      // A 400 is a definite refusal (the ruleset stays created, to be deleted at the end); anything
+      // unknown is fatal and recorded as unknown by `call`.
+      let refusal;
       const patched = await admin(
         "PATCH",
         "rules",
         `v1/${releaseResource()}`,
         { release: { name: releaseResource(), rulesetName } },
-        { expect: [200, 404], mutates: "update release" },
+        { expect: [200, 400, 404], mutates: "update release" },
       );
-      if (patched.status === 404)
-        await admin(
+      if (patched.status === 400) refusal = patched;
+      if (patched.status === 404) {
+        const posted = await admin(
           "POST",
           "rules",
           `v1/projects/${ctx.project}/releases`,
           { name: releaseResource(), rulesetName },
-          { mutates: "create release" },
+          { expect: [200, 400], mutates: "create release" },
         );
+        if (posted.status === 400) refusal = posted;
+      }
+      if (refusal) {
+        diagnostics[rulesetId] = {
+          stage: "release",
+          status: 400,
+          message: normalizeString(
+            String(refusal.json?.error?.message ?? "").slice(0, 600),
+            ctx,
+            principals,
+          ),
+        };
+        return { recorded: { compiled: false } };
+      }
       const { json } = await admin("GET", "rules", `v1/${releaseResource()}`);
       if (json?.rulesetName !== rulesetName) throw fatal("the release did not read back");
     }
@@ -717,7 +738,7 @@ export async function runCorpus({ programs, principals: specs }, ctx, deps, opti
   let fatalError;
   try {
     await session.prepareSignIn();
-    for (const name of Object.keys(specs)) await session.createPrincipal(name);
+    for (const [name, spec] of Object.entries(specs)) await session.createPrincipal(name, spec);
     for (const program of programs) {
       try {
         results[program.id] = await session.runProgram(program);

@@ -14,10 +14,10 @@
 // Copied from conformance/src/fs-rules/run.mjs, as it was when the local tenant setup and the
 // harness registry replaced its private digest recipe, and changed only where this lane differs:
 // its task, fixture, rulesets, principals and session, no custom-token signer, and the other
-// project whose ID token the foreign-project program presents (X9). The source has since set
-// productionExact for strict local runs, because the FS-RULES rows include missing-index
-// refusals; it is not copied here, as no AUTH-FS-CROSS program reads a query that needs a
-// composite index. The source as of that change (2026-10-12) has the file SHA-256
+// project whose ID token the foreign-project program presents (X9). Like the source, it sets
+// productionExact for strict local runs: the recordings are of a new production project, where
+// multi-tenancy is off until the session switches it on, and the strict profile's development
+// default turns it on from the start. The source as of that change (2026-10-12) has the file SHA-256
 // 21625ee47fd60abe212da18c14d664eed5b25eb3ccb77cefd5465d43c3aea01c
 //
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
@@ -596,6 +596,9 @@ export function localConfig(profile) {
   return {
     schemaVersion: 1,
     profile,
+    // The recordings were made on a production project with multi-tenancy off, which strict
+    // gives only with productionExact; the emulator profile refuses the key.
+    ...(profile === "strict" ? { productionExact: true } : {}),
     daemon: {
       authProjectNumbers: {
         [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER,

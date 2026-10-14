@@ -2782,33 +2782,7 @@ impl FunctionsRuntime {
             inner.next_task
         };
         let mut task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
-        if self.config.honour_task_schedule_time {
-            if let Some(text) = task.schedule_time.as_deref() {
-                let at = LogicalInstant::parse_rfc3339(text)
-                    .map_err(|_| refuse(400, "scheduleTime must be RFC 3339"))?;
-                // Cloud Tasks refuses a task scheduled more than 30 days ahead of the queue's
-                // clock (documented maximum). UNRECORDED: the error text is not a measured shape.
-                if self.task_epoch_nanos().is_some_and(|now| {
-                    at.as_nanos().saturating_sub(now) > MAX_TASK_SCHEDULE_AHEAD_NANOS
-                }) {
-                    return Err(refuse(
-                        400,
-                        "scheduleTime must be at most 30 days in the future",
-                    ));
-                }
-            }
-        }
-        if self.config.clock_policy.tasks_virtual {
-            if let Some(text) = task.schedule_time.as_deref() {
-                LogicalInstant::parse_rfc3339(text)
-                    .map_err(|_| refuse(400, "scheduleTime must be RFC 3339"))?;
-            } else {
-                task.schedule_time =
-                    Some(self.clock_snapshot().instant.to_rfc3339().map_err(|_| {
-                        refuse(400, "clock instant cannot be represented as scheduleTime")
-                    })?);
-            }
-        }
+        self.check_schedule_time(&mut task)?;
         // A task may name its own URL (`opts.uri`). Only this emulator's own function URLs
         // are accepted: the official emulator will POST a task to any address, and a local
         // emulator that makes an arbitrary outbound request on a caller's say-so is a
@@ -2851,6 +2825,44 @@ impl FunctionsRuntime {
         let answer = crate::tasks::accepted_response(&task);
         self.wake.notify_one();
         Ok(answer)
+    }
+
+    /// Validates a task's `scheduleTime` as Cloud Tasks does when the runtime honours it (RFC
+    /// 3339, at most 30 days ahead of the queue's clock; UNRECORDED: the error texts are not
+    /// measured shapes), and on the virtual task clock stamps a task that names no time with the
+    /// current virtual instant so it dispatches on the virtual axis.
+    fn check_schedule_time(
+        &self,
+        task: &mut crate::tasks::Task,
+    ) -> Result<(), crate::tasks::EnqueueRefusal> {
+        use crate::tasks::EnqueueRefusal;
+        let refuse = |body: &str| EnqueueRefusal {
+            status: 400,
+            body: body.to_owned(),
+        };
+        if self.config.honour_task_schedule_time {
+            if let Some(text) = task.schedule_time.as_deref() {
+                let at = LogicalInstant::parse_rfc3339(text)
+                    .map_err(|_| refuse("scheduleTime must be RFC 3339"))?;
+                if self.task_epoch_nanos().is_some_and(|now| {
+                    at.as_nanos().saturating_sub(now) > MAX_TASK_SCHEDULE_AHEAD_NANOS
+                }) {
+                    return Err(refuse("scheduleTime must be at most 30 days in the future"));
+                }
+            }
+        }
+        if self.config.clock_policy.tasks_virtual {
+            if let Some(text) = task.schedule_time.as_deref() {
+                LogicalInstant::parse_rfc3339(text)
+                    .map_err(|_| refuse("scheduleTime must be RFC 3339"))?;
+            } else {
+                task.schedule_time =
+                    Some(self.clock_snapshot().instant.to_rfc3339().map_err(|_| {
+                        refuse("clock instant cannot be represented as scheduleTime")
+                    })?);
+            }
+        }
+        Ok(())
     }
 
     async fn invoke_task_http(

@@ -1239,12 +1239,25 @@ async fn a_scheduled_task_is_listed_and_run_now_dispatches_it() {
             ),
         )
     };
+    // Ten days ahead: far enough to wait, inside Cloud Tasks' 30-day maximum.
+    let due = LogicalInstant::from_unix_seconds(
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap()
+            + 10 * 24 * 3600,
+    )
+    .to_rfc3339()
+    .unwrap();
     let (status, body) = enqueue(json!({
-        "data": {"n": 9}, "id": "job-later", "scheduleTime": "2099-01-01T00:00:00Z"
+        "data": {"n": 9}, "id": "job-later", "scheduleTime": due
     }))
     .await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["task"]["scheduleTime"], "2099-01-01T00:00:00Z");
+    assert_eq!(body["task"]["scheduleTime"], json!(due));
     for bad in [json!("soon"), json!(7), json!("")] {
         let (status, body) = enqueue(json!({"data": {}, "scheduleTime": bad})).await;
         assert_eq!(status, 400, "{bad}: {body}");
@@ -1265,10 +1278,7 @@ async fn a_scheduled_task_is_listed_and_run_now_dispatches_it() {
         .expect("the queue is listed");
     assert_eq!(queue["pendingTaskCount"], 1);
     assert_eq!(queue["pendingTasks"][0]["id"], "job-later");
-    assert_eq!(
-        queue["pendingTasks"][0]["scheduleTime"],
-        "2099-01-01T00:00:00Z"
-    );
+    assert_eq!(queue["pendingTasks"][0]["scheduleTime"], json!(due));
     assert_eq!(queue["pendingTasks"][0]["runNow"], false);
 
     assert_eq!(runtime.run_tasks_now("countJob", Some("job-later")), 1);

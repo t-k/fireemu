@@ -180,3 +180,78 @@ it("disables every action when the functions do not belong to the selected sessi
     expect(button(id).disabled).toBe(false);
   }
 });
+
+it("lists the tasks a queue holds back and offers to run each one, or all, now", () => {
+  const queue: FunctionInfo = {
+    name: "countJob",
+    region: "us-central1",
+    entryPoint: "countJob",
+    trigger: { kind: "tasks", maxAttempts: 3, maxConcurrentDispatches: 1 },
+    timeoutSeconds: 60,
+    retry: false,
+    concurrency: 1,
+    pendingTaskCount: 3,
+    pendingTasks: [
+      { id: "later", name: "q/tasks/later", scheduleTime: "2099-01-01T00:00:00Z", runNow: false },
+      { id: "freed", name: "q/tasks/freed", scheduleTime: "2099-01-01T00:00:00Z", runNow: true },
+    ],
+  };
+  const [active, setActive] = createSignal(false);
+  const ui = render(() => (
+    <table>
+      <tbody>
+        <FunctionRows
+          functions={[queue]}
+          project="demo"
+          active={active()}
+          onNotice={() => {}}
+          onError={() => {}}
+        />
+      </tbody>
+    </table>
+  ));
+  const list = ui.getByTestId("pending-tasks-countJob");
+  expect(list.textContent).toContain("Waiting tasks (3)");
+  expect(ui.getByTestId("pending-task-later").textContent).toContain("due 2099-01-01T00:00:00Z");
+  // A released task has no button of its own, only the note.
+  expect(ui.queryByTestId("run-task-countJob-freed")).toBeNull();
+  expect(ui.getByTestId("pending-task-freed").textContent).toContain("released");
+  // The buttons follow the session rule of every other action.
+  const buttons = ["run-task-countJob-later", "run-countJob"].map(
+    (id) => ui.getByTestId(id) as HTMLButtonElement,
+  );
+  expect(buttons.map((b) => b.disabled)).toEqual([true, true]);
+  setActive(true);
+  expect(buttons.map((b) => b.disabled)).toEqual([false, false]);
+});
+
+it("shows no waiting-task controls for a queue that holds nothing back", () => {
+  const ui = render(() => (
+    <table>
+      <tbody>
+        <FunctionRows
+          functions={[
+            {
+              name: "idleQueue",
+              region: "us-central1",
+              entryPoint: "idleQueue",
+              trigger: { kind: "tasks", maxAttempts: 3, maxConcurrentDispatches: 1 },
+              timeoutSeconds: 60,
+              retry: false,
+              concurrency: 1,
+              pendingTaskCount: 0,
+              pendingTasks: [],
+            },
+          ]}
+          project="demo"
+          active
+          onNotice={() => {}}
+          onError={() => {}}
+        />
+      </tbody>
+    </table>
+  ));
+  expect(ui.queryByTestId("pending-tasks-idleQueue")).toBeNull();
+  expect(ui.queryByTestId("run-idleQueue")).toBeNull();
+  expect(ui.getByTestId("enqueue-idleQueue-toggle")).toBeTruthy();
+});

@@ -83,6 +83,16 @@ pub trait FunctionsHook: Send + Sync {
     fn on_clock_changed(&self);
     /// Runs a scheduled function now.
     fn run_schedule(&self, function: &str) -> Result<(), RunScheduleError>;
+    /// Whether `function` is a task-queue function (`onTaskDispatched`), whose `:run` releases
+    /// waiting Cloud Tasks instead of enqueueing a schedule run.
+    fn is_task_queue(&self, _function: &str) -> bool {
+        false
+    }
+    /// Releases the pending Cloud Tasks of `function` from waiting for their `scheduleTime`: the
+    /// one named `task`, or every pending one when it is `None`. Returns how many were released.
+    fn run_tasks_now(&self, _function: &str, _task: Option<&str>) -> usize {
+        0
+    }
     /// Whether no event is pending, leased, running or retry-waiting.
     fn is_idle(&self) -> bool;
     /// Notified whenever work completes.
@@ -1161,7 +1171,7 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         );
     }
     if let Some(rest) = action.strip_prefix("functions") {
-        return functions_route(state, method, rest);
+        return functions_route(state, method, rest, body);
     }
     if let Some(rest) = action.strip_prefix("pubsub/topics/") {
         return match (method, rest.strip_suffix(":publish")) {
@@ -2411,13 +2421,29 @@ fn resources_route(
     }
 }
 
-fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonResponse {
+fn functions_route(state: &ControlState, method: &str, rest: &str, body: &Value) -> JsonResponse {
     let Some(functions) = &state.functions else {
         return error(404, "NOT_FOUND : no functions runtime is configured");
     };
     match (method, rest) {
         ("GET", "") => ok(functions.status()),
         ("POST", r) => match r.strip_prefix('/').and_then(|r| r.strip_suffix(":run")) {
+            // A task-queue function has no schedule to run: `:run` releases the Cloud Tasks
+            // that wait for their `scheduleTime` (all of them, or the one named by `task`).
+            Some(name) if !name.is_empty() && functions.is_task_queue(name) => {
+                let task = match body.get("task") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(task)) if !task.is_empty() => Some(task.as_str()),
+                    Some(_) => {
+                        return error(400, "INVALID_ARGUMENT : task must be a non-empty string")
+                    }
+                };
+                let released = functions.run_tasks_now(name, task);
+                if released == 0 && task.is_some() {
+                    return error(404, "NOT_FOUND : no pending task with that id");
+                }
+                ok(json!({"function": name, "released": released}))
+            }
             Some(name) if !name.is_empty() => match functions.run_schedule(name) {
                 Ok(()) => ok(json!({"function": name, "enqueued": true})),
                 Err(RunScheduleError::Refused(e)) => error(400, &format!("INVALID_ARGUMENT : {e}")),

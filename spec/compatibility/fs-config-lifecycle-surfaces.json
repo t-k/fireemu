@@ -437,7 +437,7 @@
       "id": "control.textIndexLifecycle",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-http/src/control.rs:1346"
+          "crates/fireemu-adapter-http/src/control.rs:1356"
         ],
         "status": "implemented"
       },

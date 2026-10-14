@@ -123,6 +123,18 @@ it("builds an enqueue request with and without an id", () => {
   expect(buildEnqueue({ data: "{}", id: "" })._unsafeUnwrap()).toEqual({ data: {} });
 });
 
+it("adds a trimmed schedule time to the enqueue request only when one is given", () => {
+  expect(
+    buildEnqueue({ data: "{}", id: "", scheduleTime: " 2026-01-01T00:00:00Z " })._unsafeUnwrap(),
+  ).toEqual({ data: {}, scheduleTime: "2026-01-01T00:00:00Z" });
+  expect(buildEnqueue({ data: "{}", id: "", scheduleTime: "   " })._unsafeUnwrap()).toEqual({
+    data: {},
+  });
+  expect(
+    buildEnqueue({ data: "{}", id: "j", scheduleTime: "2026-01-01T00:00:00Z" })._unsafeUnwrap(),
+  ).toEqual({ data: {}, id: "j", scheduleTime: "2026-01-01T00:00:00Z" });
+});
+
 it("reports invalid task data as a JSON error naming the field", () => {
   const r = buildEnqueue({ data: "oops", id: "" });
   expect(r.isErr()).toBe(true);

@@ -59,8 +59,6 @@ pub const DROP_CONNECTION_HEADER: &str = "x-fireemu-drop-connection";
 /// registry on every request instead, so the page never shows a stale registration.
 #[derive(Debug, Clone, Default)]
 pub struct AppCheckInfo {
-    /// The `kid` of this instance's App Check signing key (public: it names the JWKS entry).
-    pub kid: String,
     /// The effective baseline mode of each service (`--only` applied), in a stable order.
     pub modes: Vec<(String, String)>,
 }

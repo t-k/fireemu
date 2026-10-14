@@ -7,9 +7,15 @@ The Local Emulator Suite has no App Check. Fireemu adds a local App Check implem
 
 Local App Check uses debug tokens. Real attestation through Play Integrity, App Attest, DeviceCheck or reCAPTCHA, and replay protection with limited-use tokens, are not supported.
 
+## Without any configuration
+
+Under the `strict` profile the debug-token exchange, the JWKS and the callable trust boundary are served without an `appCheck` block, and every product baseline is `off`. Any well-formed debug token (a UUIDv4) exchanges for a token for any app with a standard app ID (`1:<project number>:<platform>:<id>`); the app is registered on first use. So an `enforceAppCheck` callable can be tested with a token from the exchange, no app registration and no digest, while a missing or malformed token is still refused. The key pair is generated in the background after start, so the first exchange does not wait for it.
+
+`appCheck.debugTokens` controls this. Setting it to `"any"` yourself next to `appCheck.enabled: true` also lets any UUIDv4 exchange for the apps you registered, whatever digests they carry. It is `"any"` in that case and `"registered"`, production's rule, under `productionExact`, under the `emulator` profile, and in any `appCheck` block that does not set the key. With `"registered"` nothing is served until you enable App Check as below.
+
 ## Register an app
 
-App Check is off by default. Enable it and register the app with the SHA-256 digests of its debug tokens. The configuration stores only digests, never a raw token.
+To enforce App Check for Authentication, Firestore or Storage, or to require registration, enable it and register the app with the SHA-256 digests of its debug tokens. The configuration stores only digests, never a raw token.
 
 ```json
 {
@@ -33,6 +39,8 @@ App Check is off by default. Enable it and register the app with the SHA-256 dig
   }
 }
 ```
+
+`--only` keeps the verifier a configured baseline needs: with `"firestore": "enforced"`, `--only firestore` still refuses a request without a valid token, and the start banner says that the verifier was included.
 
 Each service accepts `off`, `unenforced` (tokens are checked and recorded, requests still pass) or `enforced` (requests without a valid token are refused before Security Rules run). A project without a registered app cannot use App Check, so an enforced service refuses every request to it.
 

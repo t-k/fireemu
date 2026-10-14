@@ -18,6 +18,8 @@ export type EnqueueRequest = {
   data: unknown;
   id?: string;
   headers?: Record<string, string>;
+  /** RFC 3339; the task waits until then (Cloud Tasks' scheduleTime). */
+  scheduleTime?: string;
 };
 
 /**
@@ -124,14 +126,23 @@ export const buildRequestInvoke = (input: {
   });
 
 /**
- * Builds the enqueue request: the task data (parsed as JSON) and, when given, a task id.
+ * Builds the enqueue request: the task data (parsed as JSON) and, when given, a task id and a
+ * schedule time that holds the task back.
  */
-export const buildEnqueue = (input: { data: string; id: string }): Result<EnqueueRequest, string> =>
+export const buildEnqueue = (input: {
+  data: string;
+  id: string;
+  scheduleTime?: string;
+}): Result<EnqueueRequest, string> =>
   parseJson("The task data", input.data).map((data) => {
     const id = input.id.trim();
+    const scheduleTime = (input.scheduleTime ?? "").trim();
     const request: EnqueueRequest = { data };
     if (id !== "") {
       request.id = id;
+    }
+    if (scheduleTime !== "") {
+      request.scheduleTime = scheduleTime;
     }
     return request;
   });

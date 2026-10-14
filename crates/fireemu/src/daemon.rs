@@ -644,7 +644,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     pubsub_state
         .lock()
         .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?
-        .set_project_numbers(cfg.pubsub_project_numbers.clone())
+        .set_project_numbers(crate::pubsub_project_numbers(&cfg))
         .map_err(|e| e.to_string())?;
     let pubsub_handle = configured_pubsub_handle(
         fireemu_adapter_pubsub::PubSubHandle::new(
@@ -807,6 +807,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             storage.clone(),
         )));
     if let Some(runtime) = &functions_runtime {
+        // The console and the control API call a function that is not public as the project
+        // owner, with the control token.
+        runtime.set_owner_token(control_token.clone());
         runtime.set_faults(faults.for_project(runtime.project()));
         let verifier = Arc::new(callable_auth_verifier(&auth_store, &clock, &registry));
         runtime.set_callable_auth_verifier(verifier.clone());
@@ -1220,10 +1223,17 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         );
         if let Some(state) = &app_check {
             println!(
-            "  app check:        {} app(s)   FIREEMU_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",
-            cfg.app_check.apps.len(),
-            state.signer.kid()
+            "  app check:        {}   FIREEMU_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",
+            if cfg.app_check.debug_tokens == crate::config::AppCheckDebugTokens::Any {
+                "any well-formed debug token exchanges (appCheck.debugTokens \"any\")".to_owned()
+            } else {
+                format!("{} app(s)", cfg.app_check.apps.len())
+            },
+            state.kid_for_banner()
         );
+            if only.app_check_included_by_services(&cfg.app_check) {
+                println!("  note: the verifier is included although --only names neither appcheck nor functions, because appCheck.services configures a selected product; add appcheck to --only to silence this");
+            }
             println!(
             "  app check modes:  auth={} firestore={} storage={}   (Firestore covers unary gRPC, REST, Write/Listen streams and WebChannel; Storage covers resumable uploads too){}",
             only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
@@ -1961,14 +1971,18 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let want_auth_key = only.uses_auth_identity()
             && cfg.id_token_signing == fireemu_core_auth::jwt::SigningMode::SessionRsa;
         let want_app_check = only.app_check_available(&cfg.app_check);
-        if (want_auth_key || want_app_check) && !quiet {
+        if (want_auth_key || (want_app_check && !cfg.app_check.implicit())) && !quiet {
             println!("  generating the RSA signing keys ...");
         }
         let auth_key = want_auth_key.then(|| {
             let seed = cfg.seed ^ 0x2256;
             tokio::task::spawn_blocking(move || session_rsa_cache::load_or_generate(seed))
         });
-        let app_check_key = want_app_check.then(|| {
+        // The development default serves App Check without anyone asking for it, so its key is
+        // generated when something first needs it; an App Check the configuration enables is
+        // generated now, as before, so a run that relies on it starts with the key in hand.
+        let app_check_implicit = cfg.app_check.implicit();
+        let app_check_key = (want_app_check && !app_check_implicit).then(|| {
             tokio::task::spawn_blocking(|| {
                 fireemu_adapter_http::signing::AppCheckRsaSigner::generate(
                     fireemu_adapter_http::signing::AppCheckKeySource::OperatingSystem,
@@ -1977,6 +1991,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         });
         let app_check_signer = match app_check_key {
             Some(task) => Some(task.await.map_err(|e| format!("App Check RSA key: {e}"))??),
+            None if want_app_check => {
+                let signer = fireemu_adapter_http::signing::AppCheckRsaSigner::lazy(
+                    fireemu_adapter_http::signing::AppCheckKeySource::OperatingSystem,
+                )?;
+                // Generated in the background once the daemon is up, so a run that uses App
+                // Check does not pay for the prime search on its first request, and a run that
+                // never does only spends spare CPU.
+                let warm = signer.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = warm.prewarm() {
+                        eprintln!("warning: the App Check key could not be generated: {error}");
+                    }
+                });
+                Some(signer)
+            }
             None => None,
         };
         let barrier = backend.barrier();
@@ -2115,7 +2144,25 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // ones that do not enforce, so valid app context is available to them. The runner is
         // started only after this is known, because it decides whether the runner may run with
         // the `skipTokenVerification` debug feature at all.
-        let callable_trusted_protocol = app_check_gate.is_some() && functions_listener.is_some();
+        // The development default serves it only where the instrumentation can read the SDK;
+        // an App Check the configuration asks for does not get that grace and refuses to start.
+        let callable_trusted_protocol = app_check_gate.is_some()
+            && functions_listener.is_some()
+            && (!cfg.app_check.implicit()
+                || cfg.functions_to_load().iter().all(|codebase| {
+                    match functions::callable_trust_supported(std::path::Path::new(
+                        &codebase.source,
+                    )) {
+                        Ok(()) => true,
+                        Err(why) => {
+                            eprintln!(
+                                "note: functions[{}]: callable App Check is not available ({why}); an enforceAppCheck callable keeps the SDK's own check",
+                                codebase.codebase
+                            );
+                            false
+                        }
+                    }
+                }));
         // The runner's functions see exactly the services this run selected: an unselected
         // one leaves its variable unset there too, so a handler cannot reach a product the
         // suite is not running.
@@ -2229,10 +2276,119 @@ fn configured_pubsub_handle(
             }
         })
         .with_local_bearer_token(cfg.pubsub_local_bearer_token.clone())
+        .with_dead_letter_grants_required(
+            cfg.pubsub_dead_letter_authorization == crate::config::DeadLetterAuthorization::Iam,
+        )
 }
 
 #[cfg(test)]
 mod tests {
+    /// PS-01: the configuration decides whether dead-letter forwarding needs production's
+    /// grants. Strict forwards without them by default; `productionExact` (and the key) ask for
+    /// them; the emulator profile never does.
+    #[test]
+    fn dead_letter_authorization_reaches_the_pubsub_state() {
+        for (config, authorized) in [
+            (serde_json::json!({}), true),
+            (serde_json::json!({"profile": "strict"}), true),
+            (serde_json::json!({"productionExact": true}), false),
+            (
+                serde_json::json!({"pubsub": {"deadLetterAuthorization": "iam"}}),
+                false,
+            ),
+            (
+                serde_json::json!({"productionExact": true, "pubsub": {"deadLetterAuthorization": "implicit"}}),
+                true,
+            ),
+            (serde_json::json!({"profile": "emulator"}), true),
+            // Naming a project number is asking to have its service agent granted.
+            (
+                serde_json::json!({"pubsub": {"projectNumbers": {"demo-p": "123456789"}}}),
+                false,
+            ),
+            (
+                serde_json::json!({"pubsub": {"projectNumbers": {"demo-p": "123456789"}, "deadLetterAuthorization": "implicit"}}),
+                true,
+            ),
+            (
+                serde_json::json!({"profile": "emulator", "pubsub": {"projectNumbers": {"demo-p": "123456789"}}}),
+                true,
+            ),
+        ] {
+            let mut input = serde_json::json!({"schemaVersion": 1});
+            for (key, value) in config.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            let cfg = crate::config::RuntimeConfig::from_json(&input).unwrap();
+            let state = std::sync::Arc::new(std::sync::Mutex::new(
+                fireemu_core_pubsub::PubSubState::new(1),
+            ));
+            let _handle = super::configured_pubsub_handle(
+                fireemu_adapter_pubsub::PubSubHandle::new(
+                    state.clone(),
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        fireemu_core_session::clock::VirtualClock::new(
+                            fireemu_core_types::time::LogicalInstant::from_unix_seconds(0),
+                        ),
+                    )),
+                    None,
+                ),
+                &cfg,
+            );
+            let source =
+                fireemu_core_pubsub::name::SubscriptionName::new("demo-p", "sub-a").unwrap();
+            let dead = fireemu_core_pubsub::name::TopicName::new("demo-p", "dead").unwrap();
+            assert_eq!(
+                state.lock().unwrap().dead_letter_authorized(&source, &dead),
+                authorized,
+                "{config}"
+            );
+        }
+        // Only the key's own spelling is accepted, and only the strict profile may ask for iam.
+        for bad in [
+            serde_json::json!({"pubsub": {"deadLetterAuthorization": "grants"}}),
+            serde_json::json!({"profile": "emulator", "pubsub": {"deadLetterAuthorization": "iam"}}),
+        ] {
+            let mut input = serde_json::json!({"schemaVersion": 1});
+            for (key, value) in bad.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            assert!(
+                crate::config::RuntimeConfig::from_json(&input).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// Under `iam` the default project gets a service-agent number when none is configured, so
+    /// the grants can be named; a configured number is kept.
+    #[test]
+    fn iam_dead_letters_name_a_project_number_for_the_default_project() {
+        let derive = |extra: serde_json::Value| {
+            let mut input =
+                serde_json::json!({"schemaVersion": 1, "daemon": {"authProject": "demo-dl"}});
+            for (key, value) in extra.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            crate::pubsub_project_numbers(&crate::config::RuntimeConfig::from_json(&input).unwrap())
+        };
+        assert!(derive(serde_json::json!({})).is_empty());
+        let derived = derive(serde_json::json!({"productionExact": true}));
+        let number = derived.get("demo-dl").expect("a derived number");
+        assert_eq!(
+            number.parse::<u64>().unwrap(),
+            fireemu_adapter_functions::eventarc_channels::project_number("demo-dl")
+        );
+        let configured = derive(serde_json::json!({
+            "productionExact": true, "pubsub": {"projectNumbers": {"demo-dl": "424242"}}
+        }));
+        assert_eq!(configured["demo-dl"], "424242");
+        let from_auth = derive(serde_json::json!({
+            "productionExact": true, "daemon": {"authProject": "demo-dl", "authProjectNumbers": {"demo-dl": "777"}}
+        }));
+        assert_eq!(from_auth["demo-dl"], "777");
+    }
+
     #[tokio::test]
     async fn pubsub_daemon_configuration_reaches_transport_admission() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

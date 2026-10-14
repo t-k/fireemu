@@ -1935,7 +1935,7 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the emulator resolves no parameters and prompts for nothing: a missing defineString is the empty string, a missing defineInt is 0, a missing defineList throws, and a declared default is a deploy-time value the runtime never sees",
+            "the official emulator prompts for a missing parameter during discovery and runs with whatever the SDK reads; the strict profile resolves each declared parameter as a deploy does (a value from the dotenv chain, then the declared default) and refuses the codebase for a parameter with neither, naming it and the files a value goes in, because a non-interactive deploy stops for it",
             "the pinned firebase-functions@7.3.2 has removed functions.config(), so CLOUD_RUNTIME_CONFIG is set and nothing in the supported SDK surface reads it"
           ],
           "fireemuOnly": [

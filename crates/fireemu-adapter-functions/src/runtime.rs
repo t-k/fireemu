@@ -249,6 +249,25 @@ pub fn schedule_retry_policy(
     })
 }
 
+/// The farthest ahead of the queue's clock a task may be scheduled: 30 days (Cloud Tasks'
+/// documented maximum).
+const MAX_TASK_SCHEDULE_AHEAD_NANOS: i128 = 30 * 24 * 3600 * 1_000_000_000;
+
+/// A Cloud Tasks task that has not been dispatched yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTaskInfo {
+    /// The task-queue function it belongs to.
+    pub function: String,
+    /// The task's full resource name.
+    pub name: String,
+    /// The last segment of the name, which is what the task is addressed by.
+    pub id: String,
+    /// `scheduleTime`, as enqueued.
+    pub schedule_time: Option<String>,
+    /// Whether it has already been released with [`FunctionsRuntime::run_tasks_now`].
+    pub run_now: bool,
+}
+
 /// Static runtime configuration.
 #[derive(Clone)]
 pub struct FunctionsConfig {
@@ -280,6 +299,10 @@ pub struct FunctionsConfig {
     pub functions_host: Option<String>,
     /// Explicit application-clock modes.
     pub clock_policy: crate::application_clock::ApplicationClockPolicy,
+    /// Whether a task's `scheduleTime` holds it back on the native clock too, and an unparseable
+    /// one is refused: Cloud Tasks does both, the official emulator neither. On the virtual task
+    /// clock the time always gates dispatch.
+    pub honour_task_schedule_time: bool,
     /// Whether service timestamps use the configured daemon clock instead of wall time.
     pub clock_start_pinned: bool,
     /// How the subscription of a Pub/Sub function is named (and which the events name): by profile.
@@ -305,6 +328,7 @@ impl FunctionsConfig {
             catch_up: CatchUpPolicy::All,
             functions_host: None,
             clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
+            honour_task_schedule_time: false,
             clock_start_pinned: false,
             subscription_naming: crate::events::SubscriptionNaming::default(),
             auth_context: crate::events::AuthContextNaming::default(),
@@ -328,6 +352,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("catch_up", &self.catch_up)
             .field("functions_host", &self.functions_host)
             .field("clock_policy", &self.clock_policy)
+            .field("honour_task_schedule_time", &self.honour_task_schedule_time)
             .field("clock_start_pinned", &self.clock_start_pinned)
             .field("subscription_naming", &self.subscription_naming)
             .field("auth_context", &self.auth_context)
@@ -1172,6 +1197,8 @@ pub struct FunctionsRuntime {
     /// The callable trust boundary, when the callable trusted protocol is active
     /// (specification section 13.4). `None` leaves the pre-App-Check behaviour untouched.
     callable_trust: std::sync::RwLock<Option<Arc<crate::callable::CallableTrust>>>,
+    /// The control token, presented by the console and the control API as the owner's credential.
+    owner_token: std::sync::OnceLock<String>,
     /// Strict callable ingress verifies a presented Bearer even without App Check.
     callable_auth_verifier: std::sync::RwLock<Option<Arc<RulesEnforcer>>>,
     /// Whether background (event) triggers deliver, toggled by the Emulator Hub's
@@ -1446,6 +1473,7 @@ impl FunctionsRuntime {
             retry,
             faults: Mutex::new(None),
             callable_trust: std::sync::RwLock::new(None),
+            owner_token: std::sync::OnceLock::new(),
             callable_auth_verifier: std::sync::RwLock::new(None),
             schedule_publisher: std::sync::RwLock::new(None),
             background_triggers: std::sync::atomic::AtomicBool::new(true),
@@ -1483,6 +1511,22 @@ impl FunctionsRuntime {
             crate::task_scheduler::TaskTime::Virtual(self.clock_snapshot().elapsed_nanos)
         } else {
             std::time::Instant::now().into()
+        }
+    }
+
+    /// The instant a task's `scheduleTime` is compared with: the virtual clock when the task
+    /// clock is virtual, wall time when the runtime honours `scheduleTime` natively, and `None`
+    /// when `scheduleTime` does not hold a task back at all.
+    fn task_epoch_nanos(&self) -> Option<i128> {
+        if self.config.clock_policy.tasks_virtual {
+            Some(self.clock_snapshot().instant.as_nanos())
+        } else if self.config.honour_task_schedule_time {
+            let since_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            i128::try_from(since_epoch.as_nanos()).ok()
+        } else {
+            None
         }
     }
 
@@ -1874,6 +1918,21 @@ impl FunctionsRuntime {
         if let Ok(mut slot) = self.callable_trust.write() {
             *slot = Some(trust);
         }
+    }
+
+    /// Installs the owner's credential: the control token the console and the control API
+    /// present in [`crate::invoker::OWNER_TOKEN_HEADER`] to call a function that is not public.
+    /// Set once, before the functions listener serves anything.
+    pub fn set_owner_token(&self, token: String) {
+        let _ = self.owner_token.set(token);
+    }
+
+    /// Whether `presented` is the owner's credential. Without an installed token nothing is.
+    #[must_use]
+    pub fn owner_token_matches(&self, presented: &str) -> bool {
+        self.owner_token.get().is_some_and(|token| {
+            fireemu_adapter_support::secret::optional_str_matches(Some(presented), token)
+        })
     }
 
     /// The callable trust boundary, when the trusted protocol is active.
@@ -2723,17 +2782,7 @@ impl FunctionsRuntime {
             inner.next_task
         };
         let mut task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
-        if self.config.clock_policy.tasks_virtual {
-            if let Some(text) = task.schedule_time.as_deref() {
-                LogicalInstant::parse_rfc3339(text)
-                    .map_err(|_| refuse(400, "scheduleTime must be RFC 3339"))?;
-            } else {
-                task.schedule_time =
-                    Some(self.clock_snapshot().instant.to_rfc3339().map_err(|_| {
-                        refuse(400, "clock instant cannot be represented as scheduleTime")
-                    })?);
-            }
-        }
+        self.check_schedule_time(&mut task)?;
         // A task may name its own URL (`opts.uri`). Only this emulator's own function URLs
         // are accepted: the official emulator will POST a task to any address, and a local
         // emulator that makes an arbitrary outbound request on a caller's say-so is a
@@ -2776,6 +2825,44 @@ impl FunctionsRuntime {
         let answer = crate::tasks::accepted_response(&task);
         self.wake.notify_one();
         Ok(answer)
+    }
+
+    /// Validates a task's `scheduleTime` as Cloud Tasks does when the runtime honours it (RFC
+    /// 3339, at most 30 days ahead of the queue's clock; UNRECORDED: the error texts are not
+    /// measured shapes), and on the virtual task clock stamps a task that names no time with the
+    /// current virtual instant so it dispatches on the virtual axis.
+    fn check_schedule_time(
+        &self,
+        task: &mut crate::tasks::Task,
+    ) -> Result<(), crate::tasks::EnqueueRefusal> {
+        use crate::tasks::EnqueueRefusal;
+        let refuse = |body: &str| EnqueueRefusal {
+            status: 400,
+            body: body.to_owned(),
+        };
+        if self.config.honour_task_schedule_time {
+            if let Some(text) = task.schedule_time.as_deref() {
+                let at = LogicalInstant::parse_rfc3339(text)
+                    .map_err(|_| refuse("scheduleTime must be RFC 3339"))?;
+                if self.task_epoch_nanos().is_some_and(|now| {
+                    at.as_nanos().saturating_sub(now) > MAX_TASK_SCHEDULE_AHEAD_NANOS
+                }) {
+                    return Err(refuse("scheduleTime must be at most 30 days in the future"));
+                }
+            }
+        }
+        if self.config.clock_policy.tasks_virtual {
+            if let Some(text) = task.schedule_time.as_deref() {
+                LogicalInstant::parse_rfc3339(text)
+                    .map_err(|_| refuse("scheduleTime must be RFC 3339"))?;
+            } else {
+                task.schedule_time =
+                    Some(self.clock_snapshot().instant.to_rfc3339().map_err(|_| {
+                        refuse("clock instant cannot be represented as scheduleTime")
+                    })?);
+            }
+        }
+        Ok(())
     }
 
     async fn invoke_task_http(
@@ -4318,6 +4405,43 @@ impl FunctionsRuntime {
         ]
     }
 
+    /// Every task still waiting to be dispatched, with the `scheduleTime` that holds it back.
+    #[must_use]
+    pub fn pending_tasks(&self) -> Vec<PendingTaskInfo> {
+        let Ok(inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        inner
+            .task_scheduler
+            .pending_tasks()
+            .into_iter()
+            .map(|task| PendingTaskInfo {
+                function: task.function,
+                id: task.name.rsplit('/').next().unwrap_or_default().to_owned(),
+                name: task.name,
+                schedule_time: task.schedule_time,
+                run_now: task.run_now,
+            })
+            .collect()
+    }
+
+    /// Releases pending tasks of `function` from waiting for their `scheduleTime`, so they
+    /// dispatch as soon as the queue's rate and concurrency limits allow: the task named `task`
+    /// (its full resource name or its id), or every pending one when it is `None`. This is
+    /// Fireemu's control, the counterpart of Cloud Tasks' `RunTask` and of running a scheduler
+    /// job now. Returns how many tasks were released.
+    pub fn run_tasks_now(&self, function: &str, task: Option<&str>) -> usize {
+        let released = self
+            .inner
+            .lock()
+            .map(|mut inner| inner.task_scheduler.run_now(function, task))
+            .unwrap_or(0);
+        if released > 0 {
+            self.wake.notify_one();
+        }
+        released
+    }
+
     /// Returns the read-only Cloud Tasks `/queueStats` payload for all loaded task queues.
     #[must_use]
     pub fn task_queue_stats(&self) -> Value {
@@ -5181,10 +5305,7 @@ impl FunctionsRuntime {
             let epoch = inner.epoch;
             let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready_at(
                 self.task_now(),
-                self.config
-                    .clock_policy
-                    .tasks_virtual
-                    .then(|| self.clock_snapshot().instant.as_nanos()),
+                self.task_epoch_nanos(),
                 &self.config.project,
                 |function| {
                     let spec = self.manifest.get(function)?;
@@ -8531,6 +8652,7 @@ mod schedule_capacity_tests {
                 catch_up: CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
                 clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
+                honour_task_schedule_time: false,
                 clock_start_pinned: false,
                 subscription_naming: crate::events::SubscriptionNaming::default(),
                 auth_context: crate::events::AuthContextNaming::default(),

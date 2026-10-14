@@ -105,6 +105,8 @@ struct QueuedTask {
     retry: TaskRetryConfig,
     retained_bytes: usize,
     name: Arc<str>,
+    /// Set by [`TaskScheduler::run_now`]: the task no longer waits for its `scheduleTime`.
+    run_now: bool,
 }
 
 #[derive(Debug)]
@@ -227,6 +229,51 @@ impl QueueState {
     }
 }
 
+/// A task that has not been dispatched yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingTask {
+    pub function: String,
+    pub name: String,
+    pub schedule_time: Option<String>,
+    pub run_now: bool,
+}
+
+/// Whether `task` may be dispatched at `epoch_nanos` (nanoseconds since the Unix epoch on the
+/// axis the scheduler is gated on). Without an epoch nothing waits; a task without a
+/// `scheduleTime` never waits; a `scheduleTime` that does not parse never waits either (the
+/// enqueue route refuses one, so this only meets a task from a profile that does not validate).
+fn schedule_is_due(task: &Task, epoch_nanos: Option<i128>) -> bool {
+    epoch_nanos.is_none_or(|epoch| {
+        task.schedule_time.as_deref().is_none_or(|text| {
+            fireemu_core_types::time::LogicalInstant::parse_rfc3339(text)
+                .is_ok_and(|instant| instant.as_nanos() <= epoch)
+        })
+    })
+}
+
+impl QueueState {
+    /// How long until the earliest pending task that is not yet due becomes due.
+    fn next_schedule_in(&self, epoch_nanos: i128) -> Option<Duration> {
+        self.pending
+            .iter()
+            .filter(|queued| !queued.run_now)
+            .filter_map(|queued| {
+                let text = queued.task.schedule_time.as_deref()?;
+                let due = fireemu_core_types::time::LogicalInstant::parse_rfc3339(text)
+                    .ok()?
+                    .as_nanos();
+                let wait = u128::try_from(due.checked_sub(epoch_nanos)?).ok()?;
+                (wait > 0).then(|| {
+                    Duration::new(
+                        u64::try_from(wait / 1_000_000_000).unwrap_or(u64::MAX),
+                        u32::try_from(wait % 1_000_000_000).unwrap_or(0),
+                    )
+                })
+            })
+            .min()
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Dispatch {
     pub id: u64,
@@ -331,6 +378,7 @@ impl TaskScheduler {
             retry,
             retained_bytes,
             name,
+            run_now: false,
         });
         state.added_times.record(now);
         self.outstanding = next_outstanding;
@@ -386,12 +434,7 @@ impl TaskScheduler {
                     continue;
                 }
                 let ready = queue.pending.iter().position(|queued| {
-                    epoch_nanos.is_none_or(|epoch| {
-                        queued.task.schedule_time.as_deref().is_none_or(|text| {
-                            fireemu_core_types::time::LogicalInstant::parse_rfc3339(text)
-                                .is_ok_and(|instant| instant.as_nanos() <= epoch)
-                        })
-                    })
+                    queued.run_now || schedule_is_due(&queued.task, epoch_nanos)
                 });
                 let Some(queued) = ready.and_then(|position| queue.pending.remove(position)) else {
                     continue;
@@ -427,12 +470,63 @@ impl TaskScheduler {
             };
             self.next_queue = (index + 1) % functions.len();
         }
-        let next_wake = self
+        let refill_wake = self
             .queues
             .values()
             .filter_map(QueueState::next_refill)
             .min();
+        // Native time knows when the earliest scheduled task falls due; the virtual axis is
+        // woken by the clock change that moves it instead.
+        let schedule_wake = match (now, epoch_nanos) {
+            (TaskTime::Real(at), Some(epoch)) => self
+                .queues
+                .values()
+                .filter_map(|queue| queue.next_schedule_in(epoch))
+                .min()
+                .and_then(|wait| at.checked_add(wait))
+                .map(TaskTime::Real),
+            _ => None,
+        };
+        let next_wake = match (refill_wake, schedule_wake) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         (dispatches, next_wake)
+    }
+
+    /// The tasks waiting in each queue, in dispatch order.
+    pub(crate) fn pending_tasks(&self) -> Vec<PendingTask> {
+        self.queues
+            .iter()
+            .flat_map(|(function, queue)| {
+                queue.pending.iter().map(|queued| PendingTask {
+                    function: function.clone(),
+                    name: queued.task.name.clone(),
+                    schedule_time: queued.task.schedule_time.clone(),
+                    run_now: queued.run_now,
+                })
+            })
+            .collect()
+    }
+
+    /// Releases pending tasks of `queue` from waiting for their `scheduleTime`: the one named
+    /// `task` (a full resource name or its last path segment), or every pending one when `task`
+    /// is `None`. Rate limits and concurrency still apply. Returns how many tasks were released.
+    pub(crate) fn run_now(&mut self, queue: &str, task: Option<&str>) -> usize {
+        let Some(state) = self.queues.get_mut(queue) else {
+            return 0;
+        };
+        let mut released = 0;
+        for queued in &mut state.pending {
+            let named = task.is_none_or(|wanted| {
+                queued.task.name == wanted || queued.task.name.rsplit('/').next() == Some(wanted)
+            });
+            if named && !queued.run_now {
+                queued.run_now = true;
+                released += 1;
+            }
+        }
+        released
     }
 
     #[cfg(test)]
@@ -724,6 +818,195 @@ mod tests {
         );
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].task.name, "future");
+    }
+
+    fn nanos(text: &str) -> i128 {
+        fireemu_core_types::time::LogicalInstant::parse_rfc3339(text)
+            .unwrap()
+            .as_nanos()
+    }
+
+    fn scheduler_with(task_name: &str, schedule: Option<&str>, start: Instant) -> TaskScheduler {
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 4,
+                max_dispatches_per_second: 100.0,
+            }),
+            start,
+        );
+        let mut queued = task(task_name);
+        queued.schedule_time = schedule.map(str::to_owned);
+        scheduler
+            .enqueue_at("queue", queued, TaskRetryConfig::default(), 64, start)
+            .unwrap();
+        scheduler
+    }
+
+    /// Native time: a task scheduled for later is held, the scheduler names the instant it falls
+    /// due so the dispatch loop sleeps exactly that long, and it goes at that instant.
+    #[test]
+    fn a_native_schedule_time_holds_the_task_and_names_the_wake() {
+        let start = Instant::now();
+        let mut scheduler = scheduler_with("later", Some("2026-02-01T00:00:05Z"), start);
+        let epoch = nanos("2026-02-01T00:00:00Z");
+        let region = |_: &str| Some(DEFAULT_REGION.to_owned());
+        let now = start + Duration::from_secs(2);
+        let (early, wake) = scheduler.dispatch_ready_at(now, Some(epoch), "demo-app", region, 4);
+        assert!(early.is_empty());
+        assert_eq!(
+            wake.map(|w| w.saturating_duration_since(super::TaskTime::Real(now))),
+            Some(Duration::from_secs(1)),
+            "the refill tick (1s) comes before the schedule (5s)"
+        );
+        // Once the refill ticks have passed, the only thing left to wait for is the schedule.
+        let (still, wake) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(3),
+            Some(epoch + 1_000_000_000),
+            "demo-app",
+            region,
+            4,
+        );
+        assert!(still.is_empty());
+        assert!(wake.is_some());
+        let (due, _) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(10),
+            Some(epoch + 5_000_000_000),
+            "demo-app",
+            region,
+            4,
+        );
+        assert_eq!(due.len(), 1);
+    }
+
+    #[test]
+    fn the_schedule_wake_is_the_earliest_scheduled_task_when_nothing_else_waits() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 4,
+                // No tokens ever: the refill never names a wake, only the schedule does.
+                max_dispatches_per_second: 0.0,
+            }),
+            start,
+        );
+        for (name, schedule) in [
+            ("far", "2026-02-01T00:10:00Z"),
+            ("near", "2026-02-01T00:00:07Z"),
+        ] {
+            let mut queued = task(name);
+            queued.schedule_time = Some(schedule.to_owned());
+            scheduler
+                .enqueue_at("queue", queued, TaskRetryConfig::default(), 64, start)
+                .unwrap();
+        }
+        let (none, wake) = scheduler.dispatch_ready_at(
+            start,
+            Some(nanos("2026-02-01T00:00:00Z")),
+            "demo-app",
+            |_| Some(DEFAULT_REGION.to_owned()),
+            4,
+        );
+        assert!(none.is_empty());
+        assert_eq!(
+            wake,
+            Some(super::TaskTime::Real(start + Duration::from_secs(7)))
+        );
+    }
+
+    /// The wait until a scheduled task falls due keeps its fraction of a second, names nothing
+    /// for a task that is due already, and a due task that only lacks a dispatch token does not
+    /// make the loop spin on a zero wait.
+    #[test]
+    fn the_schedule_wake_keeps_fractions_and_ignores_a_task_that_is_already_due() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 4,
+                max_dispatches_per_second: 0.0,
+            }),
+            start,
+        );
+        let mut later = task("later");
+        later.schedule_time = Some("2026-02-01T00:00:07.25Z".to_owned());
+        scheduler
+            .enqueue_at("queue", later, TaskRetryConfig::default(), 64, start)
+            .unwrap();
+        let region = |_: &str| Some(DEFAULT_REGION.to_owned());
+        let (_, wake) = scheduler.dispatch_ready_at(
+            start,
+            Some(nanos("2026-02-01T00:00:00Z")),
+            "demo-app",
+            region,
+            4,
+        );
+        assert_eq!(
+            wake,
+            Some(super::TaskTime::Real(start + Duration::from_millis(7250)))
+        );
+        // Due exactly now, but no token to dispatch it: there is nothing to wait for.
+        let (none, wake) = scheduler.dispatch_ready_at(
+            start,
+            Some(nanos("2026-02-01T00:00:07.25Z")),
+            "demo-app",
+            region,
+            4,
+        );
+        assert!(none.is_empty());
+        assert_eq!(wake, None);
+    }
+
+    #[test]
+    fn run_now_releases_a_task_before_its_schedule_time_and_only_that_task() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 4,
+                max_dispatches_per_second: 100.0,
+            }),
+            start,
+        );
+        for name in [
+            "projects/p/locations/l/queues/queue/tasks/a",
+            "projects/p/locations/l/queues/queue/tasks/b",
+        ] {
+            let mut queued = task(name);
+            queued.schedule_time = Some("2030-01-01T00:00:00Z".to_owned());
+            scheduler
+                .enqueue_at("queue", queued, TaskRetryConfig::default(), 64, start)
+                .unwrap();
+        }
+        let epoch = Some(nanos("2026-02-01T00:00:00Z"));
+        let region = |_: &str| Some(DEFAULT_REGION.to_owned());
+        assert_eq!(scheduler.run_now("queue", Some("nope")), 0);
+        assert_eq!(scheduler.run_now("elsewhere", None), 0);
+        assert_eq!(scheduler.run_now("queue", Some("b")), 1);
+        assert_eq!(scheduler.run_now("queue", Some("b")), 0, "already released");
+        let (released, _) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(2),
+            epoch,
+            "demo-app",
+            region,
+            4,
+        );
+        assert_eq!(released.len(), 1);
+        assert!(released[0].task.name.ends_with("/b"));
+        let pending = scheduler.pending_tasks();
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].name.ends_with("/a"));
+        assert_eq!(
+            pending[0].schedule_time.as_deref(),
+            Some("2030-01-01T00:00:00Z")
+        );
+        assert!(!pending[0].run_now);
+        assert_eq!(scheduler.run_now("queue", None), 1);
+        let (rest, _) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(3),
+            epoch,
+            "demo-app",
+            region,
+            4,
+        );
+        assert_eq!(rest.len(), 1);
     }
 
     #[test]

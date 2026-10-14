@@ -724,9 +724,10 @@
     "appCheck": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Firebase App Check (docs/specifications/firebase-app-check.md section 8). Defaults to off, so an existing configuration keeps its behaviour. Cross-field rules (a non-off service mode needs enabled, one project ID per project number and back, one app ID per project, an embedded project number that matches) are enforced by tools/config-schema-check and by the Rust loader.",
+      "description": "Firebase App Check (docs/specifications/firebase-app-check.md section 8). appCheck.enabled defaults to false: no product baseline applies, so an existing configuration keeps its behaviour; the exchange and the callable trust boundary are served anyway under the strict profile unless an appCheck block, productionExact or debugTokens \"registered\" says otherwise. Cross-field rules (a non-off service mode needs enabled, one project ID per project number and back, one app ID per project, an embedded project number that matches) are enforced by tools/config-schema-check and by the Rust loader.",
       "properties": {
         "enabled": { "type": "boolean", "default": false },
+        "debugTokens": { "enum": ["any", "registered"], "default": "any", "description": "Which debug tokens the exchange accepts. The strict profile's development default is \"any\" when there is no appCheck block: any well-formed UUIDv4 debug token exchanges for any app with a standard app ID, which is registered on first use, so an enforceAppCheck callable works without registering apps or computing digests (a missing or malformed token is still refused). \"registered\" is production's rule, where only apps from apps[] with a registered digest exchange; it is the default under productionExact, under the emulator profile, and in any appCheck block that does not set this key." },
         "tokenSigning": { "enum": ["instance-rsa"], "default": "instance-rsa" },
         "tokenTtlSeconds": { "type": "integer", "minimum": 1800, "maximum": 604800, "default": 3600 },
         "apps": {
@@ -828,6 +829,11 @@
           "minimum": 0,
           "maximum": 600000,
           "default": 0
+        },
+        "deadLetterAuthorization": {
+          "enum": ["implicit", "iam"],
+          "default": "implicit",
+          "description": "Whether strict dead-letter forwarding needs production's grants: the Pub/Sub service agent (service-<projectNumber>@gcp-sa-pubsub.iam.gserviceaccount.com) as roles/pubsub.subscriber on the source subscription and roles/pubsub.publisher on the dead-letter topic. The development default \"implicit\" forwards as if both were granted, so a test of dead lettering needs no project number and no SetIamPolicy calls. \"iam\" is production's rule (the default under productionExact, strict profile only): nothing is forwarded until both grants exist."
         }
       }
     },

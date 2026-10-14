@@ -1258,6 +1258,9 @@ pub struct RuntimeConfig {
     pub pubsub_project_numbers: BTreeMap<String, String>,
     /// Optional exact local fixture Bearer; ignored by the emulator profile.
     pub pubsub_local_bearer_token: Option<String>,
+    /// `pubsub.deadLetterAuthorization`: whether strict dead-letter forwarding needs the service
+    /// agent's grants. Default: `implicit` unless `productionExact` or the key asks for `iam`.
+    pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -1320,6 +1323,82 @@ impl AppCheckSigning {
     }
 }
 
+/// `appCheck.debugTokens`: which debug tokens the exchange accepts.
+///
+/// Production needs the app registered in the console and the debug token added there before
+/// the exchange answers, which is setup a test has nothing to learn from. The strict profile's
+/// development default is `any`; `productionExact` and any explicit `appCheck` block ask for
+/// production's rule, `registered`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppCheckDebugTokens {
+    /// Only apps from `appCheck.apps` exchange, and only with a digest registered for them.
+    #[default]
+    Registered,
+    /// Any well-formed `UUIDv4` debug token exchanges for any app with a standard app ID, which
+    /// is registered on first use. The exchange and the callable trust boundary work without
+    /// an `appCheck` block.
+    Any,
+}
+
+impl AppCheckDebugTokens {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "any" => Some(Self::Any),
+            "registered" => Some(Self::Registered),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Registered => "registered",
+        }
+    }
+}
+
+/// `pubsub.deadLetterAuthorization`: whether dead-letter forwarding needs production's grants.
+///
+/// Production forwards a dead letter only when the Pub/Sub service agent holds
+/// `roles/pubsub.subscriber` on the source subscription and `roles/pubsub.publisher` on the
+/// dead-letter topic; the console offers to grant them, but gcloud, Terraform and the API need
+/// explicit grants. A test of dead lettering has nothing to learn from granting them by hand
+/// (and a project number for the service agent), so the strict profile's development default
+/// is `implicit`; `productionExact` asks for `iam`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeadLetterAuthorization {
+    /// Forward as if the service agent held both roles.
+    #[default]
+    Implicit,
+    /// Forward only after both grants exist on a project with a (configured or derived) number.
+    Iam,
+}
+
+impl DeadLetterAuthorization {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "implicit" => Some(Self::Implicit),
+            "iam" => Some(Self::Iam),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Implicit => "implicit",
+            Self::Iam => "iam",
+        }
+    }
+}
+
 /// One `appCheck.apps[]` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppCheckApp {
@@ -1363,9 +1442,29 @@ pub struct AppCheckConfig {
     pub firestore: fireemu_core_app_check::verify::BaselineMode,
     /// `services.storage`.
     pub storage: fireemu_core_app_check::verify::BaselineMode,
+    /// `debugTokens`.
+    pub debug_tokens: AppCheckDebugTokens,
+    /// Whether the `appCheck` block names `enabled` itself, which then decides alone.
+    pub enabled_explicit: bool,
 }
 
 impl AppCheckConfig {
+    /// Whether App Check is served without being enabled: the development default (`debugTokens`
+    /// `any`, no `appCheck.enabled` to say otherwise). The exchange, the JWKS and the callable
+    /// trust boundary are available; every product baseline stays `off`.
+    #[must_use]
+    pub const fn implicit(&self) -> bool {
+        !self.enabled
+            && !self.enabled_explicit
+            && matches!(self.debug_tokens, AppCheckDebugTokens::Any)
+    }
+
+    /// Whether App Check is served at all, enabled or implicit.
+    #[must_use]
+    pub const fn served(&self) -> bool {
+        self.enabled || self.implicit()
+    }
+
     /// The disabled default: no exchange, no JWKS, every product baseline `off`.
     #[must_use]
     pub fn disabled() -> Self {
@@ -1377,6 +1476,8 @@ impl AppCheckConfig {
             auth: fireemu_core_app_check::verify::BaselineMode::Off,
             firestore: fireemu_core_app_check::verify::BaselineMode::Off,
             storage: fireemu_core_app_check::verify::BaselineMode::Off,
+            debug_tokens: AppCheckDebugTokens::Registered,
+            enabled_explicit: false,
         }
     }
 
@@ -1531,6 +1632,7 @@ impl Default for RuntimeConfig {
             events_max_attempts: 4,
             pubsub_project_numbers: BTreeMap::new(),
             pubsub_local_bearer_token: None,
+            pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
             pubsub_push_minimum_redelivery_interval_millis:
                 fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
@@ -1545,7 +1647,11 @@ impl Default for RuntimeConfig {
             auth_idp_signers: None,
             auth_idp_assertions: IdpAssertionMode::Fixture,
             auth_api_keys: Vec::new(),
-            app_check: AppCheckConfig::disabled(),
+            // The strict profile's development default: served without registration.
+            app_check: AppCheckConfig {
+                debug_tokens: AppCheckDebugTokens::Any,
+                ..AppCheckConfig::disabled()
+            },
         };
         cfg.record_development_defaults(&Value::Null);
         cfg
@@ -2103,7 +2209,26 @@ impl Selection {
     /// section 8). Selecting `functions` implicitly selects its App Check dependency.
     #[must_use]
     pub const fn app_check_available(&self, cfg: &AppCheckConfig) -> bool {
-        cfg.enabled && (self.appcheck || self.functions)
+        cfg.served() && (self.appcheck || self.functions || self.enforces_selected(cfg))
+    }
+
+    /// Whether a selected product has a configured App Check mode other than `off`. Such a
+    /// configuration keeps its verifier even when `--only` names neither `appcheck` nor
+    /// `functions`: dropping it would let a request through that production refuses.
+    #[must_use]
+    pub const fn enforces_selected(&self, cfg: &AppCheckConfig) -> bool {
+        use fireemu_core_app_check::verify::BaselineMode::Off;
+        cfg.enabled
+            && ((self.auth && !matches!(cfg.auth, Off))
+                || (self.firestore && !matches!(cfg.firestore, Off))
+                || (self.storage && !matches!(cfg.storage, Off)))
+    }
+
+    /// Whether `--only` leaves out `appcheck` and `functions` and the verifier is kept anyway
+    /// because a selected product has a configured App Check mode ([`Self::enforces_selected`]).
+    #[must_use]
+    pub const fn app_check_included_by_services(&self, cfg: &AppCheckConfig) -> bool {
+        !self.appcheck && !self.functions && self.enforces_selected(cfg)
     }
 
     /// Whether a selected surface can consume a Firebase Auth identity.
@@ -3580,6 +3705,11 @@ impl RuntimeConfig {
         self.implicit_database_creation = profile.implicit_database_creation();
         self.refuse_without_ruleset = profile.refuse_without_ruleset();
         self.end_user_transactions = profile.end_user_transactions();
+        self.app_check.debug_tokens = if profile == CompatibilityProfile::Strict {
+            AppCheckDebugTokens::Any
+        } else {
+            AppCheckDebugTokens::Registered
+        };
         // A new production project protects against email enumeration; the official Auth
         // emulator starts with it off (owner decision K3, AUTH-CONFIG-SDK).
         if !self.auth_improved_email_privacy_explicit {
@@ -3616,10 +3746,21 @@ impl RuntimeConfig {
         } else {
             fireemu_adapter_http::identity_toolkit::TenantIdFormat::Readable
         };
+        self.pubsub_dead_letter_authorization = if exact {
+            DeadLetterAuthorization::Iam
+        } else {
+            DeadLetterAuthorization::Implicit
+        };
+        self.app_check.debug_tokens = if !exact && self.profile == CompatibilityProfile::Strict {
+            AppCheckDebugTokens::Any
+        } else {
+            AppCheckDebugTokens::Registered
+        };
         self.record_development_defaults(&Value::Null);
     }
 
     /// Records the parser's effective values and precedence once for both display surfaces.
+    #[allow(clippy::too_many_lines)]
     fn record_development_defaults(&mut self, input: &Value) {
         use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication;
         use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
@@ -3688,6 +3829,14 @@ impl RuntimeConfig {
                     },
                 },
             ),
+            (
+                "pubsub.deadLetterAuthorization",
+                self.pubsub_dead_letter_authorization.as_config_str(),
+            ),
+            (
+                "appCheck.debugTokens",
+                self.app_check.debug_tokens.as_config_str(),
+            ),
         ];
         self.development_defaults = values
             .into_iter()
@@ -3709,12 +3858,22 @@ impl RuntimeConfig {
                 {
                     "derived from auth.idpSigners"
                 } else if self.profile == CompatibilityProfile::Strict
+                    && key == "pubsub.deadLetterAuthorization"
+                    && input["pubsub"]
+                        .get("projectNumbers")
+                        .and_then(Value::as_object)
+                        .is_some_and(|numbers| !numbers.is_empty())
+                {
+                    "derived from pubsub.projectNumbers"
+                } else if self.profile == CompatibilityProfile::Strict
                     && key == "eventarc.authentication"
                     && input["eventarc"].get("oauthCredentials").is_some()
                 {
                     "derived from eventarc.oauthCredentials"
                 } else if self.production_exact {
                     "productionExact"
+                } else if key == "appCheck.debugTokens" && input.get("appCheck").is_some() {
+                    "derived from the appCheck block"
                 } else {
                     "default"
                 };
@@ -4046,6 +4205,7 @@ impl RuntimeConfig {
                 "pushMinimumRedeliveryIntervalMillis",
                 "projectNumbers",
                 "authentication",
+                "deadLetterAuthorization",
             ]
             .contains(&key.as_str())
             {
@@ -4075,6 +4235,22 @@ impl RuntimeConfig {
                 })?;
             cfg.pubsub_local_bearer_token = Some(token.to_owned());
         }
+        if let Some(value) = p.get("deadLetterAuthorization") {
+            let mode = value
+                .as_str()
+                .and_then(DeadLetterAuthorization::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "pubsub.deadLetterAuthorization must be \"implicit\" or \"iam\"".to_owned(),
+                    )
+                })?;
+            if mode == DeadLetterAuthorization::Iam && cfg.profile != CompatibilityProfile::Strict {
+                return Err(ConfigError(
+                    "pubsub.deadLetterAuthorization \"iam\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.pubsub_dead_letter_authorization = mode;
+        }
         if let Some(value) = p.get("projectNumbers") {
             let numbers = value
                 .as_object()
@@ -4087,6 +4263,14 @@ impl RuntimeConfig {
                     .ok_or_else(|| ConfigError("pubsub.projectNumbers values must be positive decimal strings of at most 20 digits".to_owned()))?;
                 cfg.pubsub_project_numbers
                     .insert(project.clone(), number.to_owned());
+            }
+            // The numbers are read only to name the service agent a grant is for, so naming
+            // one asks for production's rule unless the key above says otherwise.
+            if p.get("deadLetterAuthorization").is_none()
+                && cfg.profile == CompatibilityProfile::Strict
+                && !numbers.is_empty()
+            {
+                cfg.pubsub_dead_letter_authorization = DeadLetterAuthorization::Iam;
             }
         }
         if let Some(value) = p.get("pushMinimumRedeliveryIntervalMillis") {
@@ -4271,12 +4455,13 @@ impl RuntimeConfig {
     fn parse_app_check(
         section: &serde_json::Map<String, Value>,
     ) -> Result<AppCheckConfig, ConfigError> {
-        const KEYS: [&str; 5] = [
+        const KEYS: [&str; 6] = [
             "enabled",
             "tokenSigning",
             "tokenTtlSeconds",
             "apps",
             "services",
+            "debugTokens",
         ];
         const APP_KEYS: [&str; 5] = [
             "projectId",
@@ -4298,6 +4483,16 @@ impl RuntimeConfig {
             Some(Value::Bool(b)) => *b,
             Some(_) => return Err(ConfigError("appCheck.enabled must be a boolean".into())),
         };
+        cfg.enabled_explicit = section.contains_key("enabled");
+        // A block asks for production's rule unless it says otherwise.
+        if let Some(value) = section.get("debugTokens") {
+            cfg.debug_tokens = value
+                .as_str()
+                .and_then(AppCheckDebugTokens::parse_config)
+                .ok_or_else(|| {
+                    ConfigError("appCheck.debugTokens must be \"any\" or \"registered\"".into())
+                })?;
+        }
         if let Some(mode) = section.get("tokenSigning") {
             let text = mode
                 .as_str()
@@ -5731,6 +5926,10 @@ mod tests {
                 ),
                 ("appCheck.enabled", json!(cfg.app_check.enabled)),
                 (
+                    "appCheck.debugTokens",
+                    json!(cfg.app_check.debug_tokens.as_config_str()),
+                ),
+                (
                     "appCheck.tokenSigning",
                     json!(match cfg.app_check.token_signing {
                         AppCheckSigning::InstanceRsa => "instance-rsa",
@@ -5750,6 +5949,10 @@ mod tests {
                         fireemu_adapter_http::storage::DefaultBuckets::Both => "both",
                         _ => "narrowed",
                     }),
+                ),
+                (
+                    "pubsub.deadLetterAuthorization",
+                    json!(cfg.pubsub_dead_letter_authorization.as_config_str()),
                 ),
                 (
                     "functions.clock.date",
@@ -5795,6 +5998,11 @@ mod tests {
                     }
                     ("auth.idpAssertions", true) => json!("signed"),
                     ("auth.tenantIdFormat", true) => json!("generated"),
+                    // The open exchange is the strict profile's development default.
+                    ("appCheck.debugTokens", _) if exact || profile == "emulator" => {
+                        json!("registered")
+                    }
+                    ("pubsub.deadLetterAuthorization", true) => json!("iam"),
                     ("eventarc.authentication", true) => json!("production"),
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
@@ -7244,7 +7452,153 @@ mod tests {
             "firestore": {"edition": "standard", "apiMode": "native"},
         }))
         .unwrap();
-        assert_eq!(parsed.app_check, AppCheckConfig::disabled());
+        // The strict profile serves App Check without registration (appCheck.debugTokens "any");
+        // nothing else is switched on: no baseline, no registered app.
+        assert_eq!(
+            parsed.app_check,
+            AppCheckConfig {
+                debug_tokens: AppCheckDebugTokens::Any,
+                ..AppCheckConfig::disabled()
+            }
+        );
+        assert!(parsed.app_check.implicit() && parsed.app_check.served());
+        assert!(!parsed.app_check.enabled);
+    }
+
+    /// `appCheck.debugTokens` follows the absence of an `appCheck` block, `productionExact`, the
+    /// profile and an explicit key, in that order of precedence.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn debug_tokens_are_open_only_for_the_strict_default_and_every_other_case_is_production() {
+        let load = |extra: Value| {
+            let mut input = json!({"schemaVersion": 1});
+            for (key, value) in extra.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            RuntimeConfig::from_json(&input).unwrap().app_check
+        };
+        let cases: [(Value, AppCheckDebugTokens, bool, bool); 11] = [
+            // (config, debugTokens, implicit, served)
+            (json!({}), AppCheckDebugTokens::Any, true, true),
+            (
+                json!({"profile": "strict"}),
+                AppCheckDebugTokens::Any,
+                true,
+                true,
+            ),
+            (
+                json!({"productionExact": true}),
+                AppCheckDebugTokens::Registered,
+                false,
+                false,
+            ),
+            (
+                json!({"productionExact": false}),
+                AppCheckDebugTokens::Any,
+                true,
+                true,
+            ),
+            (
+                json!({"profile": "emulator"}),
+                AppCheckDebugTokens::Registered,
+                false,
+                false,
+            ),
+            // Any appCheck block asks for production's rule, enabled or not.
+            (
+                json!({"appCheck": {}}),
+                AppCheckDebugTokens::Registered,
+                false,
+                false,
+            ),
+            (
+                json!({"appCheck": {"enabled": true}}),
+                AppCheckDebugTokens::Registered,
+                false,
+                true,
+            ),
+            (
+                json!({"appCheck": {"enabled": false}}),
+                AppCheckDebugTokens::Registered,
+                false,
+                false,
+            ),
+            // The key decides over the block, and `enabled: false` decides over the key.
+            (
+                json!({"appCheck": {"debugTokens": "any"}}),
+                AppCheckDebugTokens::Any,
+                true,
+                true,
+            ),
+            (
+                json!({"appCheck": {"enabled": true, "debugTokens": "any"}}),
+                AppCheckDebugTokens::Any,
+                false,
+                true,
+            ),
+            (
+                json!({"appCheck": {"enabled": false, "debugTokens": "any"}}),
+                AppCheckDebugTokens::Any,
+                false,
+                false,
+            ),
+        ];
+        for (config, tokens, implicit, served) in cases {
+            let app_check = load(config.clone());
+            assert_eq!(app_check.debug_tokens, tokens, "{config}");
+            assert_eq!(app_check.implicit(), implicit, "{config}");
+            assert_eq!(app_check.served(), served, "{config}");
+        }
+        // The reported source says why: a block asked for registration, productionExact did, or
+        // nothing did.
+        let source = |config: Value| {
+            let mut input = json!({"schemaVersion": 1});
+            for (key, value) in config.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let entry = cfg
+                .development_defaults
+                .iter()
+                .find(|entry| entry["key"] == "appCheck.debugTokens")
+                .unwrap()
+                .clone();
+            (
+                entry["value"].as_str().unwrap().to_owned(),
+                entry["source"].as_str().unwrap().to_owned(),
+            )
+        };
+        assert_eq!(source(json!({})), ("any".into(), "default".into()));
+        assert_eq!(
+            source(json!({"appCheck": {}})),
+            (
+                "registered".into(),
+                "derived from the appCheck block".into()
+            )
+        );
+        assert_eq!(
+            source(json!({"appCheck": {"debugTokens": "any"}})),
+            ("any".into(), "explicit".into())
+        );
+        assert_eq!(
+            source(json!({"productionExact": true})),
+            ("registered".into(), "productionExact".into())
+        );
+        assert_eq!(
+            source(json!({"profile": "emulator"})),
+            ("registered".into(), "default".into())
+        );
+        // An explicit key beats productionExact; a bad value is refused.
+        assert_eq!(
+            load(json!({"productionExact": true, "appCheck": {"debugTokens": "any"}})).debug_tokens,
+            AppCheckDebugTokens::Any
+        );
+        for bad in [json!("all"), json!(true), json!(null)] {
+            assert!(RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "appCheck": {"debugTokens": bad}})
+            )
+            .is_err());
+        }
     }
 
     #[test]
@@ -7502,13 +7856,44 @@ mod tests {
             Off
         );
 
-        // Row 2: enabled, but neither appcheck nor functions is selected.
+        // Row 2: enabled, but neither appcheck nor functions is selected. A configured baseline
+        // is never dropped for that: the verifier is included and the modes apply (AC-1).
         let neither = Selection::parse("auth,firestore,storage").unwrap();
-        assert!(!neither.app_check_available(&enabled));
+        assert!(neither.app_check_available(&enabled));
+        assert!(neither.app_check_included_by_services(&enabled));
         assert_eq!(
             neither.app_check_mode(&enabled, AppCheckService::Firestore),
-            Off
+            Unenforced
         );
+        assert_eq!(
+            neither.app_check_mode(&enabled, AppCheckService::Storage),
+            Enforced
+        );
+        // Enabled with every mode off has nothing to enforce, so it stays out of `--only`.
+        let only_enabled = app_check(&json!({"enabled": true})).unwrap();
+        assert!(!neither.app_check_available(&only_enabled));
+        assert!(!neither.app_check_included_by_services(&only_enabled));
+        // A selected product with a mode, and only that one, brings the verifier along.
+        let firestore_only = Selection::parse("firestore").unwrap();
+        assert!(firestore_only.app_check_available(&enabled));
+        assert!(!Selection::parse("auth")
+            .unwrap()
+            .app_check_available(&enabled));
+        // The implicit development default is served with functions or appcheck selected, and
+        // never pulled in by a product alone (it enforces nothing).
+        let implicit = AppCheckConfig {
+            debug_tokens: AppCheckDebugTokens::Any,
+            ..AppCheckConfig::disabled()
+        };
+        assert!(Selection::parse("functions")
+            .unwrap()
+            .app_check_available(&implicit));
+        assert!(Selection::parse("appcheck")
+            .unwrap()
+            .app_check_available(&implicit));
+        assert!(!Selection::parse("firestore")
+            .unwrap()
+            .app_check_available(&implicit));
 
         // Row 3: enabled and appcheck selected, Functions not.
         let with_appcheck = Selection::parse("appcheck,firestore,storage").unwrap();
@@ -8315,6 +8700,54 @@ mod tests {
         }
     }
 
+    /// Naming a Pub/Sub project number is how a configuration asks for production's dead-letter
+    /// grants, and the report says so; an empty map, the emulator profile and an explicit key
+    /// say something else.
+    #[test]
+    fn the_dead_letter_default_reports_the_project_numbers_that_selected_it() {
+        let report = |config: Value| {
+            let mut input = json!({"schemaVersion": 1});
+            for (key, value) in config.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let entry = cfg
+                .development_defaults
+                .iter()
+                .find(|entry| entry["key"] == "pubsub.deadLetterAuthorization")
+                .unwrap()
+                .clone();
+            (
+                entry["value"].as_str().unwrap().to_owned(),
+                entry["source"].as_str().unwrap().to_owned(),
+            )
+        };
+        let numbers = json!({"demo-a": "123456789"});
+        assert_eq!(
+            report(json!({"pubsub": {"projectNumbers": numbers}})),
+            ("iam".into(), "derived from pubsub.projectNumbers".into())
+        );
+        assert_eq!(
+            report(json!({"pubsub": {"projectNumbers": {}}})),
+            ("implicit".into(), "default".into())
+        );
+        assert_eq!(
+            report(json!({"profile": "emulator", "pubsub": {"projectNumbers": numbers}})),
+            ("implicit".into(), "default".into())
+        );
+        assert_eq!(
+            report(
+                json!({"pubsub": {"projectNumbers": numbers, "deadLetterAuthorization": "implicit"}})
+            ),
+            ("implicit".into(), "explicit".into())
+        );
+        assert_eq!(
+            report(json!({"productionExact": true})),
+            ("iam".into(), "productionExact".into())
+        );
+        assert_eq!(report(json!({})), ("implicit".into(), "default".into()));
+    }
+
     #[test]
     fn development_defaults_report_effective_values_and_sources() {
         let keys = [
@@ -8324,6 +8757,8 @@ mod tests {
             "eventarc.authentication",
             "firestore.listenStreamLifetime",
             "auth.tenantIdFormat",
+            "pubsub.deadLetterAuthorization",
+            "appCheck.debugTokens",
         ];
         let defaults = [
             "true",
@@ -8332,6 +8767,8 @@ mod tests {
             "permissive",
             "unlimited",
             "readable",
+            "implicit",
+            "any",
         ];
         let production = [
             "false",
@@ -8340,6 +8777,8 @@ mod tests {
             "production",
             "oneHour",
             "generated",
+            "iam",
+            "registered",
         ];
         for exact in [None, Some(false), Some(true)] {
             let mut input = json!({"schemaVersion": 1});
@@ -8362,12 +8801,14 @@ mod tests {
                 .zip(values)
                 .map(|(key, value)| json!({"key": key, "value": value, "source": source}))
                 .collect();
-            // The first six are the flat keys; the switch and multi-factor entries that follow
-            // are pinned by `the_switch_and_multi_factor_defaults_are_reported_with_their_source`.
-            assert_eq!(
-                serde_json::to_value(&cfg.development_defaults[..keys.len()]).unwrap(),
-                json!(expected)
-            );
+            // The switch and multi-factor entries between them are pinned by
+            // `the_switch_and_multi_factor_defaults_are_reported_with_their_source`.
+            let flat: Vec<&Value> = cfg
+                .development_defaults
+                .iter()
+                .filter(|entry| keys.iter().any(|key| entry["key"] == *key))
+                .collect();
+            assert_eq!(serde_json::to_value(flat).unwrap(), json!(expected));
             if exact.is_none() {
                 assert_eq!(
                     serde_json::to_value(&RuntimeConfig::default().development_defaults).unwrap(),

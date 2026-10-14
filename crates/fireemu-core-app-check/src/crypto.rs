@@ -36,6 +36,11 @@ pub trait AppCheckSigner: Send + Sync {
     fn alg(&self) -> &'static str;
     /// Key ID carried in the token header. It begins with `fireemu-app-check-`.
     fn kid(&self) -> &str;
+    /// The key ID if it is known without doing any work: a signer that generates its key on
+    /// first use answers `None` until then. Showing a key ID must not be what generates it.
+    fn kid_if_ready(&self) -> Option<&str> {
+        Some(self.kid())
+    }
     /// Signature over `header.payload`.
     fn sign(&self, signing_input: &[u8]) -> Vec<u8>;
     /// Whether `signature` is valid for `signing_input`.
@@ -57,3 +62,39 @@ impl fmt::Debug for dyn AppCheckSigner {
 
 /// The prefix every local App Check key ID carries.
 pub const KEY_ID_PREFIX: &str = "fireemu-app-check-";
+
+#[cfg(test)]
+mod tests {
+    use super::AppCheckSigner;
+
+    struct FixedKey;
+
+    impl AppCheckSigner for FixedKey {
+        fn alg(&self) -> &'static str {
+            "RS256"
+        }
+        fn kid(&self) -> &'static str {
+            "fireemu-app-check-0000000000000000"
+        }
+        fn sign(&self, _: &[u8]) -> Vec<u8> {
+            Vec::new()
+        }
+        fn verify(&self, _: &[u8], _: &[u8]) -> bool {
+            true
+        }
+        fn public_jwk_json(&self) -> String {
+            "{}".to_owned()
+        }
+    }
+
+    /// A signer that has its key at hand (every signer but the lazy one) answers its key ID
+    /// without being asked to do any work.
+    #[test]
+    fn a_signer_that_does_not_override_kid_if_ready_has_its_key_ready() {
+        assert_eq!(
+            FixedKey.kid_if_ready(),
+            Some("fireemu-app-check-0000000000000000")
+        );
+        assert_eq!(FixedKey.kid_if_ready(), Some(FixedKey.kid()));
+    }
+}

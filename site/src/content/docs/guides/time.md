@@ -48,6 +48,8 @@ By default your function code sees real time. To make `Date.now()`, timers and C
 
 Each mode accepts `real` or `virtual`. Virtual timers require virtual `date`.
 
+With `tasks` set to `virtual`, a Cloud Tasks task enqueued with a `scheduleTime` becomes due when the virtual clock reaches it, so a test advances the clock instead of waiting. With `real`, the task waits for the wall clock under `strict`; the Functions page of the [Emulator UI](../ui/) lists waiting tasks and can run them now.
+
 ## Independent test worlds
 
 A session inside one daemon shares the daemon's clock, Rules and Functions. For parallel tests that change any of them, the `fireemu/testing` helper starts independent worlds, each with its own daemon, ports, clock and data, even with the same project ID:

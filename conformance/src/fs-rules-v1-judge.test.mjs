@@ -679,6 +679,9 @@ test("the environment and the default streams are the child's own", async () => 
   assert.equal(withEnv.exitCode, 0);
   assert.deepEqual(JSON.parse(readFileSync(out, "utf8")), { mark: "given", path: true });
   process.env.FS3_SUPERVISE_MARK = "inherited";
+  // The child inherits this process's environment as it is; a preload of this run is not its own.
+  const preload = process.env.NODE_OPTIONS;
+  delete process.env.NODE_OPTIONS;
   try {
     const inherited = await runSupervised({
       command: process.execPath,
@@ -688,6 +691,7 @@ test("the environment and the default streams are the child's own", async () => 
     assert.equal(inherited.exitCode, 0);
     assert.equal(JSON.parse(readFileSync(out, "utf8")).mark, "inherited");
   } finally {
+    if (preload !== undefined) process.env.NODE_OPTIONS = preload;
     delete process.env.FS3_SUPERVISE_MARK;
     rmSync(join(out, ".."), { recursive: true, force: true });
   }

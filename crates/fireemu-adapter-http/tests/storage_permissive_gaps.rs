@@ -1666,6 +1666,23 @@ fn a_multipart_upload_whose_resource_carries_an_all_users_reader_acl_is_public()
         200
     );
     assert!(!is_public(&s, DEFAULT_BUCKET, "owner-only.txt"));
+    // The entry needs both halves: the public entity with another role, another entity with READER.
+    assert_eq!(
+        upload(
+            "all-owner.txt",
+            json!({"acl": [{"entity": "allUsers", "role": "OWNER"}]})
+        ),
+        200
+    );
+    assert!(!is_public(&s, DEFAULT_BUCKET, "all-owner.txt"));
+    assert_eq!(
+        upload(
+            "user-reader.txt",
+            json!({"acl": [{"entity": "user-a@b.c", "role": "READER"}]})
+        ),
+        200
+    );
+    assert!(!is_public(&s, DEFAULT_BUCKET, "user-reader.txt"));
     assert_eq!(upload("plain.txt", json!({})), 200);
     assert!(!is_public(&s, DEFAULT_BUCKET, "plain.txt"));
 }
@@ -1909,11 +1926,23 @@ fn strict_refuses_a_bucket_name_cloud_storage_never_accepts_unless_such_a_bucket
             ),
         );
         assert_eq!(read.status, 400, "{name}");
-        let firebase = handle(
-            &s,
-            req("GET", &format!("/v0/b/{name}/o/a.txt"), &[OWNER], b""),
-        );
-        assert_eq!(firebase.status, 404, "{name}");
+        for path in [format!("/v0/b/{name}/o/a.txt"), format!("/v0/b/{name}/o")] {
+            let firebase = handle(&s, req("GET", &path, &[OWNER], b""));
+            assert_eq!(firebase.status, 404, "{path}");
+            assert!(
+                text(&firebase).contains("Could not access bucket"),
+                "{path}: {}",
+                text(&firebase)
+            );
+        }
+        seed(&s, DEFAULT_BUCKET, "src.txt", b"hello");
+        for to_invalid in [
+            format!("/storage/v1/b/{DEFAULT_BUCKET}/o/src.txt/copyTo/b/{name}/o/b.txt"),
+            format!("/storage/v1/b/{name}/o/src.txt/copyTo/b/{DEFAULT_BUCKET}/o/b.txt"),
+        ] {
+            let copy = handle(&s, req("POST", &to_invalid, &[OWNER], b""));
+            assert_eq!(copy.status, 400, "{to_invalid}: {}", text(&copy));
+        }
         let xml = handle(&s, req("GET", &format!("/{name}/a.txt"), &[OWNER], b""));
         assert_eq!(xml.status, 400, "{name}");
         assert!(text(&xml).contains("InvalidBucketName"));

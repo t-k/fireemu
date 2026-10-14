@@ -36,14 +36,15 @@ Under `strict`, Fireemu refuses at start-up (and keeps the previous indexes when
 - A composite index with a single field, such as `indexes[3]` with only `{"fieldPath": "n", "order": "ASCENDING"}`. Production answers "this index is not necessary, configure using single field index controls". Declare it under `fieldOverrides` instead, which is also how a collection-group query on one field is enabled. `(field, __name__ DESC)`, `(__name__ DESC)` and a single vector field are accepted, as production accepts them.
 - An entry without a `fields` array, which is what a misspelled key such as `feilds` looks like.
 - A `fieldOverrides` entry without an `indexes` array. A TTL-only override needs `"indexes": []`.
+- A `fieldOverrides` index that has only a `vectorConfig`: each override index needs exactly one of `order` and `arrayConfig`. Declare a single vector field as a composite index instead, as production does.
 
-A missing `queryScope` is read as `COLLECTION`, as `firebase deploy` reads it. The limits of at most 200 composite indexes, 100 fields per index and one array field per index apply under both profiles. The Admin API's `indexes.create` applies the same checks, and counts the indexes of the file and the ones created at run time together against the 200.
+A missing or empty `queryScope` is read as `COLLECTION`, and the older `collectionId` and field `mode` keys are read as `collectionGroup` and `order` / `arrayConfig`, as `firebase deploy` reads them. The limits of at most 200 composite indexes, 100 fields per index and one array field per index apply under both profiles. The Admin API's `indexes.create` applies the same checks, and counts the indexes of the file and the ones created at run time together against the 200.
 
 The `emulator` profile loads the file as before, because the official emulator never reads it.
 
 ## Query limits
 
-Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. The key switches only these query limits (at most 30 disjunctions, 10 `in` values, and so on): the limits on writes, transactions and indexes, and the wire shapes of the REST and WebChannel surfaces, follow the profile alone.
+Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` the key switches only these query limits (at most 30 disjunctions, 10 `in` values, and so on): the limits on writes, transactions and indexes, and the wire shapes of the REST and WebChannel surfaces, stay production's. Under the `emulator` profile, `true` also asks for those production limits.
 
 ## Listen streams
 
@@ -94,7 +95,7 @@ PUT /emulator/v1/projects/{project}/databases/{database}:securityRules
 {"rules": {"files": [{"name": "firestore.rules", "content": "..."}]}}
 ```
 
-This is the route `PUT /emulator/v1/projects/{project}:securityRules` uses for the `(default)` database, with the same body and answers. The rules set this way last until the database is deleted; they are not part of a snapshot. The `emulator` profile keeps the official emulator's behavior, where every database is served by the one ruleset.
+This is the route `PUT /emulator/v1/projects/{project}:securityRules` uses for the `(default)` database, with the same body and answers. The rules set this way last until the database is deleted; they are not part of a snapshot. The `emulator` profile keeps the official emulator's behavior: a database that has no rules of its own is served by the `(default)` database's rules (rules loaded for it with the route above apply to it).
 
 ## Production verification
 

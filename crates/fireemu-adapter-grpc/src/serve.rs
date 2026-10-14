@@ -963,7 +963,7 @@ where
                             Ok(r) => r,
                             Err(never) => match never {},
                         };
-                        let production_scope = rest.gateway.production_refusals();
+                        let production_scope = rest.gateway.production_scope();
                         normalize_transport_status(response.headers_mut());
                         if response
                             .headers()

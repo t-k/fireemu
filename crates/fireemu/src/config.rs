@@ -5049,6 +5049,20 @@ mod tests {
 
     use super::*;
 
+    /// The profile decides how strictly `firestore.indexes.json` loads.
+    #[test]
+    fn the_profile_decides_how_the_index_file_is_checked() {
+        use crate::control::IndexFileChecks;
+        for (profile, checks) in [
+            ("strict", IndexFileChecks::Deploy),
+            ("emulator", IndexFileChecks::Emulator),
+        ] {
+            let cfg =
+                RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": profile})).unwrap();
+            assert_eq!(cfg.index_file_checks(), checks, "{profile}");
+        }
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn config_show_reports_each_explicit_runtime_value() {

@@ -1,6 +1,7 @@
-//! `firestore.enforceLimits` switches the Standard query limits only. The limits on writes,
-//! transactions, indexes and the transport follow the compatibility profile (the index
-//! policy), whatever the switch says.
+//! Under the strict profile `firestore.enforceLimits: false` switches the Standard query limits
+//! only: the limits on writes, transactions, indexes and the transport follow the compatibility
+//! profile (the index policy). Under the emulator profile `enforceLimits: true` still asks for
+//! them, as it always has.
 
 // `tonic::Status` is the error type of the backend's own closures.
 #![allow(clippy::result_large_err)]
@@ -54,10 +55,10 @@ fn observing_query_limits_keeps_production_limits_on_writes() {
 }
 
 #[test]
-fn enforcing_query_limits_adds_no_production_limit_to_the_emulator_profile() {
+fn the_emulator_profile_asks_for_production_limits_only_with_an_explicit_true() {
     assert_eq!(
         scope_of(gateway(true, IndexValidationPolicy::Emulator)),
-        LimitScope::OfficialEmulator
+        LimitScope::Production
     );
     assert_eq!(
         scope_of(gateway(false, IndexValidationPolicy::Emulator)),

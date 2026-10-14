@@ -94,29 +94,39 @@ fn strict_refuses_a_database_id_production_could_not_create() {
     ] {
         let (mut command, _dir) = command(name, "strict", database);
         let mut child = command
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if line.contains("control API:") {
+                    let _ = tx.send(());
+                    return;
+                }
+            }
+        });
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
                 break status;
             }
-            if std::time::Instant::now() >= deadline {
+            if rx.try_recv().is_ok() || std::time::Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
                 scratch::remove_killed_daemon_locator("demo-database-id", child.id());
                 panic!("{database}: the daemon started instead of refusing the id");
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(20));
         };
         assert!(
             !status.success(),
             "{database}: the daemon exited successfully"
         );
-        let output = child.wait_with_output().unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut stderr = String::new();
+        std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
         assert!(
             stderr.contains("database_id should be 4-63 characters")
                 && stderr.contains("firebase.json"),

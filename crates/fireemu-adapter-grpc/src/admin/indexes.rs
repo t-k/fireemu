@@ -86,6 +86,15 @@ impl Default for IndexRegistry {
     }
 }
 
+/// Why [`IndexRegistry::create_within`] created nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateRefusal {
+    /// A live index has the same definition; its id.
+    Exists(String),
+    /// The database holds as many indexes as it may.
+    Full,
+}
+
 /// An index id shaped like production's: base64url of a protobuf varint field 1 holding a
 /// 56-bit number, twelve characters long.
 fn index_id(seed: &mut u64) -> String {
@@ -178,6 +187,30 @@ impl IndexRegistry {
         start_time: LogicalInstant,
         operation: String,
     ) -> Result<RuntimeIndex, String> {
+        self.create_within(project, database, definition, start_time, operation, None)
+            .map_err(|refusal| match refusal {
+                CreateRefusal::Exists(id) => id,
+                CreateRefusal::Full => unreachable!("no capacity was asked for"),
+            })
+    }
+
+    /// [`Self::create`], refusing when the database already has `capacity` indexes: the index
+    /// file's `configured` ones that were not withdrawn plus the ones created here. The count and
+    /// the insertion happen under one lock, so concurrent creates cannot both take the last slot.
+    ///
+    /// # Errors
+    ///
+    /// [`CreateRefusal::Exists`] with the id of the live index that has the same definition, or
+    /// [`CreateRefusal::Full`].
+    pub fn create_within(
+        &self,
+        project: &str,
+        database: &str,
+        definition: IndexDefinition,
+        start_time: LogicalInstant,
+        operation: String,
+        capacity: Option<(&[IndexDefinition], usize)>,
+    ) -> Result<RuntimeIndex, CreateRefusal> {
         let mut state = self.lock();
         let key = (project.to_owned(), database.to_owned());
         if let Some(existing) = state
@@ -185,7 +218,14 @@ impl IndexRegistry {
             .get(&key)
             .and_then(|all| all.iter().find(|i| i.definition == definition))
         {
-            return Err(existing.id.clone());
+            return Err(CreateRefusal::Exists(existing.id.clone()));
+        }
+        if let Some((configured, capacity)) = capacity {
+            let held = Self::configured_view(&state, &key, configured).len()
+                + state.live.get(&key).map_or(0, Vec::len);
+            if held >= capacity {
+                return Err(CreateRefusal::Full);
+            }
         }
         let id = index_id(&mut state.seed);
         let index = RuntimeIndex {

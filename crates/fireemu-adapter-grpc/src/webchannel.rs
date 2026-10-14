@@ -1503,7 +1503,7 @@ impl Hub {
     }
 
     fn session(&self, req: &ChannelRequest, sid: &str) -> Result<Arc<Session>, ChannelResponse> {
-        let strict = self.state.gateway.production_refusals();
+        let strict = self.state.gateway.production_scope();
         let s = self
             .sessions
             .lock()
@@ -1529,7 +1529,7 @@ impl Hub {
     /// Whether this hub serves the strict profile (production's refusals and wire shapes).
     #[must_use]
     pub fn production_scope(&self) -> bool {
-        self.state.gateway.production_refusals()
+        self.state.gateway.production_scope()
     }
 
     /// The answer to a form body over [`max_form_bytes`]. Production answers its HTML 400 page
@@ -2202,7 +2202,7 @@ fn spawn_stream(
 ) {
     let (out_tx, mut out_rx) = mpsc::channel::<Result<String, Status>>(256);
     let kind = session.kind;
-    let strict = ctx.gateway.production_refusals();
+    let strict = ctx.gateway.production_scope();
     // Pump: stream output → numbered arrays on the session.
     let pump_session = session.clone();
     tokio::spawn(async move {

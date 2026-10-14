@@ -4182,6 +4182,49 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A generation `firebase deploy` would refuse (a single-field composite index) is not loaded
+    /// under the strict checks: the previous indexes stay in force and a later valid generation
+    /// still reloads. The emulator profile's checks load it.
+    #[tokio::test]
+    async fn index_reload_keeps_the_previous_indexes_when_deploy_would_refuse_the_file() {
+        const SINGLE_FIELD: &str = r#"{"indexes":[{"collectionGroup":"single","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"}]}],"fieldOverrides":[]}"#;
+        for (checks, reloaded) in [
+            (control::IndexFileChecks::Deploy, false),
+            (control::IndexFileChecks::Emulator, true),
+        ] {
+            let dir = scratch(if reloaded {
+                "indexes-refused-lenient"
+            } else {
+                "indexes-refused-strict"
+            });
+            let path = dir.join("firestore.indexes.json");
+            std::fs::write(&path, INDEXES_ONE).unwrap();
+            let backend = index_backend(INDEXES_ONE);
+            start_index_reload_supervisor(
+                path.display().to_string(),
+                "staging".to_owned(),
+                &backend,
+                checks,
+            );
+            std::fs::write(&path, SINGLE_FIELD).unwrap();
+            if reloaded {
+                wait_for_index_collection(&backend, "single").await;
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(1_800)).await;
+                assert_eq!(
+                    backend.indexes_for_database("staging").composites()[0]
+                        .collection_group
+                        .as_str(),
+                    "items"
+                );
+                std::fs::write(&path, INDEXES_TWO).unwrap();
+                wait_for_index_collection(&backend, "other").await;
+            }
+            drop(backend);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     #[tokio::test]
     async fn index_reload_recovers_from_malformed_json_with_changed_metadata() {
         assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());

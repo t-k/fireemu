@@ -52,31 +52,43 @@ fn command(name: &str, profile: &str, indexes: &str) -> (Command, Scratch) {
     (command, dir)
 }
 
-/// Starts the daemon under `strict` and returns what it printed when it stopped. A daemon that is
-/// still up after the wait did not refuse the file: it is killed and the test fails.
+/// Starts the daemon under `strict` and returns what it printed when it stopped. A daemon that
+/// announces its control API, or is still up after the wait, did not refuse the file: it is
+/// killed and the test fails at once.
 fn refused(name: &str, indexes: &str) -> String {
     let (mut command, _dir) = command(name, "strict", indexes);
     let mut child = command
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.contains("control API:") {
+                let _ = tx.send(());
+                return;
+            }
+        }
+    });
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        if std::time::Instant::now() >= deadline {
+        if rx.try_recv().is_ok() || std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             scratch::remove_killed_daemon_locator("demo-indexes-deploy", child.id());
             panic!("{name}: the daemon started with the file instead of refusing it");
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(20));
     };
     assert!(!status.success(), "{name}: the daemon exited successfully");
-    let output = child.wait_with_output().unwrap();
-    String::from_utf8_lossy(&output.stderr).into_owned()
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
+    stderr
 }
 
 #[test]

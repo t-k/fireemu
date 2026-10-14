@@ -211,8 +211,10 @@ pub struct Gateway {
     /// which the compatibility profile defaults: `strict` enforces, `firebase` observes).
     /// When it observes, every violation is reported as an `FS_LIMIT_OBSERVED:<id>` warning
     /// and the query runs, which is what the official emulator does with the same query.
-    /// It switches the query limits and nothing else: the write, transaction, index and
-    /// transport limits follow the profile ([`Self::production_refusals`]).
+    /// Setting it to `false` under the strict profile switches the query limits only: the
+    /// write, transaction, index and transport limits follow the profile
+    /// ([`Self::production_scope`]). Setting it to `true` under the emulator profile still
+    /// asks for those limits, as it always has.
     pub enforce_limits: bool,
 }
 
@@ -223,6 +225,14 @@ impl Gateway {
     #[must_use]
     pub fn production_refusals(&self) -> bool {
         self.ctx.policy.production_rules()
+    }
+
+    /// Whether the write, transaction, index and transport limits, and the wire shapes that go
+    /// with them, are production's: the strict profile, or an explicit `enforceLimits: true`
+    /// under the emulator profile. `enforceLimits: false` under strict does not drop them.
+    #[must_use]
+    pub fn production_scope(&self) -> bool {
+        self.production_refusals() || self.enforce_limits
     }
 
     /// Records and logs, once per database and index, a query on `database`

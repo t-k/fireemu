@@ -829,6 +829,141 @@ fn call_anonymous(state: &RestState, method: &str, path: &str, body: Value) -> (
     (response.status, response.body)
 }
 
+/// The capacity is checked where the index is inserted: of many concurrent creates at the edge,
+/// exactly as many succeed as there is room for.
+#[test]
+fn concurrent_index_creates_never_pass_the_capacity() {
+    use crate::admin::indexes::{CreateRefusal, IndexRegistry};
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::index::{
+        IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope,
+    };
+    let definition = |i: usize| IndexDefinition {
+        collection_group: fireemu_core_types::ids::CollectionId::try_new(format!("c{i}")).unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: ["a", "b"]
+            .into_iter()
+            .map(|path| IndexField {
+                path: FieldPath::parse(path).unwrap(),
+                mode: IndexFieldMode::Ascending,
+            })
+            .collect(),
+    };
+    let configured: Vec<IndexDefinition> = (0..3).map(|i| definition(1000 + i)).collect();
+    for room in [0usize, 1, 3] {
+        let registry = Arc::new(IndexRegistry::default());
+        let capacity = configured.len() + room;
+        let results: Vec<_> = (0..8)
+            .map(|i| {
+                let registry = Arc::clone(&registry);
+                let configured = configured.clone();
+                let definition = definition(i);
+                std::thread::spawn(move || {
+                    registry.create_within(
+                        "p",
+                        "d",
+                        definition,
+                        LogicalInstant::UNIX_EPOCH,
+                        format!("op{i}"),
+                        Some((&configured, capacity)),
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            room,
+            "room {room}"
+        );
+        assert!(results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|refusal| *refusal == CreateRefusal::Full));
+        assert_eq!(registry.list("p", "d").len(), room);
+    }
+}
+
+/// The route that loads one database's rules takes the admission of the project route
+/// (`privileged_browser_guard`): a remote peer, a page from a foreign origin and a page without
+/// the control token are refused before the path is read, and a process request is admitted.
+#[test]
+fn the_database_rules_route_is_guarded_like_the_project_route() {
+    let (mut state, _clock) = state_with_open_default_rules();
+    state.control_token = Some("run-token".to_owned());
+    let body = json!({"rules": {"files": [{"name": "firestore.rules", "content": OPEN_RULES}]}});
+    let put = |path: &str, mutate: &dyn Fn(&mut RestRequest)| {
+        let mut request = RestRequest {
+            method: "PUT".to_owned(),
+            path: path.to_owned(),
+            query: String::new(),
+            authorization: None,
+            app_check: Vec::new(),
+            body: body.clone(),
+            origin: None,
+            remote_peer: false,
+            browser_metadata: false,
+            batch_field_order: Vec::new(),
+        };
+        mutate(&mut request);
+        let response = state.handle(&request);
+        (
+            response.status,
+            response.body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    };
+    for path in [
+        "/emulator/v1/projects/p:securityRules",
+        "/emulator/v1/projects/p/databases/other:securityRules",
+    ] {
+        let remote = put(path, &|r| r.remote_peer = true);
+        assert_eq!(remote.0, 403, "{path}: {remote:?}");
+        assert!(remote.1.contains("loopback"), "{path}: {remote:?}");
+        let foreign = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("https://evil.example".to_owned());
+        });
+        assert_eq!(
+            (foreign.0, foreign.1.as_str()),
+            (403, "FORBIDDEN_ORIGIN"),
+            "{path}"
+        );
+        let tokenless = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("http://localhost:4000".to_owned());
+        });
+        assert!(
+            tokenless.1.starts_with("CONTROL_TOKEN_REQUIRED"),
+            "{path}: {tokenless:?}"
+        );
+        let wrong = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("http://localhost:4000".to_owned());
+            r.authorization = Some("Bearer not-the-token".to_owned());
+        });
+        assert!(
+            wrong.1.starts_with("CONTROL_TOKEN_REQUIRED"),
+            "{path}: {wrong:?}"
+        );
+        assert_eq!(
+            put(path, &|_| {}).0,
+            200,
+            "{path}: a process request is admitted"
+        );
+        let paged = put(path, &|r| {
+            r.browser_metadata = true;
+            r.origin = Some("http://localhost:4000".to_owned());
+            r.authorization = Some("Bearer run-token".to_owned());
+        });
+        assert_eq!(paged.0, 200, "{path}: {paged:?}");
+    }
+}
+
 /// FS-2: production governs a database only by its own `cloud.firestore` release
 /// (`fs-rules/named-database/releases`), so a database created at run time refuses client
 /// requests until rules are set for it, whatever the `(default)` rules say.

@@ -57,6 +57,57 @@ pub enum IndexFileChecks {
     Deploy,
 }
 
+/// One field of a composite index entry, in the current or the older (`mode`) format.
+fn parse_index_field(f: &Value) -> Result<IndexField, String> {
+    let path = f
+        .get("fieldPath")
+        .and_then(Value::as_str)
+        .ok_or("index field without fieldPath")?;
+    // The v1beta1 `mode` stands for `order` or `arrayConfig` when the field has neither
+    // (`upgradeOldSpec`).
+    let legacy = |wanted: &str| {
+        f.get("order").is_none()
+            && f.get("arrayConfig").is_none()
+            && f.get("vectorConfig").is_none()
+            && f.get("mode").and_then(Value::as_str) == Some(wanted)
+    };
+    let mode = match (
+        f.get("order")
+            .and_then(Value::as_str)
+            .or_else(|| legacy("ASCENDING").then_some("ASCENDING"))
+            .or_else(|| legacy("DESCENDING").then_some("DESCENDING")),
+        f.get("arrayConfig")
+            .and_then(Value::as_str)
+            .or_else(|| legacy("ARRAY_CONTAINS").then_some("CONTAINS")),
+        f.get("vectorConfig"),
+    ) {
+        (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
+        (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
+        (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
+        (None, None, Some(config)) => {
+            let dimension = config
+                .get("dimension")
+                .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|dimension| (1..=2048).contains(dimension))
+                .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be an integer from 1 through 2048"))?;
+            if !config.get("flat").is_some_and(Value::is_object) {
+                return Err(format!("index field {path}: vectorConfig.flat is required"));
+            }
+            IndexFieldMode::Vector { dimension }
+        }
+        _ => {
+            return Err(format!(
+                "index field {path}: exactly one order, arrayConfig, or vectorConfig is required"
+            ))
+        }
+    };
+    Ok(IndexField {
+        path: FieldPath::parse(path).map_err(|e| e.to_string())?,
+        mode,
+    })
+}
+
 /// Parses one `firestore.indexes.json` generation already read by a reload supervisor.
 pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<IndexSet, String> {
     let json: Value = serde_json::from_str(text).map_err(|e| format!("{path}: {e}"))?;
@@ -77,15 +128,19 @@ pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<
         .flatten()
         .enumerate()
     {
-        let collection = idx
-            .get("collectionGroup")
-            .and_then(Value::as_str)
+        // `firebase deploy` upgrades the file before it validates it (firebase-tools 15.28.2,
+        // `upgradeOldSpec`): `collectionId` of the v1beta1 format stands for a missing or empty
+        // `collectionGroup`, and a missing or empty `queryScope` is `COLLECTION`. Neither is
+        // refused.
+        let collection = ["collectionGroup", "collectionId"]
+            .into_iter()
+            .filter_map(|key| idx.get(key).and_then(Value::as_str))
+            .find(|name| !name.is_empty())
             .ok_or("index without collectionGroup")?;
-        // `firebase deploy` reads a missing `queryScope` as `COLLECTION` before it validates
-        // (firebase-tools 15.28.2, `upgradeOldSpec`), so a missing one is not refused.
         let scope = match idx
             .get("queryScope")
             .and_then(Value::as_str)
+            .filter(|scope| !scope.is_empty())
             .unwrap_or("COLLECTION")
         {
             "COLLECTION" => IndexQueryScope::Collection,
@@ -99,44 +154,13 @@ pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<
                 "{path}: indexes[{entry}] (collection group {collection}): Must contain \"fields\" (an array of index fields)"
             ));
         }
-        let mut fields = Vec::new();
-        for f in idx
+        let fields = idx
             .get("fields")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-        {
-            let path = f
-                .get("fieldPath")
-                .and_then(Value::as_str)
-                .ok_or("index field without fieldPath")?;
-            let mode = match (
-                f.get("order").and_then(Value::as_str),
-                f.get("arrayConfig").and_then(Value::as_str),
-                f.get("vectorConfig"),
-            ) {
-                (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
-                (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
-                (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
-                (None, None, Some(config)) => {
-                    let dimension = config
-                        .get("dimension")
-                        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
-                        .and_then(|value| u32::try_from(value).ok())
-                        .filter(|dimension| (1..=2048).contains(dimension))
-                        .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be an integer from 1 through 2048"))?;
-                    if !config.get("flat").is_some_and(Value::is_object) {
-                        return Err(format!("index field {path}: vectorConfig.flat is required"));
-                    }
-                    IndexFieldMode::Vector { dimension }
-                }
-                _ => return Err(format!("index field {path}: exactly one order, arrayConfig, or vectorConfig is required")),
-            };
-            fields.push(IndexField {
-                path: FieldPath::parse(path).map_err(|e| e.to_string())?,
-                mode,
-            });
-        }
+            .map(parse_index_field)
+            .collect::<Result<Vec<_>, _>>()?;
         let definition = IndexDefinition {
             collection_group: CollectionId::try_new(collection).map_err(|e| e.to_string())?,
             query_scope: scope,
@@ -264,6 +288,16 @@ fn parse_field_overrides(
         if let Some(indexes) = ov.get("indexes").and_then(Value::as_array) {
             let mut modes = Vec::new();
             for index in indexes {
+                // `firebase deploy` asserts exactly one of `arrayConfig` and `order` on every
+                // override index (`validateField`), so one with only `vectorConfig` is refused;
+                // a single vector field is a composite index.
+                if checks == IndexFileChecks::Deploy
+                    && index.get("arrayConfig").is_none() == index.get("order").is_none()
+                {
+                    return Err(format!(
+                        "{file}: fieldOverrides[{entry}] ({collection}.{path}): Must contain exactly one of \"arrayConfig,order\" in each of its indexes"
+                    ));
+                }
                 let scope = match index
                     .get("queryScope")
                     .and_then(Value::as_str)
@@ -560,6 +594,104 @@ mod tests {
                 assert!(parse_indexes("f", &config.to_string(), checks).is_err());
             }
         }
+    }
+
+    /// firebase-tools `upgradeOldSpec` reads the v1beta1 file format before it validates:
+    /// `collectionId` for `collectionGroup`, `mode` for `order` / `arrayConfig`, and an empty
+    /// `queryScope` as `COLLECTION`. The deploy accepts such a file, so neither check refuses it.
+    #[test]
+    fn the_legacy_file_format_loads_as_the_deploy_reads_it() {
+        let config = json!({"indexes": [
+            {"collectionId": "legacy", "queryScope": "",
+             "fields": [{"fieldPath": "a", "mode": "ASCENDING"}, {"fieldPath": "b", "mode": "DESCENDING"}]},
+            {"collectionGroup": "tags", "queryScope": "COLLECTION_GROUP",
+             "fields": [{"fieldPath": "t", "mode": "ARRAY_CONTAINS"}, {"fieldPath": "b", "order": "ASCENDING"}]},
+            {"collectionGroup": "both", "collectionId": "ignored",
+             "fields": [{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "ASCENDING"}]},
+        ]});
+        for checks in [IndexFileChecks::Emulator, IndexFileChecks::Deploy] {
+            let set = parse_indexes("f", &config.to_string(), checks).unwrap();
+            let composites = set.composites();
+            assert_eq!(composites[0].collection_group.as_str(), "legacy");
+            assert_eq!(composites[0].query_scope, IndexQueryScope::Collection);
+            assert_eq!(
+                composites[0]
+                    .fields
+                    .iter()
+                    .map(|f| f.mode)
+                    .collect::<Vec<_>>(),
+                [IndexFieldMode::Ascending, IndexFieldMode::Descending]
+            );
+            assert_eq!(composites[1].fields[0].mode, IndexFieldMode::Contains);
+            assert_eq!(composites[2].collection_group.as_str(), "both");
+        }
+        // A `mode` the deploy cannot turn into an order is still refused.
+        let config = json!({"indexes": [{"collectionGroup": "g", "fields": [
+            {"fieldPath": "a", "mode": "SIDEWAYS"}, {"fieldPath": "b", "order": "ASCENDING"}]}]});
+        assert!(deploy(&config).is_err());
+        // Without either key there is no collection group.
+        let config = json!({"indexes": [{"fields": [asc("a"), asc("b")]}]});
+        assert!(deploy(&config).is_err());
+    }
+
+    /// firebase-tools `validateField` asserts exactly one of `arrayConfig` and `order` on every
+    /// override index, so a vector-only override is refused by the deploy (a single vector field
+    /// is declared as a composite index, which production deployed).
+    #[test]
+    fn strict_refuses_a_vector_only_override_index() {
+        let config = json!({"indexes": [], "fieldOverrides": [{
+            "collectionGroup": "items", "fieldPath": "embedding",
+            "indexes": [{"queryScope": "COLLECTION", "vectorConfig": {"dimension": 3, "flat": {}}}]
+        }]});
+        let error = deploy(&config).unwrap_err();
+        assert!(
+            error.contains("fieldOverrides[0]")
+                && error.contains("items.embedding")
+                && error.contains("exactly one of"),
+            "{error}"
+        );
+        assert!(parse_indexes("f", &config.to_string(), IndexFileChecks::Emulator).is_ok());
+        let config = json!({"indexes": [], "fieldOverrides": [{
+            "collectionGroup": "items", "fieldPath": "n",
+            "indexes": [{"order": "ASCENDING"}, {"arrayConfig": "CONTAINS", "queryScope": "COLLECTION_GROUP"}]
+        }]});
+        assert!(deploy(&config).is_ok());
+    }
+
+    fn scratch_file(name: &str, text: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "fireemu-control-{name}-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// The reading path the daemon uses (`load_index_file`, `parse_index_file`) carries the
+    /// choice of checks, and refuses the file as a whole.
+    #[test]
+    fn loading_a_file_applies_the_checks_it_is_given() {
+        let bad = json!({"indexes": [entry_ok(), {"collectionGroup": "g", "queryScope": "COLLECTION", "fields": [asc("n")]}]})
+            .to_string();
+        let path = scratch_file("load", &bad);
+        let name = path.display().to_string();
+        let loaded = load_index_file(&name, IndexFileChecks::Deploy);
+        let lenient = load_index_file(&name, IndexFileChecks::Emulator);
+        std::fs::remove_file(&path).unwrap();
+        let error = loaded.unwrap_err();
+        assert!(
+            error.contains("indexes[1]") && error.contains(&name),
+            "{error}"
+        );
+        assert_eq!(lenient.unwrap().0.composites().len(), 2);
+        // Both halves or neither: a bad index half refuses a file whose TTL half is fine.
+        let ttl = json!({"indexes": [{"collectionGroup": "g", "fields": []}], "fieldOverrides": [
+            {"collectionGroup": "s", "fieldPath": "t", "ttl": true, "indexes": []}]})
+        .to_string();
+        assert!(parse_index_file("f", &ttl, IndexFileChecks::Deploy).is_err());
+        let (set, catalog) = parse_index_file("f", &ttl, IndexFileChecks::Emulator).unwrap();
+        assert_eq!(set.composites().len(), 1);
+        assert_eq!(catalog.iter().count(), 1);
     }
 
     #[test]

@@ -1,0 +1,35 @@
+#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+schemaVersion = 1
+profile = "strict"
+
+[limits]
+catalog = "firestore-standard-2026-08-25"
+queryCatalog = "firestore-standard-query-2026-08-25"
+rulesCatalog = "firebase-rules-2026-08-25"
+
+[firestore]
+edition = "standard"
+apiMode = "native"
+
+[appCheck]
+enabled = true
+tokenSigning = "instance-rsa"
+tokenTtlSeconds = 3600
+
+[[appCheck.apps]]
+projectId = "demo-app"
+projectNumber = "1234567890"
+appId = "1:1234567890:web:local-test-app"
+enabled = true
+debugTokenSha256 = ["db8055e0e0307d5a016bec4dc338d69875eb0fb7e614a8b125b08fb082095d98"]
+
+[[appCheck.apps]]
+projectId = "demo-app"
+projectNumber = "1234567890"
+appId = "1:1234567890:android:local-test-app"
+enabled = false
+
+[appCheck.services]
+auth = "off"
+firestore = "unenforced"
+storage = "enforced"

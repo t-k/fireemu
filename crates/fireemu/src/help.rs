@@ -44,17 +44,17 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--config"],
         Value::Required("<file>"),
-        "Configuration file: a fireemu.json (schemaVersion 1) or a firebase.json. Default: ./fireemu.json when neither --config nor --firebase-json is given, else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.",
+        "Configuration file: TOML (.toml) or JSON (any other extension), with schemaVersion 1, or a firebase.json. Default: ./fireemu.toml or ./fireemu.json when neither --config nor --firebase-json is given (both present is an error; remove one), else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.",
     ),
     opt(
         &["--firebase-json"],
         Value::Required("<file>"),
-        "Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.json names, else, without ./fireemu.json, the nearest firebase.json in the current directory or a parent.",
+        "Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.toml or ./fireemu.json names, else, without either, the nearest firebase.json in the current directory or a parent.",
     ),
     opt(
         &["--no-config-discovery"],
         Value::None,
-        "Do not search for ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.",
+        "Do not search for ./fireemu.toml, ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.",
     ),
     opt(
         &["-P", "--project"],
@@ -165,7 +165,7 @@ const INIT_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--reference"],
         Value::None,
-        "Also write fireemu.reference.jsonc, which fireemu does not load. With an existing fireemu.json and no --profile or --firebase-json, write only the reference. Copying a key into fireemu.json makes it explicit and stops productionExact from switching it.",
+        "Also write fireemu.reference.toml, which fireemu does not load. With an existing fireemu.toml or fireemu.json and no --profile or --firebase-json, write only the reference. Copying a key into fireemu.toml makes it explicit and stops productionExact from switching it.",
     ),
     opt(
         &["--profile"],
@@ -175,7 +175,7 @@ const INIT_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--firebase-json"],
         Value::Required("<file>"),
-        "Reference this firebase.json from fireemu.json, so rules, indexes, Functions and ports are read from it on every start. Default: ./firebase.json when it exists (asked interactively).",
+        "Reference this firebase.json from fireemu.toml, so rules, indexes, Functions and ports are read from it on every start. Default: ./firebase.json when it exists (asked interactively).",
     ),
     opt(
         &["--interactive"],
@@ -195,7 +195,7 @@ const INIT_OPTIONS: &[OptionSpec] = &[
 ];
 
 const CONFIG_OPTIONS: &[OptionSpec] = &[
-    opt(&["--config"], Value::Required("<path>"), "Load this configuration, as fireemu up does. Default: discover fireemu.json or the nearest firebase.json."),
+    opt(&["--config"], Value::Required("<path>"), "Load this configuration, as fireemu up does. Default: discover fireemu.toml or fireemu.json, else the nearest firebase.json."),
     opt(&["--firebase-json"], Value::Required("<path>"), "Load this firebase.json, overriding a reference in the canonical configuration."),
     opt(&["--json"], Value::None, "Print key, value, source and description records as JSON. Default: one effective value and source per line."),
 ];
@@ -272,7 +272,7 @@ impl Topic {
 
     const fn summary(self) -> &'static str {
         match self {
-            Self::Init => "create fireemu.json in the current directory",
+            Self::Init => "create fireemu.toml in the current directory",
             Self::Config => "show every configuration key with its effective value and source",
             Self::Up => {
                 "start the emulators and keep them running until Ctrl-C (alias: emulators:start)"
@@ -309,7 +309,7 @@ impl Topic {
     const fn description(self) -> &'static str {
         match self {
             Self::Config => "Loads the configuration files and defaults as up does, without the command-line overrides of up (--project, --only, the port flags), and without starting the emulators. Prints every schema leaf in schema order. Missing values are (unset), or null in JSON with source unset; values unavailable from the runtime use explicit file values or defaults marked default (schema).",
-            Self::Init => "Creates fireemu.json in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given.",
+            Self::Init => "Creates fireemu.toml in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given. An existing fireemu.json must be removed before creating fireemu.toml.",
             Self::Up => "Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.",
             Self::Exec => "Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status. On Unix, a command ended by signal n gives 128 + n, and SIGINT and SIGTERM are forwarded to it.\n\nWith \"shell script\" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.",
             Self::Export => "Asks the suite that is already running for the project (found through its Emulator Hub locator file) to write its state to <dir>, in the format --import reads. Not available on Windows.",

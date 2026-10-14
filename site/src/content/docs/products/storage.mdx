@@ -3,6 +3,8 @@ title: Cloud Storage
 description: Cloud Storage for Firebase locally, with both the Firebase and Cloud Storage JSON APIs and Storage Security Rules.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Fireemu serves Cloud Storage for Firebase at `127.0.0.1:9199`, with both API dialects:
 
 - the Firebase Storage protocol the client SDKs use, including resumable uploads and download tokens;
@@ -14,7 +16,7 @@ Both dialects share one store, so an object uploaded through one is visible thro
 
 Under `strict`, generation and metageneration preconditions and declared checksums are honored as production honors them. The official emulator verifies no checksum.
 
-Storage Security Rules are read from the `storage.rules` file named in `firebase.json`, or `storage.rules` in `fireemu.json`. A Storage rule can read Firestore documents with `firestore.get()` and `firestore.exists()`. Under `strict`, a project without rules refuses every end-user request with production's 400 "bucket has not been set up" answer. See [Security Rules](../../guides/security-rules/).
+Storage Security Rules are read from the `storage.rules` file named in `firebase.json`, or `storage.rules` in `fireemu.toml`. A Storage rule can read Firestore documents with `firestore.get()` and `firestore.exists()`. Under `strict`, a project without rules refuses every end-user request with production's 400 "bucket has not been set up" answer. See [Security Rules](../../guides/security-rules/).
 
 Under `strict` the Storage emulator also refuses what production refuses and the official emulator accepts (a bucket that does not exist is the exception, see below):
 
@@ -31,15 +33,37 @@ The `emulator` profile keeps the official emulator's behavior for all of these.
 
 Production answers 404 `The specified bucket does not exist.` for an object operation on a bucket nobody created. The Storage emulator serves it instead, and creates the bucket on the first write, so a test needs no setup. Under `strict` it prints one `note:` line on standard error the first time an object is written to a bucket that is not a default bucket of the project (`<project>.appspot.com` or `<project>.firebasestorage.app`), a `firebase.json` storage target, imported data, a bucket a deployed Storage trigger names, or listed in the configuration. A typo in a bucket name is visible that way. To silence the note for a bucket that exists in production, list it:
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+
+[storage]
+buckets = ["uploads-bucket", "exports.example.com"]
+publicBuckets = ["public-assets.example.com"]
+```
+
+</TabItem>
+<TabItem label="JSON">
+
 ```json
 {
   "schemaVersion": 1,
   "storage": {
-    "buckets": ["uploads-bucket", "exports.example.com"],
-    "publicBuckets": ["public-assets.example.com"]
+    "buckets": [
+      "uploads-bucket",
+      "exports.example.com"
+    ],
+    "publicBuckets": [
+      "public-assets.example.com"
+    ]
   }
 }
 ```
+
+</TabItem>
+</Tabs>
 
 Each name must be one Cloud Storage accepts. `storage.publicBuckets` lists buckets whose objects the public URL serves without a credential, and also counts as declaring them. `storage.buckets` and `storage.publicBuckets` are ignored by the `emulator` profile.
 
@@ -49,12 +73,30 @@ A production project has one default bucket: `<project>.firebasestorage.app` if 
 
 The Storage emulator keeps every object in memory, and by default nothing bounds how much. To cap it, set `storage.maxStoredBytes`. This limit is local to Fireemu; production has none:
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+
+[storage]
+maxStoredBytes = 1073741824
+```
+
+</TabItem>
+<TabItem label="JSON">
+
 ```json
 {
   "schemaVersion": 1,
-  "storage": { "maxStoredBytes": 1073741824 }
+  "storage": {
+    "maxStoredBytes": 1073741824
+  }
 }
 ```
+
+</TabItem>
+</Tabs>
 
 - An upload, a resumable upload's final request or a copy that would grow the total past the limit is refused with HTTP 402 and the message `storage.maxStoredBytes limit exceeded`. The Firebase client SDKs report it at once as `storage/quota-exceeded`.
 - A write that does not grow the total, such as an equal or smaller replacement, always passes.

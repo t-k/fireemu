@@ -7,7 +7,7 @@ This reference is the built-in help of Fireemu 0.18.0. Run `npx fireemu --help`,
 
 | Command | What it does |
 |---|---|
-| [`init`](#init) | Create `fireemu.json` in the current directory |
+| [`init`](#init) | Create `fireemu.toml` in the current directory |
 | [`up`](#up) | Start the emulators and keep them running until `Ctrl+C` (alias: `emulators:start`) |
 | [`exec`](#exec) | Start the emulators, run a command, stop them (alias: `emulators:exec`) |
 | [`emulators:export`](#emulatorsexport) | Export the state of a running suite to a directory |
@@ -17,24 +17,24 @@ This reference is the built-in help of Fireemu 0.18.0. Run `npx fireemu --help`,
 ## init
 
 ```text
-fireemu init - create fireemu.json in the current directory
+fireemu init - create fireemu.toml in the current directory
 
 usage:
   fireemu init [options]
 
-Creates fireemu.json in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given.
+Creates fireemu.toml in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given. An existing fireemu.json must be removed before creating fireemu.toml.
 
 options:
   --profile strict|emulator
         Compatibility profile. strict follows production Firebase and is recommended, including when migrating from the official emulator; emulator is only for checking alignment with the pinned official emulator and is not needed when migrating. Default: strict (asked interactively).
   --firebase-json <file>
-        Reference this firebase.json from fireemu.json, so rules, indexes, Functions and ports are read from it on every start. Default: ./firebase.json when it exists (asked interactively).
+        Reference this firebase.json from fireemu.toml, so rules, indexes, Functions and ports are read from it on every start. Default: ./firebase.json when it exists (asked interactively).
   --interactive
         Ask for the missing choices. Default: only when stdin and stdout are terminals.
   --yes, --no-interactive
         Never ask; use the defaults for what is not given.
   --force
-        Replace an existing fireemu.json. Default: an existing file is an error.
+        Replace an existing fireemu.toml. Default: an existing file is an error.
   -h, --help
         Print this help and exit.
 ```
@@ -52,11 +52,11 @@ Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions
 
 options:
   --config <file>
-        Configuration file: a fireemu.json (schemaVersion 1) or a firebase.json. Default: ./fireemu.json when neither --config nor --firebase-json is given, else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
+        Configuration file: TOML (.toml) or JSON (any other extension), with schemaVersion 1, or a firebase.json. Default: ./fireemu.toml or ./fireemu.json when neither --config nor --firebase-json is given (both present is an error; remove one), else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
   --firebase-json <file>
-        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.json names, else, without ./fireemu.json, the nearest firebase.json in the current directory or a parent.
+        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.toml or ./fireemu.json names, else, without either, the nearest firebase.json in the current directory or a parent.
   --no-config-discovery
-        Do not search for ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
+        Do not search for ./fireemu.toml, ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
@@ -116,11 +116,11 @@ With "shell script" (the official form) the script is run by the system shell. W
 
 options:
   --config <file>
-        Configuration file: a fireemu.json (schemaVersion 1) or a firebase.json. Default: ./fireemu.json when neither --config nor --firebase-json is given, else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
+        Configuration file: TOML (.toml) or JSON (any other extension), with schemaVersion 1, or a firebase.json. Default: ./fireemu.toml or ./fireemu.json when neither --config nor --firebase-json is given (both present is an error; remove one), else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
   --firebase-json <file>
-        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.json names, else, without ./fireemu.json, the nearest firebase.json in the current directory or a parent.
+        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.toml or ./fireemu.json names, else, without either, the nearest firebase.json in the current directory or a parent.
   --no-config-discovery
-        Do not search for ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
+        Do not search for ./fireemu.toml, ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
@@ -213,11 +213,11 @@ Prints the capability manifest for the profile the options resolve to. It accept
 
 options:
   --config <file>
-        Configuration file: a fireemu.json (schemaVersion 1) or a firebase.json. Default: ./fireemu.json when neither --config nor --firebase-json is given, else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
+        Configuration file: TOML (.toml) or JSON (any other extension), with schemaVersion 1, or a firebase.json. Default: ./fireemu.toml or ./fireemu.json when neither --config nor --firebase-json is given (both present is an error; remove one), else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.
   --firebase-json <file>
-        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.json names, else, without ./fireemu.json, the nearest firebase.json in the current directory or a parent.
+        Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.toml or ./fireemu.json names, else, without either, the nearest firebase.json in the current directory or a parent.
   --no-config-discovery
-        Do not search for ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
+        Do not search for ./fireemu.toml, ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>

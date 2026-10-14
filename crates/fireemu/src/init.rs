@@ -1,4 +1,4 @@
-//! Safe creation of a canonical `fireemu.json`.
+//! Safe creation of a canonical `fireemu.toml`.
 
 use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write};
@@ -49,7 +49,7 @@ struct InitArgs {
     interaction: Interaction,
 }
 
-/// Creates `fireemu.json` in the current directory.
+/// Creates `fireemu.toml` in the current directory.
 pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let options = parse_args(args)?;
     let cwd = std::env::current_dir()
@@ -57,11 +57,28 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     if options.reference
         && options.profile.is_none()
         && options.firebase_json.is_none()
-        && cwd.join("fireemu.json").is_file()
+        && (cwd.join("fireemu.toml").is_file() || cwd.join("fireemu.json").is_file())
     {
-        let destination = cwd.join("fireemu.reference.jsonc");
-        write_config(&destination, reference_document().as_bytes(), options.force)?;
+        let is_toml = !cwd.join("fireemu.json").is_file();
+        let destination = cwd.join(if is_toml {
+            "fireemu.reference.toml"
+        } else {
+            "fireemu.reference.jsonc"
+        });
+        let document = reference_document(is_toml);
+        write_config(&destination, document.as_bytes(), options.force)?;
         return Ok(destination);
+    }
+    match std::fs::symlink_metadata(cwd.join("fireemu.json")) {
+        Ok(_) => return Err(CliError::refused(
+            "fireemu.json already exists; keep using it or remove it before creating fireemu.toml",
+        )),
+        Err(error) if destination_is_missing(error.kind()) => {}
+        Err(error) => {
+            return Err(CliError::refused(format!(
+                "cannot inspect fireemu.json: {error}"
+            )))
+        }
     }
     let terminals = automatic_interaction(
         std::io::stdin().is_terminal(),
@@ -70,7 +87,7 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let options = complete_options(options, &cwd, &mut input, &mut output, terminals)?;
-    let destination = cwd.join("fireemu.json");
+    let destination = cwd.join("fireemu.toml");
     if let Some(reference) = &options.firebase_json {
         let source = if reference.is_absolute() {
             reference.clone()
@@ -83,10 +100,7 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         "$schema": CANONICAL_SCHEMA_URL,
         "schemaVersion": 1,
         "profile": options.profile.unwrap_or(Profile::Strict).as_str(),
-        "firestore": {
-            "edition": "standard",
-            "apiMode": "native"
-        }
+        "firestore": { "edition": "standard", "apiMode": "native" }
     });
     if let Some(firebase_json) = options.firebase_json {
         let firebase_json = firebase_json.to_str().ok_or_else(|| {
@@ -94,10 +108,34 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         })?;
         document["firebaseJson"] = firebase_json.into();
     }
-    let mut bytes = serde_json::to_vec_pretty(&document)
-        .map_err(|e| CliError::refused(format!("cannot serialize fireemu.json: {e}")))?;
-    bytes.push(b'\n');
-    let reference = cwd.join("fireemu.reference.jsonc");
+    let mut output_document = format!(
+        "#:schema {CANONICAL_SCHEMA_URL}\nschemaVersion = 1\nprofile = {}\n",
+        document["profile"]
+    );
+    // Keep the required version and profile first without changing TOML table scope.
+    for (key, value) in document.as_object().expect("configuration object") {
+        if matches!(key.as_str(), "schemaVersion" | "profile") {
+            continue;
+        }
+        if let Some(table) = value.as_object() {
+            for (name, value) in table {
+                let _ = writeln!(
+                    output_document,
+                    "{key}.{name} = {}",
+                    toml::Value::try_from(value).expect("configuration value")
+                );
+            }
+        } else {
+            let key = if key == "$schema" { "\"$schema\"" } else { key };
+            let _ = writeln!(
+                output_document,
+                "{key} = {}",
+                toml::Value::try_from(value).expect("configuration value")
+            );
+        }
+    }
+    let bytes = output_document.into_bytes();
+    let reference = cwd.join("fireemu.reference.toml");
     // Both destinations are checked before either is written, so a refusal leaves nothing behind.
     check_destination(&destination, options.force)?;
     if options.reference {
@@ -105,7 +143,11 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     }
     write_config(&destination, &bytes, options.force)?;
     if options.reference {
-        write_config(&reference, reference_document().as_bytes(), options.force)?;
+        write_config(
+            &reference,
+            reference_document(true).as_bytes(),
+            options.force,
+        )?;
         writeln!(output, "created {}", crate::diagnostic_path(&reference))
             .map_err(|error| output_error(&error))?;
     }
@@ -114,23 +156,38 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
 
 /// The reference is documentation; commented settings must never become implicit defaults.
 #[allow(clippy::too_many_lines)]
-fn reference_document() -> String {
+fn reference_document(is_toml: bool) -> String {
     let governed = crate::config::RuntimeConfig::default().development_defaults;
-    let entries = crate::config::config_schema();
-    let mut output = String::from("// This reference file is not loaded by fireemu. Edit fireemu.json to configure it.\n// Copying a key into fireemu.json makes it explicit and stops productionExact\n// from switching that key. Commented examples are not active defaults.\n{\n");
+    let mut entries = crate::config::config_schema();
+    if is_toml {
+        for key in ["profile", "schemaVersion"] {
+            let index = entries
+                .iter()
+                .position(|(path, _)| path == key)
+                .expect("required schema key");
+            let entry = entries.remove(index);
+            entries.insert(0, entry);
+        }
+    }
+    let mut output = if is_toml {
+        format!("#:schema {CANONICAL_SCHEMA_URL}\n# This reference file is not loaded by fireemu. Edit fireemu.toml to configure it.\n# Copying a key into fireemu.toml makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n")
+    } else {
+        String::from("// This reference file is not loaded by fireemu. Edit fireemu.json to configure it.\n// Do not create fireemu.toml beside fireemu.json.\n// Copying a key into fireemu.json makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n{\n")
+    };
     let mut sections: Vec<(String, bool, bool)> = vec![(String::new(), false, false)];
     for (path, schema) in entries {
         let parent = path.rsplit_once('.').map_or("", |(parent, _)| parent);
         while sections.last().expect("root section").0 != parent {
             let (_, commented, _) = sections.pop().expect("section");
-            let _ = writeln!(
-                output,
-                "{}{} }}",
-                "  ".repeat(sections.len()),
-                if commented { "//" } else { "" }
-            );
+            if !is_toml {
+                let _ = writeln!(
+                    output,
+                    "{}{} }}",
+                    "  ".repeat(sections.len()),
+                    if commented { "//" } else { "" }
+                );
+            }
         }
-        let name = path.rsplit('.').next().expect("schema key");
         let is_section = schema.get("properties").is_some();
         let production_exact = governed.iter().any(|entry| entry["key"] == path);
         let presence_selects_mode = matches!(
@@ -157,15 +214,20 @@ fn reference_document() -> String {
             || no_effect
             || presence_selects_mode
             || (!is_section && schema.get("default").is_none());
-        let indent = "  ".repeat(sections.len());
-        if !commented {
+        let indent = if is_toml {
+            String::new()
+        } else {
+            "  ".repeat(sections.len())
+        };
+        if !is_toml && !commented {
             let (_, _, active) = sections.last_mut().expect("section");
             if *active {
                 let _ = writeln!(output, "{indent},");
             }
             *active = true;
         }
-        let _ = writeln!(output, "{indent}// {path}:");
+        let comment_prefix = if is_toml { "#" } else { "//" };
+        let _ = writeln!(output, "\n{indent}{comment_prefix} {path}:");
         let description = schema["description"]
             .as_str()
             .unwrap_or("No description in the schema.");
@@ -182,44 +244,62 @@ fn reference_document() -> String {
         if presence_selects_mode {
             comment.push_str(" Presence selects behavior; leave commented unless intended.");
         }
-        let mut width = 0;
-        for word in comment.split_whitespace() {
-            if width == 0 {
-                let _ = write!(output, "{indent}// ");
-            } else if width + 1 + word.len() > 88_usize.saturating_sub(indent.len()) {
-                let _ = write!(output, "\n{indent}// ");
-                width = 0;
-            } else {
-                output.push(' ');
-                width += 1;
-            }
-            output.push_str(word);
-            width += word.len();
-        }
-        output.push('\n');
-        let prefix = if commented { "// " } else { "" };
+        let _ = writeln!(output, "{indent}{comment_prefix} {comment}");
         if is_section {
-            let _ = writeln!(output, "{indent}{prefix}{name:?}: {{");
+            if !is_toml {
+                let name = path.rsplit('.').next().expect("schema key");
+                let prefix = if commented { "// " } else { "" };
+                let _ = writeln!(output, "{indent}{prefix}{name:?}: {{");
+            }
             sections.push((path, commented, false));
         } else {
             let value = schema
                 .get("default")
                 .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
-                .or_else(|| schema.get("const"))
-                .unwrap_or(&serde_json::Value::Null);
-            let _ = writeln!(output, "{indent}{prefix}{name:?}: {value}");
+                .or_else(|| schema.get("const"));
+            let key = if path == "$schema" {
+                "\"$schema\""
+            } else {
+                &path
+            };
+            if !is_toml {
+                let name = path.rsplit('.').next().expect("schema key");
+                let value = value.unwrap_or(&serde_json::Value::Null);
+                let prefix = if commented { "// " } else { "" };
+                let _ = writeln!(output, "{indent}{prefix}{name:?}: {value}");
+            } else if let Some(value) = value {
+                if value.is_null() {
+                    let _ = writeln!(output, "# {key} is omitted; TOML has no null.");
+                } else if let Ok(value) = toml::Value::try_from(value) {
+                    let prefix = if commented { "# " } else { "" };
+                    let _ = writeln!(output, "{prefix}{key} = {value}");
+                } else {
+                    let _ = writeln!(
+                        output,
+                        "# {key} = ... (see the schema; omit nullable keys or array items)"
+                    );
+                }
+            } else {
+                let hint = schema
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or(String::new(), |kind| format!("; type: {kind}"));
+                let _ = writeln!(output, "# {key} = ... (no default; see the schema){hint}");
+            }
         }
     }
-    while sections.len() > 1 {
-        let (_, commented, _) = sections.pop().expect("section");
-        let _ = writeln!(
-            output,
-            "{}{} }}",
-            "  ".repeat(sections.len()),
-            if commented { "//" } else { "" }
-        );
+    if !is_toml {
+        while sections.len() > 1 {
+            let (_, commented, _) = sections.pop().expect("section");
+            let _ = writeln!(
+                output,
+                "{}{} }}",
+                "  ".repeat(sections.len()),
+                if commented { "//" } else { "" }
+            );
+        }
+        output.push_str("}\n");
     }
-    output.push_str("}\n");
     output
 }
 
@@ -361,7 +441,7 @@ fn complete_options(
             path => Some(PathBuf::from(path)),
         };
     }
-    let answer = prompt(input, output, "Create fireemu.json? [Y/n] ")?;
+    let answer = prompt(input, output, "Create fireemu.toml? [Y/n] ")?;
     if matches!(answer.to_ascii_lowercase().as_str(), "n" | "no") {
         return Err(CliError::refused("initialization cancelled"));
     }
@@ -469,7 +549,7 @@ fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     let name = path
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or("fireemu.json");
+        .unwrap_or("fireemu.toml");
     let temporary = path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
     let write_result = (|| -> Result<(), CliError> {
         let mut temporary_file = std::fs::OpenOptions::new()
@@ -570,14 +650,46 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
 mod tests {
 
     #[test]
+    fn toml_reference_distinguishes_missing_defaults_from_null() {
+        let reference = super::reference_document(true);
+        for (key, schema) in crate::config::config_schema() {
+            if schema.get("properties").is_some() {
+                continue;
+            }
+            let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
+            let assignment = section.lines().nth(1).unwrap();
+            if schema
+                .get("default")
+                .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
+                .or_else(|| schema.get("const"))
+                .is_none()
+            {
+                assert!(
+                    assignment.starts_with(&format!("# {key} = ... (no default; see the schema)")),
+                    "{key}: {assignment}"
+                );
+                assert!(!assignment.contains("null"), "{key}: {assignment}");
+            } else if schema
+                .get("default")
+                .is_some_and(serde_json::Value::is_null)
+            {
+                assert!(
+                    assignment.contains("TOML has no null"),
+                    "{key}: {assignment}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn init_reference_keeps_default_sections_active_and_governed_values_commented() {
-        let reference = super::reference_document();
+        let reference = super::reference_document(true);
         let active = reference
             .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
+            .filter(|line| !line.trim_start().starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        let parsed: serde_json::Value = serde_json::from_str(&active).unwrap();
+        let parsed: serde_json::Value = toml::from_str(&active).unwrap();
         for (pointer, expected) in [
             ("/network/allowNonLoopbackHosts", serde_json::json!(false)),
             ("/projects/requireDemoPrefix", serde_json::json!(true)),
@@ -589,14 +701,11 @@ mod tests {
                 serde_json::json!(1_073_741_824),
             ),
             ("/functions/clock/date", serde_json::json!("real")),
-            (
-                "/auth",
-                serde_json::json!({"signIn": {"email": {}, "anonymous": {}, "phoneNumber": {}}, "multiTenant": {}, "client": {}}),
-            ),
         ] {
             assert_eq!(parsed.pointer(pointer), Some(&expected), "{pointer}");
         }
         for pointer in [
+            "/auth",
             "/auth/idpSigners",
             "/auth/mfa",
             "/auth/totp",
@@ -618,32 +727,30 @@ mod tests {
             "firestore.listenStreamLifetime",
             "eventarc.authentication",
         ] {
-            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
-            let name = key.rsplit('.').next().unwrap();
-            let comment = section.split_once(&format!("// \"{name}\":")).unwrap().0;
+            let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
+            let comment = section.lines().next().unwrap();
             assert!(comment.contains("Governed by productionExact;"), "{key}");
         }
-        let (_, section) = reference.split_once("// firestore.location:\n").unwrap();
-        let comment = section.split_once("\"location\":").unwrap().0;
+        let (_, section) = reference.split_once("# firestore.location:\n").unwrap();
+        let comment = section.split_once("firestore.location =").unwrap().0;
         assert!(!comment.contains("Governed by productionExact;"));
         let (_, section) = reference
-            .split_once("// firestore.missingIndexes:\n")
+            .split_once("# firestore.missingIndexes:\n")
             .unwrap();
-        let comment = section.split_once("\"missingIndexes\":").unwrap().0;
+        let comment = section.split_once("firestore.missingIndexes =").unwrap().0;
         assert!(!comment.contains("Governed by productionExact;"));
     }
 
     #[test]
     fn init_reference_says_which_keys_currently_have_no_effect() {
-        let reference = super::reference_document();
+        let reference = super::reference_document(true);
         let marker = "Accepted for forward compatibility; currently has no effect.";
         for key in crate::config::NO_EFFECT_KEYS {
-            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
-            let name = key.rsplit('.').next().unwrap();
-            let comment = section.split_once(&format!("// \"{name}\":")).unwrap().0;
+            let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
+            let comment = section.lines().next().unwrap();
             let comment = comment
                 .lines()
-                .map(|line| line.trim_start_matches(' ').trim_start_matches("// "))
+                .map(|line| line.trim_start_matches(' ').trim_start_matches("# "))
                 .collect::<Vec<_>>()
                 .join(" ");
             assert!(comment.contains(marker), "{key}: {comment}");
@@ -653,71 +760,32 @@ mod tests {
             "firestore.missingIndexes",
             "rules.source",
         ] {
-            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
-            let name = key.rsplit('.').next().unwrap();
-            let comment = section.split_once(&format!("\"{name}\":")).unwrap().0;
+            let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
+            let comment = section.lines().next().unwrap();
             assert!(!comment.contains("no effect"), "{key}");
         }
     }
 
     #[test]
-    fn init_reference_wraps_descriptions_greedily_at_whole_word_boundaries() {
-        let reference = super::reference_document();
-        let mut wrapped = 0;
-        let mut exactly_full = 0;
+    fn init_reference_preserves_complete_descriptions_on_one_comment_line() {
+        let reference = super::reference_document(true);
         for (key, schema) in crate::config::config_schema() {
-            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
-            let name = key.rsplit('.').next().unwrap();
-            let description_lines: Vec<_> = section
-                .lines()
-                .take_while(|line| !line.contains(&format!("\"{name}\":")))
-                .collect();
-            let indent = key.split('.').count() * 2;
-            let width = 88_usize.saturating_sub(indent);
-            let content: Vec<_> = description_lines
-                .iter()
-                .map(|line| {
-                    assert!(
-                        line.starts_with(&format!("{}// ", " ".repeat(indent))),
-                        "{key}: {line}"
-                    );
-                    let text = &line[indent + 3..];
-                    // The existing width excludes the three-character comment marker.
-                    assert!(
-                        line.len() <= 91 || (!text.contains(' ') && text.len() > width),
-                        "{key}: {line}"
-                    );
-                    if text.len() == width {
-                        exactly_full += 1;
-                    }
-                    text
-                })
-                .collect();
-            if content.len() > 1 {
-                wrapped += 1;
-            }
-            for pair in content.windows(2) {
-                let next_word = pair[1].split_whitespace().next().unwrap();
-                assert!(
-                    pair[0].len() + 1 + next_word.len() > width,
-                    "premature wrap: {key}: {pair:?}"
-                );
-            }
-            let joined = content.join(" ");
+            let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
             let description = schema["description"]
                 .as_str()
                 .unwrap_or("No description in the schema.");
             let default = schema
                 .get("default")
                 .map_or_else(|| "no default".to_owned(), ToString::to_string);
-            let expected = format!("{description} Default: {default}.")
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            assert!(joined.starts_with(&expected), "split or lost word: {key}");
+            assert!(
+                section
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .starts_with(&format!("# {description} Default: {default}.")),
+                "{key}"
+            );
         }
-        assert!(wrapped > 0, "exercise a long description");
-        assert!(exactly_full > 0, "exercise the inclusive width boundary");
     }
 
     #[test]
@@ -732,7 +800,7 @@ mod tests {
     #[test]
     fn a_destination_that_cannot_be_inspected_is_refused_not_treated_as_absent() {
         // /dev/null is not a directory, so its child fails with ENOTDIR rather than ENOENT.
-        let path = std::path::Path::new("/dev/null/fireemu.reference.jsonc");
+        let path = std::path::Path::new("/dev/null/fireemu.reference.toml");
         for force in [false, true] {
             let error = super::check_destination(path, force).unwrap_err();
             assert!(

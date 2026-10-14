@@ -14,7 +14,7 @@ Name the rules files in `firebase.json`, as for the Firebase CLI:
 }
 ```
 
-or in `fireemu.json` (`rules.source` for Firestore, `storage.rules` for Storage). The startup output has a `firestore rules:` and a `storage rules:` line that say whether rules are loaded.
+or in `fireemu.toml` (`rules.source` for Firestore, `storage.rules` for Storage). The startup output has a `firestore rules:` and a `storage rules:` line that say whether rules are loaded.
 
 `@firebase/rules-unit-testing` can also load rules at run time: `initializeTestEnvironment` sends the `firestore.rules` and `storage.rules` you pass to the emulators, and `testEnv.clearFirestore()` is served.
 
@@ -37,7 +37,7 @@ Production answers a denial with a short message (Firestore's `PERMISSION_DENIED
 note: firestore: Security Rules denied get on "notes/n1" in "database (default)" (request.auth.uid "bob"): no allow statement evaluated to true; line 5:22 `request.auth.uid == resource.data.owner` was false
 ```
 
-- Set `rules.denialLog` to `"off"` in `fireemu.json` to silence these lines, for example in a suite that asserts many denials. The answer to the client is the same either way.
+- Set `rules.denialLog` to `"off"` in `fireemu.toml` to silence these lines, for example in a suite that asserts many denials. The answer to the client is the same either way.
 - When the UI is running, its Rules page lists the decided requests from the start of the run, with what every expression evaluated to. The control API serves the same trace at `GET /v1/sessions/default/rules/requests`.
 
 ## Unit testing with mock tokens

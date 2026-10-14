@@ -1,4 +1,4 @@
-//! Runtime configuration: the canonical JSON config (spec 17) plus command-line overrides.
+//! Runtime configuration: the canonical TOML or JSON config (spec 17) plus command-line overrides.
 //!
 //! Only the keys the daemon currently honours are read; unknown keys are still rejected so
 //! that typos never silently change behaviour (the JSON schema in `spec/config` is the
@@ -2363,7 +2363,7 @@ fn emulator_host(
     if !allow_non_loopback {
         return loopback.map_err(|ConfigError(message)| {
             ConfigError(format!(
-                "{message}; to serve a container or another host, set network.allowNonLoopbackHosts to true in fireemu.json (the control API stays on loopback)"
+                "{message}; to serve a container or another host, set network.allowNonLoopbackHosts to true in fireemu.toml (the control API stays on loopback)"
             ))
         });
     }
@@ -7627,6 +7627,164 @@ mod tests {
     }
 
     #[test]
+    fn site_config_tabs_match_and_cover_all_toml_examples() {
+        let mut pending =
+            vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../site/src/content/docs")];
+        let mut groups = 0;
+        while let Some(path) = pending.pop() {
+            if path.is_dir() {
+                pending.extend(
+                    std::fs::read_dir(path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+                continue;
+            }
+            if !path
+                .extension()
+                .is_some_and(|ext| ext == "md" || ext == "mdx")
+            {
+                continue;
+            }
+            // A Windows checkout may have CRLF line endings; the fences are matched on LF.
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
+            let mut ranges = Vec::new();
+            for (start, _) in text.match_indices("<Tabs syncKey=\"config-format\">") {
+                assert_eq!(path.extension().unwrap(), "mdx", "{}", path.display());
+                let end = start + text[start..].find("</Tabs>").expect("unclosed config tabs");
+                let group = &text[start..end];
+                let mut values = Vec::new();
+                for (label, language) in [("TOML", "toml"), ("JSON", "json")] {
+                    let opening = format!("<TabItem label=\"{label}\">");
+                    assert_eq!(
+                        group.matches(&opening).count(),
+                        1,
+                        "{}: expected one {label} tab",
+                        path.display()
+                    );
+                    let position = group.find(&opening).unwrap();
+                    let tab = group[position + opening.len()..]
+                        .split_once("</TabItem>")
+                        .expect("unclosed config tab")
+                        .0;
+                    let fence = format!("```{language}\n");
+                    assert_eq!(
+                        tab.matches(&fence).count(),
+                        1,
+                        "{}: expected one {language} block",
+                        path.display()
+                    );
+                    let body = tab
+                        .split_once(&fence)
+                        .unwrap()
+                        .1
+                        .split_once("\n```")
+                        .expect("unclosed config block")
+                        .0;
+                    let value = if language == "toml" {
+                        let fragment = toml::from_str::<toml::Value>(body)
+                            .unwrap()
+                            .get("schemaVersion")
+                            .is_none();
+                        let input = if fragment {
+                            format!("schemaVersion = 1\n{body}")
+                        } else {
+                            body.to_owned()
+                        };
+                        let (mut value, canonical) =
+                            crate::parse_config_text(&path.with_extension("toml"), &input, true)
+                                .unwrap_or_else(|error| {
+                                    panic!("{}: {}", path.display(), error.message)
+                                });
+                        assert!(canonical);
+                        if fragment {
+                            value.as_object_mut().unwrap().remove("schemaVersion");
+                        }
+                        value
+                    } else {
+                        serde_json::from_str::<Value>(body)
+                            .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+                    };
+                    values.push(value);
+                }
+                assert_eq!(
+                    values[0],
+                    values[1],
+                    "{}: config tabs differ",
+                    path.display()
+                );
+                ranges.push(start..end);
+                groups += 1;
+            }
+            for (position, _) in text.match_indices("```toml") {
+                assert!(
+                    ranges.iter().any(|range| range.contains(&position)),
+                    "{}: TOML block outside config tabs",
+                    path.display()
+                );
+            }
+        }
+        assert!(groups > 0, "the site must contain config tabs");
+    }
+
+    #[test]
+    fn toml_examples_match_their_json_twins() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config/examples");
+        let exceptions = [
+            "auth-authorized-domains-null",
+            "auth-providers-null",
+            "auth-providers-partial-empty",
+            "enterprise-strict-validation",
+        ];
+        let mut seen_exceptions = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let json: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let mut pending = vec![&json];
+            let mut has_null = false;
+            while let Some(value) = pending.pop() {
+                match value {
+                    Value::Null => has_null = true,
+                    Value::Array(array) => pending.extend(array),
+                    Value::Object(object) => pending.extend(object.values()),
+                    _ => {}
+                }
+            }
+            let name = path.file_stem().unwrap().to_str().unwrap();
+            assert_eq!(
+                has_null,
+                exceptions.contains(&name),
+                "update the explicit null exceptions for {name}"
+            );
+            if has_null {
+                seen_exceptions.insert(name.to_owned());
+                continue;
+            }
+            let twin = path.with_extension("toml");
+            assert!(twin.is_file(), "missing TOML twin for {name}");
+            let text = std::fs::read_to_string(&twin).unwrap();
+            let (toml, canonical) = crate::parse_config_text(&twin, &text, true)
+                .unwrap_or_else(|error| panic!("{}", error.message));
+            assert!(canonical, "{}", twin.display());
+            assert_eq!(toml, json, "{}", twin.display());
+            RuntimeConfig::from_json(&toml)
+                .unwrap_or_else(|error| panic!("{}: {error}", twin.display()));
+        }
+        assert_eq!(
+            seen_exceptions,
+            exceptions.into_iter().map(str::to_owned).collect()
+        );
+    }
+
+    #[test]
     fn every_canonical_example_loads_and_the_tenants_example_declares_its_tenants() {
         let dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config/examples");
@@ -9331,10 +9489,13 @@ mod tests {
             for entry in std::fs::read_dir(root.join(directory)).unwrap() {
                 let path = entry.unwrap().path();
                 if path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("auth-authorized-domains")
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+                    && path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("auth-authorized-domains")
                 {
                     let config: Value =
                         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -10448,10 +10609,13 @@ mod provider_seed_tests {
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
                 .filter(|path| {
-                    path.file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .starts_with("auth-providers-")
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                        && path
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("auth-providers-")
                 })
             {
                 let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -10741,10 +10905,13 @@ mod eventarc_authentication_tests {
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
                 .filter(|path| {
-                    path.file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .starts_with("eventarc-authentication-")
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                        && path
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("eventarc-authentication-")
                 })
             {
                 let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

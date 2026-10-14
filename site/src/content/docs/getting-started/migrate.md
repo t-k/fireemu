@@ -7,14 +7,14 @@ Fireemu reads your existing `firebase.json`, serves the same ports, and accepts 
 
 ## Steps
 
-1. Install Fireemu and create `fireemu.json` that references your `firebase.json`:
+1. Install Fireemu and create `fireemu.toml` that references your `firebase.json`:
 
    ```sh
    npm install --save-dev fireemu
    npx fireemu init --firebase-json firebase.json
    ```
 
-   Keep `"profile": "strict"`, the default.
+   Keep `profile = "strict"`, the default.
 
 2. Replace the commands:
 
@@ -45,5 +45,5 @@ A test that passed on the official emulator but fails under `strict` usually sho
 ## Differences from the official CLI
 
 - A failed `--export-on-exit` makes the run exit 1 when the command succeeded. The official CLI only warns and exits 0; Fireemu differs so that a CI job that depends on the saved data cannot pass without it.
-- On Unix, a discovered `fireemu.json` or `firebase.json` is loaded only when its owner is trusted. See [Configuration files](../../guides/configuration/#file-ownership-checks).
+- On Unix, a discovered `fireemu.toml` or `firebase.json` is loaded only when its owner is trusted. See [Configuration files](../../guides/configuration/#file-ownership-checks).
 - Under `strict`, a project without Security Rules behaves as a production project without a rules release: client requests are refused. See [Security Rules](../../guides/security-rules/).

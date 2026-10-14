@@ -34,6 +34,7 @@ fireemu-core-pubsub = { path = "../fireemu-core-pubsub" }
 fireemu-core-export = { path = "../fireemu-core-export" }
 fireemu-export-publication = { path = "../fireemu-export-publication" }
 serde_json.workspace = true
+toml.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time"] }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

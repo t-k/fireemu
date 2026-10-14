@@ -1,7 +1,7 @@
 //! Which configuration files `up` and `exec` load when neither `--config` nor `--firebase-json`
 //! is given.
 //!
-//! A `fireemu.json` is looked for in the working directory only: its paths (`rules.source`,
+//! A `fireemu.toml` or `fireemu.json` is looked for in the working directory only: its paths (`rules.source`,
 //! `storage.rules`, `functions.source`) are read relative to the working directory, so one
 //! found in a parent would point at the wrong files. A `firebase.json` is looked for the way
 //! firebase-tools 15.28.2 finds it (`detectProjectRoot`): in the working directory, then in
@@ -34,7 +34,9 @@
 use std::path::{Path, PathBuf};
 
 /// The canonical configuration file name.
-pub(crate) const CANONICAL_FILE: &str = "fireemu.json";
+pub(crate) const CANONICAL_FILE: &str = "fireemu.toml";
+/// The legacy JSON configuration file name.
+pub(crate) const JSON_FILE: &str = "fireemu.json";
 /// The Firebase project configuration file name.
 pub(crate) const FIREBASE_FILE: &str = "firebase.json";
 /// The Firebase project aliases file name.
@@ -133,11 +135,13 @@ impl Opened {
 /// What the search found. A found file carries the text it was judged by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Discovered {
-    /// `fireemu.json` in the working directory: loaded as `--config` would load it.
+    /// `fireemu.toml` or `fireemu.json` in the working directory: loaded as `--config` would load it.
     Canonical(PathBuf, Result<String, String>),
     /// The nearest `firebase.json`: loaded as `--firebase-json` would load it.
     FirebaseJson(PathBuf, Result<String, String>),
-    /// Neither file: the built-in defaults apply.
+    /// Both canonical files are regular files: refuse before reading or checking file trust.
+    Ambiguous,
+    /// No configuration file: the built-in defaults apply.
     Nothing,
 }
 
@@ -185,7 +189,7 @@ pub(crate) fn discover(
             }
         }
         let names: &[&str] = if working {
-            &[CANONICAL_FILE, FIREBASE_FILE]
+            &[CANONICAL_FILE, JSON_FILE, FIREBASE_FILE]
         } else {
             &[FIREBASE_FILE]
         };
@@ -209,6 +213,13 @@ pub(crate) fn discover(
             let Some(opened) = open(&candidate).filter(|o| o.stat.is_file) else {
                 continue;
             };
+            if *name == CANONICAL_FILE && open(&dir.join(JSON_FILE)).is_some_and(|o| o.stat.is_file)
+            {
+                return Discovery {
+                    found: Discovered::Ambiguous,
+                    skipped: None,
+                };
+            }
             if let Some(reason) = untrusted_file(&opened.stat, trust) {
                 return nothing(Some(Skipped {
                     path: shown,
@@ -216,7 +227,7 @@ pub(crate) fn discover(
                 }));
             }
             return Discovery {
-                found: if *name == CANONICAL_FILE {
+                found: if *name == CANONICAL_FILE || *name == JSON_FILE {
                     Discovered::Canonical(shown, opened.read())
                 } else {
                     Discovered::FirebaseJson(shown, opened.read())
@@ -497,6 +508,55 @@ mod tests {
                 PathBuf::from("fireemu.json"),
                 Ok("text of /p/app/fireemu.json".to_owned())
             )
+        );
+    }
+
+    #[test]
+    fn both_canonical_files_are_refused_without_reading_either() {
+        for owner in [ME, OTHER] {
+            let tree = Tree::new(&[
+                ("/p/app/fireemu.toml", file(owner, 0o644)),
+                ("/p/app/fireemu.json", file(ME, 0o644)),
+            ]);
+            let result = discover(
+                Path::new("/p/app"),
+                &USER,
+                |path| tree.0.get(path).copied(),
+                |path| {
+                    tree.0
+                        .get(path)
+                        .copied()
+                        .filter(|stat| stat.is_file)
+                        .map(|stat| {
+                            Opened::new(stat, || panic!("ambiguous configuration must not be read"))
+                        })
+                },
+            );
+            assert_eq!(result.found, Discovered::Ambiguous);
+        }
+    }
+
+    #[test]
+    fn toml_discovery_preserves_trust_checks_and_parent_exclusion() {
+        let tree = Tree::new(&[("/p/app/fireemu.toml", file(ME, 0o644))]);
+        assert_eq!(
+            found(tree.discover("/p/app", &USER)),
+            Discovered::Canonical(
+                PathBuf::from("fireemu.toml"),
+                Ok("text of /p/app/fireemu.toml".to_owned())
+            )
+        );
+        for stat in [file(OTHER, 0o644), file(ME, 0o666)] {
+            let discovery = Tree::new(&[("/p/app/fireemu.toml", stat)]).discover("/p/app", &USER);
+            assert_eq!(discovery.found, Discovered::Nothing);
+            assert_eq!(
+                discovery.skipped.unwrap().path,
+                PathBuf::from("fireemu.toml")
+            );
+        }
+        assert_eq!(
+            found(Tree::new(&[("/p/fireemu.toml", file(ME, 0o644))]).discover("/p/app", &USER)),
+            Discovered::Nothing
         );
     }
 
@@ -796,14 +856,15 @@ mod tests {
     }
 
     /// One directory level of the generated trees: who owns it and its mode, and the
-    /// `fireemu.json` and `firebase.json` it may hold.
-    fn level() -> impl Strategy<Value = (Stat, Option<Stat>, Option<Stat>)> {
+    /// `fireemu.toml`, `fireemu.json` and `firebase.json` it may hold.
+    fn level() -> impl Strategy<Value = (Stat, Option<Stat>, Option<Stat>, Option<Stat>)> {
         let owner = prop_oneof![Just(ME), Just(OTHER), Just(0)];
         let dir_mode = prop_oneof![Just(0o755), Just(0o775), Just(0o777), Just(0o1777)];
         let file_mode = prop_oneof![Just(0o644), Just(0o600), Just(0o664), Just(0o666)];
         let file_stat = (owner.clone(), file_mode).prop_map(|(o, m)| file(o, m));
         (
             (owner, dir_mode).prop_map(|(o, m)| dir(o, m)),
+            proptest::option::weighted(0.3, prop_oneof![file_stat.clone(), Just(dir(ME, 0o755))]),
             proptest::option::weighted(0.3, file_stat.clone()),
             proptest::option::weighted(0.3, file_stat),
         )
@@ -861,10 +922,13 @@ mod tests {
                 })
                 .collect();
             let mut present = BTreeMap::new();
-            for (dir, (dir_stat, canonical, firebase)) in dirs.iter().zip(&levels) {
+            for (dir, (dir_stat, toml, json, firebase)) in dirs.iter().zip(&levels) {
                 present.insert(dir.clone(), *dir_stat);
-                if let Some(s) = canonical {
+                if let Some(s) = toml {
                     present.insert(dir.join(CANONICAL_FILE), *s);
+                }
+                if let Some(s) = json {
+                    present.insert(dir.join(JSON_FILE), *s);
                 }
                 if let Some(s) = firebase {
                     present.insert(dir.join(FIREBASE_FILE), *s);
@@ -876,15 +940,21 @@ mod tests {
             let trusted = |owner| owner == trust.euid || owner == 0 || Some(owner) == trust.sudo_uid;
             let mut expected = (Discovered::Nothing, None::<PathBuf>);
             for i in (0..=last).rev() {
-                let (dir_stat, canonical, firebase) = &levels[i];
+                let (dir_stat, toml, json, firebase) = &levels[i];
                 let world = dir_stat.mode & 0o002 != 0;
                 if i == last && world {
                     expected = (Discovered::Nothing, Some(cwd.clone()));
                     break;
                 }
                 let dir_ok = !world && (i == last || trusted(dir_stat.owner));
-                let candidate = if i == last && canonical.is_some() {
-                    Some((CANONICAL_FILE, canonical.unwrap()))
+                if i == last && dir_ok && toml.is_some_and(|s| s.is_file) && json.is_some_and(|s| s.is_file) {
+                    expected = (Discovered::Ambiguous, None);
+                    break;
+                }
+                let candidate = if i == last {
+                    toml.filter(|s| s.is_file).map(|s| (CANONICAL_FILE, s))
+                        .or_else(|| json.filter(|s| s.is_file).map(|s| (JSON_FILE, s)))
+                        .or_else(|| firebase.map(|s| (FIREBASE_FILE, s)))
                 } else {
                     firebase.map(|s| (FIREBASE_FILE, s))
                 };
@@ -893,7 +963,7 @@ mod tests {
                     let file_ok = trusted(s.owner) && s.mode & 0o002 == 0;
                     let text = Ok(format!("text of {}", dirs[i].join(name).display()).replace('\\', "/"));
                     expected = if dir_ok && file_ok {
-                        (if name == CANONICAL_FILE {
+                        (if name == CANONICAL_FILE || name == JSON_FILE {
                             Discovered::Canonical(shown, text)
                         } else {
                             Discovered::FirebaseJson(shown, text)

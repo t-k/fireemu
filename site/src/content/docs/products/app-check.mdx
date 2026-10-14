@@ -3,6 +3,8 @@ title: App Check
 description: Test Firebase App Check enforcement locally with debug tokens.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 The Local Emulator Suite has no App Check. Fireemu adds a local App Check implementation, so you can test how Authentication, Firestore, Storage and callable functions treat requests with and without a valid App Check token.
 
 Local App Check uses debug tokens. Real attestation through Play Integrity, App Attest, DeviceCheck or reCAPTCHA, and replay protection with limited-use tokens, are not supported.
@@ -17,6 +19,31 @@ Under the `strict` profile the debug-token exchange, the JWKS and the callable t
 
 To enforce App Check for Authentication, Firestore or Storage, or to require registration, enable it and register the app with the SHA-256 digests of its debug tokens. The configuration stores only digests, never a raw token.
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+profile = "strict"
+
+[appCheck]
+enabled = true
+
+[[appCheck.apps]]
+projectId = "demo-app"
+projectNumber = "1234567890"
+appId = "1:1234567890:web:local-test-app"
+debugTokenSha256 = ["<sha256 of your debug token>"]
+
+[appCheck.services]
+auth = "unenforced"
+firestore = "enforced"
+storage = "enforced"
+```
+
+</TabItem>
+<TabItem label="JSON">
+
 ```json
 {
   "schemaVersion": 1,
@@ -28,7 +55,9 @@ To enforce App Check for Authentication, Firestore or Storage, or to require reg
         "projectId": "demo-app",
         "projectNumber": "1234567890",
         "appId": "1:1234567890:web:local-test-app",
-        "debugTokenSha256": ["<sha256 of your debug token>"]
+        "debugTokenSha256": [
+          "<sha256 of your debug token>"
+        ]
       }
     ],
     "services": {
@@ -40,7 +69,10 @@ To enforce App Check for Authentication, Firestore or Storage, or to require reg
 }
 ```
 
-`--only` keeps the verifier a configured baseline needs: with `"firestore": "enforced"`, `--only firestore` still refuses a request without a valid token, and the start banner says that the verifier was included.
+</TabItem>
+</Tabs>
+
+`--only` keeps the verifier a configured baseline needs: with `appCheck.services.firestore = "enforced"`, `--only firestore` still refuses a request without a valid token, and the start banner says that the verifier was included.
 
 Each service accepts `off`, `unenforced` (tokens are checked and recorded, requests still pass) or `enforced` (requests without a valid token are refused before Security Rules run). A project without a registered app cannot use App Check, so an enforced service refuses every request to it.
 

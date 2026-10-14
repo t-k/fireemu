@@ -3,6 +3,8 @@ title: Pub/Sub and Eventarc
 description: Cloud Pub/Sub, Eventarc and Cloud Tasks emulators for Functions and server code.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Cloud Pub/Sub
 
 Fireemu serves the `google.pubsub.v1` API over gRPC and REST at `127.0.0.1:8085`. Pub/Sub starts when it is configured: `emulators.pubsub` in `firebase.json`, `daemon.pubsubPort`, `--pubsub-port`, or `--only pubsub`.
@@ -21,9 +23,32 @@ Under `strict`, a request without any credential is accepted, so clients that us
 
 For tests that need a credential, set a local fixture bearer token. The endpoint then accepts only `Authorization: Bearer <token>` with that exact value, and refuses requests without a credential as production does:
 
-```json
-{ "schemaVersion": 1, "pubsub": { "authentication": { "localBearerToken": "fixture-token" } } }
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+
+[pubsub.authentication]
+localBearerToken = "fixture-token"
 ```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "pubsub": {
+    "authentication": {
+      "localBearerToken": "fixture-token"
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 Use a made-up value; never reuse a production credential. The published configuration schema does not list `pubsub.authentication` yet, so an editor that validates against it flags this key; Fireemu accepts it.
 

@@ -369,7 +369,10 @@ export function createWorld(scenario = {}) {
             ...documents.map((p) => ({
               at: 2,
               kind: "documentChange",
-              documentChange: { document: { name: names(p) } },
+              documentChange: {
+                document: { name: names(p), fields: world.documents.get(p) ?? {} },
+                targetIds: [1],
+              },
             })),
             {
               at: 3,

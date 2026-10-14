@@ -329,13 +329,15 @@ test("brief: one token per recorded shape", () => {
   const listen = {
     listen: true,
     frames: [
-      { kind: "targetChange", type: "ADD" },
-      { kind: "documentChange", names: ["a", "b"] },
+      { kind: "targetChange", type: "ADD", cause: null },
+      { kind: "documentChange", doc: "a" },
+      { kind: "documentChange", doc: "b" },
+      { kind: "boundary" },
       { kind: "targetChange", type: "REMOVE", cause: { code: 7 } },
     ],
     end: { code: 7 },
   };
-  assert.equal(brief(listen), "listen[ADD,documentChangex2,REMOVE:cause7] end=7");
+  assert.equal(brief(listen), "listen[ADD,documentChangex2,boundary,REMOVE:cause7] end=7");
 });
 
 // ---- local side -----------------------------------------------------------------------------
@@ -601,7 +603,7 @@ test("brief: a listen that ended names its code, an open one does not; a bare er
   assert.equal(brief({ status: 200, body: [] }), "200 docs=0");
   assert.equal(
     brief({ listen: true, frames: [{ kind: "filter" }], end: "open" }),
-    "listen[filterx0]",
+    "listen[filter]",
   );
 });
 

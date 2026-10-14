@@ -664,12 +664,17 @@ test("a Listen is read until it ends, goes quiet, or reaches the cap, and is clo
 test("summarizeListen names a frame it does not know by its kind, or as unknown", () => {
   const ctx = contextOf(createClock());
   assert.deepEqual(
-    summarizeListen([{ at: 1, kind: "filter" }, { at: 2 }], undefined, ctx, new Map()).frames,
-    [{ kind: "filter" }, { kind: "unknown" }],
+    summarizeListen([{ at: 1, kind: "other" }, { at: 2 }], undefined, ctx, new Map()).frames,
+    [{ kind: "other" }, { kind: "unknown" }],
   );
   assert.deepEqual(
-    summarizeListen([{ at: 1, kind: "targetChange" }], undefined, ctx, new Map()).frames,
-    [{ kind: "targetChange", type: undefined, targetIds: [] }],
+    summarizeListen(
+      [{ at: 1, kind: "targetChange", targetChange: { targetIds: [3] } }],
+      undefined,
+      ctx,
+      new Map(),
+    ).frames,
+    [{ kind: "targetChange", type: "NO_CHANGE", targetIds: [3], cause: null, resumeToken: false }],
   );
 });
 

@@ -455,20 +455,38 @@ test("the bodies the session sends carry every field the API requires", async ()
 
 const ctxFor = () => createContext({ run: "1790000000000", target: PRODUCTION });
 
-test("summarizeListen keeps what is behaviour and drops times, tokens and arrival order", () => {
+test("summarizeListen keeps what is behaviour in arrival order and drops times and tokens", () => {
   const name = (id) => `projects/${SANDBOX_PROJECT}/databases/(default)/documents/posts/${id}`;
+  const doc = (id, n) => ({
+    at: 7,
+    kind: "documentChange",
+    documentChange: {
+      document: { name: name(id), fields: { n: { integerValue: n } } },
+      targetIds: [1],
+    },
+  });
   const frames = [
     {
       at: 5,
       kind: "targetChange",
       targetChange: { targetChangeType: "ADD", targetIds: [1], resumeToken: "AAAA", readTime: "t" },
     },
-    { at: 7, kind: "documentChange", documentChange: { document: { name: name("b") } } },
-    { at: 8, kind: "documentChange", documentChange: { document: { name: name("a") } } },
+    doc("b", "2"),
+    doc("a", "1"),
     {
       at: 9,
       kind: "targetChange",
       targetChange: { targetChangeType: "CURRENT", targetIds: [1], resumeToken: "BBBB" },
+    },
+    {
+      at: 10,
+      kind: "targetChange",
+      targetChange: { targetChangeType: "NO_CHANGE", resumeToken: "CC" },
+    },
+    {
+      at: 11,
+      kind: "targetChange",
+      targetChange: { targetChangeType: "NO_CHANGE", targetIds: [] },
     },
   ];
   const summary = summarizeListen(
@@ -480,19 +498,42 @@ test("summarizeListen keeps what is behaviour and drops times, tokens and arriva
   assert.deepEqual(summary, {
     listen: true,
     frames: [
-      { kind: "targetChange", type: "ADD", targetIds: [1] },
-      {
-        kind: "documentChange",
-        names: [
-          "projects/demo-fs-rules/databases/(default)/documents/posts/a",
-          "projects/demo-fs-rules/databases/(default)/documents/posts/b",
-        ],
-      },
-      { kind: "targetChange", type: "CURRENT", targetIds: [1] },
+      { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: true },
+      { kind: "documentChange", doc: "posts/b", n: "2", targetIds: [1], removedTargetIds: [] },
+      { kind: "documentChange", doc: "posts/a", n: "1", targetIds: [1], removedTargetIds: [] },
+      { kind: "targetChange", type: "CURRENT", targetIds: [1], cause: null, resumeToken: true },
+      { kind: "boundary", resumeToken: false },
     ],
     end: "open",
   });
   assert.ok(!JSON.stringify(summary).includes("AAAA"));
+});
+
+test("summarizeListen collapses a run of heartbeats to the last one and counts each separated run", () => {
+  const beat = (token) => ({
+    at: 1,
+    kind: "targetChange",
+    targetChange: { targetChangeType: "NO_CHANGE", resumeToken: token },
+  });
+  const change = {
+    at: 2,
+    kind: "documentChange",
+    documentChange: { document: { name: "x/documents/p/1" } },
+  };
+  const summary = summarizeListen(
+    [beat(""), beat("T"), change, beat("T"), beat("")],
+    undefined,
+    ctxFor(),
+    new Map(),
+  );
+  assert.deepEqual(
+    summary.frames.map((f) => [f.kind, f.resumeToken]),
+    [
+      ["boundary", true],
+      ["documentChange", undefined],
+      ["boundary", false],
+    ],
+  );
 });
 
 test("summarizeListen records a refusal as a cause or as a stream end, and silence as silence", () => {
@@ -513,6 +554,7 @@ test("summarizeListen records a refusal as a cause or as a stream end, and silen
       type: "REMOVE",
       targetIds: [1],
       cause: { code: 7, message: "denied for demo-fs-rules" },
+      resumeToken: false,
     },
   ]);
   const errored = summarizeListen(
@@ -527,15 +569,15 @@ test("summarizeListen records a refusal as a cause or as a stream end, and silen
   assert.equal(silent.silent, true);
   assert.equal(silent.end, "open");
   const other = summarizeListen(
-    [{ at: 1, kind: "filter", filter: { count: 1 } }],
+    [{ at: 1, kind: "filter", filter: { targetId: 1, count: 2 } }],
     undefined,
     ctxFor(),
     new Map(),
   );
-  assert.deepEqual(other.frames, [{ kind: "filter" }]);
+  assert.deepEqual(other.frames, [{ kind: "filter", targetId: 1, count: 2 }]);
 });
 
-test("summarizeListen: the order documents arrive in never changes the record (property)", () => {
+test("summarizeListen: the order documents arrive in is the order recorded (property)", () => {
   let seed = 7;
   const random = () => {
     seed = (seed * 1664525 + 1013904223) % 2 ** 32;
@@ -549,10 +591,43 @@ test("summarizeListen: the order documents arrive in never changes the record (p
       kind: "documentChange",
       documentChange: { document: { name: `projects/x/databases/(default)/documents/p/${id}` } },
     });
-    const a = summarizeListen(ids.map(frame), undefined, ctxFor(), new Map());
-    const b = summarizeListen(shuffled.map(frame), undefined, ctxFor(), new Map());
-    assert.deepEqual(a, b);
+    const recorded = summarizeListen(shuffled.map(frame), undefined, ctxFor(), new Map());
+    assert.deepEqual(
+      recorded.frames.map((f) => f.doc.split("/").at(-1)),
+      shuffled,
+    );
+    assert.equal(recorded.frames.length, shuffled.length, "no document is merged or dropped");
   }
+});
+
+test("summarizeListen: documents leaving a target are rows too", () => {
+  const rows = summarizeListen(
+    [
+      {
+        at: 1,
+        kind: "documentDelete",
+        documentDelete: {
+          document: `projects/${SANDBOX_PROJECT}/databases/(default)/documents/p/1`,
+          removedTargetIds: [1],
+        },
+      },
+      {
+        at: 2,
+        kind: "documentRemove",
+        documentRemove: {
+          document: `projects/${SANDBOX_PROJECT}/databases/(default)/documents/p/2`,
+          removedTargetIds: [2],
+        },
+      },
+    ],
+    undefined,
+    ctxFor(),
+    new Map(),
+  ).frames;
+  assert.deepEqual(rows, [
+    { kind: "documentDelete", doc: "p/1", removedTargetIds: [1] },
+    { kind: "documentRemove", doc: "p/2", removedTargetIds: [2] },
+  ]);
 });
 
 test("a Listen that never answers is capped, not waited out", async () => {

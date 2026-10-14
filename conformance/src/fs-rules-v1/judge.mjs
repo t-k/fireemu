@@ -236,12 +236,17 @@ export function brief(recorded) {
   if (recorded.compiled !== undefined) return `compiled=${recorded.compiled}`;
   if (recorded.unresolved !== undefined) return "not-published";
   if (recorded.listen) {
-    const kinds = recorded.frames.map((f) =>
-      f.kind === "targetChange"
-        ? `${f.type}${f.cause ? `:cause${f.cause.code}` : ""}`
-        : `${f.kind}x${f.names?.length ?? 0}`,
-    );
-    return `listen[${kinds.join(",")}]${recorded.end === "open" ? "" : ` end=${recorded.end.code}`}`;
+    const kinds = [];
+    for (const frame of recorded.frames) {
+      const last = kinds.at(-1);
+      if (frame.kind === "documentChange" && last?.documents) last.documents += 1;
+      else if (frame.kind === "documentChange") kinds.push({ documents: 1 });
+      else if (frame.kind === "targetChange")
+        kinds.push({ text: `${frame.type}${frame.cause ? `:cause${frame.cause.code}` : ""}` });
+      else kinds.push({ text: frame.kind });
+    }
+    const tokens = kinds.map((k) => (k.documents ? `documentChangex${k.documents}` : k.text));
+    return `listen[${tokens.join(",")}]${recorded.end === "open" ? "" : ` end=${recorded.end.code}`}`;
   }
   if (recorded.grpc !== undefined) {
     const n = recorded.messages?.length ?? 0;

@@ -86,38 +86,81 @@ export function guardHarnessRequest(url, ctx) {
     throw new Error(`harness request is outside the sandbox project: ${parsed.origin}${path}`);
 }
 
-/** The listen frames as the rows record them: no times or tokens, documents merged and sorted. */
-export function summarizeListen(frames, end, ctx, principals) {
-  const out = [];
-  for (const frame of frames) {
-    if (frame.kind === "documentChange") {
-      const name = normalizeString(frame.documentChange?.document?.name ?? "", ctx, principals);
-      const last = out.at(-1);
-      if (last?.kind === "documentChange") last.names = [...last.names, name].toSorted();
-      else out.push({ kind: "documentChange", names: [name] });
-    } else if (frame.kind === "targetChange") {
+/**
+ * One Listen frame as a row compares it: the rows of AUTH-FS-CROSS stage 2 (`frameRow`), which
+ * production has answered. Times and tokens are values and are dropped, but a target change says
+ * whether a resume token came. Frames keep their arrival order and are not merged or sorted.
+ */
+function frameRow(frame, root, ctx, principals) {
+  const relative = (name) => String(name ?? "").replace(`${root}/`, "");
+  switch (frame.kind) {
+    case "targetChange": {
       const change = frame.targetChange ?? {};
-      out.push({
+      return {
         kind: "targetChange",
-        type: change.targetChangeType,
+        type: change.targetChangeType ?? "NO_CHANGE",
         targetIds: change.targetIds ?? [],
-        ...(change.cause
+        cause: change.cause
           ? {
-              cause: {
-                code: change.cause.code,
-                message: normalizeString(change.cause.message ?? "", ctx, principals),
-              },
+              code: change.cause.code,
+              message: normalizeString(change.cause.message ?? "", ctx, principals),
             }
-          : {}),
-      });
+          : null,
+        resumeToken: Boolean(change.resumeToken),
+      };
+    }
+    case "documentChange": {
+      const change = frame.documentChange ?? {};
+      return {
+        kind: "documentChange",
+        doc: relative(change.document?.name),
+        n: change.document?.fields?.n?.integerValue ?? null,
+        targetIds: change.targetIds ?? [],
+        removedTargetIds: change.removedTargetIds ?? [],
+      };
+    }
+    case "documentDelete":
+    case "documentRemove": {
+      const change = frame[frame.kind] ?? {};
+      return {
+        kind: frame.kind,
+        doc: relative(change.document),
+        removedTargetIds: change.removedTargetIds ?? [],
+      };
+    }
+    case "filter":
+      return { kind: "filter", targetId: frame.filter?.targetId, count: frame.filter?.count };
+    default:
+      return { kind: String(frame.kind ?? "unknown") };
+  }
+}
+
+/**
+ * The frames of a Listen as the row records them. A global `NO_CHANGE` (no target ids) is a
+ * boundary where a client raises its snapshot; how many arrive depends only on time, so a run of
+ * them counts once, with whether a resume token came.
+ */
+export function summarizeListen(frames, end, ctx, principals) {
+  const root = documentsName(ctx);
+  const rows = [];
+  for (const frame of frames) {
+    const change = frame.kind === "targetChange" ? (frame.targetChange ?? {}) : undefined;
+    if (
+      change &&
+      (change.targetChangeType ?? "NO_CHANGE") === "NO_CHANGE" &&
+      (change.targetIds ?? []).length === 0
+    ) {
+      const boundary = { kind: "boundary", resumeToken: Boolean(change.resumeToken) };
+      if (rows.at(-1)?.kind === "boundary") rows[rows.length - 1] = boundary;
+      else rows.push(boundary);
     } else {
-      out.push({ kind: String(frame.kind ?? "unknown") });
+      rows.push(frameRow(frame, root, ctx, principals));
     }
   }
   const ended = end && end.reason !== "closed-by-harness";
   return {
     listen: true,
-    frames: out,
+    frames: rows,
     end: ended
       ? {
           reason: end.reason,
@@ -125,7 +168,7 @@ export function summarizeListen(frames, end, ctx, principals) {
           details: normalizeString(end.details ?? "", ctx, principals),
         }
       : "open",
-    ...(out.length === 0 && !ended ? { silent: true } : {}),
+    ...(rows.length === 0 && !ended ? { silent: true } : {}),
   };
 }
 

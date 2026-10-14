@@ -16,10 +16,17 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Under the strict profile a `firebase.json` that declares a Firestore database whose id production could not create (not 4 to 63 characters of `[a-z0-9-]` starting with a letter) stops the daemon at start-up with production's message.
 - The Admin API's `indexes.create` shares the index file's shape checks: more than 100 fields or more than one array field is refused, and the indexes of the file and the ones created at run time count together against the 200 composite indexes of a database. It no longer refuses `(field, __name__ DESC)` or `(__name__ DESC)`, which production deploys.
 - `exportDocuments` and `importDocuments` refuse more than 100 `collectionIds` with `INVALID_ARGUMENT`, as the documented limit requires.
+- Under the strict profile, multi-factor authentication and multi-tenancy now work by default, without a console toggle, an Admin API call or a configuration block: SMS and TOTP second factors enroll (`auth.mfa` is on, `state: "ENABLED"`), and the Admin API creates tenants and `auth.tenants` loads without `auth.multiTenant.allowTenants: true`. `productionExact: true` brings back a new production project's behavior, multi-factor off (`OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` and `TOTP based MFA not enabled.`) and tenants refused until enabled, and an explicit `auth.mfa` (such as `{"state": "DISABLED"}`) or `auth.multiTenant.allowTenants` always decides. Both appear in the start banner, `GET /v1/capabilities` and `fireemu config show` as development defaults. The emulator profile is unchanged. A tenant keeps its own `mfaConfig`.
+- Under the strict profile, signing in through an `oidc.*` or `saml.*` provider that has no configuration, is disabled, or is named in another case is now refused with production's `OPERATION_NOT_ALLOWED : The identity provider configuration is not found.` or `... is disabled.` even with the default fixture assertions, which skip only the signature check. Declare the provider in `auth.providers` or create it through the Admin API. Built-in providers such as `google.com` still sign in without a console configuration. The emulator profile still accepts every provider.
+- The profiles guide now lists the Auth conveniences that differ from production and are not switched by `productionExact`: all sign-in methods enabled, built-in identity providers without console setup, any Web API key until `auth.apiKeys` is declared, phone verification without app verification, reCAPTCHA enforcement that is stored but not enforced, no `batchCreate` row limit, no sign-up rate limit, other project ids served in their own namespace, and the Admin SDK's unsigned `verifyIdToken` inside functions.
 
 ### Added
 
 - The profiles guide lists three more development conveniences that only save waiting: indexes that become `READY` in seconds, managed export, import and bulk-delete operations that finish on the first poll, and the 60-second rollback of a contended transaction holder.
+
+### Fixed
+
+- The `auth.totp` and `auth.multiTenant` schema descriptions now say that the strict profile turns multi-factor and multi-tenancy on by default and that `productionExact` restores production's behavior.
 
 ## [0.19.0] - 2026-10-13
 

@@ -60,13 +60,23 @@ impl Daemon {
     /// daemon (`0`) and read from its banner, so no port is picked here and released before the
     /// daemon binds it.
     fn start(name: &str, profile: &str, auth: &Value) -> Self {
+        Self::start_with(name, profile, false, auth)
+    }
+
+    /// A strict daemon with `productionExact`: a new project does not allow tenants until it is
+    /// told to.
+    fn start_exact(name: &str, auth: &Value) -> Self {
+        Self::start_with(name, "strict", true, auth)
+    }
+
+    fn start_with(name: &str, profile: &str, production_exact: bool, auth: &Value) -> Self {
         let dir = TrustedTempDir::new(&format!("auth-tenants-config-{name}"));
         let config = dir.join("fireemu.json");
-        std::fs::write(
-            &config,
-            json!({"schemaVersion": 1, "profile": profile, "auth": auth}).to_string(),
-        )
-        .unwrap();
+        let mut document = json!({"schemaVersion": 1, "profile": profile, "auth": auth});
+        if production_exact {
+            document["productionExact"] = json!(true);
+        }
+        std::fs::write(&config, document.to_string()).unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args([
                 "up",
@@ -357,13 +367,21 @@ fn the_emulator_profile_takes_tenants_without_the_switch() {
 /// Runs `fireemu up` on a file that must stop it, with every port chosen by the daemon and a
 /// bounded wait: a daemon that starts anyway is killed and fails the test, and never lingers.
 fn refused_at_start(name: &str, auth: &Value) -> (Option<i32>, String) {
+    refused_at_start_with(name, false, auth)
+}
+
+fn refused_at_start_with(
+    name: &str,
+    production_exact: bool,
+    auth: &Value,
+) -> (Option<i32>, String) {
     let dir = TrustedTempDir::new(&format!("auth-tenants-config-{name}"));
     let config = dir.join("fireemu.json");
-    std::fs::write(
-        &config,
-        json!({"schemaVersion": 1, "profile": "strict", "auth": auth}).to_string(),
-    )
-    .unwrap();
+    let mut document = json!({"schemaVersion": 1, "profile": "strict", "auth": auth});
+    if production_exact {
+        document["productionExact"] = json!(true);
+    }
+    std::fs::write(&config, document.to_string()).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(["up", "--config", config.to_str().unwrap(), "--only", "auth"])
         .args([
@@ -413,16 +431,158 @@ fn refused_at_start(name: &str, auth: &Value) -> (Option<i32>, String) {
     (status.and_then(|s| s.code()), text)
 }
 
+/// Multi-tenancy is a development default of the strict profile (owner ledger 1413, AU-4): tenants
+/// are declared and created through the Admin API without `auth.multiTenant.allowTenants` or an
+/// `updateConfig` call, and `productionExact` restores production's requirement.
+#[test]
+fn strict_allows_tenants_without_the_switch_and_production_exact_requires_it() {
+    let mut auth = declared(true);
+    auth.as_object_mut().unwrap().remove("multiTenant");
+    let daemon = Daemon::start("default-switch", "strict", &auth);
+    assert_eq!(daemon.tenant_ids(), ["acme-x7k2q", "beta-a1b2c"]);
+    assert_eq!(daemon.multi_tenant(), json!({"allowTenants": true}));
+    // An Admin API create works too, and a reset returns to the declared tenants.
+    let (status, created) = daemon.admin(
+        "POST",
+        &format!("{V2}/projects/{PROJECT}/tenants"),
+        &json!({"displayName": "gamma"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    drop(daemon);
+    let daemon = Daemon::start(
+        "default-switch-plain",
+        "strict",
+        &json!({"apiKeys": ["fake-api-key"]}),
+    );
+    let (status, created) = daemon.admin(
+        "POST",
+        &format!("{V2}/projects/{PROJECT}/tenants"),
+        &json!({"displayName": "gamma"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    // A project created later has it too.
+    let (status, session) = http(
+        daemon.control_port(),
+        "POST",
+        "/v1/sessions",
+        "",
+        &json!({"project": "demo-second"}),
+    );
+    assert_eq!(status, 200, "{session}");
+    let (status, created) = daemon.admin(
+        "POST",
+        &format!("{V2}/projects/demo-second/tenants"),
+        &json!({"displayName": "delta"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    drop(daemon);
+    // productionExact: refused as production refuses it until the switch is on.
+    let daemon = Daemon::start_exact("exact-switch", &json!({"apiKeys": ["fake-api-key"]}));
+    let (status, refused) = daemon.admin(
+        "POST",
+        &format!("{V2}/projects/{PROJECT}/tenants"),
+        &json!({"displayName": "gamma"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"], "INVALID_PROJECT_ID",
+        "{refused}"
+    );
+    // An explicit false decides under the default too.
+    drop(daemon);
+    let daemon = Daemon::start(
+        "explicit-off",
+        "strict",
+        &json!({"apiKeys": ["fake-api-key"], "multiTenant": {"allowTenants": false}}),
+    );
+    let (status, refused) = daemon.admin(
+        "POST",
+        &format!("{V2}/projects/{PROJECT}/tenants"),
+        &json!({"displayName": "gamma"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+}
+
+/// Pins how a reset treats an Admin-written switch under the development default: a default
+/// that nobody replaced is only an initial value, so a reset leaves an Admin-written `false` alone
+/// in the default session and in a session project alike.
+#[test]
+fn a_reset_keeps_an_admin_written_switch_in_every_session() {
+    let daemon = Daemon::start(
+        "reset-default",
+        "strict",
+        &json!({"apiKeys": ["fake-api-key"]}),
+    );
+    let (status, session) = http(
+        daemon.control_port(),
+        "POST",
+        "/v1/sessions",
+        "",
+        &json!({"project": "demo-second"}),
+    );
+    assert_eq!(status, 200, "{session}");
+    // Whether the project creates tenants (the read-back omits a switch that is off).
+    let creates_tenants = |project: &str| {
+        daemon
+            .admin(
+                "POST",
+                &format!("{V2}/projects/{project}/tenants"),
+                &json!({"displayName": "probe"}),
+            )
+            .0
+            == 200
+    };
+    for project in [PROJECT, "demo-second"] {
+        let (status, body) = daemon.admin(
+            "PATCH",
+            &format!(
+                "/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config?updateMask=multiTenant.allowTenants"
+            ),
+            &json!({"multiTenant": {"allowTenants": false}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            !creates_tenants(project),
+            "{project}: the Admin-written false decides"
+        );
+    }
+    for session in ["default", "demo-second"] {
+        let (status, body) = http(
+            daemon.control_port(),
+            "POST",
+            &format!("/v1/sessions/{session}/reset"),
+            "",
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    assert!(
+        !creates_tenants(PROJECT),
+        "the default session keeps the Admin-written false"
+    );
+    assert!(
+        !creates_tenants("demo-second"),
+        "a session project keeps the Admin-written false too"
+    );
+}
+
 #[test]
 fn strict_refuses_tenants_without_the_switch_before_it_starts() {
-    for (n, auth) in [
-        json!({"tenants": [acme()]}),
-        json!({"multiTenant": {"allowTenants": false}, "tenants": [acme()]}),
+    for (n, (exact, auth)) in [
+        (true, json!({"tenants": [acme()]})),
+        (
+            false,
+            json!({"multiTenant": {"allowTenants": false}, "tenants": [acme()]}),
+        ),
+        (
+            true,
+            json!({"multiTenant": {"allowTenants": false}, "tenants": [acme()]}),
+        ),
     ]
     .into_iter()
     .enumerate()
     {
-        let (code, text) = refused_at_start(&format!("refused-{n}"), &auth);
+        let (code, text) = refused_at_start_with(&format!("refused-{n}"), exact, &auth);
         assert_eq!(code, Some(1), "{auth}: {text}");
         assert!(text.contains("auth.tenants"), "{auth}: {text}");
         assert!(

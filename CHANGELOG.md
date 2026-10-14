@@ -8,13 +8,15 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-15
+
 ### Added
 
 - fireemu reads its configuration from `fireemu.toml` as well as `fireemu.json`, with the same keys, validation and defaults; `--config <file>.toml` reads TOML, matching `.toml` case-insensitively, and any other extension reads JSON, as before. A TOML file must set `schemaVersion = 1` and is never read as `firebase.json`, which is JSON only. TOML has no `null`: leave the key out instead. A TOML date or time value is refused with the key's name.
 
 ### Changed
 
-- `fireemu init` writes `fireemu.toml` instead of `fireemu.json`, and `--reference` writes `fireemu.reference.toml` (or `fireemu.reference.jsonc` for an existing `fireemu.json`); an existing `fireemu.json` is left alone and counts as a configuration. When the working directory has both `fireemu.toml` and `fireemu.json`, `up` and `exec` refuse to start and name both files; remove one or choose one with `--config`. The documentation shows TOML first.
+- `fireemu init` writes `fireemu.toml` instead of `fireemu.json`, and `--reference` writes `fireemu.reference.toml` (or `fireemu.reference.jsonc` for an existing `fireemu.json`); an existing `fireemu.json` is left alone and counts as a configuration. When the working directory has both `fireemu.toml` and `fireemu.json`, `up` and `exec` refuse to start and name both files; remove one or choose one with `--config`. The documentation site shows each configuration example as synced TOML and JSON tabs, TOML first.
 
 ## [0.20.0] - 2026-10-14
 
@@ -742,7 +744,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/t-k/fireemu/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/t-k/fireemu/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/t-k/fireemu/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/t-k/fireemu/compare/v0.17.0...v0.18.0

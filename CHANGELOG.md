@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-14
+
 ### Changed
 
 - Under the strict profile `firestore.indexes.json` is checked as `firebase deploy` checks it, and a file production's deploy refuses stops the daemon (or, on a reload, leaves the previous indexes in force) with a message that names the entry: a composite index with a single field (production answers "this index is not necessary, configure using single field index controls"; use `fieldOverrides`), an entry without a `fields` array (a misspelled key looks like this), a `fieldOverrides` entry without an `indexes` array and a `fieldOverrides` index that has only a `vectorConfig` (declare a single vector field as a composite index). Such an index used to load and then serve queries production would refuse. A missing `queryScope` is still read as `COLLECTION`, as `firebase deploy` reads it. The emulator profile loads the file as before.
@@ -18,7 +20,6 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - `exportDocuments` and `importDocuments` refuse more than 100 `collectionIds` with `INVALID_ARGUMENT`, as the documented limit requires.
 - Under the strict profile, multi-factor authentication and multi-tenancy now work by default, without a console toggle, an Admin API call or a configuration block: SMS and TOTP second factors enroll (`auth.mfa` is on, `state: "ENABLED"`), and the Admin API creates tenants and `auth.tenants` loads without `auth.multiTenant.allowTenants: true`. `productionExact: true` brings back a new production project's behavior, multi-factor off (`OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` and `TOTP based MFA not enabled.`) and tenants refused until enabled, and an explicit `auth.mfa` (such as `{"state": "DISABLED"}`) or `auth.multiTenant.allowTenants` always decides. Both appear in the start banner, `GET /v1/capabilities` and `fireemu config show` as development defaults. The emulator profile is unchanged. A tenant keeps its own `mfaConfig`.
 - Under the strict profile, signing in through an `oidc.*` or `saml.*` provider that has no configuration, is disabled, or is named in another case is now refused with production's `OPERATION_NOT_ALLOWED : The identity provider configuration is not found.` or `... is disabled.` even with the default fixture assertions, which skip only the signature check. Declare the provider in `auth.providers` or create it through the Admin API. Built-in providers such as `google.com` still sign in without a console configuration. The emulator profile still accepts every provider.
-- The profiles guide now lists the Auth conveniences that differ from production and are not switched by `productionExact`: all sign-in methods enabled, built-in identity providers without console setup, any Web API key until `auth.apiKeys` is declared, phone verification without app verification, reCAPTCHA enforcement that is stored but not enforced, no `batchCreate` row limit, no sign-up rate limit, other project ids served in their own namespace, and the Admin SDK's unsigned `verifyIdToken` inside functions.
 - Under the strict profile the Storage emulator now refuses what production refuses and the official emulator accepts (owner decision of 2026-10-13: a gap that hides an app bug must fail by default). The `emulator` profile is unchanged.
   - `GET /{bucket}/{object}` (what `file.publicUrl()` builds) answers 403 `AccessDenied` for an object that is not public, unless the request has a non-empty `Bearer` `Authorization` header, comes from a Google client library (it sends `x-goog-api-client`; the Go library reads through this URL with no credential), or is a signed URL that has not expired. An object becomes public with `file.makePublic()` (an `allUsers` `READER` ACL entry) or `predefinedAcl=publicRead` on upload, for that generation only, or when its bucket is listed in the new `storage.publicBuckets` (a bucket whose IAM grants `allUsers` the object viewer role). The 403 names both ways. Firebase download-token URLs are unchanged.
   - An expired signed URL answers 400 `ExpiredToken`; a V4 URL with a lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature is still not verified.
@@ -46,11 +47,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - `POST /storage/v1/b/{bucket}/o/{object}/acl`, the long spelling of the object ACL route, in both profiles.
 - `DELETE /storage/v1/b/{bucket}/o/{object}/acl/{entity}` (and `/b/...`) under the strict profile.
 - `POST /v1/sessions/default/functions/{queue}:run` releases the Cloud Tasks of a task-queue function that wait for their `scheduleTime` (all of them, or one with `{"task": "<id>"}`), and the Functions page of the Emulator UI lists waiting tasks with their due time, a **Run now** button for each and for all, and a schedule time field on the enqueue form.
-- The documented development conveniences now include the `.env.local` file, the 4-attempt event retry (`events.maxAttempts`), loopback `http://` Pub/Sub push endpoints, and the way a non-public function accepts a Google-issued-token-shaped bearer.
-
-### Added
-
-- The profiles guide lists three more development conveniences that only save waiting: indexes that become `READY` in seconds, managed export, import and bulk-delete operations that finish on the first poll, and the 60-second rollback of a contended transaction holder.
+- The profiles guide documents more development conveniences that differ from production: for Auth (not switched by `productionExact`), all sign-in methods enabled, built-in identity providers without console setup, any Web API key until `auth.apiKeys` is declared, phone verification without app verification, reCAPTCHA enforcement that is stored but not enforced, no `batchCreate` row limit, no sign-up rate limit, other project ids served in their own namespace, and the Admin SDK's unsigned `verifyIdToken` inside functions; for Functions and Pub/Sub, the `.env.local` file, the 4-attempt event retry (`events.maxAttempts`), loopback `http://` Pub/Sub push endpoints, and the way a non-public function accepts a Google-issued-token-shaped bearer; and, for conveniences that only save waiting, indexes that become `READY` in seconds, managed export, import and bulk-delete operations that finish on the first poll, and the 60-second rollback of a contended transaction holder.
 
 ### Fixed
 
@@ -737,7 +734,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/t-k/fireemu/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/t-k/fireemu/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/t-k/fireemu/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/t-k/fireemu/compare/v0.16.0...v0.17.0

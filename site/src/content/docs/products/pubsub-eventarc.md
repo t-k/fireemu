@@ -24,8 +24,6 @@ For tests that need a credential, set a local fixture bearer token. The endpoint
 ```toml
 schemaVersion = 1
 
-[pubsub]
-
 [pubsub.authentication]
 localBearerToken = "fixture-token"
 ```

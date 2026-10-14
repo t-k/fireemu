@@ -15,8 +15,6 @@ apiMode = "native"
 [rules]
 executionMode = "admin-bypass"
 
-[auth]
-
 [auth.mfa]
 state = "ENABLED"
 

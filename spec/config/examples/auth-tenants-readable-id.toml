@@ -10,8 +10,6 @@ queryCatalog = "firestore-standard-query-2026-08-25"
 edition = "standard"
 apiMode = "native"
 
-[auth]
-
 [auth.multiTenant]
 allowTenants = true
 

@@ -59,8 +59,14 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         && options.firebase_json.is_none()
         && (cwd.join("fireemu.toml").is_file() || cwd.join("fireemu.json").is_file())
     {
-        let destination = cwd.join("fireemu.reference.toml");
-        write_config(&destination, reference_document().as_bytes(), options.force)?;
+        let is_toml = !cwd.join("fireemu.json").is_file();
+        let destination = cwd.join(if is_toml {
+            "fireemu.reference.toml"
+        } else {
+            "fireemu.reference.jsonc"
+        });
+        let document = reference_document(is_toml);
+        write_config(&destination, document.as_bytes(), options.force)?;
         return Ok(destination);
     }
     match std::fs::symlink_metadata(cwd.join("fireemu.json")) {
@@ -102,9 +108,15 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
         })?;
         document["firebaseJson"] = firebase_json.into();
     }
-    let mut output_document = format!("#:schema {CANONICAL_SCHEMA_URL}\n");
-    // Dotted keys preserve the JSON generator's key order without changing TOML table scope.
+    let mut output_document = format!(
+        "#:schema {CANONICAL_SCHEMA_URL}\nschemaVersion = 1\nprofile = {}\n",
+        document["profile"]
+    );
+    // Keep the required version and profile first without changing TOML table scope.
     for (key, value) in document.as_object().expect("configuration object") {
+        if matches!(key.as_str(), "schemaVersion" | "profile") {
+            continue;
+        }
         if let Some(table) = value.as_object() {
             for (name, value) in table {
                 let _ = writeln!(
@@ -131,7 +143,11 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     }
     write_config(&destination, &bytes, options.force)?;
     if options.reference {
-        write_config(&reference, reference_document().as_bytes(), options.force)?;
+        write_config(
+            &reference,
+            reference_document(true).as_bytes(),
+            options.force,
+        )?;
         writeln!(output, "created {}", crate::diagnostic_path(&reference))
             .map_err(|error| output_error(&error))?;
     }
@@ -140,15 +156,37 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
 
 /// The reference is documentation; commented settings must never become implicit defaults.
 #[allow(clippy::too_many_lines)]
-fn reference_document() -> String {
+fn reference_document(is_toml: bool) -> String {
     let governed = crate::config::RuntimeConfig::default().development_defaults;
-    let entries = crate::config::config_schema();
-    let mut output = format!("#:schema {CANONICAL_SCHEMA_URL}\n# This reference file is not loaded by fireemu. Edit fireemu.toml to configure it.\n# Copying a key into fireemu.toml makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n");
-    let mut sections: Vec<(String, bool)> = vec![(String::new(), false)];
+    let mut entries = crate::config::config_schema();
+    if is_toml {
+        for key in ["profile", "schemaVersion"] {
+            let index = entries
+                .iter()
+                .position(|(path, _)| path == key)
+                .expect("required schema key");
+            let entry = entries.remove(index);
+            entries.insert(0, entry);
+        }
+    }
+    let mut output = if is_toml {
+        format!("#:schema {CANONICAL_SCHEMA_URL}\n# This reference file is not loaded by fireemu. Edit fireemu.toml to configure it.\n# Copying a key into fireemu.toml makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n")
+    } else {
+        String::from("// This reference file is not loaded by fireemu. Edit fireemu.json to configure it.\n// Do not create fireemu.toml beside fireemu.json.\n// Copying a key into fireemu.json makes it explicit and stops productionExact from switching that key. Commented examples are not active defaults.\n{\n")
+    };
+    let mut sections: Vec<(String, bool, bool)> = vec![(String::new(), false, false)];
     for (path, schema) in entries {
         let parent = path.rsplit_once('.').map_or("", |(parent, _)| parent);
         while sections.last().expect("root section").0 != parent {
-            sections.pop().expect("section");
+            let (_, commented, _) = sections.pop().expect("section");
+            if !is_toml {
+                let _ = writeln!(
+                    output,
+                    "{}{} }}",
+                    "  ".repeat(sections.len()),
+                    if commented { "//" } else { "" }
+                );
+            }
         }
         let is_section = schema.get("properties").is_some();
         let production_exact = governed.iter().any(|entry| entry["key"] == path);
@@ -176,7 +214,20 @@ fn reference_document() -> String {
             || no_effect
             || presence_selects_mode
             || (!is_section && schema.get("default").is_none());
-        let _ = writeln!(output, "\n# {path}:");
+        let indent = if is_toml {
+            String::new()
+        } else {
+            "  ".repeat(sections.len())
+        };
+        if !is_toml && !commented {
+            let (_, _, active) = sections.last_mut().expect("section");
+            if *active {
+                let _ = writeln!(output, "{indent},");
+            }
+            *active = true;
+        }
+        let comment_prefix = if is_toml { "#" } else { "//" };
+        let _ = writeln!(output, "\n{indent}{comment_prefix} {path}:");
         let description = schema["description"]
             .as_str()
             .unwrap_or("No description in the schema.");
@@ -193,32 +244,61 @@ fn reference_document() -> String {
         if presence_selects_mode {
             comment.push_str(" Presence selects behavior; leave commented unless intended.");
         }
-        let _ = writeln!(output, "# {comment}");
+        let _ = writeln!(output, "{indent}{comment_prefix} {comment}");
         if is_section {
-            sections.push((path, commented));
+            if !is_toml {
+                let name = path.rsplit('.').next().expect("schema key");
+                let prefix = if commented { "// " } else { "" };
+                let _ = writeln!(output, "{indent}{prefix}{name:?}: {{");
+            }
+            sections.push((path, commented, false));
         } else {
             let value = schema
                 .get("default")
                 .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
-                .or_else(|| schema.get("const"))
-                .unwrap_or(&serde_json::Value::Null);
+                .or_else(|| schema.get("const"));
             let key = if path == "$schema" {
                 "\"$schema\""
             } else {
                 &path
             };
-            if value.is_null() {
-                let _ = writeln!(output, "# {key} is omitted; TOML has no null.");
-            } else if let Ok(value) = toml::Value::try_from(value) {
-                let prefix = if commented { "# " } else { "" };
-                let _ = writeln!(output, "{prefix}{key} = {value}");
+            if !is_toml {
+                let name = path.rsplit('.').next().expect("schema key");
+                let value = value.unwrap_or(&serde_json::Value::Null);
+                let prefix = if commented { "// " } else { "" };
+                let _ = writeln!(output, "{indent}{prefix}{name:?}: {value}");
+            } else if let Some(value) = value {
+                if value.is_null() {
+                    let _ = writeln!(output, "# {key} is omitted; TOML has no null.");
+                } else if let Ok(value) = toml::Value::try_from(value) {
+                    let prefix = if commented { "# " } else { "" };
+                    let _ = writeln!(output, "{prefix}{key} = {value}");
+                } else {
+                    let _ = writeln!(
+                        output,
+                        "# {key} = ... (see the schema; omit nullable keys or array items)"
+                    );
+                }
             } else {
-                let _ = writeln!(
-                    output,
-                    "# {key} is omitted; this JSON example contains null."
-                );
+                let hint = schema
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or(String::new(), |kind| format!("; type: {kind}"));
+                let _ = writeln!(output, "# {key} = ... (no default; see the schema){hint}");
             }
         }
+    }
+    if !is_toml {
+        while sections.len() > 1 {
+            let (_, commented, _) = sections.pop().expect("section");
+            let _ = writeln!(
+                output,
+                "{}{} }}",
+                "  ".repeat(sections.len()),
+                if commented { "//" } else { "" }
+            );
+        }
+        output.push_str("}\n");
     }
     output
 }
@@ -570,8 +650,40 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
 mod tests {
 
     #[test]
+    fn toml_reference_distinguishes_missing_defaults_from_null() {
+        let reference = super::reference_document(true);
+        for (key, schema) in crate::config::config_schema() {
+            if schema.get("properties").is_some() {
+                continue;
+            }
+            let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
+            let assignment = section.lines().nth(1).unwrap();
+            if schema
+                .get("default")
+                .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
+                .or_else(|| schema.get("const"))
+                .is_none()
+            {
+                assert!(
+                    assignment.starts_with(&format!("# {key} = ... (no default; see the schema)")),
+                    "{key}: {assignment}"
+                );
+                assert!(!assignment.contains("null"), "{key}: {assignment}");
+            } else if schema
+                .get("default")
+                .is_some_and(serde_json::Value::is_null)
+            {
+                assert!(
+                    assignment.contains("TOML has no null"),
+                    "{key}: {assignment}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn init_reference_keeps_default_sections_active_and_governed_values_commented() {
-        let reference = super::reference_document();
+        let reference = super::reference_document(true);
         let active = reference
             .lines()
             .filter(|line| !line.trim_start().starts_with('#'))
@@ -631,7 +743,7 @@ mod tests {
 
     #[test]
     fn init_reference_says_which_keys_currently_have_no_effect() {
-        let reference = super::reference_document();
+        let reference = super::reference_document(true);
         let marker = "Accepted for forward compatibility; currently has no effect.";
         for key in crate::config::NO_EFFECT_KEYS {
             let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
@@ -656,7 +768,7 @@ mod tests {
 
     #[test]
     fn init_reference_preserves_complete_descriptions_on_one_comment_line() {
-        let reference = super::reference_document();
+        let reference = super::reference_document(true);
         for (key, schema) in crate::config::config_schema() {
             let (_, section) = reference.split_once(&format!("# {key}:\n")).unwrap();
             let description = schema["description"]

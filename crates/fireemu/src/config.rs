@@ -7630,26 +7630,54 @@ mod tests {
     fn toml_examples_match_their_json_twins() {
         let dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config/examples");
-        let mut loaded = 0;
+        let exceptions = [
+            "auth-authorized-domains-null",
+            "auth-providers-null",
+            "auth-providers-partial-empty",
+            "enterprise-strict-validation",
+        ];
+        let mut seen_exceptions = std::collections::BTreeSet::new();
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
-            if path.extension().is_none_or(|extension| extension != "toml") {
+            if path.extension().is_none_or(|extension| extension != "json") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
-            let (toml, canonical) = crate::parse_config_text(&path, &text, true)
+            let json: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let mut pending = vec![&json];
+            let mut has_null = false;
+            while let Some(value) = pending.pop() {
+                match value {
+                    Value::Null => has_null = true,
+                    Value::Array(array) => pending.extend(array),
+                    Value::Object(object) => pending.extend(object.values()),
+                    _ => {}
+                }
+            }
+            let name = path.file_stem().unwrap().to_str().unwrap();
+            assert_eq!(
+                has_null,
+                exceptions.contains(&name),
+                "update the explicit null exceptions for {name}"
+            );
+            if has_null {
+                seen_exceptions.insert(name.to_owned());
+                continue;
+            }
+            let twin = path.with_extension("toml");
+            assert!(twin.is_file(), "missing TOML twin for {name}");
+            let text = std::fs::read_to_string(&twin).unwrap();
+            let (toml, canonical) = crate::parse_config_text(&twin, &text, true)
                 .unwrap_or_else(|error| panic!("{}", error.message));
-            assert!(canonical, "{}", path.display());
-            let json: Value = serde_json::from_str(
-                &std::fs::read_to_string(path.with_extension("json")).unwrap(),
-            )
-            .unwrap();
-            assert_eq!(toml, json, "{}", path.display());
+            assert!(canonical, "{}", twin.display());
+            assert_eq!(toml, json, "{}", twin.display());
             RuntimeConfig::from_json(&toml)
-                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-            loaded += 1;
+                .unwrap_or_else(|error| panic!("{}: {error}", twin.display()));
         }
-        assert!(loaded >= 7, "the TOML corpus must not silently shrink");
+        assert_eq!(
+            seen_exceptions,
+            exceptions.into_iter().map(str::to_owned).collect()
+        );
     }
 
     #[test]

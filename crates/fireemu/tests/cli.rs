@@ -79,6 +79,130 @@ fn toml_and_json_configs_have_identical_effective_values() {
 }
 
 #[test]
+fn toml_rules_source_reloads_after_an_edit() {
+    let dir = scratch("toml-rules-reload");
+    write(
+        &dir,
+        "fireemu.toml",
+        "schemaVersion = 1\nrules.source = 'firestore.rules'\n",
+    );
+    write(&dir, "firestore.rules", "rules_version = '2'; service cloud.firestore { match /databases/{db}/documents/{doc=**} { allow read: if true; } }");
+    let script = r#"
+const fs = require('node:fs');
+(async () => {
+  const host = process.env.FIRESTORE_EMULATOR_HOST;
+  if (!host.startsWith('127.0.0.1:')) throw new Error('expected a local emulator');
+  const url = `http://${host}/v1/projects/demo-toml-reload/databases/(default)/documents/items/one`;
+  const initial = await fetch(url);
+  await initial.text();
+  if (initial.status !== 404) throw new Error(`initial read: ${initial.status}`);
+  fs.writeFileSync('firestore.rules', "rules_version = '2'; service cloud.firestore { match /databases/{db}/documents/{doc=**} { allow read: if false; } }");
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const response = await fetch(url);
+    await response.text();
+    if (response.status === 403) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('edited TOML rules.source was not reloaded');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#;
+    let mut args = vec!["exec"];
+    args.extend_from_slice(&PORTS);
+    args.extend([
+        "--only",
+        "firestore",
+        "--project",
+        "demo-toml-reload",
+        "--",
+        "node",
+        "-e",
+        script,
+    ]);
+    let out = run_in(&dir, &args, None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("reloaded Firestore rules"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn toml_without_schema_version_is_refused_by_up_exec_and_config_show() {
+    let dir = scratch("toml-version-parity");
+    for body in [
+        "[emulators.firestore]\nport = 0\n[firestore]\nrules = 'missing.rules'\n",
+        "profile = 'emulator'\n",
+    ] {
+        for file in ["fireemu.toml", "explicit.toml"] {
+            write(&dir, file, body);
+            let expected = format!("{file}: a TOML configuration must set schemaVersion = 1 (firebase.json is JSON only)");
+            let mut errors = Vec::new();
+            for command in [vec!["up"], vec!["exec"], vec!["config", "show"]] {
+                let mut args = command.clone();
+                if file != "fireemu.toml" {
+                    args.extend(["--config", file]);
+                }
+                if command[0] != "config" {
+                    args.extend(["--only", "firestore"]);
+                }
+                if command[0] == "exec" {
+                    args.extend(["--", "true"]);
+                }
+                let out = run_in(&dir, &args, None);
+                assert_eq!(out.status.code(), Some(1), "{args:?}: {}", stderr(&out));
+                let error = stderr(&out);
+                assert!(
+                    error.starts_with(&format!("error: {expected}")),
+                    "{args:?}: {error}"
+                );
+                assert!(!error.contains("add \"schemaVersion\": 1"), "{error}");
+                errors.push(error);
+            }
+            assert_eq!(errors[0], errors[1]);
+            assert_eq!(errors[1], errors[2]);
+        }
+    }
+}
+
+#[test]
+fn toml_diagnostic_key_paths_escape_controls_and_quote_dots() {
+    let dir = scratch("toml-diagnostic-keys");
+    for value in ["1979-05-27", "inf"] {
+        for (key, expected) in [
+            (r#""b.c""#, r#"a.\"b.c\""#),
+            (r#""\u001b[31mRED""#, r#"a.\"\\u001B[31mRED\""#),
+        ] {
+            write(
+                &dir,
+                "keys.toml",
+                &format!("schemaVersion = 1\n[a]\n{key} = {value}\n"),
+            );
+            let out = run_in(&dir, &["config", "show", "--config", "keys.toml"], None);
+            assert_eq!(out.status.code(), Some(1));
+            let error = stderr(&out);
+            assert!(!error.contains('\u{1b}'), "raw terminal escape");
+            assert!(
+                error.contains(&format!("keys.toml: {expected}:")),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn toml_extension_is_case_insensitive() {
+    let dir = scratch("toml-extension-case");
+    for file in ["config.TOML", "config.ToMl"] {
+        write(&dir, file, "schemaVersion = 1\nprofile = 'emulator'\n");
+        let out = run_in(&dir, &["config", "show", "--config", file], None);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("profile = \"emulator\" (explicit)"));
+    }
+}
+
+#[test]
 fn toml_errors_name_the_path_position_and_datetime_key() {
     let dir = scratch("toml-errors");
     write(&dir, "broken.toml", "schemaVersion = 1\nprofile = [\n");
@@ -165,14 +289,32 @@ fn discovery_loads_toml_and_refuses_both_canonical_files() {
     let out = run_in(&dir, &["config", "show"], None);
     assert_eq!(out.status.code(), Some(1));
     let error = stderr(&out);
-    assert!(
-        error.contains("fireemu.toml")
-            && error.contains("fireemu.json")
-            && error.contains("remove one"),
-        "{error}"
-    );
+    assert_eq!(error, "error: both fireemu.toml and fireemu.json exist; remove one or select a file with --config\n");
     let out = run_in(&dir, &["config", "show", "--config", "fireemu.toml"], None);
     assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn discovery_skips_non_regular_toml_beside_json() {
+    let dir = scratch("toml-non-regular");
+    write(
+        &dir,
+        "fireemu.json",
+        r#"{"schemaVersion":1,"profile":"emulator"}"#,
+    );
+    let toml = dir.join("fireemu.toml");
+    std::fs::create_dir(&toml).unwrap();
+    let out = run_in(&dir, &["config", "show"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("profile = \"emulator\" (explicit)"));
+    #[cfg(unix)]
+    {
+        std::fs::remove_dir(&toml).unwrap();
+        std::os::unix::fs::symlink("missing.toml", &toml).unwrap();
+        let out = run_in(&dir, &["config", "show"], None);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("profile = \"emulator\" (explicit)"));
+    }
 }
 
 #[test]
@@ -228,7 +370,20 @@ fn init_with_existing_json_does_not_create_toml_even_with_force() {
     }
     let out = run_in(&dir, &["init", "--reference", "--yes"], None);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(dir.join("fireemu.reference.toml").is_file());
+    let reference = std::fs::read_to_string(dir.join("fireemu.reference.jsonc")).unwrap();
+    assert!(reference.contains("Edit fireemu.json to configure it."));
+    assert!(reference.contains("Do not create fireemu.toml beside fireemu.json."));
+    assert!(reference.contains("Copying a key into fireemu.json makes it explicit"));
+    let active = reference
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let parsed: serde_json::Value = serde_json::from_str(&active).unwrap();
+    assert!(reference.contains("\"schemaVersion\": 1"));
+    assert_eq!(parsed["network"]["allowNonLoopbackHosts"], false);
+    assert!(parsed.pointer("/auth/allowUnsignedIdTokens").is_none());
+    assert!(!dir.join("fireemu.reference.toml").exists());
     assert!(!dir.join("fireemu.toml").exists());
 }
 
@@ -535,6 +690,20 @@ fn init_reference_is_complete_valid_toml_and_preserves_the_minimal_config() {
     assert!(reference.contains("not loaded by fireemu"));
     assert!(reference.starts_with(&format!("#:schema {}\n", config_schema_url())));
     assert!(reference.contains("makes it explicit"));
+    assert!(reference.contains("Edit fireemu.toml to configure it."));
+    let keys: Vec<_> = reference
+        .lines()
+        .filter(|line| line.starts_with("# ") && line.ends_with(':'))
+        .take(2)
+        .collect();
+    assert_eq!(keys, ["# schemaVersion:", "# profile:"]);
+
+    assert!(std::str::from_utf8(&minimal)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .take(2)
+        .eq(["schemaVersion = 1", "profile = \"strict\""]));
     let active = reference
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))

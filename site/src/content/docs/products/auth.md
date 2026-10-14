@@ -61,8 +61,6 @@ requireUppercase = true
 requireLowercase = true
 requireNumeric = true
 
-[auth.client]
-
 [auth.client.permissions]
 disabledUserSignup = false
 disabledUserDeletion = true
@@ -79,8 +77,6 @@ Under `strict`, TOTP is enabled only through the project's MFA configuration, as
 ```toml
 schemaVersion = 1
 profile = "strict"
-
-[auth]
 
 [auth.mfa]
 state = "ENABLED"
@@ -101,8 +97,6 @@ Multi-tenancy is on by default, so the Admin API creates tenants and `auth.tenan
 ```toml
 schemaVersion = 1
 profile = "strict"
-
-[auth]
 
 [auth.multiTenant]
 allowTenants = true
@@ -142,9 +136,6 @@ The Admin SDK's `verifyIdToken` and `verifySessionCookie` inside a function you 
 To test sign-up quota errors, set `auth.quotaSimulation`:
 
 ```toml
-
-[auth]
-
 [auth.quotaSimulation]
 mode = "enforce"
 defaultQuotaPerHour = 5

@@ -25,7 +25,7 @@ JSON also works: existing `fireemu.json` files and `--config <path>.json` remain
 
 `up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
 
-1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML and every other extension as JSON. `--firebase-json` always reads JSON.
+1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML (case-insensitive, including `.TOML`) and every other extension as JSON. A TOML configuration must set `schemaVersion = 1`; it is never read as a `firebase.json`, which is JSON only. `--firebase-json` always reads JSON.
 2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used.
 3. Otherwise, the nearest `firebase.json` is loaded: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. The `.firebaserc` beside it is read too.
 4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.

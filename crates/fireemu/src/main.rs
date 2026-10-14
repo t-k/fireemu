@@ -363,7 +363,7 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
         }
     }
     let mut raw = parse_raw_options(&flags, OptionContext::Start)?;
-    let origin = discover_project_config(&mut raw);
+    let origin = discover_project_config(&mut raw)?;
     let (mut cfg, project_root, sources) =
         load_project_config(&raw, &Selection::default()).map_err(note_discovered(&origin))?;
     let rc = if matches!(origin, ConfigOrigin::Discovered(_)) {
@@ -992,9 +992,7 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
     Ok(raw)
 }
 
-/// Reads the file `--config` names. A canonical fireemu configuration always carries
-/// `schemaVersion`; otherwise it is a `firebase.json` unless fireemu-only keys reveal a
-/// missing version. Shared product sections and unrelated Firebase deploy keys remain valid.
+/// Reads the file `--config` names. TOML always requires `schemaVersion`; JSON without it is a `firebase.json` unless fireemu-only keys reveal a missing version. Shared product sections and unrelated Firebase deploy keys remain valid.
 fn read_config_file(path: &Path, is_toml: bool) -> Result<(serde_json::Value, bool), CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path))))?;
@@ -1011,35 +1009,57 @@ fn parse_config_text(
 ) -> Result<(serde_json::Value, bool), CliError> {
     let json: serde_json::Value = if is_toml {
         let value: toml::Value = toml::from_str(text).map_err(|error| {
-            let offset = error.span().map_or(0, |span| span.start).min(text.len());
-            let before = &text[..offset];
-            let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
-            let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+            let position = error
+                .span()
+                .and_then(|span| text.get(..span.start))
+                .map(|before| {
+                    let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                    let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+                    format!(":{line}:{column}")
+                })
+                .unwrap_or_default();
             CliError::refused(format!(
-                "{}:{line}:{column}: {}",
+                "{}{position}: {}",
                 diagnostic_path(path),
-                error.message()
+                diagnostic_text(error.message())
             ))
         })?;
+        if value.get("schemaVersion").is_none() {
+            return Err(CliError::refused(format!(
+                "{}: a TOML configuration must set schemaVersion = 1 (firebase.json is JSON only)",
+                diagnostic_path(path)
+            )));
+        }
         let mut pending = vec![(String::new(), &value)];
         while let Some((key, value)) = pending.pop() {
             match value {
                 toml::Value::Datetime(_) => {
                     return Err(CliError::refused(format!(
-                        "{}: {key}: TOML datetime values are not supported; use a quoted string",
-                        diagnostic_path(path)
+                        "{}: {}: TOML datetime values are not supported; use a quoted string",
+                        diagnostic_path(path),
+                        diagnostic_text(&key)
                     )))
                 }
                 toml::Value::Float(number) if !number.is_finite() => {
                     return Err(CliError::refused(format!(
-                        "{}: {key}: non-finite TOML numbers are not supported",
-                        diagnostic_path(path)
+                        "{}: {}: non-finite TOML numbers are not supported",
+                        diagnostic_path(path),
+                        diagnostic_text(&key)
                     )))
                 }
                 toml::Value::Table(table) => pending.extend(table.iter().map(|(name, value)| {
+                    let name = if !name.is_empty()
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                    {
+                        name.clone()
+                    } else {
+                        toml::Value::String(name.clone()).to_string()
+                    };
                     (
                         if key.is_empty() {
-                            name.clone()
+                            name
                         } else {
                             format!("{key}.{name}")
                         },
@@ -1278,15 +1298,15 @@ enum ConfigOrigin {
 
 /// When neither `--config` nor `--firebase-json` is given, fills the one the working directory
 /// supplies: its `fireemu.toml` or `fireemu.json`, else the nearest `firebase.json` (see `config_discovery`).
-fn discover_project_config(raw: &mut RawOptions) -> ConfigOrigin {
+fn discover_project_config(raw: &mut RawOptions) -> Result<ConfigOrigin, CliError> {
     if raw.config_path.is_some() || raw.firebase_json.is_some() {
-        return ConfigOrigin::Flags;
+        return Ok(ConfigOrigin::Flags);
     }
     if raw.config_discovery == ConfigDiscovery::Off {
-        return ConfigOrigin::DiscoveryOff;
+        return Ok(ConfigOrigin::DiscoveryOff);
     }
     let Ok(cwd) = std::env::current_dir() else {
-        return ConfigOrigin::NoWorkingDirectory;
+        return Ok(ConfigOrigin::NoWorkingDirectory);
     };
     let discovery = config_discovery::discover(
         &cwd,
@@ -1303,6 +1323,9 @@ fn discover_project_config(raw: &mut RawOptions) -> ConfigOrigin {
             raw.firebase_json = Some(path.clone());
             raw.discovered_text = Some((path.clone(), text.clone()));
         }
+        config_discovery::Discovered::Ambiguous => {
+            return Err(CliError::refused("both fireemu.toml and fireemu.json exist; remove one or select a file with --config"));
+        }
         config_discovery::Discovered::Nothing => {}
     }
     if let Some(skipped) = &discovery.skipped {
@@ -1312,7 +1335,7 @@ fn discover_project_config(raw: &mut RawOptions) -> ConfigOrigin {
             skipped_config_warning(skipped, "the built-in defaults apply")
         );
     }
-    ConfigOrigin::Discovered(discovery)
+    Ok(ConfigOrigin::Discovered(discovery))
 }
 
 /// The warning for a candidate the search refused to load, or a directory it did not search,
@@ -1337,13 +1360,17 @@ fn config_document(raw: &RawOptions, path: &Path) -> Result<(serde_json::Value, 
                 path,
                 text,
                 raw.config_path.as_deref() == Some(path)
-                    && path.extension().is_some_and(|ext| ext == "toml"),
+                    && path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("toml")),
             )
         }
         _ => read_config_file(
             path,
             raw.config_path.as_deref() == Some(path)
-                && path.extension().is_some_and(|ext| ext == "toml"),
+                && path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("toml")),
         ),
     }
 }
@@ -1523,7 +1550,7 @@ fn parse_options(
     let mut raw = parse_raw_options(args, context)?;
     let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
-    let origin = discover_project_config(&mut raw);
+    let origin = discover_project_config(&mut raw)?;
     let (mut cfg, project_root, sources) =
         load_project_config(&raw, &only).map_err(note_discovered(&origin))?;
     let config_origin = config_origin_line(&origin, &sources);
@@ -3395,6 +3422,20 @@ fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
 #[cfg(test)]
 mod config_reload_tests {
     use super::*;
+
+    #[test]
+    fn toml_errors_without_a_span_have_no_position() {
+        let text = format!("{} = 1", vec!["a"; 200].join("."));
+        let error = parse_config_text(Path::new("deep.toml"), &text, true).unwrap_err();
+        assert_eq!(error.message, "deep.toml: recursion limit");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn parse_config_text_never_panics_on_arbitrary_utf8(text in proptest::prelude::any::<String>()) {
+            let _ = parse_config_text(Path::new("arbitrary.toml"), &text, true);
+        }
+    }
 
     /// The file discovery found is parsed from the text read on the handle it was judged by,
     /// never re-read; any other path is read from disk.

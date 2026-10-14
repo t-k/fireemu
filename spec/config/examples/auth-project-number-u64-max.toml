@@ -11,7 +11,5 @@ rulesCatalog = "firebase-rules-2026-08-25"
 edition = "standard"
 apiMode = "native"
 
-[daemon]
-
 [daemon.authProjectNumbers]
 demo-max = "18446744073709551615"

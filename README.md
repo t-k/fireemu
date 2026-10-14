@@ -177,7 +177,7 @@ The command reports information about the Fireemu binary, UI, Functions runner, 
 
 ### Initial setup and reusing `firebase.json`
 
-`fireemu init --reference` also writes `fireemu.reference.toml`, a commented reference generated from the schema. Fireemu never loads this file. The normal `fireemu.toml` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment) stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
+`fireemu init --reference` also writes `fireemu.reference.toml`, a commented reference generated from the schema. With an existing `fireemu.json`, it writes `fireemu.reference.jsonc` instead, so reference keys match the configuration format. Fireemu never loads this file. The normal `fireemu.toml` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment) stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
 
 `fireemu init` creates `fireemu.toml` in the current directory. The interactive setup lets you choose a compatibility profile and whether to reuse an existing `firebase.json`.
 
@@ -195,7 +195,7 @@ An existing `fireemu.toml` is not overwritten unless `--force` is supplied. An e
 
 `up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
 
-1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML and every other extension as JSON. `--firebase-json` always reads JSON.
+1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML (case-insensitive, including `.TOML`) and every other extension as JSON. A TOML configuration must set `schemaVersion = 1`; it is never read as a `firebase.json`, which is JSON only. `--firebase-json` always reads JSON.
 2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded as if it were passed with `--config`. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used, because the paths it contains are relative to the current directory.
 3. Otherwise, the nearest `firebase.json` is loaded as if it were passed with `--firebase-json`: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. Its paths and the `.firebaserc` beside it are read from its directory.
 4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
@@ -399,8 +399,6 @@ requireUppercase = true
 requireLowercase = true
 requireNumeric = true
 
-[auth.client]
-
 [auth.client.permissions]
 disabledUserSignup = false
 disabledUserDeletion = true
@@ -421,8 +419,6 @@ Under the `strict` profile, TOTP is enabled only through the project's MFA confi
 ```toml
 schemaVersion = 1
 profile = "strict"
-
-[auth]
 
 [auth.mfa]
 state = "ENABLED"
@@ -452,8 +448,6 @@ Instead of creating tenants through the Admin API in every session, declare the 
 schemaVersion = 1
 profile = "strict"
 
-[auth]
-
 [auth.multiTenant]
 allowTenants = true
 
@@ -475,12 +469,9 @@ enabledProviders = ["PHONE_SMS"]
 
 #### Test quota-exceeded behavior
 
-Use `auth.quotaSimulation` to test sign-up quota-exceeded behavior locally. For example, set `auth.quotaSimulation` to:
+Use `auth.quotaSimulation` to test sign-up quota-exceeded behavior locally. For example, add these settings to `fireemu.toml`:
 
 ```toml
-
-[auth]
-
 [auth.quotaSimulation]
 mode = "enforce"
 defaultQuotaPerHour = 5

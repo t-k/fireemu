@@ -661,6 +661,20 @@ test("a Listen is read until it ends, goes quiet, or reaches the cap, and is clo
   assert.equal(late.row.frames.length, 2);
 });
 
+test("a target change with no type and no target ids is a heartbeat, as the proto's default NO_CHANGE", () => {
+  const ctx = contextOf(createClock());
+  const rows = summarizeListen(
+    [
+      { at: 1, kind: "targetChange", targetChange: { targetIds: [] } },
+      { at: 2, kind: "targetChange", targetChange: {} },
+    ],
+    undefined,
+    ctx,
+    new Map(),
+  ).frames;
+  assert.deepEqual(rows, [{ kind: "boundary", resumeToken: false }]);
+});
+
 test("summarizeListen names a frame it does not know by its kind, or as unknown", () => {
   const ctx = contextOf(createClock());
   assert.deepEqual(

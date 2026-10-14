@@ -167,7 +167,10 @@ export function createWorld(scenario = {}) {
       body: init.body ? JSON.parse(init.body) : undefined,
     });
     // A real network call takes a turn of the event loop and honours its timeout signal.
-    await new Promise((resolve) => setImmediate(resolve));
+    // A write takes longer than a read, so a write that is not awaited lands after later reads.
+    const turns = String(url).endsWith(":commit") ? 3 : 1;
+    for (let turn = 0; turn < turns; turn += 1)
+      await new Promise((resolve) => setImmediate(resolve));
     if (init.signal?.aborted) throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
     // A test can replace the answer: `throw` (a transport failure with a cause code),
     // `rejectWith` (any error) or `status`. With `applyFirst` the call takes effect in the world

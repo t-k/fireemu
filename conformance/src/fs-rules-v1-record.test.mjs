@@ -42,6 +42,7 @@ const CLEAN_REPORT = {
 function fakeDeps(override = {}) {
   const calls = [];
   const files = new Map();
+  const completed = [];
   const ledger = { text: override.ledgerText ?? "" };
   const state = { fixture: undefined, handler: undefined, warnings: [], logs: [] };
   // Every effect takes a turn of the event loop, so a call that is not awaited shows.
@@ -57,14 +58,21 @@ function fakeDeps(override = {}) {
     readLedger: note("readLedger", async () => ledger.text),
     appendLedger: note("appendLedger", async (_path, text) => {
       ledger.text += text;
+      completed.push(JSON.parse(text).event === "started" ? "ledger:started" : "ledger:final");
     }),
     assertCleanTree: note("assertCleanTree", async () => {}),
     gitSha: note("gitSha", async () => "a".repeat(40)),
     harnessDigest: () => "h".repeat(64),
     assertIgnored: note("assertIgnored", async () => {}),
     makeRunDir: note("makeRunDir", async () => {}),
+    // A run file takes longer the bigger it is, so a recording that is not awaited completes
+    // after the small meta file that follows it. `completed` is the order in which effects finished.
     writeRunFile: note("writeRunFile", async (dir, name, text) => {
+      const turns = 2 + Math.floor(text.length / 2000);
+      for (let turn = 0; turn < turns; turn += 1)
+        await new Promise((resolve) => setImmediate(resolve));
       files.set(`${dir}/${name}`, text);
+      completed.push(name);
     }),
     clockOffset: note("clockOffset", async () => 0.01),
     sandboxWebConfig: note("sandboxWebConfig", async () => WEB),
@@ -88,7 +96,7 @@ function fakeDeps(override = {}) {
     warn: (text) => state.warnings.push(text),
     ...override.deps,
   };
-  return { deps, calls, files, ledger, state };
+  return { deps, calls, files, ledger, state, completed };
 }
 
 /** A recording shaped like runCorpus's, with the same rows in both. */
@@ -701,4 +709,49 @@ test("the preflight asks with the right methods and bodies, and a GET carries no
     );
   }
   assert.equal(world.log.length, 6);
+});
+
+test("each run file is written before the next effect, and the final ledger line is the last thing to finish", async () => {
+  const fake = fakeDeps();
+  fake.deps.recordOnce = async () => recording();
+  await recordProduction(ENV, fake.deps);
+  assert.deepEqual(fake.completed, [
+    "ledger:started",
+    "recording-1.json",
+    "recording-2.json",
+    "meta.json",
+    "ledger:final",
+  ]);
+  const failing = fakeDeps();
+  failing.deps.recordOnce = async () => {
+    throw Object.assign(new Error("stopped"), { fatal: true, partial: recording() });
+  };
+  await recordProduction(ENV, failing.deps);
+  assert.deepEqual(failing.completed, [
+    "ledger:started",
+    "recording-1-partial.json",
+    "meta.json",
+    "ledger:final",
+  ]);
+});
+
+test("what the run prints is indented JSON, and a fixture scan that throws a plain string is reported as it is", async () => {
+  const fake = fakeDeps();
+  fake.deps.recordOnce = async () => recording();
+  await recordProduction(ENV, fake.deps);
+  assert.ok(
+    fake.state.logs[0].startsWith('{\n  "programs": 4,\n  "corpusRequests": 76,'),
+    fake.state.logs[0],
+  );
+  const refusing = fakeDeps({
+    deps: {
+      scanFixture: async () => {
+        throw "plain refusal";
+      },
+    },
+  });
+  refusing.deps.recordOnce = async () => recording();
+  const result = await recordProduction(ENV, refusing.deps);
+  assert.equal(result.outcome, "not-written");
+  assert.match(result.error, /^plain refusal \(recordings kept in \/private\/fs3\/fs-rules-v1-/);
 });

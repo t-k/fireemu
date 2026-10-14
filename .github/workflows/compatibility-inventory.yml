@@ -1,9 +1,14 @@
 name: compatibility-inventory
 
+# Nothing here reads the documentation site, which pages.yml builds.
 on:
   pull_request:
+    paths-ignore:
+      - "site/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "site/**"
   workflow_dispatch:
     inputs:
       run_retired:

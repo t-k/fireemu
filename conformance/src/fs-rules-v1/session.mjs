@@ -363,7 +363,7 @@ export function createSession(
     try {
       return check();
     } catch (error) {
-      throw error.fatal ? error : fatal(String(error.message ?? error));
+      throw fatal(String(error.message));
     }
   }
 

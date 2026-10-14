@@ -69,7 +69,10 @@ function fakeDeps(override = {}) {
     clockOffset: note("clockOffset", async () => 0.01),
     sandboxWebConfig: note("sandboxWebConfig", async () => WEB),
     productionTarget: note("productionTarget", async () => TARGET),
-    preflight: note("preflight", async () => ({ report: CLEAN_REPORT, problems: [] })),
+    preflight: note("preflight", async (target) => {
+      if (target !== TARGET) throw new Error("preflight was not given the resolved target");
+      return { report: CLEAN_REPORT, problems: [] };
+    }),
     recordOnce: note("recordOnce", async () => {
       throw new Error("recordOnce not set");
     }),
@@ -604,4 +607,98 @@ test("the first recording's files are written before the second starts", async (
   };
   await recordProduction(ENV, fake.deps);
   assert.equal(seen, 1, "recording-1.json existed when the second recording began");
+});
+
+// ---- every effect is awaited ----------------------------------------------------------------
+
+test("a private directory that is not ignored, a run directory that cannot be made, or a ledger that cannot be written stops everything", async () => {
+  for (const [effect, pattern] of [
+    ["assertIgnored", /is not ignored by git/],
+    ["makeRunDir", /read-only file system/],
+    ["appendLedger", /ledger is not writable/],
+  ]) {
+    const message = {
+      assertIgnored: "/private/fs3 is not ignored by git",
+      makeRunDir: "read-only file system",
+      appendLedger: "ledger is not writable",
+    }[effect];
+    const fake = fakeDeps({
+      deps: {
+        [effect]: async () => {
+          throw new Error(message);
+        },
+      },
+    });
+    fake.deps.recordOnce = async () => recording();
+    await assert.rejects(recordProduction(ENV, fake.deps), pattern);
+    assert.ok(!fake.calls.includes("recordOnce"), `${effect}: a recording started`);
+    assert.ok(!fake.calls.includes("writeFixture"));
+  }
+  const early = fakeDeps({
+    deps: {
+      assertIgnored: async () => {
+        throw new Error("not ignored");
+      },
+    },
+  });
+  await assert.rejects(recordProduction(ENV, early.deps), /not ignored/);
+  assert.ok(!early.calls.includes("makeRunDir") && !early.calls.includes("appendLedger"));
+});
+
+test("the refusal for a sandbox that is not fit names every problem, separated by a semicolon", async () => {
+  const fake = fakeDeps({
+    deps: {
+      preflight: async () => ({
+        report: CLEAN_REPORT,
+        problems: ["a release exists", "an account exists"],
+      }),
+    },
+  });
+  await assert.rejects(recordProduction(ENV, fake.deps), (error) => {
+    assert.equal(error.message, "preflight: a release exists; an account exists");
+    return true;
+  });
+});
+
+test("the git sha, the clock and the web config are read before anything is written", async () => {
+  const fake = fakeDeps();
+  fake.deps.recordOnce = async () => recording();
+  await recordProduction(ENV, fake.deps);
+  const first = fake.calls.indexOf("appendLedger");
+  for (const read of [
+    "gitSha",
+    "clockOffset",
+    "sandboxWebConfig",
+    "preflight",
+    "assertIgnored",
+    "makeRunDir",
+  ])
+    assert.ok(fake.calls.indexOf(read) < first, read);
+  const [started] = lines(fake.ledger);
+  assert.equal(started.gitSha, "a".repeat(40));
+  assert.equal(started.programs, 4);
+  assert.equal(started.operatorConfirmation, ENV.FS3_NO_AUTH_RECORDING);
+});
+
+test("the preflight asks with the right methods and bodies, and a GET carries no content type", async () => {
+  const { world, fetchImpl } = createWorld();
+  await preflight(TARGET, "", { now: NOW, fetchImpl });
+  const by = (suffix) => world.log.find((e) => e.path.endsWith(suffix));
+  assert.equal(by(":runQuery").method, "POST");
+  assert.deepEqual(by(":runQuery").body, {
+    structuredQuery: { from: [{ allDescendants: true }], limit: 1 },
+  });
+  assert.equal(by("/accounts:query").method, "POST");
+  assert.deepEqual(by("/accounts:query").body, { returnUserInfo: false });
+  assert.equal(by("/releases").method, "GET");
+  for (const entry of world.log) {
+    assert.equal(entry.headers.authorization, "Bearer ya29.owner-test-token");
+    assert.equal(entry.headers["x-goog-user-project"], SANDBOX_PROJECT);
+    assert.equal(
+      Object.hasOwn(entry.headers, "content-type"),
+      entry.body !== undefined,
+      `${entry.method} ${entry.path}`,
+    );
+  }
+  assert.equal(world.log.length, 6);
 });

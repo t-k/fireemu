@@ -315,6 +315,7 @@ export function createWorld(scenario = {}) {
         /^\/v1\/(projects\/[^/]+\/databases\/\(default\)\/documents.*?)(?::(\w+))?$/.exec(path);
       if (!match) return json(404, {});
       const rpc = match[2];
+      if (rpc && method !== "POST") return json(405, { error: { status: "METHOD_NOT_ALLOWED" } });
       const op = rpc ?? { GET: "get", PATCH: "patch" }[method];
       const answer = firestore({ op, path: match[1], body, owner });
       if (answer.status !== 200)

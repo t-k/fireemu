@@ -719,3 +719,22 @@ test("a signal to the supervising process stops the child's group, and the handl
     assert.equal(await groupGone(result.pid), true);
   }
 });
+
+test("a new fixture starts at version 1", () => {
+  const first = recording({ r1: ok200 });
+  const fixture = JSON.parse(
+    fixtureText({ programs: PROGRAMS, recordings: [first, first], meta: META }),
+  );
+  assert.equal(fixture.version, 1);
+  assert.equal(
+    JSON.parse(
+      fixtureText({
+        programs: PROGRAMS,
+        recordings: [first, first],
+        meta: META,
+        existing: { version: 7, programs: {} },
+      }),
+    ).version,
+    7,
+  );
+});

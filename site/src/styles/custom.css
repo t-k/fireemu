@@ -78,6 +78,23 @@ ul.conditions {
 	}
 }
 
+/* Landing page hero on wide screens: the hero has no image, so let the copy use the full width
+   instead of Starlight's 7fr/4fr image grid, and balance the heading's lines. */
+@media (min-width: 50rem) {
+	.hero:not(:has(> img, > .hero-html)) {
+		grid-template-columns: 100%;
+	}
+	.hero h1 {
+		text-wrap: balance;
+	}
+	.hero .copy > h1 {
+		max-width: 24ch;
+	}
+	.hero .copy > .tagline {
+		max-width: 62ch;
+	}
+}
+
 /* Keep wide content on the landing page inside the viewport. */
 .sl-markdown-content :not(pre) > code {
 	overflow-wrap: anywhere;

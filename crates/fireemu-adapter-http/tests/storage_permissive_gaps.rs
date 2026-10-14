@@ -1759,6 +1759,22 @@ fn make_private_and_a_deleted_all_users_entry_end_the_public_bit() {
 }
 
 #[test]
+fn deleting_an_acl_entry_is_the_official_emulators_501_outside_strict() {
+    let s = emulator();
+    upload_as_owner(&s, "a.txt");
+    for path in [
+        format!("/b/{DEFAULT_BUCKET}/o/a.txt/acl/allUsers"),
+        format!("/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt/acl/allUsers"),
+    ] {
+        assert_eq!(
+            handle(&s, req("DELETE", &path, &[OWNER], b"")).status,
+            501,
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn the_emulator_profile_ignores_the_bucket_lists() {
     for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
         let s = state(acceptance);

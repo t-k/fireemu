@@ -998,6 +998,15 @@ test("a read that is answered with an unknown status is a failure, not an unknow
   assert.match(error.message, /HTTP 503/);
   assert.deepEqual(out.unknowns, []);
   assert.equal(out.closureReady, true);
+  // The same for a read whose transport fails.
+  const lost = await run({
+    programs: [],
+    onCall: (method, url) =>
+      method === "GET" && url.endsWith("/config") ? { throw: "ETIMEDOUT" } : undefined,
+  });
+  assert.equal(lost.error.fatal, true);
+  assert.deepEqual(lost.out.unknowns, []);
+  assert.equal(lost.out.closureReady, true);
 });
 
 test("a transport failure is named in the message by its cause code, else by the error's name", async () => {

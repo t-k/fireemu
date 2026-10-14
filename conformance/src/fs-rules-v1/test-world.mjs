@@ -414,7 +414,10 @@ export function createClock(start = 1_000_000) {
   const clock = { t: start };
   return {
     now: () => clock.t,
+    // A wait takes a turn of the event loop, as a real one does, so a wait that is not awaited
+    // does not advance the clock in time.
     sleep: async (ms) => {
+      await new Promise((resolve) => setImmediate(resolve));
       clock.t += ms;
     },
     advance: (ms) => {

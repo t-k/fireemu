@@ -634,15 +634,12 @@ test("the mock token defaults to now, in seconds", () => {
 const probeFile = (name) => join(mkdtempSync(join(tmpdir(), "fs3-probe-")), name);
 
 test("a child that traps SIGTERM is stopped by SIGTERM, one that ignores it by SIGKILL after the grace", async () => {
+  // Shell children, so the trap is in place within milliseconds of the start.
   const graceful = await runSupervised({
-    command: process.execPath,
-    args: [
-      "-e",
-      "process.on('SIGTERM', () => process.exit(7)); setTimeout(() => process.exit(0), 15000);",
-      MARK,
-    ],
-    timeoutMs: 500,
-    graceMs: 3000,
+    command: "/bin/sh",
+    args: ["-c", "trap 'exit 7' TERM; sleep 15 & wait", MARK],
+    timeoutMs: 1500,
+    graceMs: 5000,
     env: CHILD_ENV,
     stdio: ["ignore", "ignore", "inherit"],
   });
@@ -651,20 +648,16 @@ test("a child that traps SIGTERM is stopped by SIGTERM, one that ignores it by S
 
   const started = Date.now();
   const stubborn = await runSupervised({
-    command: process.execPath,
-    args: [
-      "-e",
-      "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 15000);",
-      MARK,
-    ],
-    timeoutMs: 400,
-    graceMs: 700,
+    command: "/bin/sh",
+    args: ["-c", "trap '' TERM; exec sleep 15", MARK],
+    timeoutMs: 1500,
+    graceMs: 800,
     env: CHILD_ENV,
     stdio: ["ignore", "ignore", "inherit"],
   });
   assert.equal(stubborn.timedOut, true);
   assert.equal(stubborn.exitCode, null, "killed by a signal, so no exit code");
-  assert.ok(Date.now() - started >= 1000, "SIGKILL waited for the grace");
+  assert.ok(Date.now() - started >= 2300, "SIGKILL waited for the grace");
 });
 
 test("the environment and the default streams are the child's own", async () => {

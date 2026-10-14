@@ -13,6 +13,7 @@ import {
   brief,
   ceilings,
   classify,
+  comparable,
   compareRows,
   confirmedNoAuthRecording,
   estimatedUsd,
@@ -908,4 +909,21 @@ test("an existence filter and the heartbeat after it come and go with timing: th
     classify({ row: "r", production: ok200, alternative: denied, fireemu: ok200 }),
     "INDETERMINATE",
   );
+});
+
+test("when the filter goes, the heartbeats around it become the last one, with its token flag", () => {
+  const head = [add, doc("p/1"), current];
+  const production = listenRow([
+    ...head,
+    { ...boundary, resumeToken: true },
+    filter,
+    { ...boundary, resumeToken: false },
+  ]);
+  const lastOnly = listenRow([...head, { ...boundary, resumeToken: false }]);
+  const firstOnly = listenRow([...head, { ...boundary, resumeToken: true }]);
+  assert.equal(classify({ row: "p#l", production, fireemu: lastOnly }), "MATCH");
+  assert.equal(classify({ row: "p#l", production, fireemu: firstOnly }), "MISMATCH");
+  assert.deepEqual(comparable(production).frames.at(-1), { ...boundary, resumeToken: false });
+  assert.equal(comparable(production).frames.length, 4);
+  assert.equal(comparable(ok200), ok200);
 });

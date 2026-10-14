@@ -1472,3 +1472,51 @@ test("a cleanup that fails after a fatal run keeps the fatal error and lists the
   assert.match(error.message, /request ceiling 3 reached/);
   assert.ok(out.cleanupErrors.length > 0);
 });
+
+test("a poll that disagrees restarts the streak: the publication needs thirty agreeing polls in a row", async () => {
+  let markerWrites = 0;
+  const { out, error } = await run({
+    programs: [PROGRAMS[0]],
+    onCall: (method, url) => {
+      if (method !== "PATCH" || !url.includes("/fsr-marker/")) return undefined;
+      markerWrites += 1;
+      return markerWrites === 3 ? { status: 403 } : undefined;
+    },
+  });
+  assert.equal(error, undefined);
+  // Polls 1 and 2 agree, poll 3 does not, then thirty agree: 33 polls and 32 waits.
+  assert.deepEqual([out.publications[0].polls, out.publications[0].settleMs], [33, 32_000]);
+});
+
+test("the Listen is closed before the next request is made", async () => {
+  const made = createWorld();
+  const clock = createClock();
+  let closedFlag = false;
+  let listening = false;
+  let early;
+  made.grpc.listen = () => {
+    listening = true;
+    return {
+      frames: [FRAME],
+      ended: () => undefined,
+      close: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        closedFlag = true;
+      },
+    };
+  };
+  made.world.onCall = (method, url) => {
+    if (listening && !closedFlag && !early) early = `${method} ${url}`;
+    return undefined;
+  };
+  const program = { ...PROGRAMS[1], steps: [PROGRAMS[1].steps[0], base] };
+  await runCorpus(
+    { programs: [program], principals: PRINCIPALS },
+    contextOf(clock),
+    { fetchImpl: made.fetchImpl, grpc: made.grpc, sleep: clock.sleep, now: clock.now },
+    ceilings([program]),
+  );
+  assert.equal(early, undefined, `a request was made before the Listen was closed: ${early}`);
+  assert.equal(closedFlag, true);
+});

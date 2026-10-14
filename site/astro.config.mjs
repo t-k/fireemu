@@ -27,6 +27,10 @@ export default defineConfig({
 			editLink: { baseUrl: 'https://github.com/t-k/fireemu/edit/main/site/' },
 			lastUpdated: false,
 			customCss: ['./src/styles/custom.css'],
+			components: {
+				// Section links in the header, so the landing page reaches the docs too.
+				SocialIcons: './src/components/HeaderNav.astro',
+			},
 			sidebar: [
 				{
 					label: 'Getting started',

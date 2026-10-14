@@ -1,0 +1,63 @@
+---
+// Replaces Starlight's SocialIcons slot in the header: section links first,
+// then the default social icons.
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+import { headerNav, currentNavSlug } from '../data/header-nav.mjs';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const path = Astro.url.pathname.startsWith(base)
+	? Astro.url.pathname.slice(base.length)
+	: Astro.url.pathname;
+const current = currentNavSlug(path);
+---
+
+<nav class="header-nav sl-flex" aria-label="Site sections">
+	{
+		headerNav.map(({ label, slug }) => (
+			<a href={`${base}/${slug}/`} aria-current={slug === current ? 'page' : undefined}>
+				{label}
+			</a>
+		))
+	}
+</nav>
+<Default />
+
+<style>
+	.header-nav {
+		gap: 1.25rem;
+		align-items: center;
+		margin-inline-end: 0.5rem;
+	}
+	.header-nav a {
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-sm);
+		font-weight: 500;
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.header-nav a:hover,
+	.header-nav a[aria-current='page'] {
+		color: var(--sl-color-white);
+	}
+	.header-nav a[aria-current='page'] {
+		text-decoration: underline;
+		text-underline-offset: 0.4em;
+		text-decoration-color: var(--sl-color-accent);
+	}
+	/* Below this width the links would crowd out the site title; the landing page hero links to the same pages. */
+	@media (max-width: 55.9375rem) {
+		.header-nav {
+			display: none;
+		}
+	}
+	/* Pages with a sidebar list every page there, so the links give way when the header is narrow. */
+	@media (max-width: 71.9375rem) {
+		:global(:root[data-has-sidebar]) .header-nav {
+			display: none;
+		}
+	}
+	/* The mobile menu repeats SocialIcons in its footer; the sidebar already lists every page there. */
+	:global(.mobile-preferences) .header-nav {
+		display: none;
+	}
+</style>

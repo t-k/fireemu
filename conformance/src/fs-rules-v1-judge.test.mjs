@@ -353,6 +353,8 @@ test("the mock token is an unsigned anonymous ID token of the project and expire
 
 // ---- supervising a real child ---------------------------------------------------------------
 
+/** The children are plain node processes; a preloaded module of the parent is not theirs. */
+const CHILD_ENV = { ...process.env, NODE_OPTIONS: "" };
 const groupAlive = (pgid) => {
   try {
     process.kill(-pgid, 0);
@@ -379,6 +381,7 @@ setInterval(() => {}, 1000);`;
     args: ["-e", script],
     timeoutMs: 700,
     graceMs: 500,
+    env: CHILD_ENV,
     stdio: ["ignore", "ignore", "inherit"],
   });
   assert.equal(timedOut, true);
@@ -395,6 +398,7 @@ process.exit(0);`;
     args: ["-e", script],
     timeoutMs: 10_000,
     graceMs: 500,
+    env: CHILD_ENV,
     stdio: ["ignore", "ignore", "inherit"],
   });
   assert.equal(exitCode, 0);
@@ -407,6 +411,7 @@ test("a failing launch is reported as no exit code, not as a hang", async () => 
     command: "/nonexistent/fs3-binary",
     args: [],
     timeoutMs: 5000,
+    env: CHILD_ENV,
     stdio: ["ignore", "ignore", "ignore"],
   });
   assert.equal(exitCode, null);

@@ -586,7 +586,10 @@ test("a Listen under a parent document is asked of that document, and without on
   const handle = ({ closeAt, clock }) => ({
     frames: [FRAME],
     ended: () => undefined,
-    close: async () => closeAt(clock.now()),
+    close: async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      closeAt(clock.now());
+    },
   });
   const root = await listenRow({ step: base, handle });
   assert.equal(root.asked.parent, documents);
@@ -608,7 +611,10 @@ test("a Listen is read until it ends, goes quiet, or reaches the cap, and is clo
     handle: ({ closeAt, clock }) => ({
       frames: [FRAME],
       ended: () => ({ reason: "error", code: 7, details: "denied" }),
-      close: async () => closeAt(clock.now()),
+      close: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        closeAt(clock.now());
+      },
     }),
   });
   assert.equal(ended.duration, 0, "a stream that has ended is not waited for");
@@ -622,10 +628,28 @@ test("a Listen is read until it ends, goes quiet, or reaches the cap, and is clo
         return clock.now() - opened >= 1000 ? [FRAME, { ...FRAME, at: 2 }] : [FRAME];
       },
       ended: () => undefined,
-      close: async () => closeAt(clock.now()),
+      close: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        closeAt(clock.now());
+      },
     }),
   });
   assert.equal(late.duration, 3000);
+  // A first frame at one second starts the quiet period then, not at the start.
+  const firstLate = await listenRow({
+    step: base,
+    handle: ({ closeAt, clock, opened }) => ({
+      get frames() {
+        return clock.now() - opened >= 1000 ? [FRAME] : [];
+      },
+      ended: () => undefined,
+      close: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        closeAt(clock.now());
+      },
+    }),
+  });
+  assert.equal(firstLate.duration, 3000);
   assert.equal(late.row.frames.length, 2);
 });
 
@@ -1095,4 +1119,78 @@ test("a local run seeds and signs up at the origins of the right services", asyn
     ),
   );
   assert.ok(log.every((l) => l.includes("http://127.0.0.1:")));
+});
+
+test("a local publication settles at once: no wait, no poll", async () => {
+  const log = [];
+  const clock = createClock();
+  const ctx = createContext({
+    run: "1790000000000",
+    target: {
+      kind: "local",
+      firestoreOrigin: "http://127.0.0.1:9000",
+      authOrigin: "http://127.0.0.1:9099",
+      grpcHost: "127.0.0.1",
+      grpcPort: 9000,
+    },
+  });
+  const session = createSession(
+    ctx,
+    {
+      fetchImpl: async (url) => {
+        log.push(url);
+        return { status: 200, text: async () => "{}" };
+      },
+      grpc: { close: async () => {} },
+      sleep: clock.sleep,
+      now: clock.now,
+    },
+    {},
+  );
+  await session.runProgram({ ...PROGRAMS[0], steps: [PROGRAMS[0].steps[0]] });
+  assert.deepEqual(session.evidence().publications, [
+    { label: markerOf("recursive-v1"), previous: null, settleMs: 0, polls: 0 },
+  ]);
+  assert.equal(clock.now() - 1_000_000, 0, "nothing waited");
+  assert.ok(!log.some((url) => url.includes("fsr-marker")));
+});
+
+test("a release that never settles, or never goes away, says which", async () => {
+  const never = await run({
+    programs: [PROGRAMS[0]],
+    options: { maxHarnessRequests: 100_000 },
+    onCall: (method, url) =>
+      method === "PATCH" && url.includes("/fsr-marker/") ? { status: 403 } : undefined,
+  });
+  assert.equal(never.error.message, `release of ${markerOf("recursive-v1")} did not settle`);
+  // The release is deleted but its rules keep answering: cleanup says it waited for nothing.
+  const lingering = await run({
+    programs: [PROGRAMS[0]],
+    options: { maxHarnessRequests: 100_000 },
+    onCall: (method, url) =>
+      method === "DELETE" && url.endsWith("/releases/cloud.firestore")
+        ? { status: 200, body: {} }
+        : undefined,
+  });
+  assert.ok(
+    lingering.out.cleanupErrors.includes("release of nothing did not settle"),
+    lingering.out.cleanupErrors.join("|"),
+  );
+  assert.equal(lingering.out.closureReady, false);
+});
+
+test("a gRPC marker failure is a poll that does not match, whatever it throws", async () => {
+  const flaky = createWorld();
+  const clock = createClock();
+  flaky.grpc.call = async () => {
+    throw new Error("socket");
+  };
+  const result = await runCorpus(
+    { programs: [PROGRAMS[0]], principals: PRINCIPALS },
+    contextOf(clock),
+    { fetchImpl: flaky.fetchImpl, grpc: flaky.grpc, sleep: clock.sleep, now: clock.now },
+    { ...ceilings([PROGRAMS[0]]), maxHarnessRequests: 100_000 },
+  ).catch((error) => error);
+  assert.match(result.message, /did not settle/);
+  assert.ok(flaky.world.markerAnswers.length > 400, "it kept polling REST until the limit");
 });

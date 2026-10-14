@@ -955,6 +955,7 @@ async function listenDuration(frames) {
       frames,
       ended: () => undefined,
       close: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
         closed = clock.now();
       },
     };

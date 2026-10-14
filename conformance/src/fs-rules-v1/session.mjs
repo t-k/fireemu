@@ -451,14 +451,16 @@ export function createSession(
       body: { fields: {} },
     };
     const rest = (await sendRest(step, { harness: true })).status;
-    const { code } = await sendGrpc({ ...step, transport: "grpc" }, { harness: true }).catch(
-      (error) => {
-        if (error.fatal) throw error;
-        return { code: -1 };
-      },
-    );
-    const grpcStatus = { 0: 200, 7: 403 }[code] ?? -code - 1;
-    return rest === grpcStatus ? rest : `rest ${rest} grpc ${code}`;
+    let code;
+    try {
+      ({ code } = await sendGrpc(step, { harness: true }));
+    } catch (error) {
+      if (error.fatal) throw error;
+      return `rest ${rest} grpc failed`;
+    }
+    // gRPC 0 is an allowed write and 7 (PERMISSION_DENIED) a refused one; any other code agrees
+    // with no status, so the poll is not a match.
+    return rest === { 0: 200, 7: 403 }[code] ? rest : `rest ${rest} grpc ${code}`;
   }
 
   /** The markers a ruleset in force must answer 200 for and every other one 403 for. */

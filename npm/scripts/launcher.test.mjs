@@ -282,8 +282,11 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
 // child_process.spawn and signals the launcher's own process, then spins so that JavaScript is
 // still running synchronously when the OS delivers it. "after" delivers it once spawn() has
 // returned (the window in which a handler registered after the spawn does not exist yet),
-// "before" delivers it before the daemon exists.
+// "before" delivers it before the daemon exists. "after" first waits (bounded) until the fake daemon
+// reports that its handlers are installed, so a loaded machine cannot deliver the signal to a daemon
+// that has not registered them yet (it would die of the signal instead of exiting 0).
 const spawnHook = `
+import { readFileSync } from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 const cp = createRequire(import.meta.url)("node:child_process");
 const real = cp.spawn;
@@ -292,14 +295,21 @@ cp.spawn = function (...args) {
   const at = process.env.HOOK_AT;
   if (at === "before") { process.kill(process.pid, process.env.HOOK_SIGNAL); spin(150); }
   const child = real.apply(this, args);
-  if (at === "after") { process.kill(process.pid, process.env.HOOK_SIGNAL); spin(150); }
+  if (at === "after") {
+    const ready = () => { try { return readFileSync(process.env.DAEMON_LOG, "utf8").includes("ready"); } catch { return false; } };
+    const limit = Date.now() + 8000;
+    while (!ready() && Date.now() < limit) spin(5);
+    process.kill(process.pid, process.env.HOOK_SIGNAL);
+    spin(150);
+  }
   return child;
 };
 syncBuiltinESMExports();
 `;
 
-// The daemon logs its PID and each signal it gets, exits 0 shortly after one, and otherwise
-// exits 7 after three seconds (a daemon left running by a dead launcher is still alive then).
+// The daemon logs its PID, then "ready" once its signal handlers are installed, and each signal it
+// gets; it exits 0 shortly after one, and otherwise exits 7 after three seconds (a daemon left
+// running by a dead launcher is still alive then).
 const fakeDaemon = `
 import { appendFileSync, writeFileSync } from "node:fs";
 const log = process.env.DAEMON_LOG;
@@ -307,6 +317,7 @@ writeFileSync(log, "pid " + process.pid + "\\n");
 for (const s of ["SIGTERM", "SIGINT"]) {
   process.on(s, () => { appendFileSync(log, "got " + s + "\\n"); setTimeout(() => process.exit(0), 50); });
 }
+appendFileSync(log, "ready\\n");
 setTimeout(() => { appendFileSync(log, "timeout\\n"); process.exit(7); }, 3000);
 `;
 

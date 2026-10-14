@@ -844,6 +844,9 @@ fn an_unselected_service_binds_no_listener_at_all() {
     }
 }
 
+/// How often a case picks a fresh UI port after the daemon lost the race for the previous one.
+const UI_PORT_ATTEMPTS: usize = 5;
+
 #[test]
 fn the_emulator_ui_is_opt_in_for_exec_and_stops_with_the_command() {
     for (label, ui_flag, ui_port_flag, expected) in [
@@ -853,15 +856,21 @@ fn the_emulator_ui_is_opt_in_for_exec_and_stops_with_the_command() {
     ] {
         let unrelated_listener =
             (label == "default").then(|| std::net::TcpListener::bind("127.0.0.1:0").unwrap());
-        let ui_port = unrelated_listener
-            .as_ref()
-            .map_or_else(free_port, |listener| listener.local_addr().unwrap().port());
-        let dir = scratch(&format!("ui-{label}"));
-        let config = dir.join("fireemu.json");
-        std::fs::write(
-            &config,
-            format!(
-                r#"{{
+        // A port picked with `free_port` can be taken by a parallel test before the daemon binds
+        // it. Only that failure retries, with a fresh port; the deliberate listener of the
+        // "default" case is never replaced, and any other failure is reported at once.
+        let mut attempt = 0;
+        let ui_port = loop {
+            attempt += 1;
+            let ui_port = unrelated_listener
+                .as_ref()
+                .map_or_else(free_port, |listener| listener.local_addr().unwrap().port());
+            let dir = scratch(&format!("ui-{label}-{attempt}"));
+            let config = dir.join("fireemu.json");
+            std::fs::write(
+                &config,
+                format!(
+                    r#"{{
   "schemaVersion": 1,
   "daemon": {{
     "firestorePort": 0,
@@ -872,40 +881,65 @@ fn the_emulator_ui_is_opt_in_for_exec_and_stops_with_the_command() {
     "loggingPort": 0
   }}
 }}"#
-            ),
-        )
-        .unwrap();
-        let probe = dir.join("probe.txt");
-        let script = format!(
-            "curl --fail --silent --max-time 1 http://127.0.0.1:{ui_port}/ui 2>/dev/null | grep --fixed-strings --quiet 'window.__FIREEMU__ = ' && echo open > {} || echo closed > {}",
-            probe.display(),
-            probe.display()
-        );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
-        command.args(["exec", "--config", config.to_str().unwrap()]);
-        if ui_flag {
-            command.arg("--ui");
-        }
-        if ui_port_flag {
-            command.arg("--ui-port").arg(ui_port.to_string());
-        }
-        let output = command
-            .args(["--", "bash", "-c", &script])
-            .stdin(Stdio::null())
-            .output()
+                ),
+            )
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{label}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(std::fs::read_to_string(&probe).unwrap().trim(), expected);
+            let probe = dir.join("probe.txt");
+            let script = format!(
+                "curl --fail --silent --max-time 1 http://127.0.0.1:{ui_port}/ui 2>/dev/null | grep --fixed-strings --quiet 'window.__FIREEMU__ = ' && echo open > {} || echo closed > {}",
+                probe.display(),
+                probe.display()
+            );
+            let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+            command.args(["exec", "--config", config.to_str().unwrap()]);
+            if ui_flag {
+                command.arg("--ui");
+            }
+            if ui_port_flag {
+                command.arg("--ui-port").arg(ui_port.to_string());
+            }
+            let output = command
+                .args(["--", "bash", "-c", &script])
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // An explicit port makes the lost bind fatal; otherwise exec carries on with the UI
+            // disabled and says so on stdout. Either way the case measured nothing.
+            let reported = format!("{stderr}{}", String::from_utf8_lossy(&output.stdout));
+            if lost_the_port_race(&reported, ui_port) && attempt < UI_PORT_ATTEMPTS {
+                continue;
+            }
+            assert!(output.status.success(), "{label}: {stderr}");
+            assert_eq!(std::fs::read_to_string(&probe).unwrap().trim(), expected);
+            break ui_port;
+        };
         drop(unrelated_listener);
         assert!(
             refused(&format!("127.0.0.1:{ui_port}")),
             "{label}: the UI listener survived exec"
         );
     }
+}
+
+/// Whether the daemon's output says it could not bind `port` because another socket took it.
+fn lost_the_port_race(output: &str, port: u16) -> bool {
+    output.contains(&format!("127.0.0.1:{port}")) && output.contains("Address already in use")
+}
+
+#[test]
+fn only_a_lost_port_race_on_the_chosen_ui_port_is_retried() {
+    let taken = "error: bind 127.0.0.1:41234: Address already in use (os error 48)";
+    assert!(lost_the_port_race(taken, 41234));
+    let unavailable = "ui: disabled (cannot bind 127.0.0.1:41234: Address already in use (os error 48); choose one with --ui-port <n>)";
+    assert!(lost_the_port_race(unavailable, 41234));
+    // A bind failure on another port, or any other failure, is a real failure.
+    assert!(!lost_the_port_race(taken, 41235));
+    assert!(!lost_the_port_race(
+        "error: bind 127.0.0.1:41234: Permission denied",
+        41234
+    ));
+    assert!(!lost_the_port_race("", 41234));
 }
 
 #[test]

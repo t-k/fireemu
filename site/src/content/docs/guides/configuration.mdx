@@ -3,12 +3,19 @@ title: Configuration files
 description: How Fireemu finds fireemu.toml and firebase.json, and what each one holds.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Fireemu reads both TOML (`fireemu.toml`) and JSON (`fireemu.json`); discovery loads the file in the current directory and refuses to start if both exist, unless you select one with `--config`.
+
 Fireemu reads two kinds of files:
 
 - **`fireemu.toml`** holds Fireemu's own settings, such as the [profile](../profiles/), Authentication project configuration and the clock. It contains `schemaVersion = 1`. See the [configuration schema](../../reference/configuration/).
 - **`firebase.json`** is the file the Firebase CLI uses. Fireemu reads ports, Security Rules, indexes and Functions codebases from it, every time it starts.
 
 Keep Fireemu-specific settings in `fireemu.toml` rather than in `firebase.json`. To use both, name the `firebase.json` in `fireemu.toml`:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
 
 ```toml
 #:schema https://fireemu.dev/spec/config/fireemu.schema.json
@@ -17,7 +24,19 @@ profile = "strict"
 firebaseJson = "firebase.json"
 ```
 
-JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firebaseJson": "firebase.json"
+}
+```
+
+</TabItem>
+</Tabs>
 
 `npx fireemu init --firebase-json firebase.json` writes this for you.
 

@@ -8,6 +8,8 @@ description: The JSON Schema of fireemu.toml.
 - [fireemu.schema.json on this site](../../spec/config/fireemu.schema.json)
 - [spec/config/fireemu.schema.json on GitHub](https://github.com/t-k/fireemu/blob/main/spec/config/fireemu.schema.json)
 
+Fireemu reads both TOML (`fireemu.toml`) and JSON (`fireemu.json`); discovery loads the file in the current directory and refuses to start if both exist, unless you select one with `--config`.
+
 Fireemu validates the file at startup, including rules the schema cannot express, and stops with an error on a value it does not accept.
 
 ## Top-level sections

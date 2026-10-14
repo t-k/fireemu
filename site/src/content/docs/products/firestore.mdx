@@ -3,11 +3,16 @@ title: Cloud Firestore
 description: Run Cloud Firestore locally with production's query, index, transaction and Security Rules behavior.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Fireemu serves Cloud Firestore over gRPC, REST and the WebChannel transport the Web SDK uses, with Firestore Security Rules. Connect to it at `127.0.0.1:8080` (see [Connect your app](../../getting-started/connect/)).
 
 ## Editions and API modes
 
 Select the database edition and API mode in `fireemu.toml`. `fireemu init` writes the Standard edition with the Native API:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
 
 ```toml
 schemaVersion = 1
@@ -17,7 +22,21 @@ edition = "standard"
 apiMode = "native"
 ```
 
-JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 `edition` accepts `standard` and `enterprise`. The Enterprise Pipeline API supports a limited subset of read operations; see [Limitations](../../compatibility/limitations/).
 
@@ -65,6 +84,9 @@ A test that updates the same documents many times therefore holds many versions 
 
 To use less memory, lower the limits in `firestore.history`:
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
 ```toml
 schemaVersion = 1
 
@@ -76,6 +98,26 @@ apiMode = "native"
 maxVersionsPerPath = 16
 maxBytes = 268435456
 ```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "history": {
+      "maxVersionsPerPath": 16,
+      "maxBytes": 268435456
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 - `maxVersionsPerPath` (1 to 1,000,000) sets the most versions of one document a database keeps.
 - `maxBytes` (1 MiB to 1 GiB) lowers the logical history bytes one database retains.

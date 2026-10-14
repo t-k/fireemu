@@ -3,9 +3,14 @@ title: Time and scheduled functions
 description: Start at a chosen time, move a virtual clock, and run scheduled functions without waiting.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Fireemu has a clock of its own. Set where it starts and move it, and every service sees the new time: scheduled functions come due, tokens expire, and Security Rules see the new `request.time`.
 
 ## Set the start time
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
 
 ```toml
 schemaVersion = 1
@@ -14,7 +19,20 @@ schemaVersion = 1
 clockStart = "2026-01-31T23:59:00Z"
 ```
 
-JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "daemon": {
+    "clockStart": "2026-01-31T23:59:00Z"
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 Configure the time zone, catch-up and overlap behavior of scheduled functions in the `scheduler` section.
 
@@ -37,6 +55,9 @@ Under `strict`, Authentication, Firestore and Storage refuse an ID token issued 
 
 By default your function code sees real time. To make `Date.now()`, timers and Cloud Tasks follow the virtual clock too, set `functions.clock` together with a pinned `daemon.clockStart`:
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
 ```toml
 schemaVersion = 1
 
@@ -51,6 +72,29 @@ date = "virtual"
 timers = "real"
 tasks = "virtual"
 ```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "daemon": {
+    "clockStart": "2026-01-31T23:59:00Z"
+  },
+  "functions": {
+    "source": "./functions",
+    "clock": {
+      "date": "virtual",
+      "timers": "real",
+      "tasks": "virtual"
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 Each mode accepts `real` or `virtual`. Virtual timers require virtual `date`.
 

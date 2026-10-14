@@ -3,6 +3,8 @@ title: Authentication
 description: Firebase Authentication and Identity Platform locally, including TOTP MFA, multi-tenancy and blocking functions.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Fireemu serves Firebase Authentication with the Identity Platform features: multi-factor authentication including TOTP, multi-tenancy, OIDC and SAML providers, and blocking functions. Connect to it at `http://127.0.0.1:9099` (see [Connect your app](../../getting-started/connect/)).
 
 ## Configure your project
@@ -26,6 +28,9 @@ The `auth` section of `fireemu.toml` declares the project configuration your app
 | Sign-up quota and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 
 This example enables email/password and phone sign-in, disables anonymous sign-in, requires passwords of at least 12 characters with uppercase, lowercase and numeric characters, and prevents users from deleting their own accounts:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
 
 ```toml
 #:schema https://fireemu.dev/spec/config/fireemu.schema.json
@@ -66,13 +71,62 @@ disabledUserSignup = false
 disabledUserDeletion = true
 ```
 
-JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "improvedEmailPrivacy": true,
+    "signIn": {
+      "allowDuplicateEmails": false,
+      "email": {
+        "enabled": true,
+        "passwordRequired": true
+      },
+      "anonymous": {
+        "enabled": false
+      },
+      "phoneNumber": {
+        "enabled": true,
+        "testPhoneNumbers": {
+          "+16505550101": "123456"
+        }
+      }
+    },
+    "passwordPolicy": {
+      "enforcementState": "ENFORCE",
+      "forceUpgradeOnSignin": true,
+      "constraints": {
+        "minLength": 12,
+        "requireUppercase": true,
+        "requireLowercase": true,
+        "requireNumeric": true
+      }
+    },
+    "client": {
+      "permissions": {
+        "disabledUserSignup": false,
+        "disabledUserDeletion": true
+      }
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 ## Multi-factor authentication
 
 The official emulator has no TOTP. Fireemu supports TOTP and SMS second factors.
 
 Under `strict`, TOTP is enabled only through the project's MFA configuration, as in production. That configuration is on by default (SMS and TOTP enabled), so enrolling a second factor needs no console toggle, Admin API call or `auth.mfa` block. With `productionExact` a new project starts with MFA off, as production does, and enrollment answers `OPERATION_NOT_ALLOWED` until it is enabled. Declare the configuration with `auth.mfa`, in the shape Identity Platform uses, to mirror your project or to turn MFA off (`auth.mfa.state = "DISABLED"`); a declared block always decides:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
 
 ```toml
 schemaVersion = 1
@@ -88,11 +142,40 @@ state = "ENABLED"
 adjacentIntervals = 1
 ```
 
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "mfa": {
+      "state": "ENABLED",
+      "providerConfigs": [
+        {
+          "state": "ENABLED",
+          "totpProviderConfig": {
+            "adjacentIntervals": 1
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
 The configuration applies at startup and to every project created afterward, and is validated as the Admin API validates an update; a value production would refuse stops the daemon at startup. A session reset returns the project to it. The accepted TOTP window stays `auth.totp.windowSteps` unless the configuration sets `adjacentIntervals`. A tenant follows its own `mfaConfig`.
 
 ## Multi-tenancy
 
 Multi-tenancy is on by default, so the Admin API creates tenants and `auth.tenants` loads without enabling anything first. With `productionExact` a new project starts as production does, with tenants refused until `multiTenant.allowTenants` is enabled through the Admin API or in the file, and `auth.multiTenant.allowTenants: false` turns it off in either case. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
 
 ```toml
 schemaVersion = 1
@@ -110,6 +193,37 @@ allowPasswordSignup = true
 state = "ENABLED"
 enabledProviders = ["PHONE_SMS"]
 ```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "multiTenant": {
+      "allowTenants": true
+    },
+    "tenants": [
+      {
+        "tenantId": "tenant-a",
+        "displayName": "acme",
+        "allowPasswordSignup": true,
+        "mfaConfig": {
+          "state": "ENABLED",
+          "enabledProviders": [
+            "PHONE_SMS"
+          ]
+        }
+      }
+    ]
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 By default a tenant ID can be any readable name, such as `tenant-a`. With `productionExact` or `auth.tenantIdFormat: "generated"`, it must have the form production generates: the display name, a hyphen and five characters of `a-z0-9`, such as `acme-x7k2q`.
 
@@ -135,11 +249,31 @@ The Admin SDK's `verifyIdToken` and `verifySessionCookie` inside a function you 
 
 To test sign-up quota errors, set `auth.quotaSimulation`:
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
 ```toml
 [auth.quotaSimulation]
 mode = "enforce"
 defaultQuotaPerHour = 5
 ```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "auth": {
+    "quotaSimulation": {
+      "mode": "enforce",
+      "defaultQuotaPerHour": 5
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 This is a local fixed-window simulation, not Firebase's full quota accounting or abuse prevention.
 

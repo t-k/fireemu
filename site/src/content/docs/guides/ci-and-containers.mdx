@@ -3,6 +3,8 @@ title: CI and containers
 description: Run Fireemu in GitHub Actions and in containers.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## GitHub Actions
 
 `fireemu exec` returns your test command's exit status, so a CI job needs no separate start and stop steps:
@@ -42,6 +44,9 @@ See [Configuration files](../configuration/#file-ownership-checks).
 
 By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.toml`, and give the product emulators a host in `firebase.json`:
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
 ```toml
 schemaVersion = 1
 firebaseJson = "firebase.json"
@@ -50,7 +55,21 @@ firebaseJson = "firebase.json"
 allowNonLoopbackHosts = true
 ```
 
-JSON also works: existing `fireemu.json` files and `--config <path>.json` remain supported.
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "firebaseJson": "firebase.json",
+  "network": {
+    "allowNonLoopbackHosts": true
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 ```json
 {

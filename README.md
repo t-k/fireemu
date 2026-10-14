@@ -1,5 +1,7 @@
 # Fireemu
 
+[![npm](https://img.shields.io/npm/v/fireemu)](https://www.npmjs.com/package/fireemu)
+
 Fireemu is a local emulator for testing applications built with Firebase. It aims to match production Firebase behavior as closely as possible, so you can test locally and in CI without using a real Firebase project.
 
 Passing tests against the official emulator does not always mean your application will behave the same way in production. Some features are not supported by the official emulator, and some execution conditions are difficult to reproduce locally. These gaps can leave you relying on a real Firebase project for part of your testing.

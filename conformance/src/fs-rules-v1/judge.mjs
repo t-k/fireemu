@@ -184,6 +184,40 @@ export function fixtureText({ programs, recordings, meta, existing }) {
  */
 export const NONDETERMINISTIC_ROWS = {};
 
+/** gRPC codes that say nothing about Rules: DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, INTERNAL, UNAVAILABLE. */
+const TRANSIENT_LISTEN_CODES = new Set([4, 8, 13, 14]);
+
+/**
+ * Whether a recorded answer says nothing about behaviour. A Listen has no status: it is transient
+ * when it ended on a transient gRPC code or never answered (`silent`), on top of what any answer
+ * can be (`isTransient`). A refusal (PERMISSION_DENIED, code 7) is a behaviour.
+ */
+export function isTransientRow(recorded) {
+  if (isTransient(recorded)) return true;
+  if (!recorded?.listen) return false;
+  return (
+    recorded.silent === true ||
+    (recorded.end?.reason === "error" && TRANSIENT_LISTEN_CODES.has(recorded.end.code))
+  );
+}
+
+/**
+ * A Listen as it is compared. Production sends an existence filter, and the heartbeat after it,
+ * only when the stream is still open when they are due: two recordings of the same program
+ * differed that way (FS-3 run 1, `group-listen-none` of three programs), so neither frame is
+ * compared. Every other frame, its order and its resume-token flag still are.
+ */
+export function comparable(recorded) {
+  if (!recorded?.listen) return recorded;
+  const frames = [];
+  for (const frame of recorded.frames.filter((f) => f.kind !== "filter")) {
+    if (frame.kind === "boundary" && frames.at(-1)?.kind === "boundary")
+      frames[frames.length - 1] = frame;
+    else frames.push(frame);
+  }
+  return { ...recorded, frames };
+}
+
 export function classify(
   { row, stale, production, alternative, fireemu },
   nondeterministic = NONDETERMINISTIC_ROWS,
@@ -191,15 +225,18 @@ export function classify(
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
-  if ([production, alternative, fireemu].some(isTransient)) return "INDETERMINATE";
-  if (alternative && !Object.hasOwn(nondeterministic, row)) return "INDETERMINATE";
+  if ([production, alternative, fireemu].some(isTransientRow)) return "INDETERMINATE";
+  const [one, other, local] = [production, alternative, fireemu].map(comparable);
+  // A second recording that only differs in what is not compared is the same answer.
+  const second = other !== undefined && sameRecording(one, other) ? undefined : other;
+  if (second && !Object.hasOwn(nondeterministic, row)) return "INDETERMINATE";
   // A row whose dependency was refused on both sides never ran: it confirms that refusal only.
-  if (production.unresolved !== undefined || fireemu.unresolved !== undefined) {
-    const same = production.unresolved === fireemu.unresolved;
-    return same && !alternative ? "DEPENDENCY_REFUSED" : "MISMATCH";
+  if (one.unresolved !== undefined || local.unresolved !== undefined) {
+    const same = one.unresolved === local.unresolved;
+    return same && !second ? "DEPENDENCY_REFUSED" : "MISMATCH";
   }
-  if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
-  if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
+  if (sameRecording(one, local)) return second ? "MATCH_NONDETERMINISTIC" : "MATCH";
+  if (second && sameRecording(second, local)) return "MATCH_NONDETERMINISTIC";
   return "MISMATCH";
 }
 

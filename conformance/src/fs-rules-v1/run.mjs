@@ -101,19 +101,13 @@ async function assertClockSynchronized() {
   return offset;
 }
 
-async function assertCleanTree() {
-  const { stdout } = await execFileAsync(
-    "git",
-    [
-      "status",
-      "--porcelain",
-      "--",
-      "src/fs-rules-v1",
-      "src/fs-rules/harness.mjs",
-      "fs-rules-v1-observation.json",
-    ],
-    { cwd: CONFORMANCE_DIR },
-  );
+/**
+ * Refuses a recording from a worktree with any change, tracked or not: the recorder depends on
+ * more files than its own (the shared harness, the Listen helper, the fixture scan, the config),
+ * and a change in any of them is a change in what the rows mean.
+ */
+export async function assertCleanTree(cwd = CONFORMANCE_DIR) {
+  const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd });
   if (stdout.trim()) throw new Error(`record-production needs a clean tree:\n${stdout}`);
 }
 
@@ -158,7 +152,7 @@ function productionDeps() {
     writeFixture: (text) => writeFile(FIXTURE, text),
     scanFixture,
     installSignals(handler) {
-      for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => handler(signal));
+      for (const signal of RECORDING_SIGNALS) process.on(signal, () => handler(signal));
     },
     log: (text) => console.log(text),
     warn: (text) => console.error(text),
@@ -224,6 +218,9 @@ async function prepareRunDir(programs) {
   await writeFile(paths.in, JSON.stringify(programs));
   return paths;
 }
+
+/** What stops a recording at its next step, with cleanup: an interrupt, a terminate, a closed terminal. */
+export const RECORDING_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 const SESSION_TIMEOUT_MS = 30 * 60_000;
 

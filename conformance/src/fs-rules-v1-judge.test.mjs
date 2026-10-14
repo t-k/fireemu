@@ -799,3 +799,113 @@ test("the child's output goes where stdio says, and by default to this process's
   assert.equal(errOnly.stdout, "");
   assert.match(errOnly.stderr, /child-err/);
 });
+
+// ---- Listen rows in the comparison ----------------------------------------------------------
+
+const listenRow = (frames, end = "open", extra = {}) => ({ listen: true, frames, end, ...extra });
+const add = { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false };
+const doc = (name) => ({
+  kind: "documentChange",
+  doc: name,
+  n: "1",
+  targetIds: [1],
+  removedTargetIds: [],
+});
+const current = {
+  kind: "targetChange",
+  type: "CURRENT",
+  targetIds: [1],
+  cause: null,
+  resumeToken: true,
+};
+const boundary = { kind: "boundary", resumeToken: true };
+const filter = { kind: "filter", targetId: 1, count: 1 };
+const BASE = [add, doc("p/1"), current, boundary];
+
+test("a Listen that ended on a transient gRPC code, or stayed silent, says nothing about behaviour", () => {
+  const allowed = listenRow(BASE);
+  for (const code of [4, 8, 13, 14]) {
+    const ended = listenRow([], { reason: "error", code, details: "x" });
+    assert.equal(
+      classify({ row: "p#l", production: ended, fireemu: allowed }),
+      "INDETERMINATE",
+      String(code),
+    );
+    assert.equal(
+      classify({ row: "p#l", production: allowed, fireemu: ended }),
+      "INDETERMINATE",
+      String(code),
+    );
+    assert.equal(
+      classify({ row: "p#l", production: allowed, alternative: ended, fireemu: allowed }),
+      "INDETERMINATE",
+    );
+  }
+  const silent = listenRow([], "open", { silent: true });
+  assert.equal(classify({ row: "p#l", production: silent, fireemu: allowed }), "INDETERMINATE");
+  assert.equal(classify({ row: "p#l", production: allowed, fireemu: silent }), "INDETERMINATE");
+});
+
+test("a Listen refused with PERMISSION_DENIED is a behaviour, not a transient answer", () => {
+  const refused = listenRow([
+    {
+      kind: "targetChange",
+      type: "REMOVE",
+      targetIds: [1],
+      cause: { code: 7, message: "denied" },
+      resumeToken: false,
+    },
+  ]);
+  const errored = listenRow([], { reason: "error", code: 7, details: "denied" });
+  const allowed = listenRow(BASE);
+  for (const refusal of [refused, errored]) {
+    assert.equal(classify({ row: "p#l", production: refusal, fireemu: allowed }), "MISMATCH");
+    assert.equal(
+      classify({ row: "p#l", production: refusal, fireemu: JSON.parse(JSON.stringify(refusal)) }),
+      "MATCH",
+    );
+  }
+  // An error that ended the stream normally (code 0) is not transient either.
+  assert.equal(
+    classify({
+      row: "p#l",
+      production: listenRow(BASE, { reason: "ended", code: 0, details: "" }),
+      fireemu: listenRow(BASE, { reason: "ended", code: 0, details: "" }),
+    }),
+    "MATCH",
+  );
+});
+
+test("an existence filter and the heartbeat after it come and go with timing: they are not compared", () => {
+  const withFilter = listenRow([...BASE, filter, boundary]);
+  const plain = listenRow(BASE);
+  assert.equal(classify({ row: "p#l", production: withFilter, fireemu: plain }), "MATCH");
+  assert.equal(classify({ row: "p#l", production: plain, fireemu: withFilter }), "MATCH");
+  // Two production recordings that differ only that way are the same behaviour.
+  assert.equal(
+    classify({ row: "p#l", production: withFilter, alternative: plain, fireemu: plain }),
+    "MATCH",
+  );
+  // Anything else in a Listen still counts: a document, a target change, the order, a token.
+  for (const other of [
+    listenRow([add, doc("p/2"), current, boundary]),
+    listenRow([add, current, boundary]),
+    listenRow([add, current, doc("p/1"), boundary]),
+    listenRow([add, doc("p/1"), { ...current, resumeToken: false }, boundary]),
+    listenRow([add, doc("p/1"), current]),
+  ])
+    assert.equal(classify({ row: "p#l", production: withFilter, fireemu: other }), "MISMATCH");
+  // The filter's own content is not compared, and nor is any other row kind affected.
+  assert.equal(
+    classify({
+      row: "p#l",
+      production: listenRow([...BASE, { ...filter, count: 9 }, boundary]),
+      fireemu: plain,
+    }),
+    "MATCH",
+  );
+  assert.equal(
+    classify({ row: "r", production: ok200, alternative: denied, fireemu: ok200 }),
+    "INDETERMINATE",
+  );
+});

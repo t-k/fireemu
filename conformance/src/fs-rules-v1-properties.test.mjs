@@ -137,13 +137,18 @@ test("two production recordings that differ are never a match unless the row is 
     const x = row(random);
     const y = row(random);
     const fireemu = random.pick([x, y]);
-    assert.equal(classify({ row: "p#s", production: x, alternative: y, fireemu }), "INDETERMINATE");
+    // A second recording equal to the first is the same answer; a different one is not.
+    const same = sameRecording(x, y);
+    assert.equal(
+      classify({ row: "p#s", production: x, alternative: y, fireemu }),
+      same ? "MATCH" : "INDETERMINATE",
+    );
     const listed = classify(
       { row: "p#s", production: x, alternative: y, fireemu },
       { "p#s": "why" },
     );
     // The row is listed and fireemu equals one of the two recordings.
-    assert.equal(listed, "MATCH_NONDETERMINISTIC");
+    assert.equal(listed, same ? "MATCH" : "MATCH_NONDETERMINISTIC");
     const neither = row(random);
     if (!sameRecording(neither, x) && !sameRecording(neither, y))
       assert.equal(

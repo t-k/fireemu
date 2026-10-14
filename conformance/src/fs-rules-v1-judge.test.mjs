@@ -881,7 +881,8 @@ test("an existence filter and the heartbeat after it come and go with timing: th
   const withFilter = listenRow([...BASE, filter, boundary]);
   const plain = listenRow(BASE);
   assert.equal(classify({ row: "p#l", production: withFilter, fireemu: plain }), "MATCH");
-  assert.equal(classify({ row: "p#l", production: plain, fireemu: withFilter }), "MATCH");
+  // Only production's frames are skipped: what fireemu sends is compared in full.
+  assert.equal(classify({ row: "p#l", production: plain, fireemu: withFilter }), "MISMATCH");
   // Two production recordings that differ only that way are the same behaviour.
   assert.equal(
     classify({ row: "p#l", production: withFilter, alternative: plain, fireemu: plain }),
@@ -926,4 +927,23 @@ test("when the filter goes, the heartbeats around it become the last one, with i
   assert.deepEqual(comparable(production).frames.at(-1), { ...boundary, resumeToken: false });
   assert.equal(comparable(production).frames.length, 4);
   assert.equal(comparable(ok200), ok200);
+});
+
+test("fireemu's own existence filter is compared: a wrong count is a mismatch, a right one too when production sent none", () => {
+  const production = listenRow([...BASE, filter, boundary]);
+  const wrongCount = listenRow([...BASE, { ...filter, count: 99 }, boundary]);
+  assert.equal(classify({ row: "p#l", production, fireemu: wrongCount }), "MISMATCH");
+  assert.equal(
+    classify({
+      row: "p#l",
+      production: listenRow(BASE),
+      fireemu: listenRow([...BASE, filter, boundary]),
+    }),
+    "MISMATCH",
+  );
+  // Production's own recordings are still compared without the skipped frames.
+  assert.equal(
+    classify({ row: "p#l", production, alternative: listenRow(BASE), fireemu: listenRow(BASE) }),
+    "MATCH",
+  );
 });

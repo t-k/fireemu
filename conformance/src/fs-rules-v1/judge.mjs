@@ -202,10 +202,10 @@ export function isTransientRow(recorded) {
 }
 
 /**
- * A Listen as it is compared. Production sends an existence filter, and the heartbeat after it,
+ * A recorded production Listen as it is compared. Production sends an existence filter, and the heartbeat after it,
  * only when the stream is still open when they are due: two recordings of the same program
  * differed that way (FS-3 run 1, `group-listen-none` of three programs), so neither frame is
- * compared. Every other frame, its order and its resume-token flag still are.
+ * compared on production's side (never on fireemu's). Every other frame, its order and its resume-token flag still are.
  */
 export function comparable(recorded) {
   if (!recorded?.listen) return recorded;
@@ -226,7 +226,9 @@ export function classify(
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
   if ([production, alternative, fireemu].some(isTransientRow)) return "INDETERMINATE";
-  const [one, other, local] = [production, alternative, fireemu].map(comparable);
+  // Only production's frames are relaxed; what fireemu sends is compared in full.
+  const [one, other] = [production, alternative].map(comparable);
+  const local = fireemu;
   // A second recording that only differs in what is not compared is the same answer.
   const second = other !== undefined && sameRecording(one, other) ? undefined : other;
   if (second && !Object.hasOwn(nondeterministic, row)) return "INDETERMINATE";

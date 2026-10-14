@@ -1376,3 +1376,80 @@ test("a program that fails and whose wipe fails reports the wipe", async () => {
   });
   assert.match(error.message, /runQuery: HTTP 500/, "the cleanup error is the one reported");
 });
+
+// ---- the end of a run -----------------------------------------------------------------------
+
+test("a program that throws a plain error is a failure of that program, and the others still run", async () => {
+  const made = createWorld();
+  const call = made.grpc.call.bind(made.grpc);
+  let first = true;
+  made.grpc.call = async (built, bearer) => {
+    if (built.method === "RunQuery" && !bearer && first) {
+      first = false;
+      throw new Error("socket closed");
+    }
+    return call(built, bearer);
+  };
+  const clock = createClock();
+  const out = await runCorpus(
+    { programs: [PROGRAMS[0], PROGRAMS[1]], principals: PRINCIPALS },
+    contextOf(clock),
+    { fetchImpl: made.fetchImpl, grpc: made.grpc, sleep: clock.sleep, now: clock.now },
+    ceilings([PROGRAMS[0], PROGRAMS[1]]),
+  );
+  assert.deepEqual(out.failures, [{ program: PROGRAMS[0].id, error: "socket closed" }]);
+  assert.deepEqual(Object.keys(out.results), [PROGRAMS[1].id]);
+  assert.ok(isEmpty(made.world), "the failed program's documents were wiped");
+  assert.equal(out.closureReady, true);
+  assert.equal(made.grpc.closed, true);
+  const second = createWorld();
+  const call2 = second.grpc.call.bind(second.grpc);
+  second.grpc.call = async (built, bearer) => {
+    if (built.method === "RunQuery" && !bearer) throw "plain string";
+    return call2(built, bearer);
+  };
+  const clock2 = createClock();
+  const out2 = await runCorpus(
+    { programs: [PROGRAMS[1]], principals: PRINCIPALS },
+    contextOf(clock2),
+    { fetchImpl: second.fetchImpl, grpc: second.grpc, sleep: clock2.sleep, now: clock2.now },
+    ceilings([PROGRAMS[1]]),
+  );
+  assert.deepEqual(out2.failures, [{ program: PROGRAMS[1].id, error: "plain string" }]);
+});
+
+test("the recording says which run it is and closes the gRPC client before it returns", async () => {
+  const { out, grpc, clock } = await run({ programs: [PROGRAMS[0]] });
+  assert.deepEqual(out.context, { run: "1790000000000", startedMs: 1_000_000 });
+  assert.equal(grpc.closed, true);
+  assert.ok(clock.now() > 1_000_000);
+});
+
+test("a run whose cleanup fails throws a fatal error that lists every failure, with the recording attached", async () => {
+  const { error, out } = await run({
+    programs: [PROGRAMS[0]],
+    onCall: (method, url) =>
+      method === "DELETE" &&
+      (url.endsWith("/releases/cloud.firestore") || url.includes("/rulesets/"))
+        ? { status: 503 }
+        : undefined,
+  });
+  assert.equal(error.fatal, true);
+  assert.equal(error.message, `cleanup failed: ${out.cleanupErrors.join("; ")}`);
+  assert.ok(out.cleanupErrors.length >= 3, out.cleanupErrors.join("|"));
+  assert.equal(error.partial, out);
+  for (const entry of out.cleanupErrors) assert.ok(!entry.startsWith("Error: "), entry);
+});
+
+test("a cleanup that fails after a fatal run keeps the fatal error and lists the cleanup errors in the recording", async () => {
+  const { error, out } = await run({
+    programs: [PROGRAMS[0]],
+    options: { maxRequests: 3 },
+    onCall: (method, url) =>
+      method === "DELETE" && url.endsWith("/releases/cloud.firestore")
+        ? { status: 503 }
+        : undefined,
+  });
+  assert.match(error.message, /request ceiling 3 reached/);
+  assert.ok(out.cleanupErrors.length > 0);
+});

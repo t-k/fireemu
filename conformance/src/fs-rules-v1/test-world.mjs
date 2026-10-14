@@ -403,7 +403,11 @@ export function createWorld(scenario = {}) {
       grpc.listens.push({ shape, allowed });
       return stream;
     },
-    close: async () => {},
+    close: async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      grpc.closed = true;
+    },
+    closed: false,
   };
 
   return { world, fetchImpl, grpc };

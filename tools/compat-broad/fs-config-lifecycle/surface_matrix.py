@@ -588,7 +588,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         _IMPLEMENTED,
         (
             _at(_CONTROL, "pub fn load_index_file("),
-            _at(_CONTROL, "for f in idx"),
+            _at(_CONTROL, "fn parse_index_field("),
             _at(_CONTROL, "fn parse_field_overrides("),
         ),
     ),

@@ -367,9 +367,9 @@
       "id": "config.firestoreIndexes",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:205",
-          "crates/fireemu/src/control.rs:103",
-          "crates/fireemu/src/control.rs:235"
+          "crates/fireemu/src/control.rs:229",
+          "crates/fireemu/src/control.rs:61",
+          "crates/fireemu/src/control.rs:259"
         ],
         "status": "implemented"
       },
@@ -381,8 +381,8 @@
       "id": "config.singleFieldExemption",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:235",
-          "crates/fireemu/src/control.rs:316",
+          "crates/fireemu/src/control.rs:259",
+          "crates/fireemu/src/control.rs:350",
           "crates/fireemu-core-firestore/src/index.rs:214",
           "crates/fireemu-core-firestore/src/index.rs:233"
         ],
@@ -607,8 +607,8 @@
       "dataPlaneConsequence": "An index created through the Admin API is CREATING, then READY and used by the planner; a query that needs it while it builds is refused as production refuses it.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:230",
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:173"
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:300",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:182"
         ],
         "status": "implemented"
       },
@@ -620,8 +620,8 @@
       "dataPlaneConsequence": "Deleting an index, including one the index file declares, withdraws it from the planner, so the refusal direction of the transition is reachable at runtime.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:338",
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:365"
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:378",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:405"
         ],
         "status": "implemented"
       },
@@ -633,8 +633,8 @@
       "dataPlaneConsequence": "An index reads back CREATING then READY, as production reports it, so index-dependent query acceptance is testable against the same contract.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:230",
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:323"
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:300",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:363"
         ],
         "status": "implemented"
       },
@@ -646,7 +646,7 @@
       "dataPlaneConsequence": "The list names the index file's indexes and those the Admin API created, which are exactly the ones the planner uses.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:323",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:363",
           "crates/fireemu-adapter-grpc/src/local.rs:3416"
         ],
         "status": "implemented"
@@ -971,7 +971,7 @@
     {
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
-        "crates/fireemu/src/control.rs:235",
+        "crates/fireemu/src/control.rs:259",
         "crates/fireemu-core-firestore/src/index.rs:315"
       ],
       "class": "data-plane-contract",

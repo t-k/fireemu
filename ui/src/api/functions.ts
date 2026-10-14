@@ -34,6 +34,19 @@ export type FunctionInfo = {
   concurrency: number;
   /** When a scheduled function next runs on the virtual clock (RFC 3339), if reachable. */
   nextRun?: string;
+  /** For a task queue: how many tasks wait, and the first of them (the count is exact). */
+  pendingTaskCount?: number;
+  pendingTasks?: PendingTask[];
+};
+
+/** A Cloud Task that has not been dispatched yet. */
+export type PendingTask = {
+  id: string;
+  name: string;
+  /** What holds it back (RFC 3339), if the task was enqueued with a scheduleTime. */
+  scheduleTime: string | null;
+  /** Already released with "Run now"; it dispatches as soon as the queue allows. */
+  runNow: boolean;
 };
 
 /** The response of a forwarded invocation (see functions_actions::encode_response). */

@@ -44,6 +44,7 @@ export const RUNNER_FILES = [
   "log-context.mjs",
   "protocol.mjs",
   "discovery.mjs",
+  "params.mjs",
   "output.mjs",
   "diagnostic-output.mjs",
   "http-lifecycle.mjs",

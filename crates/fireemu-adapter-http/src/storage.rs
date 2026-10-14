@@ -106,6 +106,22 @@ enum StorageRulesMode {
     PerBucket(BTreeMap<String, Arc<RulesetSlot>>),
 }
 
+/// Which of a project's two default bucket names count as existing under the strict profile. A
+/// production project has one of them: `<project>.firebasestorage.app` when Storage was set up
+/// after 2024-10-30, `<project>.appspot.com` before. A local run cannot know which, so both exist
+/// unless `storage.defaultBucket` names one; the other name is then an undeclared bucket (its first
+/// write is noted, and the bucket resource answers 404).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DefaultBuckets {
+    /// Both names exist.
+    #[default]
+    Both,
+    /// Only `<project>.firebasestorage.app` exists.
+    FirebaseStorageApp,
+    /// Only `<project>.appspot.com` exists.
+    AppspotCom,
+}
+
 /// Why [`StorageRulesRegistry::replace_source`] refused a source.
 #[derive(Debug)]
 pub enum StorageRulesSourceError {
@@ -123,6 +139,18 @@ pub struct StorageRulesRegistry {
     /// are not rules state (never snapshotted): the strict profile counts them as existing, as
     /// production does for a bucket a trigger was deployed on.
     trigger_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// The buckets `storage.buckets` declares: extra buckets the project owns besides its default
+    /// ones. Like the trigger buckets they are configuration, not rules state.
+    configured_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// Which of the project's two default bucket names exist (`storage.defaultBucket`).
+    default_buckets: std::sync::RwLock<DefaultBuckets>,
+    /// The buckets `storage.publicBuckets` lists: every object in them is readable without a
+    /// credential, as a bucket whose IAM grants `allUsers` the object viewer role is.
+    public_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// Where the first write to a bucket nothing declared is reported, once per bucket.
+    unknown_bucket_notice: std::sync::RwLock<Option<NoRulesNotice>>,
+    /// The buckets already reported to `unknown_bucket_notice`.
+    noticed_unknown_buckets: Mutex<NoticeLimit>,
     /// Where the refusal of an end-user request for want of rules is reported, once per bucket:
     /// the client only sees production's (or the official emulator's) answer.
     no_rules_notice: std::sync::RwLock<Option<NoRulesNotice>>,
@@ -195,6 +223,11 @@ impl StorageRulesRegistry {
         Self {
             mode: std::sync::RwLock::new(StorageRulesMode::Global(slot)),
             trigger_buckets: std::sync::RwLock::default(),
+            configured_buckets: std::sync::RwLock::default(),
+            default_buckets: std::sync::RwLock::default(),
+            public_buckets: std::sync::RwLock::default(),
+            unknown_bucket_notice: std::sync::RwLock::default(),
+            noticed_unknown_buckets: Mutex::default(),
             no_rules_notice: std::sync::RwLock::default(),
             noticed_without_rules: Mutex::default(),
             denial_log: std::sync::RwLock::default(),
@@ -207,6 +240,11 @@ impl StorageRulesRegistry {
         Self {
             mode: std::sync::RwLock::new(StorageRulesMode::PerBucket(slots)),
             trigger_buckets: std::sync::RwLock::default(),
+            configured_buckets: std::sync::RwLock::default(),
+            default_buckets: std::sync::RwLock::default(),
+            public_buckets: std::sync::RwLock::default(),
+            unknown_bucket_notice: std::sync::RwLock::default(),
+            noticed_unknown_buckets: Mutex::default(),
             no_rules_notice: std::sync::RwLock::default(),
             noticed_without_rules: Mutex::default(),
             denial_log: std::sync::RwLock::default(),
@@ -253,6 +291,86 @@ impl StorageRulesRegistry {
         if let Ok(mut set) = self.trigger_buckets.write() {
             *set = buckets.into_iter().collect();
         }
+    }
+
+    /// Replaces the set of buckets `storage.buckets` declares.
+    pub fn set_configured_buckets(&self, buckets: impl IntoIterator<Item = String>) {
+        if let Ok(mut set) = self.configured_buckets.write() {
+            *set = buckets.into_iter().collect();
+        }
+    }
+
+    /// Selects which default bucket names exist (strict profile only).
+    pub fn set_default_buckets(&self, which: DefaultBuckets) {
+        if let Ok(mut slot) = self.default_buckets.write() {
+            *slot = which;
+        }
+    }
+
+    fn default_buckets(&self) -> DefaultBuckets {
+        self.default_buckets.read().map(|d| *d).unwrap_or_default()
+    }
+
+    /// Replaces the set of buckets `storage.publicBuckets` lists.
+    pub fn set_public_buckets(&self, buckets: impl IntoIterator<Item = String>) {
+        if let Ok(mut set) = self.public_buckets.write() {
+            *set = buckets.into_iter().collect();
+        }
+    }
+
+    /// Whether `storage.publicBuckets` lists `bucket`.
+    #[must_use]
+    pub fn names_public_bucket(&self, bucket: &str) -> bool {
+        self.public_buckets
+            .read()
+            .is_ok_and(|set| set.contains(bucket))
+    }
+
+    /// Reports the first write to each bucket nothing declared (strict profile) to `notice`. The
+    /// write is served.
+    pub fn set_unknown_bucket_notice(&self, notice: NoRulesNotice) {
+        if let Ok(mut slot) = self.unknown_bucket_notice.write() {
+            *slot = Some(notice);
+        }
+    }
+
+    /// Calls the notice the first time a write names the undeclared `bucket`.
+    fn notice_unknown_bucket(&self, bucket: &str) {
+        let Some(notice) = self
+            .unknown_bucket_notice
+            .read()
+            .ok()
+            .and_then(|n| n.clone())
+        else {
+            return;
+        };
+        let event = self
+            .noticed_unknown_buckets
+            .lock()
+            .ok()
+            .and_then(|mut limit| limit.observe(bucket));
+        if let Some(event) = event {
+            (notice.0)(event);
+        }
+    }
+
+    /// The names `storage.buckets` and `storage.publicBuckets` declare, in name order.
+    fn declared_config_buckets(&self) -> Vec<String> {
+        let mut names = std::collections::BTreeSet::new();
+        for set in [&self.configured_buckets, &self.public_buckets] {
+            if let Ok(set) = set.read() {
+                names.extend(set.iter().cloned());
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    /// Whether `storage.buckets` declares `bucket`.
+    #[must_use]
+    pub fn names_configured_bucket(&self, bucket: &str) -> bool {
+        self.configured_buckets
+            .read()
+            .is_ok_and(|set| set.contains(bucket))
     }
 
     /// Whether a deployed Storage trigger names `bucket`.
@@ -2474,6 +2592,12 @@ enum Route {
     },
     /// `POST /b/{b}/o/{n}/acl` (short spelling only).
     GcsAcl { bucket: String, name: String },
+    /// `DELETE /b/{bucket}/o/{object}/acl/{entity}` (and the `/storage/v1` spelling): one ACL entry.
+    GcsAclEntry {
+        bucket: String,
+        name: String,
+        entity: String,
+    },
     /// `/upload/storage/v1/b/{bucket}/o` (POST and PUT).
     GcsUpload { bucket: String },
     /// `POST /{bucket}`: the form-data upload.
@@ -2528,9 +2652,19 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
             bucket: d(b)?,
             name: d(n)?,
         }),
-        ("POST", ["b", b, "o", n, "acl"]) => Ok(Route::GcsAcl {
+        ("POST", ["b", b, "o", n, "acl"] | ["storage", "v1", "b", b, "o", n, "acl"]) => {
+            Ok(Route::GcsAcl {
+                bucket: d(b)?,
+                name: d(n)?,
+            })
+        }
+        (
+            "DELETE",
+            ["b", b, "o", n, "acl", entity] | ["storage", "v1", "b", b, "o", n, "acl", entity],
+        ) => Ok(Route::GcsAclEntry {
             bucket: d(b)?,
             name: d(n)?,
+            entity: d(entity)?,
         }),
         (
             "POST",
@@ -3264,6 +3398,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         | Route::GcsObject { bucket, .. }
         | Route::GcsCopy { bucket, .. }
         | Route::GcsAcl { bucket, .. }
+        | Route::GcsAclEntry { bucket, .. }
         | Route::GcsUpload { bucket }
         | Route::FormUpload { bucket }
         | Route::XmlStyle { bucket, .. } => bucket.clone(),
@@ -3296,6 +3431,20 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     {
         return production_invalid_credentials();
     }
+    // Production also refuses a Firebase ID token presented as an OAuth bearer on every other
+    // JSON API route: an ID token is not an access token (`Invalid Credentials`, the recorded
+    // answer to a bearer that is no access token). Only a token that decodes as a Firebase ID token
+    // is refused: any other `Bearer` value may be a real access token a developer's Application
+    // Default Credentials produced, which a local run cannot judge.
+    if state.is_strict()
+        && !json_api_authenticated
+        && dialect == Dialect::Gcs
+        && authorization
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .is_some_and(looks_like_firebase_id_token)
+    {
+        return production_invalid_credentials();
+    }
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
     let admitted = if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it
@@ -3317,6 +3466,15 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     };
     if let Some(refused) = fault_response(state, dialect, &bucket_project, operation) {
         return refused;
+    }
+    // Strict: a bucket name Cloud Storage never accepts is refused unless such a bucket exists, and
+    // a write to a bucket nothing declared is noted once it succeeded.
+    let mut undeclared = None;
+    if state.is_strict() {
+        if let Some(refused) = invalid_bucket_refusal(state, &route, &params) {
+            return refused;
+        }
+        undeclared = unknown_bucket_written(state, &route, &req.method, &params);
     }
     let principal = match dialect {
         // The whole JSON API side is the privileged dialect: rules never run there.
@@ -3415,6 +3573,13 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
             &host,
         ),
         Route::GcsAcl { bucket, name } => gcs_acl(state, &bucket, &name, &req, &host),
+        // The official emulator has no route for deleting an ACL entry.
+        Route::GcsAclEntry { .. } if !state.is_strict() => Ok(plain_status(501)),
+        Route::GcsAclEntry {
+            bucket,
+            name,
+            entity,
+        } => gcs_acl_entry_delete(state, &bucket, &name, &entity),
         Route::GcsUpload { bucket } => gcs_upload(state, &bucket, req, &params, &host, &admitted),
         Route::FormUpload { bucket } => form_upload(state, &bucket, req),
         Route::XmlStyle { bucket, name } => xml_style_get(state, &bucket, &name, &req, &params),
@@ -3422,10 +3587,174 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         Route::NotImplemented | Route::GcsBucketShort { .. } => Ok(plain_status(501)),
     };
     let response = respond(outcome);
+    if let Some(bucket) = undeclared {
+        if (200..300).contains(&response.status) {
+            state.rules.notice_unknown_bucket(&bucket);
+        }
+    }
     if state.is_strict() {
         production_framing(dialect, response)
     } else {
         response
+    }
+}
+
+/// Whether `token` is a JWT that says it is a Firebase ID token: its payload carries the
+/// `firebase` claim or a `securetoken.google.com` issuer. The signature is not read.
+fn looks_like_firebase_id_token(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(_header), Some(payload), Some(_signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let Some(payload) = fireemu_core_auth::jwt::base64url_decode(payload)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
+        return false;
+    };
+    payload.get("firebase").is_some_and(Value::is_object)
+        || payload
+            .get("iss")
+            .and_then(Value::as_str)
+            .is_some_and(|iss| iss.starts_with("https://securetoken.google.com/"))
+}
+
+/// An XML API error document (`application/xml; charset=UTF-8`).
+fn xml_error(status: u16, code: &str, message: &str, details: Option<&str>) -> StorageResponse {
+    let details = details.map_or_else(String::new, |d| {
+        format!("<Details>{}</Details>", xml_escape(d))
+    });
+    StorageResponse {
+        status,
+        headers: vec![(
+            "content-type".into(),
+            "application/xml; charset=UTF-8".into(),
+        )],
+        body: bytes::Bytes::from(format!(
+            "<?xml version='1.0' encoding='UTF-8'?><Error><Code>{code}</Code><Message>{}</Message>{details}</Error>",
+            xml_escape(message)
+        )),
+    }
+}
+
+/// The bucket a request is about to create without anything declaring it, if any. The first write
+/// to such a bucket is served (creating buckets would be setup a local run should not need) and,
+/// once it succeeded, reported once on standard error, so a typo in a bucket name is visible:
+/// production answers 404 for a bucket that does not exist. A bucket exists when it is a
+/// default bucket of its project, a `firebase.json` storage target, declared by a registered
+/// session, named by a deployed Storage trigger, listed in `storage.buckets` or
+/// `storage.publicBuckets`, or already holds data (an import). Only requests that can create an
+/// object count: uploads, the destination of a copy or rewrite, and form uploads. A resumable
+/// continuation belongs to a session that started with its own check. Strict profile only; the
+/// official emulator creates the bucket silently.
+fn unknown_bucket_written(
+    state: &StorageState,
+    route: &Route,
+    method: &str,
+    params: &BTreeMap<String, String>,
+) -> Option<String> {
+    if params.contains_key("upload_id") {
+        return None;
+    }
+    let bucket = match route {
+        Route::FbBucket { bucket } | Route::FbObject { bucket, .. }
+            if matches!(method, "POST" | "PUT") =>
+        {
+            bucket
+        }
+        Route::GcsUpload { bucket } if matches!(method, "POST" | "PUT") => bucket,
+        Route::GcsCopy { dst_bucket, .. } => dst_bucket,
+        Route::FormUpload { bucket } => bucket,
+        _ => return None,
+    };
+    let Ok(parsed) = BucketName::try_new(bucket) else {
+        return None;
+    };
+    let exists = state
+        .store()
+        .map_or(true, |store| bucket_exists(state, &store, &parsed));
+    (!exists).then(|| bucket.clone())
+}
+
+/// Strict: a request naming a bucket that does not exist and could never have been created, because
+/// Cloud Storage's naming rules refuse the name, is refused. A bucket that exists (imported data, a
+/// declared bucket) is never refused for its name. UNRECORDED: the JSON API's `Invalid bucket name`
+/// 400 and the XML API's `InvalidBucketName` document are Cloud Storage's documented ones; the
+/// Firebase dialect answers its not-found envelope. A resumable continuation belongs to a session
+/// that checked its bucket when it started.
+fn invalid_bucket_refusal(
+    state: &StorageState,
+    route: &Route,
+    params: &BTreeMap<String, String>,
+) -> Option<StorageResponse> {
+    if params.contains_key("upload_id") {
+        return None;
+    }
+    let (bucket, surface) = match route {
+        Route::FbBucket { bucket } | Route::FbObject { bucket, .. } => {
+            (bucket, BucketSurface::Firebase)
+        }
+        Route::GcsList { bucket }
+        | Route::GcsObject { bucket, .. }
+        | Route::GcsUpload { bucket }
+        | Route::GcsAcl { bucket, .. }
+        | Route::GcsAclEntry { bucket, .. } => (bucket, BucketSurface::Json),
+        Route::GcsCopy {
+            bucket, dst_bucket, ..
+        } => {
+            let invalid = [bucket, dst_bucket]
+                .into_iter()
+                .find(|name| bucket_is_invalid_and_absent(state, name))?;
+            return Some(bucket_refusal(BucketSurface::Json, invalid));
+        }
+        Route::XmlStyle { bucket, .. } | Route::FormUpload { bucket } => {
+            (bucket, BucketSurface::Xml)
+        }
+        _ => return None,
+    };
+    bucket_is_invalid_and_absent(state, bucket).then(|| bucket_refusal(surface, bucket))
+}
+
+fn bucket_is_invalid_and_absent(state: &StorageState, bucket: &str) -> bool {
+    if fireemu_core_storage::name::bucket_name_violation(bucket).is_none() {
+        return false;
+    }
+    // A name `BucketName` itself refuses is answered by the handlers as before.
+    let Ok(parsed) = BucketName::try_new(bucket) else {
+        return false;
+    };
+    state
+        .store()
+        .is_ok_and(|store| !bucket_exists(state, &store, &parsed))
+}
+
+/// Which answer shape a refusal on a bucket takes.
+#[derive(Clone, Copy)]
+enum BucketSurface {
+    /// The Firebase dialect (`/v0/b/{bucket}/o...`).
+    Firebase,
+    /// The JSON API.
+    Json,
+    /// The XML API (`GET /{bucket}/{object}` and the form upload).
+    Xml,
+}
+
+fn bucket_refusal(surface: BucketSurface, bucket: &str) -> StorageResponse {
+    match surface {
+        BucketSurface::Firebase => {
+            production_error(404, &format!("Not Found. Could not access bucket {bucket}"))
+        }
+        BucketSurface::Json => {
+            gcs_json_error(400, &format!("Invalid bucket name: '{bucket}'"), "invalid")
+        }
+        BucketSurface::Xml => xml_error(
+            400,
+            "InvalidBucketName",
+            "The specified bucket is not valid.",
+            None,
+        ),
     }
 }
 
@@ -3508,6 +3837,25 @@ fn fb_list(
     let max_results = params
         .get("maxResults")
         .and_then(|v| v.parse::<usize>().ok());
+    // Strict refuses a value it cannot read instead of listing from the first page as if it had
+    // not been sent. UNRECORDED: only `maxResults=0` was recorded; a value that is no number reuses
+    // that answer, and a page token that is not the base64 of a name has no recorded text.
+    if state.is_strict() {
+        if params.get("maxResults").is_some() && max_results.is_none() {
+            return Err(production_error(
+                400,
+                "Expect maxResults to be a positive number.",
+            ));
+        }
+        if page_token.as_deref().is_some_and(|token| {
+            base64_decode(token)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .is_none()
+        }) {
+            return Err(production_error(400, "Invalid pageToken."));
+        }
+    }
     state.authorize(
         principal,
         Method::List,
@@ -4556,11 +4904,25 @@ fn bucket_resource(name: &str, versioning: Option<bool>, now: &str, host: &str) 
 
 fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     let store = state.store()?;
-    let default = format!("{}.appspot.com", state.project);
+    let default = if state.is_strict()
+        && state.rules.default_buckets() == DefaultBuckets::FirebaseStorageApp
+    {
+        format!("{}.firebasestorage.app", state.project)
+    } else {
+        format!("{}.appspot.com", state.project)
+    };
     let mut names = vec![default];
     for bucket in store.buckets() {
         if !names.iter().any(|n| n == bucket.as_str()) {
             names.push(bucket.as_str().to_owned());
+        }
+    }
+    // The buckets the configuration declares exist under strict even while empty.
+    if state.is_strict() {
+        for declared in state.rules.declared_config_buckets() {
+            if !names.contains(&declared) {
+                names.push(declared);
+            }
         }
     }
     let now = rfc3339(state.now());
@@ -4579,8 +4941,8 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     ))
 }
 
-/// Whether `bucket` exists: the default buckets of its project always do, under strict a bucket a
-/// deployed Storage trigger names does too (production requires it to exist to deploy the trigger;
+/// Whether `bucket` exists: the default buckets of its project always do, a bucket `storage.buckets` or `storage.publicBuckets`
+/// declares does, under strict a bucket a deployed Storage trigger names does too (production requires it to exist to deploy the trigger;
 /// the official emulator creates every bucket on first use and so refuses nothing here), a bucket declared in
 /// `firebase.json` (a storage target, which becomes a per-bucket rules entry, or a bucket a
 /// registered session project declared) does though it is empty, and any other bucket exists once
@@ -4591,8 +4953,15 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
 fn bucket_exists(state: &StorageState, store: &ObjectStore, bucket: &BucketName) -> bool {
     let name = bucket.as_str();
     let project = state.project_of_bucket(name);
-    name == format!("{project}.appspot.com")
-        || name == format!("{project}.firebasestorage.app")
+    let which = if state.is_strict() {
+        state.rules.default_buckets()
+    } else {
+        DefaultBuckets::Both
+    };
+    (name == format!("{project}.appspot.com") && which != DefaultBuckets::FirebaseStorageApp)
+        || (name == format!("{project}.firebasestorage.app") && which != DefaultBuckets::AppspotCom)
+        || (state.is_strict()
+            && (state.rules.names_public_bucket(name) || state.rules.names_configured_bucket(name)))
         || state.rules.declares_bucket(name)
         || state
             .tenancy
@@ -5401,6 +5770,13 @@ fn gcs_object(
             let m = store
                 .update_generation_metadata(&b, &n, target, &patch, pre, now)
                 .map_err(gcs_core_err)?;
+            apply_acl_request(
+                state,
+                &mut store,
+                (&m.bucket, &m.name),
+                params.get("predefinedAcl").map(String::as_str),
+                Some(&body),
+            );
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
         "DELETE" => {
@@ -5553,6 +5929,17 @@ fn gcs_copy(
             now,
         )
         .map_err(gcs_core_err)?;
+    apply_acl_request(
+        state,
+        &mut store,
+        (&m.bucket, &m.name),
+        Some(
+            params
+                .get("destinationPredefinedAcl")
+                .map_or("private", String::as_str),
+        ),
+        incoming.as_ref(),
+    );
     Ok(copy_response(rewrite, &m, host, state.is_strict()))
 }
 
@@ -5607,6 +5994,22 @@ fn gcs_acl(
     if store.get(&b, &n).is_none() {
         return Ok(gcs_no_such_object(bucket, name, false));
     }
+    // Strict: an entity or role Cloud Storage does not know is a 400 (UNRECORDED: the texts), and
+    // `allUsers` `READER` is the one entry the emulator acts on, making the object publicly
+    // readable. The official emulator accepts any ACL and keeps none.
+    if state.is_strict() {
+        let entity = body.get("entity").and_then(Value::as_str);
+        let role = body.get("role").and_then(Value::as_str);
+        let (Some(entity), Some(role)) = (entity, role) else {
+            return Err(gcs_json_error(400, "Required", "required"));
+        };
+        if !valid_acl_entity(entity) || !matches!(role, "OWNER" | "READER") {
+            return Err(gcs_json_error(400, "Invalid argument", "invalid"));
+        }
+        if entity == "allUsers" && role == "READER" {
+            store.set_public_read(&b, &n);
+        }
+    }
     let m = store
         .update_metadata(
             &b,
@@ -5616,20 +6019,104 @@ fn gcs_acl(
             now,
         )
         .map_err(gcs_core_err)?;
+    let entity = body.get("entity").cloned().unwrap_or(Value::Null);
     Ok(StorageResponse::json(
         200,
         &json!({
             "kind": "storage#objectAccessControl",
             "object": m.name.as_str(),
-            "id": format!("{}/{}/{}/allUsers", m.bucket.as_str(), m.name.as_str(), m.generation),
-            "selfLink": format!("http://{host}/storage/v1/b/{}/o/{}/acl/allUsers", m.bucket.as_str(), encode_segment(m.name.as_str())),
+            "id": format!("{}/{}/{}/{}", m.bucket.as_str(), m.name.as_str(), m.generation, entity.as_str().unwrap_or("allUsers")),
+            "selfLink": format!("http://{host}/storage/v1/b/{}/o/{}/acl/{}", m.bucket.as_str(), encode_segment(m.name.as_str()), entity.as_str().unwrap_or("allUsers")),
             "bucket": m.bucket.as_str(),
-            "entity": body.get("entity").cloned().unwrap_or(Value::Null),
+            "entity": entity,
             "role": body.get("role").cloned().unwrap_or(Value::Null),
             "etag": "someEtag",
             "generation": m.generation.to_string(),
         }),
     ))
+}
+
+/// `DELETE .../acl/{entity}` (strict only): removes one ACL entry. Only the `allUsers` entry has an
+/// effect: the object stops being public. 204 as Cloud Storage answers, 404 for a missing object.
+fn gcs_acl_entry_delete(state: &StorageState, bucket: &str, name: &str, entity: &str) -> Outcome {
+    let b = bucket_name(bucket)?;
+    let n = object_name(name)?;
+    let mut store = state.store()?;
+    if store.get(&b, &n).is_none() {
+        return Ok(gcs_no_such_object(bucket, name, false));
+    }
+    if entity == "allUsers" {
+        store.clear_public_read(&b, &n);
+    }
+    Ok(StorageResponse::empty(204))
+}
+
+/// Sets or clears the public bit of the live object from what a request says about its ACL (strict
+/// only; the official emulator keeps none): `predefinedAcl` (`publicRead` grants, any other value
+/// replaces the ACL and so ends it) and an `acl` array of the object resource (public iff it holds
+/// an `allUsers` `READER` entry). The array wins over the query when both are present, as the body
+/// is the more specific. A request that says neither leaves the ACL as it is.
+fn apply_acl_request(
+    state: &StorageState,
+    store: &mut ObjectStore,
+    object: (&BucketName, &ObjectName),
+    predefined: Option<&str>,
+    resource: Option<&Value>,
+) {
+    if !state.is_strict() {
+        return;
+    }
+    let mut public = predefined.map(|p| p == "publicRead");
+    if let Some(entries) = resource
+        .and_then(|r| r.get("acl"))
+        .and_then(Value::as_array)
+    {
+        public = Some(entries.iter().any(|entry| {
+            entry.get("entity").and_then(Value::as_str) == Some("allUsers")
+                && entry.get("role").and_then(Value::as_str) == Some("READER")
+        }));
+    }
+    match public {
+        Some(true) => {
+            store.set_public_read(object.0, object.1);
+        }
+        Some(false) => {
+            store.clear_public_read(object.0, object.1);
+        }
+        None => {}
+    }
+}
+
+/// Whether `entity` is an ACL entity Cloud Storage knows: `allUsers`, `allAuthenticatedUsers`,
+/// `user-`, `group-` or `domain-` followed by a name, or `project-{owners|editors|viewers}-` and a
+/// project.
+fn valid_acl_entity(entity: &str) -> bool {
+    if matches!(entity, "allUsers" | "allAuthenticatedUsers") {
+        return true;
+    }
+    if let Some(rest) = entity.strip_prefix("project-") {
+        return ["owners-", "editors-", "viewers-"]
+            .iter()
+            .any(|team| rest.strip_prefix(team).is_some_and(|id| !id.is_empty()));
+    }
+    ["user-", "group-", "domain-"].iter().any(|prefix| {
+        entity
+            .strip_prefix(prefix)
+            .is_some_and(|name| !name.is_empty())
+    })
+}
+
+/// Applies `predefinedAcl=publicRead` of an upload to the object it wrote (strict only; the
+/// official emulator keeps no ACL).
+fn apply_predefined_acl(
+    state: &StorageState,
+    store: &mut ObjectStore,
+    params: &BTreeMap<String, String>,
+    object: &ObjectMetadata,
+) {
+    if state.is_strict() && params.get("predefinedAcl").map(String::as_str) == Some("publicRead") {
+        store.set_public_read(&object.bucket, &object.name);
+    }
 }
 
 /// `/upload/storage/v1/b/{bucket}/o`: media, multipart and resumable JSON API uploads.
@@ -5666,7 +6153,7 @@ fn gcs_upload(
         let Some(upload_id) = params.get("upload_id") else {
             return Ok(plain_status(400));
         };
-        return gcs_resumable_put(state, &b, upload_id, req, host, admitted);
+        return gcs_resumable_put(state, &b, upload_id, req, params, host, admitted);
     }
     let upload_type = params
         .get("uploadType")
@@ -5796,6 +6283,13 @@ fn gcs_upload(
             let m = store
                 .put_prepared(&b, &n, prepared, meta, pre, now)
                 .map_err(gcs_core_err)?;
+            apply_acl_request(
+                state,
+                &mut store,
+                (&m.bucket, &m.name),
+                params.get("predefinedAcl").map(String::as_str),
+                Some(&meta_json),
+            );
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
         _ => {
@@ -5820,6 +6314,7 @@ fn gcs_upload(
             let m = store
                 .put_prepared(&b, &n, prepared, meta, pre, now)
                 .map_err(gcs_core_err)?;
+            apply_predefined_acl(state, &mut store, params, &m);
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
     }
@@ -5828,11 +6323,13 @@ fn gcs_upload(
 /// The JSON API PUT continuation. fireemu serves the production `Content-Range` chunk
 /// protocol here (308 between chunks); the official emulator appends whatever arrives and
 /// finalizes on every PUT — a published divergence.
+#[allow(clippy::too_many_lines)]
 fn gcs_resumable_put(
     state: &StorageState,
     bucket: &BucketName,
     upload_id: &str,
     mut req: StorageRequest,
+    params: &BTreeMap<String, String>,
     host: &str,
     admitted: &AdmittedApp,
 ) -> Outcome {
@@ -5941,6 +6438,8 @@ fn gcs_resumable_put(
                 principal_refusal_response(Dialect::Gcs, status, &message)
             }
         })?;
+        // The session URL repeats the start request's query, `predefinedAcl` included.
+        apply_predefined_acl(state, &mut store, params, &m);
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
     }
     let (received, _) = store.upload_status(&id, now).map_err(gcs_core_err)?;
@@ -6031,6 +6530,52 @@ fn parse_content_range(cr: &str) -> Option<ContentRange> {
     })
 }
 
+/// The XML API's refusal of a form upload that breaks its policy (UNRECORDED: Cloud Storage's
+/// documented codes).
+fn post_policy_refusal(fault: crate::storage_xml::PolicyFault) -> StorageResponse {
+    use crate::storage_xml::PolicyFault;
+    const CONDITIONS: &str =
+        "The content of the form does not meet the conditions specified in the policy document.";
+    match fault {
+        PolicyFault::Unsigned => xml_error(
+            403,
+            "AccessDenied",
+            "Access denied.",
+            Some("Anonymous caller does not have storage.objects.create access to the Google Cloud Storage object. Permission 'storage.objects.create' denied on resource (or it may not exist)."),
+        ),
+        PolicyFault::Malformed(details) => xml_error(
+            400,
+            "InvalidPolicyDocument",
+            "The policy document is not valid.",
+            Some(&details),
+        ),
+        PolicyFault::Expired => xml_error(
+            400,
+            "ExpiredToken",
+            "Invalid argument.",
+            Some("Policy expired."),
+        ),
+        PolicyFault::Condition(condition) => xml_error(
+            400,
+            "InvalidPolicyDocument",
+            CONDITIONS,
+            Some(&format!("Policy Condition failed: {condition}")),
+        ),
+        PolicyFault::TooLarge => xml_error(
+            400,
+            "EntityTooLarge",
+            "Your proposed upload exceeds the maximum allowed object size.",
+            None,
+        ),
+        PolicyFault::TooSmall => xml_error(
+            400,
+            "EntityTooSmall",
+            "Your proposed upload is smaller than the minimum allowed object size.",
+            None,
+        ),
+    }
+}
+
 /// The XML-ish `POST /{bucket}` form-data upload: a `key` field names the object, a file
 /// part carries the bytes, and header-named fields set the metadata. Rules never run (the
 /// gcloud router is the privileged dialect) and the answer is a bare 204.
@@ -6060,7 +6605,22 @@ fn form_upload(state: &StorageState, bucket: &str, mut req: StorageRequest) -> O
     let (Some(key), Some((file_ct, data))) = (key, file) else {
         return Ok(html_text(400, "Missing 'key' or file."));
     };
-    let n = object_name(&key)?;
+    // Production accepts a form only with a signed policy and holds it to the policy's
+    // conditions (strict only); the object name then follows the JSON API's refusals.
+    let n = if state.is_strict() {
+        let mut form = fields.clone();
+        form.push(("key".to_owned(), key.clone()));
+        crate::storage_xml::check_post_policy(
+            &form,
+            bucket,
+            data.len() as u64,
+            now_unix_seconds(state),
+        )
+        .map_err(post_policy_refusal)?;
+        upload_object_name(state, &key)?
+    } else {
+        object_name(&key)?
+    };
     let mut meta = NewMetadata {
         content_type: file_ct,
         custom: Some(BTreeMap::new()),
@@ -6114,8 +6674,92 @@ fn form_upload(state: &StorageState, bucket: &str, mut req: StorageRequest) -> O
     Ok(StorageResponse::empty(204))
 }
 
+/// Seconds since the Unix epoch on the run's clock.
+fn now_unix_seconds(state: &StorageState) -> i64 {
+    i64::try_from(state.now().as_nanos().div_euclid(1_000_000_000)).unwrap_or(0)
+}
+
+/// Whether the request carries a credential a local run can accept on the public URL: a `Bearer`
+/// value that is not empty. Other schemes and an empty value prove nothing.
+fn has_bearer_credential(req: &StorageRequest) -> bool {
+    req.header("authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| !token.trim().is_empty())
+}
+
+/// Whether the request comes from a Google client library: they send `x-goog-api-client` on every
+/// request, and the Go library (and so the Firebase Admin Go SDK) reads objects through this very
+/// URL with no `Authorization` header while `STORAGE_EMULATOR_HOST` is set. A browser fetch of a
+/// public URL does not send it. The Python, Java and Node libraries read through the JSON API
+/// (`/download/storage/v1/...`, never refused) and need nothing here.
+fn has_client_library_marker(req: &StorageRequest) -> bool {
+    req.header("x-goog-api-client")
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Whether an anonymous read of `GET /{bucket}/{object}` is admitted (strict only). Production
+/// answers such a request with 403 `AccessDenied` unless the caller proves who it is or the object
+/// grants `allUsers` read:
+///
+/// - a request with an `Authorization` header is admitted, as every JSON API request is: a local
+///   run cannot judge an access token (`Bearer owner` is the emulator's own credential);
+/// - a signed URL is admitted while it has not expired; its signature is not verified, since that
+///   needs the signing service account's key (a documented development default), and an expired
+///   or unreadable one is refused as production refuses it;
+/// - any other request reads the object only if its ACL made it public (`makePublic`, an `allUsers`
+///   `READER` entry, or `predefinedAcl=publicRead` on upload) or its bucket is listed in
+///   `storage.publicBuckets` (the local stand-in for a bucket IAM grant to `allUsers`). A missing
+///   object is the same 403, as the permission check comes before the lookup.
+///
+/// UNRECORDED: the XML API's answers were not recorded (STORAGE-OBJECT scope decision 3); the
+/// documents are Cloud Storage's documented ones.
+fn xml_read_admission(
+    state: &StorageState,
+    store: &ObjectStore,
+    bucket: &BucketName,
+    name: &ObjectName,
+    req: &StorageRequest,
+    params: &BTreeMap<String, String>,
+) -> Result<(), StorageResponse> {
+    use crate::storage_xml::{check_signed_url, SignedUrl};
+    match check_signed_url(params, now_unix_seconds(state)) {
+        SignedUrl::Valid => return Ok(()),
+        SignedUrl::Expired => {
+            return Err(xml_error(
+                400,
+                "ExpiredToken",
+                "Invalid argument.",
+                Some("Request has expired."),
+            ))
+        }
+        SignedUrl::Invalid(details) => {
+            return Err(xml_error(
+                400,
+                "InvalidArgument",
+                "Invalid argument.",
+                Some(details),
+            ))
+        }
+        SignedUrl::Absent => {}
+    }
+    if has_bearer_credential(req)
+        || has_client_library_marker(req)
+        || store.is_public_read(bucket, name)
+        || state.rules.names_public_bucket(bucket.as_str())
+    {
+        return Ok(());
+    }
+    // Production's `Details` text, then the two ways to make the read succeed locally.
+    Err(xml_error(
+        403,
+        "AccessDenied",
+        "Access denied.",
+        Some(&format!("Anonymous caller does not have storage.objects.get access to the Google Cloud Storage object. Permission 'storage.objects.get' denied on resource (or it may not exist). Fireemu: make the object public (file.makePublic(), predefinedAcl=publicRead or an allUsers READER ACL entry) or list the bucket {:?} in storage.publicBuckets, which stands for a bucket whose IAM grants allUsers the object viewer role.", bucket.as_str())),
+    ))
+}
+
 /// The `GET /{bucket}/{object...}` fallback: object bytes when it exists, the JSON API's
-/// missing-object answer otherwise.
+/// missing-object answer otherwise. Strict first applies [`xml_read_admission`].
 fn xml_style_get(
     state: &StorageState,
     bucket: &str,
@@ -6128,6 +6772,9 @@ fn xml_style_get(
         return Ok(gcs_no_such_object(bucket, name, media));
     };
     let store = state.store()?;
+    if state.is_strict() {
+        xml_read_admission(state, &store, &b, &n, req, params)?;
+    }
     let Some(meta) = store.get(&b, &n).cloned() else {
         return Ok(gcs_no_such_object(bucket, name, media));
     };

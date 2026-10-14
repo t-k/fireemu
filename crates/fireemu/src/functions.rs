@@ -1765,6 +1765,139 @@ pub fn check_ignored(
     ))
 }
 
+/// Refuses a codebase that declares a parameter nothing gives a value to.
+///
+/// `firebase deploy` resolves every `defineString`/`defineInt`/... parameter before it deploys:
+/// the dotenv chain first, then the declared default, and a non-interactive deploy stops at a
+/// parameter that has neither. The runner has already applied the defaults, so what `report`
+/// lists as `missing` is exactly what a deploy would stop at.
+pub fn check_declared_params(
+    report: Option<&serde_json::Value>,
+    codebase: &str,
+    source: &str,
+    project: &str,
+    alias: Option<&str>,
+) -> Result<(), String> {
+    let missing: Vec<String> = report
+        .and_then(|r| r.get("missing"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.get("name")?.as_str()?;
+            let kind = entry
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("string");
+            Some(format!("{name} ({kind})"))
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let project_file = alias.map_or_else(
+        || format!(".env.{project}"),
+        |alias| format!(".env.{project} or .env.{alias}"),
+    );
+    Err(format!(
+        "the Functions codebase {codebase:?} declares {} parameter(s) with no value and no \
+         default: {}. A deploy would stop for each of them. Set a value in {source}/.env, \
+         {source}/{project_file} or {source}/.env.local (emulator only), or declare a default, \
+         for example defineString(\"NAME\", {{ default: \"value\" }})",
+        missing.len(),
+        missing.join(", ")
+    ))
+}
+
+/// The `firebase-functions` majors the callable App Check instrumentation is written for
+/// (`tools/runner-node/callable-app-check.mjs`).
+const CALLABLE_TRUST_MAJORS: [u64; 2] = [6, 7];
+
+/// Whether the callable trust boundary may be switched on by default for the codebase at
+/// `source`: it needs an installed `firebase-functions` whose major version the runner's callable
+/// instrumentation supports. Older and newer majors keep working without it (a callable then
+/// follows the SDK's own App Check check, as before); only an App Check the configuration asks
+/// for refuses to start on them.
+///
+/// The version is read the way Node resolves the package: `node_modules/firebase-functions` of
+/// the source directory or of the nearest ancestor that has one.
+pub fn callable_trust_supported(source: &Path) -> Result<(), String> {
+    let manifest = source
+        .ancestors()
+        .map(|dir| dir.join("node_modules/firebase-functions/package.json"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| "firebase-functions is not installed in the codebase".to_owned())?;
+    let version = std::fs::read_to_string(&manifest)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|package| package.get("version")?.as_str().map(str::to_owned))
+        .ok_or_else(|| format!("cannot read the version in {}", manifest.display()))?;
+    let major = version
+        .split('.')
+        .next()
+        .and_then(|major| major.parse::<u64>().ok());
+    if major.is_some_and(|major| CALLABLE_TRUST_MAJORS.contains(&major)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "firebase-functions {version} is outside the supported range (6.x and 7.x)"
+        ))
+    }
+}
+
+/// One `functions[...]` warning per secret a function declares that `.secret.local` has no value
+/// for. `firebase deploy` checks that a declared secret exists in Secret Manager; here the SDK
+/// only logs "No value found for secret parameter" at the first read and answers the empty
+/// string, which can hide a missing secret behind a request that happens to work.
+#[must_use]
+pub fn missing_secret_warnings(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    local_secrets: &[(String, String)],
+    codebase: &str,
+) -> Vec<String> {
+    let mut missing: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for function in &manifest.functions {
+        for secret in &function.platform_options.secrets {
+            if !local_secrets.iter().any(|(name, _)| name == secret) {
+                missing.entry(secret).or_default().push(&function.name);
+            }
+        }
+    }
+    missing
+        .into_iter()
+        .map(|(secret, functions)| {
+            format!(
+                "functions[{codebase}]: secret {secret} (declared by {}) has no value in \
+                 .secret.local, so it reads as the empty string; a deploy needs it in Secret \
+                 Manager",
+                functions.join(", ")
+            )
+        })
+        .collect()
+}
+
+/// The stderr lines for every export that will never run, each a `warning:` and followed by one
+/// summary line. An export production would deploy and run (a v2 Test Lab trigger, a function
+/// whose options fail to resolve) is skipped here, so a test asserting "no side effect" would
+/// pass for the wrong reason; the warning is how a developer finds out.
+pub fn ignored_warnings(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    policy: UnservedTriggers,
+) -> Result<Vec<String>, String> {
+    let mut lines: Vec<String> = check_ignored(manifest, policy)?
+        .into_iter()
+        .map(|line| format!("warning: {line}"))
+        .collect();
+    if !lines.is_empty() {
+        lines.push(format!(
+            "warning: functions: {} export(s) are not served and will never run locally, \
+             although a deploy may serve them in production",
+            lines.len()
+        ));
+    }
+    Ok(lines)
+}
+
 /// Addresses the runner's functions need to reach the daemon. `None` means the service was
 /// not selected by `--only`: its variable is then left unset in the runner, so a handler
 /// cannot reach a product this run is not serving.
@@ -2710,6 +2843,9 @@ pub async fn start(
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
         clock_policy: cfg.functions_clock,
+        // Cloud Tasks holds a task until its scheduleTime; the official emulator dispatches at
+        // once, so only the strict profile waits.
+        honour_task_schedule_time: cfg.profile == CompatibilityProfile::Strict,
         clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
         auth_context: auth_context_naming(cfg.profile),
@@ -2986,7 +3122,7 @@ async fn start_codebase(
     ));
     let spec = SpawnSpec {
         command,
-        cwd: Some(source),
+        cwd: Some(source.clone()),
         env,
         hello_timeout: Duration::from_secs(60),
     };
@@ -3037,6 +3173,13 @@ async fn start_codebase(
         );
     }
     let configured = (|| {
+        check_declared_params(
+            runner.hello().params.as_ref(),
+            label,
+            &source,
+            &cfg.auth_project,
+            cfg.functions_project_alias.as_deref(),
+        )?;
         let manifest_json = match &cfg.functions_manifest {
             Some(path) => {
                 let text = std::fs::read_to_string(path)
@@ -3058,17 +3201,11 @@ async fn start_codebase(
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
         let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
-        for (function, line) in manifest
-            .ignored
-            .iter()
-            .zip(check_ignored(&manifest, policy)?)
-        {
-            let level = if function.trigger_type == "schedule" {
-                "warning"
-            } else {
-                "note"
-            };
-            eprintln!("{level}: {line}");
+        for line in ignored_warnings(&manifest, policy)? {
+            eprintln!("{line}");
+        }
+        for line in missing_secret_warnings(&manifest, &user_env.secrets, label) {
+            eprintln!("warning: {line}");
         }
         if cfg.functions_manifest.is_some() {
             // A configured manifest replaces discovery outright. Security-sensitive trigger
@@ -5602,6 +5739,19 @@ impl FunctionsHook for Hook {
         function: &str,
     ) -> Result<(), fireemu_adapter_http::control::RunScheduleError> {
         self.0.run_schedule(function).map_err(run_schedule_error)
+    }
+
+    fn is_task_queue(&self, function: &str) -> bool {
+        self.0.manifest().get(function).is_some_and(|spec| {
+            matches!(
+                spec.trigger,
+                fireemu_core_functions::manifest::Trigger::TaskQueue { .. }
+            )
+        })
+    }
+
+    fn run_tasks_now(&self, function: &str, task: Option<&str>) -> usize {
+        self.0.run_tasks_now(function, task)
     }
 
     fn is_idle(&self) -> bool {
@@ -11377,6 +11527,7 @@ exports.add = onCall({{}}, observe("add"));
                 functions_host: None,
                 clock_policy:
                     fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+                honour_task_schedule_time: false,
                 clock_start_pinned: false,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
@@ -12380,6 +12531,170 @@ exports.add = onCall({{}}, observe("add"));
                  declares no trigger"
                     .to_owned(),
             ]
+        );
+    }
+
+    /// A declared secret with no `.secret.local` value is named once, with the functions that
+    /// declare it; one that has a value, and a function that declares none, are not.
+    #[test]
+    fn a_declared_secret_without_a_local_value_is_warned_about() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "a", "trigger": {"type": "http", "callable": false},
+             "platformOptions": {"secrets": ["API_KEY", "HAS_VALUE"]}},
+            {"name": "b", "trigger": {"type": "http", "callable": false},
+             "platformOptions": {"secrets": ["API_KEY"]}},
+            {"name": "c", "trigger": {"type": "http", "callable": false}}
+        ]}))
+        .unwrap();
+        let local = vec![("HAS_VALUE".to_owned(), "x".to_owned())];
+        let lines = super::missing_secret_warnings(&manifest, &local, "default");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("secret API_KEY (declared by a, b)"),
+            "{lines:?}"
+        );
+        assert!(!lines[0].contains("HAS_VALUE"));
+        assert!(
+            super::missing_secret_warnings(
+                &manifest,
+                &[
+                    ("API_KEY".to_owned(), String::new()),
+                    ("HAS_VALUE".to_owned(), String::new()),
+                ],
+                "default"
+            )
+            .is_empty(),
+            "an empty value is still a value"
+        );
+    }
+
+    /// The default callable trust boundary needs a supported `firebase-functions`; it is found
+    /// the way Node finds it, in the source directory or an ancestor.
+    #[test]
+    fn callable_trust_is_supported_only_for_the_instrumented_firebase_functions_majors() {
+        let root = std::env::temp_dir().join(format!("fireemu-trust-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("functions");
+        std::fs::create_dir_all(&source).unwrap();
+        let install = |dir: &std::path::Path, version: &str| {
+            let package = dir.join("node_modules/firebase-functions");
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(
+                package.join("package.json"),
+                format!(r#"{{"name":"firebase-functions","version":"{version}"}}"#),
+            )
+            .unwrap();
+        };
+        assert!(super::callable_trust_supported(&source)
+            .unwrap_err()
+            .contains("not installed"));
+        for (version, ok) in [
+            ("5.1.1", false),
+            ("6.0.0", true),
+            ("6.4.2", true),
+            ("7.3.2", true),
+            ("7.0.0-beta.1", true),
+            ("8.0.0", false),
+            ("not-a-version", false),
+        ] {
+            install(&source, version);
+            assert_eq!(
+                super::callable_trust_supported(&source).is_ok(),
+                ok,
+                "{version}"
+            );
+        }
+        // An install above the source directory is found, as Node finds it.
+        std::fs::remove_dir_all(source.join("node_modules")).unwrap();
+        install(&root, "7.3.2");
+        assert!(super::callable_trust_supported(&source).is_ok());
+        // A nearer install shadows the farther one.
+        install(&source, "5.1.1");
+        assert!(super::callable_trust_supported(&source)
+            .unwrap_err()
+            .contains("5.1.1"));
+        std::fs::write(
+            source.join("node_modules/firebase-functions/package.json"),
+            "{",
+        )
+        .unwrap();
+        assert!(super::callable_trust_supported(&source)
+            .unwrap_err()
+            .contains("cannot read the version"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The refusal for a parameter nothing resolves: it names every such parameter with its
+    /// type, says where a value goes, and only fires when the runner reports one missing.
+    #[test]
+    fn an_unresolved_parameter_refuses_the_codebase_and_names_it() {
+        let report = json!({
+            "missing": [{"name": "API_URL", "type": "string"}, {"name": "RETRIES", "type": "int"}],
+            "defaulted": [{"name": "REGION_NAME", "type": "string"}]
+        });
+        let error = super::check_declared_params(
+            Some(&report),
+            "default",
+            "/work/functions",
+            "demo-app",
+            Some("staging"),
+        )
+        .expect_err("two parameters have no value");
+        assert!(error.contains("2 parameter(s)"), "{error}");
+        assert!(error.contains("API_URL (string), RETRIES (int)"), "{error}");
+        assert!(!error.contains("REGION_NAME"), "{error}");
+        for place in [
+            "/work/functions/.env",
+            ".env.demo-app or .env.staging",
+            "/work/functions/.env.local",
+        ] {
+            assert!(error.contains(place), "{place}: {error}");
+        }
+        let plain = super::check_declared_params(Some(&report), "default", "/w", "demo-app", None)
+            .unwrap_err();
+        assert!(plain.contains("/w/.env.demo-app or"), "{plain}");
+        assert!(!plain.contains("staging"), "{plain}");
+        for quiet in [
+            None,
+            Some(json!({})),
+            Some(json!({"missing": []})),
+            Some(json!({"missing": [], "defaulted": [{"name": "A", "type": "string"}]})),
+        ] {
+            assert!(
+                super::check_declared_params(quiet.as_ref(), "default", "/w", "demo-app", None)
+                    .is_ok(),
+                "{quiet:?}"
+            );
+        }
+    }
+
+    /// An export that will never run is a `warning:` on standard error, never a quiet `note:`,
+    /// whatever its trigger family, and the lines end with one summary.
+    #[test]
+    fn every_ignored_export_is_a_warning_with_a_summary() {
+        let manifest = parse_manifest(&json!({
+            "functions": [],
+            "ignored": [
+                {"name": "a", "region": "us-central1", "triggerType": "schedule",
+                 "scope": "unsupported", "reason": "r1"},
+                {"name": "b", "region": "us-central1", "triggerType": "unknown",
+                 "scope": "unsupported", "reason": "r2"}
+            ]
+        }))
+        .expect("parses");
+        let lines = super::ignored_warnings(&manifest, super::UnservedTriggers::Refuse)
+            .expect("unsupported exports are not fatal");
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines.iter().all(|l| l.starts_with("warning: ")),
+            "{lines:?}"
+        );
+        assert!(lines[2].contains("2 export(s)"), "{lines:?}");
+        let none = parse_manifest(&json!({"functions": [], "ignored": []})).unwrap();
+        assert!(
+            super::ignored_warnings(&none, super::UnservedTriggers::Refuse)
+                .unwrap()
+                .is_empty()
         );
     }
 

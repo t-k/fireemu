@@ -28,7 +28,8 @@ use fireemu_core_app_check::exchange::{
 use fireemu_core_app_check::limits::MAX_EXCHANGE_BODY_BYTES;
 use fireemu_core_app_check::observe::{CredentialCategory, Observation, UNKNOWN_APP_LABEL};
 use fireemu_core_app_check::registry::{
-    validate_display_name, AppCheckRegistry, DebugTokenDigest, RegistryError,
+    validate_display_name, AppCheckRegistry, AppRegistration, DebugTokenDigest, ProjectEpoch,
+    RegistryError,
 };
 use fireemu_core_app_check::verify::{AppCheckFailure, BaselineMode};
 use fireemu_core_session::clock::VirtualClock;
@@ -70,6 +71,12 @@ pub struct AppCheckState {
     pub secrets: Arc<dyn DebugSecretSource>,
     /// Session admission barrier, when shared.
     pub barrier: Option<Arc<fireemu_core_session::barrier::AdmissionBarrier>>,
+    /// `appCheck.debugTokens = "any"`: the exchange accepts any well-formed `UUIDv4` debug token
+    /// for any app with a standard app ID, registering the app on first use, so nothing has to
+    /// be registered or digested by hand. The value is the project a bare project-number
+    /// selector resolves to. `None` is production's rule: only registered apps and registered
+    /// digests exchange.
+    pub open_debug_tokens: Option<String>,
 }
 
 impl AppCheckState {
@@ -84,10 +91,21 @@ impl AppCheckState {
     }
 }
 
+impl AppCheckState {
+    /// The key ID for a banner or a status line, without generating a key nobody has needed yet.
+    #[must_use]
+    pub fn kid_for_banner(&self) -> String {
+        self.signer.kid_if_ready().map_or_else(
+            || "being generated in the background".to_owned(),
+            str::to_owned,
+        )
+    }
+}
+
 impl std::fmt::Debug for AppCheckState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppCheckState")
-            .field("signer", &self.signer.kid())
+            .field("signer", &self.signer.kid_if_ready())
             .field("control_token", &"[redacted]")
             .finish_non_exhaustive()
     }
@@ -310,21 +328,33 @@ fn exchange_debug_token(
     };
 
     let at = now(state);
+    let open = if limited_use || canonical_debug_token(debug_token).is_none() {
+        None
+    } else {
+        state
+            .open_debug_tokens
+            .as_deref()
+            .and_then(|default_project| {
+                open_exchange(state, default_project, project_selector, app_id, at)
+            })
+    };
     let Ok(registry) = state.registry.read() else {
         return error(500, "INTERNAL", "the App Check registry is unavailable");
     };
-    let outcome = exchange(
-        &registry,
-        &ExchangeRequest {
-            project_selector,
-            app_id,
-            debug_token,
-            limited_use,
-        },
-        state.hasher.as_ref(),
-        state.constant_time.as_ref(),
-        at,
-    );
+    let outcome = open.unwrap_or_else(|| {
+        exchange(
+            &registry,
+            &ExchangeRequest {
+                project_selector,
+                app_id,
+                debug_token,
+                limited_use,
+            },
+            state.hasher.as_ref(),
+            state.constant_time.as_ref(),
+            at,
+        )
+    });
     let project = registry
         .resolve_project(project_selector)
         .unwrap_or(UNKNOWN_APP_LABEL)
@@ -358,6 +388,60 @@ fn exchange_debug_token(
     };
     registry.record_observation(observation);
     response
+}
+
+/// The exchange under `appCheck.debugTokens = "any"`, for a debug token that is a well-formed
+/// `UUIDv4`: registers the app when it is not yet known (its project number is the one in its
+/// standard app ID) and issues the token, whatever digests the app carries. `None` leaves the
+/// request to the normal exchange, which refuses it: an app ID that is not in the standard
+/// `1:{number}:{platform}:{id}` form, a project selector that names another project number, or a
+/// registry that refuses the registration. A project selector that names neither a known project
+/// nor the daemon's own project is left to the normal exchange too.
+fn open_exchange(
+    state: &AppCheckState,
+    default_project: &str,
+    project_selector: &str,
+    app_id: &str,
+    at: LogicalInstant,
+) -> Option<ExchangeOutcome> {
+    let number = fireemu_core_app_check::registry::embedded_project_number(app_id)?;
+    let mut registry = state.registry.write().ok()?;
+    let project = match registry.resolve_project(project_selector) {
+        Some(known) => known.to_owned(),
+        None if project_selector.bytes().all(|b| b.is_ascii_digit()) => {
+            if project_selector != number {
+                return None;
+            }
+            default_project.to_owned()
+        }
+        // A project the registry does not know registers only if it is the one this daemon
+        // serves: a mistyped or foreign id must not bind the app ID's project number to a
+        // project that is not the user's, which would misresolve the right one afterwards.
+        None if project_selector == default_project => project_selector.to_owned(),
+        None => return None,
+    };
+    if registry.app(&project, app_id).is_none() {
+        registry
+            .register_app(AppRegistration {
+                project_id: project.clone(),
+                project_number: number.to_owned(),
+                app_id: app_id.to_owned(),
+                enabled: true,
+                debug_token_digests: Vec::new(),
+            })
+            .ok()?;
+    }
+    if registry.project_epoch(&project).is_none() {
+        let epoch = fireemu_adapter_support::entropy::u128_value().ok()?;
+        registry.set_project_epoch(&project, ProjectEpoch::new(epoch));
+    }
+    if !registry.app(&project, app_id)?.enabled() {
+        return Some(ExchangeOutcome::AttestationFailed);
+    }
+    registry
+        .issue_claims(&project, app_id, at)
+        .ok()
+        .map(|claims| ExchangeOutcome::Issued(Box::new(claims)))
 }
 
 /// One secret-free record of an exchange (section 15). No token, no secret, no digest.

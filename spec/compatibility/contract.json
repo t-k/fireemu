@@ -1595,6 +1595,7 @@
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-http/tests/storage.rs",
+              "crates/fireemu-adapter-http/tests/storage_permissive_gaps.rs",
               "crates/fireemu-core-storage/tests/store.rs",
               "crates/fireemu-core-storage/tests/stored_bytes.rs",
               "crates/fireemu/tests/storage_limits.rs",
@@ -1641,6 +1642,10 @@
             {
               "behaviour": "the strict profile applies the list filters startOffset (inclusive), endOffset (exclusive) and matchGlob to object names, as recorded (lean-v5), and refuses includeTrailingDelimiter=true with 400 (not recorded); versions=true lists every generation (object versioning is implemented, see the versioning entry) and the same three filters apply to every generation it lists (a versions listing with a filter was not recorded: the documented JSON API semantics are followed, not a refusal); the strict profile also refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "the strict profile refuses what production refuses and the official emulator accepts, with the XML API texts, the ACL texts and the list-parameter texts UNRECORDED (Cloud Storage's documented codes): an anonymous GET /{bucket}/{object} of an object that is not public answers 403 AccessDenied (an object is public through makePublic, predefinedAcl=publicRead or an allUsers READER ACL entry, or through storage.publicBuckets for a bucket whose IAM grants allUsers); an expired signed URL answers 400 ExpiredToken and a form upload needs a signed policy whose expiry and conditions it meets; a Firebase ID token as a JSON API bearer answers 401 Invalid Credentials; an unknown ACL entity or role and an unreadable Firebase list maxResults or pageToken answer 400. A write to a bucket nothing declared is still served and creates the bucket (owner decision 2026-10-13) where production answers 404 `The specified bucket does not exist.` (recorded for the bucket resource, FE v5): the first write to each such bucket prints one note: line on standard error (storage.defaultBucket makes the default name your project does not have such a bucket). Signatures are never verified and any other JSON API credential is served as the owner (documented development defaults, docs: site/src/content/docs/guides/profiles.md). The emulator profile keeps the official emulator's behaviour.",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [
@@ -1930,7 +1935,7 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the emulator resolves no parameters and prompts for nothing: a missing defineString is the empty string, a missing defineInt is 0, a missing defineList throws, and a declared default is a deploy-time value the runtime never sees",
+            "the official emulator prompts for a missing parameter during discovery and runs with whatever the SDK reads; the strict profile resolves each declared parameter as a deploy does (a value from the dotenv chain, then the declared default) and refuses the codebase for a parameter with neither, naming it and the files a value goes in, because a non-interactive deploy stops for it",
             "the pinned firebase-functions@7.3.2 has removed functions.config(), so CLOUD_RUNTIME_CONFIG is set and nothing in the supported SDK surface reads it"
           ],
           "fireemuOnly": [

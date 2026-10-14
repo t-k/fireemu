@@ -11,6 +11,10 @@ Topics, subscriptions, publish, pull and acknowledgement, push delivery, filters
 
 `fireemu exec` sets `PUBSUB_EMULATOR_HOST`, which the Google Cloud client libraries read.
 
+### Dead-letter topics
+
+Under `strict` a message that exhausts `maxDeliveryAttempts` is forwarded to the dead-letter topic with no project number and no IAM grants, with the metadata attributes production adds. Production forwards only after the Pub/Sub service agent holds `roles/pubsub.subscriber` on the subscription and `roles/pubsub.publisher` on the dead-letter topic; set `pubsub.deadLetterAuthorization` to `"iam"` (or `productionExact`, or name `pubsub.projectNumbers`) to require the same grants through `SetIamPolicy`. The start banner then names the service agent to grant.
+
 ### Authentication
 
 Under `strict`, a request without any credential is accepted, so clients that use `PUBSUB_EMULATOR_HOST` without credentials work. A request that presents a credential is checked, and Fireemu cannot verify a real Google OAuth token offline, so such a request is refused with 401. Use a credential-free client against the emulator, for example the Java client with `NoCredentialsProvider`.
@@ -48,4 +52,4 @@ By default the listener does not check the credential (`eventarc.authentication:
 
 ## Cloud Tasks
 
-When a Functions codebase is loaded, Fireemu starts a Cloud Tasks emulator at `127.0.0.1:9499` and sets `CLOUD_TASKS_EMULATOR_HOST`. Task queue functions (`onTaskDispatched`) receive the tasks enqueued for them, with their rate limits and retry configuration. Task scheduling can follow the virtual clock; see [Time and scheduled functions](../../guides/time/).
+When a Functions codebase is loaded, Fireemu starts a Cloud Tasks emulator at `127.0.0.1:9499` and sets `CLOUD_TASKS_EMULATOR_HOST`. Task queue functions (`onTaskDispatched`) receive the tasks enqueued for them, with their rate limits and retry configuration. A task's `scheduleTime` holds it back under `strict`; see [Task queues](../functions/#task-queues) for waiting tasks, **Run now** and the virtual clock.

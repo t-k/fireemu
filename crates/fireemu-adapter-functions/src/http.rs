@@ -1058,6 +1058,48 @@ fn sanitize_credentials(
     }
 }
 
+/// The Google front end's page for a bearer credential it does not accept (recorded for a
+/// callable called with an invalid ID token).
+const UNAUTHORIZED_PAGE: &str = "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n";
+
+/// The answer for a request the function's access rule refuses on the public URL, or `None`.
+///
+/// Strict profile only: the official emulator serves every function to every caller, so the
+/// emulator profile may not refuse what it serves. The owner's credential
+/// ([`crate::invoker::OWNER_TOKEN_HEADER`]) is for this check alone; it is dropped from the
+/// request before the runner sees it, whatever the function's access.
+fn invocation_refusal(
+    runtime: &FunctionsRuntime,
+    function: &str,
+    path: &str,
+    headers: &hyper::HeaderMap,
+    profile: FunctionsHttpProfile,
+) -> Option<Response<OutBody>> {
+    if profile != FunctionsHttpProfile::Strict {
+        return None;
+    }
+    let owner = field_values(headers, crate::invoker::OWNER_TOKEN_HEADER)
+        .iter()
+        .any(|value| runtime.owner_token_matches(value));
+    let access = runtime
+        .manifest()
+        .get(function)
+        .map_or(crate::invoker::Access::Public, crate::invoker::access_of);
+    match crate::invoker::decide(access, owner, &field_values(headers, "authorization")) {
+        crate::invoker::Decision::Allow => None,
+        crate::invoker::Decision::Forbidden => Some(typed(
+            StatusCode::FORBIDDEN,
+            "text/html; charset=UTF-8",
+            &crate::invoker::forbidden_page(path),
+        )),
+        crate::invoker::Decision::Unauthenticated => Some(typed(
+            StatusCode::UNAUTHORIZED,
+            "text/html; charset=UTF-8",
+            UNAUTHORIZED_PAGE,
+        )),
+    }
+}
+
 fn strict_callable_bearer_refusal(
     runtime: &FunctionsRuntime,
     raw: &hyper::HeaderMap,
@@ -1081,7 +1123,7 @@ fn strict_callable_bearer_refusal(
         typed(
             StatusCode::UNAUTHORIZED,
             "text/html; charset=UTF-8",
-            "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n",
+            UNAUTHORIZED_PAGE,
         )
     })
 }
@@ -1660,6 +1702,10 @@ async fn respond(
         drain_refused_body(req.into_body()).await;
         return Ok(simple(StatusCode::BAD_REQUEST, &error));
     }
+    if let Some(refusal) = invocation_refusal(&runtime, function, &path, req.headers(), profile) {
+        drain_refused_body(req.into_body()).await;
+        return Ok(refusal);
+    }
     let method = req.method().as_str().to_owned();
     let (callable, _plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
     let callable_preflight = callable && method == "OPTIONS";
@@ -1681,6 +1727,10 @@ async fn respond(
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
+        .filter(|(k, _)| {
+            !k.as_str()
+                .eq_ignore_ascii_case(crate::invoker::OWNER_TOKEN_HEADER)
+        })
         .filter_map(|(k, v)| {
             v.to_str()
                 .ok()

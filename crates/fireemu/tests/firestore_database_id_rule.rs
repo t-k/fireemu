@@ -93,12 +93,29 @@ fn strict_refuses_a_database_id_production_could_not_create() {
         ("long", &"a".repeat(64)),
     ] {
         let (mut command, _dir) = command(name, "strict", database);
-        let output = command
+        let mut child = command
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .output()
+            .spawn()
             .unwrap();
-        assert!(!output.status.success(), "{database}: the daemon started");
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                scratch::remove_killed_daemon_locator("demo-database-id", child.id());
+                panic!("{database}: the daemon started instead of refusing the id");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!(
+            !status.success(),
+            "{database}: the daemon exited successfully"
+        );
+        let output = child.wait_with_output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains("database_id should be 4-63 characters")

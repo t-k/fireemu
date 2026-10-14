@@ -582,6 +582,8 @@ test("a Listen that never answers is capped, not waited out", async () => {
 function localFake({ compileStatus = () => 200 } = {}) {
   const log = [];
   const fetchImpl = async (url, init = {}) => {
+    await new Promise((resolve) => setImmediate(resolve));
+    if (init.signal?.aborted) throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
     log.push({ method: init.method ?? "GET", url, authorization: init.headers?.authorization });
     const response = (status, body = {}) => ({ status, text: async () => JSON.stringify(body) });
     if (url.includes(":securityRules")) {

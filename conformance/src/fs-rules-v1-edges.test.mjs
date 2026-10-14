@@ -22,6 +22,12 @@ const PRODUCTION = {
 };
 const SPEC = { provider: "anonymous" };
 
+/** A local fake's answer takes a turn of the event loop and honours the call's timeout. */
+const turn = async (init) => {
+  await new Promise((resolve) => setImmediate(resolve));
+  if (init?.signal?.aborted) throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+};
+
 const contextOf = (clock, target = PRODUCTION) =>
   createContext({ run: "1790000000000", startedMs: clock.now(), target });
 
@@ -358,6 +364,7 @@ test("a local wipe is the emulator's own delete with the owner credential, and n
     ctx,
     {
       fetchImpl: async (url, init) => {
+        await turn(init);
         log.push({ url, method: init.method, authorization: init.headers.authorization });
         return { status: 200, text: async () => "{}" };
       },
@@ -380,6 +387,7 @@ test("a local wipe is the emulator's own delete with the owner credential, and n
     ctx,
     {
       fetchImpl: async (url, init) => {
+        await turn(init);
         signUp.push({ url, body: init.body });
         return { status: 200, text: async () => JSON.stringify({ idToken: "t", localId: "u" }) };
       },
@@ -928,6 +936,7 @@ function localSession() {
     ctx,
     {
       fetchImpl: async (url, init) => {
+        await turn(init);
         log.push({ url, method: init.method, headers: init.headers, body: init.body });
         return {
           status: url.includes(":securityRules") ? statuses.current : 200,
@@ -1089,6 +1098,7 @@ test("a local run seeds and signs up at the origins of the right services", asyn
     ctx,
     {
       fetchImpl: async (url, init) => {
+        await turn(init);
         log.push(`${init.method} ${url}`);
         return { status: 200, text: async () => JSON.stringify({ idToken: "t", localId: "u" }) };
       },
@@ -1137,7 +1147,8 @@ test("a local publication settles at once: no wait, no poll", async () => {
   const session = createSession(
     ctx,
     {
-      fetchImpl: async (url) => {
+      fetchImpl: async (url, init) => {
+        await turn(init);
         log.push(url);
         return { status: 200, text: async () => "{}" };
       },
@@ -1193,4 +1204,175 @@ test("a gRPC marker failure is a poll that does not match, whatever it throws", 
   ).catch((error) => error);
   assert.match(result.message, /did not settle/);
   assert.ok(flaky.world.markerAnswers.length > 400, "it kept polling REST until the limit");
+});
+
+// ---- publication refusals, deletes and the program's own cleanup ----------------------------
+
+test("a refused ruleset or release keeps the refusal text, cut at 600 characters", async () => {
+  const exact = await run({ scenario: { pathV1: "refused" } });
+  assert.deepEqual(exact.out.diagnostics["path-v1"], {
+    stage: "ruleset",
+    status: 400,
+    message: "Compilation error in demo-fs-rules: line 6",
+  });
+  const release = await run({ scenario: { pathV1: "release-refused" } });
+  assert.deepEqual(release.out.diagnostics["path-v1"], {
+    stage: "release",
+    status: 400,
+    message: "release refused in demo-fs-rules",
+  });
+  const long = `${"x".repeat(590)}${SANDBOX_PROJECT}${"y".repeat(100)}`;
+  const cut = await run({
+    programs: [PROGRAMS[0]],
+    onCall: (method, url) =>
+      method === "POST" && url.endsWith("/rulesets")
+        ? { status: 400, body: { error: { message: long } } }
+        : undefined,
+  });
+  assert.equal(
+    cut.out.diagnostics["recursive-v1"].message,
+    long.slice(0, 600).replaceAll(SANDBOX_PROJECT, "demo-fs-rules"),
+  );
+  assert.equal(cut.out.diagnostics["recursive-v1"].message.length, 590 + 10);
+  const bare = await run({
+    programs: [PROGRAMS[0]],
+    onCall: (method, url) =>
+      method === "POST" && url.endsWith("/rulesets") ? { status: 400, body: {} } : undefined,
+  });
+  assert.equal(bare.out.diagnostics["recursive-v1"].message, "");
+});
+
+test("the first release can be refused too: the create answers 400 and the ruleset is deleted", async () => {
+  const { out, world, error } = await run({
+    programs: [PROGRAMS[2]],
+    scenario: { pathV1: "release-refused" },
+  });
+  assert.equal(error, undefined);
+  assert.deepEqual(out.results[PROGRAMS[2].id].steps.publishes, { compiled: false });
+  assert.equal(out.diagnostics["path-v1"].stage, "release");
+  assert.deepEqual(out.unknowns, []);
+  assert.ok(isEmpty(world));
+  assert.ok(
+    world.log.some((e) => e.method === "POST" && e.path.endsWith("/releases")),
+    "the create was tried",
+  );
+  assert.deepEqual(world.commits, [], "a refused program neither seeds nor deletes anything");
+  assert.equal(out.closureReady, true);
+});
+
+test("a delete of a ruleset answered with an unknown status is unknown, and sent once", async () => {
+  const { out, world } = await run({
+    programs: [PROGRAMS[0]],
+    onCall: (method, url) =>
+      method === "DELETE" && url.includes("/rulesets/") ? { status: 503 } : undefined,
+  });
+  assert.deepEqual(out.unknowns, [{ call: "delete ruleset", answer: "HTTP 503" }]);
+  assert.equal(
+    world.log.filter((e) => e.method === "DELETE" && e.path.includes("/rulesets/")).length,
+    1,
+  );
+  assert.equal(out.closureReady, false);
+  assert.ok(out.cleanupErrors.some((e) => /^harness DELETE .*\/rulesets\/rs\d+: HTTP 503/.test(e)));
+});
+
+test("ruleset delete failures are reported by their own messages", async () => {
+  const made = await published();
+  const inUse = [...made.world.rulesets.keys()][0];
+  await assert.rejects(made.session.deleteCreatedRulesets(), (error) => {
+    assert.equal(
+      error.message,
+      `harness DELETE /v1/${inUse}: HTTP 400 {"error":{"status":"FAILED_PRECONDITION"}}`,
+    );
+    return true;
+  });
+});
+
+test("after an unpublish the next publication has no superseded ruleset to wait for", async () => {
+  const made = await published();
+  await made.session.unpublish();
+  const before = made.world.markerAnswers.length;
+  await made.session.runProgram(PROGRAMS[1]);
+  const second = made.world.markerAnswers.slice(before);
+  const first = markerOf("recursive-v1");
+  assert.ok(second.length > 0);
+  assert.ok(
+    second.every((a) => a.label === markerOf("recursive-v2")),
+    "only the new marker is polled",
+  );
+  assert.ok(!second.some((a) => a.label === first));
+});
+
+test("an audit that cannot read the account count does not call the sandbox clean", async () => {
+  const made = direct();
+  made.world.onCall = (method, url) =>
+    url.endsWith("/accounts:query") ? { status: 200, body: {} } : undefined;
+  assert.deepEqual(await made.session.audit(), ["a project-level account remains"]);
+});
+
+test("a stop request during the rows ends the program at the next row, and its wipe still runs", async () => {
+  let rowsBegan = false;
+  const { error, world, out } = await run({
+    programs: [PROGRAMS[1]],
+    options: () => ({ shouldStop: () => rowsBegan }),
+    onCall: (method, url, _n, w) => {
+      if (
+        method === "POST" &&
+        url.endsWith(":runQuery") &&
+        w.log.at(-1).body.structuredQuery.from[0].collectionId === "posts"
+      )
+        rowsBegan = true;
+      return undefined;
+    },
+  });
+  assert.equal(error.message, "stopped by a signal");
+  assert.ok(
+    !world.log.some((e) => e.method === "GET" && e.path.endsWith("/posts/p0")),
+    "later rows did not run",
+  );
+  assert.ok(isEmpty(world));
+  assert.deepEqual(out.cleanupErrors, []);
+  assert.deepEqual(Object.keys(out.results), []);
+});
+
+test("a wipe that fails after the rows fails the program, and wins over an earlier failure", async () => {
+  let afterRows = false;
+  const failWipe = (method, url, _n, w) => {
+    const last = w.log.at(-1);
+    if (
+      method === "POST" &&
+      url.endsWith(":runAggregationQuery") &&
+      last.body.structuredAggregationQuery.structuredQuery.from[0].allDescendants &&
+      !last.body.structuredAggregationQuery.structuredQuery.from[0].collectionId
+    )
+      afterRows = true;
+    return afterRows &&
+      method === "POST" &&
+      url.endsWith(":runQuery") &&
+      last.headers["x-goog-user-project"]
+      ? { status: 500 }
+      : undefined;
+  };
+  const plain = await run({ programs: [PROGRAMS[1]], onCall: failWipe });
+  assert.match(plain.error.message, /runQuery: HTTP 500/);
+  assert.equal(plain.error.fatal, true);
+});
+
+test("a program that fails and whose wipe fails reports the wipe", async () => {
+  let rowsBegan = false;
+  const { error } = await run({
+    programs: [PROGRAMS[1]],
+    options: () => ({ shouldStop: () => rowsBegan }),
+    onCall: (method, url, _n, w) => {
+      const last = w.log.at(-1);
+      if (method === "POST" && url.endsWith(":runQuery") && !last.headers["x-goog-user-project"])
+        rowsBegan = true;
+      return rowsBegan &&
+        method === "POST" &&
+        url.endsWith(":runQuery") &&
+        last.headers["x-goog-user-project"]
+        ? { status: 500 }
+        : undefined;
+    },
+  });
+  assert.match(error.message, /runQuery: HTTP 500/, "the cleanup error is the one reported");
 });

@@ -404,12 +404,11 @@ setTimeout(() => process.exit(0), 15000);`;
 });
 
 test("a child that exits by itself leaves nothing behind either", async () => {
-  const script = `const { spawn } = require("node:child_process");
-spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 15000)", process.argv[1]], { stdio: "ignore" });
-process.exit(0);`;
+  // The shell exits at once and leaves a background sleep in its group that ignores SIGTERM, which
+  // only the SIGKILL sweep after the leader's exit can stop.
   const { exitCode, timedOut, pid } = await runSupervised({
-    command: process.execPath,
-    args: ["-e", script, MARK],
+    command: "/bin/sh",
+    args: ["-c", "(trap '' TERM; exec sleep 15) & exit 0", MARK],
     timeoutMs: 10_000,
     graceMs: 500,
     env: CHILD_ENV,
@@ -417,7 +416,7 @@ process.exit(0);`;
   });
   assert.equal(exitCode, 0);
   assert.equal(timedOut, false);
-  assert.equal(await groupGone(pid), true, "the orphaned grandchild was killed with the group");
+  assert.equal(await groupGone(pid), true, "the orphaned sleep was killed with the group");
 });
 
 test("a failing launch is reported as no exit code, not as a hang", async () => {
@@ -742,4 +741,61 @@ test("a new fixture starts at version 1", () => {
     ).version,
     7,
   );
+});
+
+// ---- the supervisor as a program of its own ------------------------------------------------
+
+/** Runs `body` (module code using `runSupervised`) in a node process of its own. */
+function inProcess(body, timeout = 20_000) {
+  const script = `
+    import { runSupervised } from ${JSON.stringify(join(import.meta.dirname, "fs-rules-v1/supervise.mjs"))};
+    ${body}
+  `;
+  const started = Date.now();
+  const done = spawnSync(process.execPath, ["--input-type=module", "-e", script, MARK], {
+    env: { PATH: process.env.PATH, NODE_OPTIONS: "" },
+    encoding: "utf8",
+    timeout,
+  });
+  return { ...done, seconds: (Date.now() - started) / 1000 };
+}
+
+test("the supervisor's grace timer is cleared once the child has gone, so the process can end", () => {
+  const done = inProcess(`
+    const result = await runSupervised({
+      command: "/bin/sh",
+      args: ["-c", "trap 'exit 7' TERM; sleep 15 & wait", process.argv[1]],
+      timeoutMs: 400,
+      graceMs: 20000,
+      env: { PATH: process.env.PATH },
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+    console.log(JSON.stringify({ exitCode: result.exitCode, timedOut: result.timedOut }));
+  `);
+  assert.equal(done.status, 0, done.stderr);
+  assert.deepEqual(JSON.parse(done.stdout.trim()), { exitCode: 7, timedOut: true });
+  assert.ok(done.seconds < 10, `the process lingered for ${done.seconds} s`);
+});
+
+test("the child's output goes where stdio says, and by default to this process's", () => {
+  const body = (stdio) => `
+    await runSupervised({
+      command: "/bin/sh",
+      args: ["-c", "echo child-out; echo child-err >&2", process.argv[1]],
+      timeoutMs: 10000,
+      env: { PATH: process.env.PATH },
+      ${stdio}
+    });
+  `;
+  const silent = inProcess(body('stdio: ["ignore", "ignore", "ignore"],'));
+  assert.equal(silent.status, 0, silent.stderr);
+  assert.equal(silent.stdout, "");
+  assert.equal(silent.stderr, "");
+  const defaults = inProcess(body(""));
+  assert.equal(defaults.status, 0, defaults.stderr);
+  assert.match(defaults.stdout, /child-out/);
+  assert.match(defaults.stderr, /child-err/);
+  const errOnly = inProcess(body('stdio: ["ignore", "ignore", "inherit"],'));
+  assert.equal(errOnly.stdout, "");
+  assert.match(errOnly.stderr, /child-err/);
 });

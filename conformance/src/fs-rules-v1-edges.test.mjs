@@ -961,3 +961,129 @@ test("a local load answers a refusal as not compiled, other statuses as transien
     );
   }
 });
+
+// ---- late findings of the mutation pass -----------------------------------------------------
+
+test("the seeded documents come back whole: name and fields", async () => {
+  const { out } = await run({ programs: [PROGRAMS[1]] });
+  const steps = out.results[PROGRAMS[1].id].steps;
+  const docs = (row) =>
+    steps[row].body
+      .filter((e) => e.document)
+      .map((e) => [e.document.name.split("/documents/")[1], e.document.fields]);
+  const one = { n: { integerValue: "1" } };
+  assert.deepEqual(docs("kindless-root-none"), [
+    ["fsr-g1/x/other/o1", one],
+    ["fsr-g1/x/posts/p1", one],
+    ["fsr-g2/y/posts/p2", one],
+    ["posts/p0", one],
+  ]);
+  assert.deepEqual(
+    docs("group-none").map(([name]) => name),
+    ["fsr-g1/x/posts/p1", "fsr-g2/y/posts/p2", "posts/p0"],
+  );
+  assert.deepEqual(
+    docs("kindless-parent-none").map(([name]) => name),
+    ["fsr-g1/x/other/o1", "fsr-g1/x/posts/p1"],
+  );
+});
+
+test("a read that is answered with an unknown status is a failure, not an unknown create", async () => {
+  const { out, error } = await run({
+    programs: [],
+    onCall: (method, url) =>
+      method === "GET" && url.endsWith("/config") ? { status: 503 } : undefined,
+  });
+  assert.equal(error.fatal, true);
+  assert.match(error.message, /HTTP 503/);
+  assert.deepEqual(out.unknowns, []);
+  assert.equal(out.closureReady, true);
+});
+
+test("a transport failure is named in the message by its cause code, else by the error's name", async () => {
+  const path = `/v1/projects/${SANDBOX_PROJECT}/rulesets`;
+  const coded = await run({
+    onCall: (method, url) =>
+      method === "POST" && url.endsWith("/rulesets") ? { throw: "ECONNRESET" } : undefined,
+  });
+  assert.equal(coded.error.message, `harness POST ${path}: ECONNRESET`);
+  const named = await run({
+    onCall: (method, url) =>
+      method === "POST" && url.endsWith("/rulesets")
+        ? { rejectWith: new TypeError("x") }
+        : undefined,
+  });
+  assert.equal(named.error.message, `harness POST ${path}: TypeError`);
+});
+
+test("accounts that cannot be deleted are reported by their own messages, joined by a semicolon", async () => {
+  const failing = direct();
+  await failing.session.createPrincipal("a", SPEC);
+  await failing.session.createPrincipal("b", SPEC);
+  failing.world.accounts.clear();
+  const path = `/v1/projects/${SANDBOX_PROJECT}/accounts:delete`;
+  const one = `harness POST ${path}: HTTP 400 {"error":{"message":"USER_NOT_FOUND"}}`;
+  await assert.rejects(failing.session.deletePrincipals(), (error) => {
+    assert.equal(error.message, `${one}; ${one}`);
+    return true;
+  });
+});
+
+test("only a request with a body carries a content type", async () => {
+  const { world } = await run({ programs: [PROGRAMS[0]] });
+  for (const entry of world.log.filter((e) => e.headers["x-goog-user-project"]))
+    assert.equal(
+      Object.hasOwn(entry.headers, "content-type"),
+      entry.body !== undefined,
+      `${entry.method} ${entry.path}`,
+    );
+});
+
+test("a local run seeds and signs up at the origins of the right services", async () => {
+  const log = [];
+  const clock = createClock();
+  const ctx = createContext({
+    run: "1790000000000",
+    target: {
+      kind: "local",
+      firestoreOrigin: "http://127.0.0.1:9000",
+      authOrigin: "http://127.0.0.1:9099",
+      grpcHost: "127.0.0.1",
+      grpcPort: 9000,
+    },
+  });
+  const session = createSession(
+    ctx,
+    {
+      fetchImpl: async (url, init) => {
+        log.push(`${init.method} ${url}`);
+        return { status: 200, text: async () => JSON.stringify({ idToken: "t", localId: "u" }) };
+      },
+      grpc: {
+        call: async () => ({ code: 0, details: "", messages: [] }),
+        listen: () => ({
+          frames: [],
+          ended: () => ({ reason: "ended", code: 0 }),
+          close: async () => {},
+        }),
+        close: async () => {},
+      },
+      sleep: clock.sleep,
+      now: clock.now,
+    },
+    {},
+  );
+  await session.createPrincipal("anon", SPEC);
+  await session.runProgram({ ...PROGRAMS[0], steps: [PROGRAMS[0].steps[0]] });
+  const project = ctx.project;
+  assert.deepEqual(
+    log.filter((l) => l.includes("commit")),
+    [`POST http://127.0.0.1:9000/v1/projects/${project}/databases/(default)/documents:commit`],
+  );
+  assert.ok(
+    log.includes(
+      "POST http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key",
+    ),
+  );
+  assert.ok(log.every((l) => l.includes("http://127.0.0.1:")));
+});

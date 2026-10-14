@@ -148,7 +148,9 @@ export function createWorld(scenario = {}) {
       code: 0,
       status: 200,
       body: limited.length
-        ? limited.map((p) => ({ document: { name: names(p), fields: {} } }))
+        ? limited.map((p) => ({
+            document: { name: names(p), fields: world.documents.get(p) ?? {} },
+          }))
         : [{}],
     };
   }

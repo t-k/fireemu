@@ -145,11 +145,12 @@ export function createSession(
   const { fetchImpl = fetch, grpc, sleep = realSleep, now = Date.now } = deps;
   let requests = 0;
   let harnessRequests = 0;
-  /** A sleep that ends early once a stop is requested, so a signal never waits out a long wait. */
+  /**
+   * One wait of at most a second (the poll interval). A stop requested during it ends the run
+   * once it is over; cleanup waits like any other wait and is never stopped.
+   */
   async function pause(ms) {
-    const until = now() + ms;
-    const keepWaiting = () => cleaningUp || !shouldStop();
-    while (now() < until && keepWaiting()) await sleep(Math.min(1000, Math.max(1, until - now())));
+    await sleep(ms);
     if (shouldStop() && !cleaningUp) throw fatal("stopped by a signal");
   }
   const principals = new Map();
@@ -195,9 +196,10 @@ export function createSession(
 
   function apiUrl(api, path) {
     if (ctx.target.kind === "production") return `${PRODUCTION[api]}/${path}`;
-    if (api === "itk") return `${ctx.target.authOrigin}/identitytoolkit.googleapis.com/${path}`;
-    if (api === "firestore") return `${ctx.target.firestoreOrigin}/${path}`;
-    throw new Error(`${api} has no local form`);
+    // Locally only Identity Toolkit and Firestore exist; Rules are loaded by `loadLocal`.
+    return api === "itk"
+      ? `${ctx.target.authOrigin}/identitytoolkit.googleapis.com/${path}`
+      : `${ctx.target.firestoreOrigin}/${path}`;
   }
 
   /**

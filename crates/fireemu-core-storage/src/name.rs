@@ -84,6 +84,50 @@ impl fmt::Display for ObjectName {
     }
 }
 
+/// How a bucket name breaks Cloud Storage's naming rules, or `None` for a name Cloud Storage
+/// could have created. [`BucketName::try_new`] is deliberately wider (it also admits what an
+/// import or a test fixture holds); the strict profile applies these rules to a name a client
+/// sends.
+///
+/// The rules are the documented ones: 3 to 222 characters of lowercase letters, digits, `-`, `_`
+/// and `.`; a letter or digit at both ends; dot-separated components of 1 to 63 characters; not
+/// shaped like an IPv4 address; no `goog` prefix and no `google` inside. Cloud Storage also
+/// refuses "close misspellings" of `google`, which this does not model.
+#[must_use]
+pub fn bucket_name_violation(name: &str) -> Option<&'static str> {
+    let bytes = name.as_bytes();
+    if bytes.len() < 3 {
+        return Some("a bucket name has at least 3 characters");
+    }
+    if bytes.len() > MAX_BUCKET_NAME_LEN {
+        return Some("a bucket name has at most 222 characters");
+    }
+    let alphanumeric = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    if !bytes
+        .iter()
+        .all(|b| alphanumeric(*b) || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Some("a bucket name uses lowercase letters, digits, '-', '_' and '.' only");
+    }
+    if !alphanumeric(bytes[0]) || !alphanumeric(bytes[bytes.len() - 1]) {
+        return Some("a bucket name starts and ends with a letter or a digit");
+    }
+    if name
+        .split('.')
+        .any(|part| part.is_empty() || part.len() > 63)
+    {
+        return Some("each dot-separated component of a bucket name has 1 to 63 characters");
+    }
+    if name.starts_with("goog") || name.contains("google") {
+        return Some("a bucket name does not start with 'goog' or contain 'google'");
+    }
+    let parts: Vec<&str> = name.split('.').collect();
+    if parts.len() == 4 && parts.iter().all(|part| part.parse::<u8>().is_ok()) {
+        return Some("a bucket name is not shaped like an IP address");
+    }
+    None
+}
+
 /// A validated bucket name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BucketName(String);

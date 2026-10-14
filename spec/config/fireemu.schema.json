@@ -792,6 +792,21 @@
           "minimum": 1,
           "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would grow the total past it (upload, resumable finalize, copy) is refused with 402 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it; an import above it starts with a warning."
         },
+        "buckets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 3, "maxLength": 222 },
+          "description": "Cloud Storage buckets the project owns besides its two default ones (<project>.appspot.com and <project>.firebasestorage.app). Under strict the first write to a bucket that is not declared is served, as the official emulator serves it, but reported once on standard error (production answers 404 for a bucket that does not exist), so a typo in a bucket name is visible; declare the bucket here to silence that note. A bucket named by firebase.json storage targets, by a deployed Storage trigger, or holding imported data exists without being listed. A name listed twice counts once. Each name must be one Cloud Storage accepts (3 to 222 lowercase letters, digits, '-', '_' and '.', starting and ending with a letter or digit). The emulator profile creates a bucket on first use without a note and ignores this key."
+        },
+        "defaultBucket": {
+          "enum": ["both", "firebasestorage.app", "appspot.com"],
+          "default": "both",
+          "description": "Which of the project's two default buckets exist under strict. A production project has one: <project>.firebasestorage.app when Storage was set up after 2024-10-30, <project>.appspot.com before. A local run cannot know which, so both exist by default. Name the one your project has: the other name then counts as an undeclared bucket, so its first write prints the undeclared-bucket note and the bucket resource answers 404 (production answers 404 for the name your project does not have). The emulator profile ignores this key."
+        },
+        "publicBuckets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 3, "maxLength": 222 },
+          "description": "Buckets whose objects anyone can read through the public URL (GET /{bucket}/{object}, what file.publicUrl() builds) without a credential. It stands for a bucket whose IAM grants allUsers the object viewer role, which production sets in the console. Under strict that URL otherwise answers 403 AccessDenied for an object that was not made public in application code (file.makePublic(), predefinedAcl=publicRead or an allUsers READER ACL entry). Firebase download-token URLs and requests that carry an Authorization header are not affected. A bucket listed here also counts as declared. A name listed twice counts once. Each name must be one Cloud Storage accepts. The emulator profile serves the public URL to anyone and ignores this key."
+        },
         "persistence": { "enum": ["memory", "snapshot-files", "redb"], "description": "Currently has no effect." }
       }
     },

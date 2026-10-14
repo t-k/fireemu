@@ -4652,13 +4652,22 @@ fn a_multipart_upload_carves_the_data_part_out_of_its_request_buffer() {
     );
 }
 
+/// The fields that make a form upload a signed one: a policy that is valid until 2030 and holds
+/// no condition, and a signature (not verified). Strict refuses a form without them.
+fn signed_form_fields(boundary: &str) -> String {
+    format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"policy\"\r\n\r\neyJleHBpcmF0aW9uIjoiMjAzMC0wMS0wMVQwMDowMDowMFoiLCJjb25kaXRpb25zIjpbXX0=\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"x-goog-signature\"\r\n\r\nabcdef\r\n"
+    )
+}
+
 #[test]
 fn a_form_upload_carves_the_file_part_out_of_its_request_buffer() {
     let s = state(None);
     let data = payload();
     let boundary = "form-storage-buffer";
     let mut body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n{}--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+        signed_form_fields(boundary)
     )
     .into_bytes();
     body.extend_from_slice(&data);
@@ -5459,7 +5468,7 @@ fn a_missing_media_object_answers_text_html_as_production_does() {
                 format!("/download/storage/v1/b/{BUCKET}/o/absent.txt?alt=media"),
                 true,
             ),
-            (format!("/{BUCKET}/absent.txt?alt=media"), false),
+            (format!("/{BUCKET}/absent.txt?alt=media"), true),
         ] {
             let owner = [("authorization", "Bearer owner")];
             let r = handle(
@@ -5536,6 +5545,7 @@ fn metadata_with_control_characters_is_refused_at_the_boundary() {
         format!("--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nobj.txt\r\n")
             .as_bytes(),
     );
+    body.extend_from_slice(signed_form_fields(boundary).as_bytes());
     body.extend_from_slice(
         format!("--{boundary}\r\nContent-Disposition: form-data; name=\"content-disposition\"\r\n\r\ninline\r\nX-Injected: 1\r\n").as_bytes(),
     );
@@ -6698,7 +6708,8 @@ fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_402() {
     }
     let boundary = "stored-byte-limit";
     let body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n6789\r\n--{boundary}--\r\n"
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n{}--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n6789\r\n--{boundary}--\r\n",
+        signed_form_fields(boundary)
     );
     let refused = handle(
         &s,

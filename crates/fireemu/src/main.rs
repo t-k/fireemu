@@ -2119,6 +2119,20 @@ fn read_storage_rules(path: &str) -> Result<LoadedRules, String> {
 }
 
 fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
+    let loaded = load_storage_rules_registry(cfg)?;
+    loaded
+        .registry
+        .set_configured_buckets(cfg.storage_buckets.iter().cloned());
+    loaded
+        .registry
+        .set_public_buckets(cfg.storage_public_buckets.iter().cloned());
+    loaded
+        .registry
+        .set_default_buckets(cfg.storage_default_bucket);
+    Ok(loaded)
+}
+
+fn load_storage_rules_registry(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
     if cfg.storage_rules_by_target.is_empty() {
         let loaded = match &cfg.storage_rules_file {
             Some(path) => read_storage_rules(path)?,

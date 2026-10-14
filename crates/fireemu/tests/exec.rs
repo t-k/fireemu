@@ -333,6 +333,179 @@ fn app_check_variables_are_exported_only_when_the_service_is_selected() {
     assert!(!env.contains_key("FIREEMU_APP_CHECK_JWKS_URL"));
 }
 
+/// AC-1: `--only firestore` does not drop a configured Firestore enforcement. The verifier is
+/// included although neither `appcheck` nor `functions` is named, a client that sends no App
+/// Check token is refused as production refuses it, and the run says why the verifier is there.
+#[test]
+fn only_keeps_the_app_check_enforcement_a_selected_product_is_configured_with() {
+    let dir = scratch("appcheck-only");
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firestore": { "edition": "standard", "apiMode": "native" },
+  "appCheck": {
+    "enabled": true,
+    "apps": [{ "projectId": "demo-exec", "projectNumber": "1234567890", "appId": "1:1234567890:web:local-test-app" }],
+    "services": { "firestore": "enforced" }
+  }
+}
+"#,
+    )
+    .unwrap();
+    let out = dir.join("status.txt");
+    let output = daemon()
+        .args(["--config"])
+        .arg(&config)
+        .args([
+            "--project",
+            "demo-exec",
+            "--only",
+            "firestore",
+            "--",
+            "/bin/sh",
+            "-c",
+        ])
+        .arg(format!(
+            "printf '%s %s\\n' \"${{FIREEMU_APP_CHECK_EMULATOR_HOST:+exported}}\" \"$(curl -s -o /dev/null -w '%{{http_code}}' \"http://$FIRESTORE_EMULATOR_HOST/v1/projects/demo-exec/databases/(default)/documents/c/d\")\" > {}",
+            out.display()
+        ))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap().trim(),
+        "exported 403",
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("although --only names neither appcheck nor functions"),
+        "{stdout}"
+    );
+
+    // With every mode off nothing is enforced, so `--only` still leaves App Check out.
+    let quiet = dir.join("fireemu-off.json");
+    std::fs::write(
+        &quiet,
+        std::fs::read_to_string(&config).unwrap().replace(
+            r#""services": { "firestore": "enforced" }"#,
+            r#""services": {}"#,
+        ),
+    )
+    .unwrap();
+    let out = dir.join("status-off.txt");
+    let output = daemon()
+        .args(["--config"])
+        .arg(&quiet)
+        .args([
+            "--project",
+            "demo-exec",
+            "--only",
+            "firestore",
+            "--",
+            "/bin/sh",
+            "-c",
+        ])
+        .arg(format!("env > {}", out.display()))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!env_file(&out).contains_key("FIREEMU_APP_CHECK_EMULATOR_HOST"));
+}
+
+/// FN-08 / AC-2 and PS-01 at the command line: with no configuration the strict profile serves the
+/// open App Check exchange and says so; `productionExact` and an `appCheck` block ask for
+/// registration, and the dead-letter line follows `pubsub.deadLetterAuthorization`.
+#[test]
+fn the_development_defaults_for_app_check_and_dead_letters_show_in_the_banner_and_in_effect() {
+    let dir = scratch("defaults-appcheck-dlq");
+    let exchange = r#"curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"debugToken":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"}' "http://$FIREEMU_APP_CHECK_EMULATOR_HOST/v1/projects/demo-exec/apps/1:1234567890:web:local-test-app:exchangeDebugToken""#;
+    let run = |config: Option<&str>| {
+        let mut command = daemon();
+        if let Some(config) = config {
+            let path = dir.join("fireemu-case.json");
+            std::fs::write(&path, config).unwrap();
+            command.arg("--config").arg(path);
+        }
+        let output = command
+            .args([
+                "--project",
+                "demo-exec",
+                "--pubsub-port",
+                "0",
+                "--",
+                "/bin/sh",
+                "-c",
+                &format!("{exchange} || true"),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let open = run(None);
+    assert!(
+        open.contains("any well-formed debug token exchanges"),
+        "{open}"
+    );
+    assert!(open.contains("(kid "), "{open}");
+    assert!(open.contains("forwarded without grants"), "{open}");
+    assert!(
+        open.contains("appCheck.debugTokens: any (default)"),
+        "{open}"
+    );
+    assert!(
+        open.contains("pubsub.deadLetterAuthorization: implicit (default)"),
+        "{open}"
+    );
+    assert!(open.trim_end().ends_with("200"), "{open}");
+
+    let exact = run(Some(r#"{"schemaVersion":1,"productionExact":true}"#));
+    assert!(
+        !exact.contains("any well-formed debug token exchanges"),
+        "{exact}"
+    );
+    assert!(exact.contains("service-"), "{exact}");
+    assert!(
+        exact.contains("gcp-sa-pubsub.iam.gserviceaccount.com"),
+        "{exact}"
+    );
+    assert!(
+        exact.contains("appCheck.debugTokens: registered (productionExact)"),
+        "{exact}"
+    );
+    // Not served at all without registration: the variable is not exported, the request fails.
+    assert!(!exact.trim_end().ends_with("200"), "{exact}");
+
+    let block = run(Some(
+        r#"{"schemaVersion":1,"appCheck":{"enabled":true,"apps":[{"projectId":"demo-exec","projectNumber":"1234567890","appId":"1:1234567890:web:local-test-app"}]}}"#,
+    ));
+    assert!(
+        block.contains("appCheck.debugTokens: registered (derived from the appCheck block)"),
+        "{block}"
+    );
+    assert!(
+        block.trim_end().ends_with("403"),
+        "an unregistered digest is refused: {block}"
+    );
+}
+
 #[test]
 fn the_exit_status_of_the_command_is_propagated() {
     let output = daemon()

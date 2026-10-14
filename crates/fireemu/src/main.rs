@@ -2699,6 +2699,40 @@ fn clock_millis(clock: &Arc<Mutex<VirtualClock>>) -> i64 {
     i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
 }
 
+/// What the start banner says about dead-letter forwarding under the strict profile.
+fn dead_letter_banner(cfg: &RuntimeConfig) -> String {
+    match cfg.pubsub_dead_letter_authorization {
+        config::DeadLetterAuthorization::Implicit => "forwarded without grants (pubsub.deadLetterAuthorization \"implicit\"); productionExact requires them".to_owned(),
+        config::DeadLetterAuthorization::Iam => format!(
+            "forwarded after roles/pubsub.subscriber on the source subscription and roles/pubsub.publisher on the dead-letter topic are granted to serviceAccount:service-{}@gcp-sa-pubsub.iam.gserviceaccount.com",
+            pubsub_project_numbers(cfg)
+                .get(&cfg.auth_project)
+                .map_or("<project number>", String::as_str)
+        ),
+    }
+}
+
+/// The project numbers Pub/Sub derives its service agents from: the configured ones, and under
+/// `pubsub.deadLetterAuthorization = "iam"` one for the default project when none is configured
+/// (`daemon.authProjectNumbers`, else the number a local project gets elsewhere), so production's
+/// grants can be written out by name.
+fn pubsub_project_numbers(cfg: &RuntimeConfig) -> std::collections::BTreeMap<String, String> {
+    let mut numbers = cfg.pubsub_project_numbers.clone();
+    if cfg.pubsub_dead_letter_authorization == config::DeadLetterAuthorization::Iam
+        && !numbers.contains_key(&cfg.auth_project)
+    {
+        let number = cfg
+            .auth_project_numbers
+            .get(&cfg.auth_project)
+            .copied()
+            .unwrap_or_else(|| {
+                fireemu_adapter_functions::eventarc_channels::project_number(&cfg.auth_project)
+            });
+        numbers.insert(cfg.auth_project.clone(), number.to_string());
+    }
+    numbers
+}
+
 #[allow(clippy::too_many_lines)]
 fn print_banner(
     cfg: &RuntimeConfig,
@@ -2790,7 +2824,12 @@ fn print_banner(
         None => println!("  tasks:            not started (requires a Functions codebase)"),
     }
     match addrs.pubsub {
-        Some(a) => println!("  pubsub (gRPC):    {a}   PUBSUB_EMULATOR_HOST={a}"),
+        Some(a) => {
+            println!("  pubsub (gRPC):    {a}   PUBSUB_EMULATOR_HOST={a}");
+            if cfg.profile == config::CompatibilityProfile::Strict {
+                println!("  dead letters:     {}", dead_letter_banner(cfg));
+            }
+        }
         None => println!(
             "  pubsub:           not started (configure emulators.pubsub / --pubsub-port, or --only pubsub)"
         ),
@@ -3080,6 +3119,8 @@ fn app_check_state(
         constant_time: Arc::new(fireemu_adapter_http::signing::SubtleConstantTimeEq),
         secrets: Arc::new(fireemu_adapter_http::signing::OsDebugSecrets),
         barrier: Some(barrier.clone()),
+        open_debug_tokens: (cfg.app_check.debug_tokens == config::AppCheckDebugTokens::Any)
+            .then(|| cfg.auth_project.clone()),
     }))
 }
 

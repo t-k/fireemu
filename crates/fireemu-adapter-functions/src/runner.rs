@@ -30,6 +30,10 @@ pub struct Hello {
     pub http_port: Option<u16>,
     /// Discovered manifest (canonical JSON), if the runner performed discovery.
     pub manifest: Option<Value>,
+    /// What the runner found out about the codebase's declared parameters (`defineString`,
+    /// `defineInt`, ...): `missing` lists each `{name, type}` that has neither a value in the
+    /// dotenv chain nor a declared default, `defaulted` each one a default filled in.
+    pub params: Option<Value>,
     /// The runner's callable App Check report: the installed `firebase-functions` version,
     /// whether the loader instrumentation could be installed, and whether the debug switches
     /// behave the way the trusted callable protocol relies on (specification section 13.4).
@@ -636,6 +640,7 @@ impl Runner {
                                     .and_then(Value::as_u64)
                                     .and_then(|p| u16::try_from(p).ok()),
                                 manifest: frame.get("manifest").cloned(),
+                                params: frame.get("params").cloned(),
                                 app_check: frame.get("appCheck").cloned(),
                                 clock: frame.get("clock").cloned(),
                             };

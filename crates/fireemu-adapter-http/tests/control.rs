@@ -451,6 +451,17 @@ impl fireemu_adapter_http::control::FunctionsHook for FakeFunctions {
             _ => Ok(()),
         }
     }
+    fn is_task_queue(&self, function: &str) -> bool {
+        function == "queue"
+    }
+    fn run_tasks_now(&self, _function: &str, task: Option<&str>) -> usize {
+        // Two tasks wait: `a` and `b`.
+        match task {
+            None => 2,
+            Some("a" | "b") => 1,
+            Some(_) => 0,
+        }
+    }
     fn is_idle(&self) -> bool {
         true
     }
@@ -2465,6 +2476,50 @@ fn a_manual_run_refused_for_capacity_answers_resource_exhausted() {
     assert_eq!(ok.body["enqueued"], true);
 }
 
+/// `:run` on a task-queue function releases waiting Cloud Tasks (all, or the one named by
+/// `task`) instead of enqueueing a schedule run; an unknown task id is a 404 and a malformed
+/// `task` is a 400. This is how a test or the console runs a task whose `scheduleTime` is hours
+/// away without moving the clock.
+#[test]
+fn run_on_a_task_queue_releases_the_waiting_tasks() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.functions = Some(Arc::new(FakeFunctions(Mutex::new(Vec::new()))));
+    let run = |body: Value| {
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/functions/queue:run",
+            &body,
+        )
+    };
+    let all = run(json!({}));
+    assert_eq!(all.status, 200, "{}", all.body);
+    assert_eq!(all.body["released"], 2);
+    assert_eq!(all.body["function"], "queue");
+    assert!(all.body.get("enqueued").is_none());
+    let one = run(json!({"task": "a"}));
+    assert_eq!(one.status, 200, "{}", one.body);
+    assert_eq!(one.body["released"], 1);
+    let missing = run(json!({"task": "zzz"}));
+    assert_eq!(missing.status, 404, "{}", missing.body);
+    for bad in [
+        json!({"task": 7}),
+        json!({"task": ""}),
+        json!({"task": ["a"]}),
+    ] {
+        let refused = run(bad.clone());
+        assert_eq!(refused.status, 400, "{bad}: {}", refused.body);
+    }
+    // A schedule function still takes the schedule path.
+    let tick = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/functions/tick:run",
+        &json!({"task": "a"}),
+    );
+    assert_eq!(tick.body["enqueued"], true, "{}", tick.body);
+}
+
 /// `POST /v1/firestore/listen:expire` fires the Firestore enforcer's signal and answers how many
 /// end-user streams it ended; without an enforcer there is nothing to end, which is said.
 #[test]
@@ -2570,4 +2625,26 @@ fn an_exposed_daemon_requires_the_control_token_for_every_control_request() {
         handle_with(&s, "GET", "/v1/rules", &process, &json!({})).status,
         200
     );
+}
+
+/// A functions hook that knows nothing of task queues takes the schedule path for every name and
+/// releases nothing: the trait's defaults.
+#[test]
+fn the_default_hook_has_no_task_queues_and_releases_nothing() {
+    use fireemu_adapter_http::control::FunctionsHook as _;
+    let hook = ClockCounting(AtomicUsize::new(0));
+    assert!(!hook.is_task_queue("queue"));
+    assert_eq!(hook.run_tasks_now("queue", None), 0);
+    assert_eq!(hook.run_tasks_now("queue", Some("a")), 0);
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.functions = Some(Arc::new(ClockCounting(AtomicUsize::new(0))));
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/functions/queue:run",
+        &json!({"task": "a"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["enqueued"], true, "{}", r.body);
+    assert!(r.body.get("released").is_none());
 }

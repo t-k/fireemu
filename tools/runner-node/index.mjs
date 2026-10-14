@@ -28,6 +28,7 @@ import { invocationFailure } from "./invocation-error.mjs";
 import { InvocationBudget, readFrames } from "./protocol.mjs";
 import { deliverSchedule, v1ScheduleContext } from "./schedule-delivery.mjs";
 import { collectFunctions, exportNamespace } from "./discovery.mjs";
+import { resolveDeclaredParams, resolveWhenDeclared } from "./params.mjs";
 import { FrameWriter } from "./output.mjs";
 import { installDiagnosticOutput } from "./diagnostic-output.mjs";
 import { trackHttpResponse } from "./http-lifecycle.mjs";
@@ -1539,6 +1540,25 @@ async function invoke(functions, manifest, msg) {
 }
 
 
+// Applies the declared defaults of `defineString`/`defineInt`/... to the environment and reports
+// the parameters that have no value and no default, which the daemon refuses to start with. A
+// codebase that does not use `firebase-functions/params` declares none.
+function declaredParamsOfCodebase() {
+  try {
+    const require = createRequire(join(sourceDir, "package.json"));
+    return require("firebase-functions/params").declaredParams;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveCodebaseParams() {
+  const declared = declaredParamsOfCodebase();
+  return declared
+    ? resolveDeclaredParams(declared, process.env)
+    : { missing: [], defaulted: [] };
+}
+
 async function main() {
   const clockOptions = JSON.parse(process.env.FIREEMU_CLOCK_JSON ?? '{}');
   const runtimeClock = createRuntimeClock(clockOptions);
@@ -1619,6 +1639,7 @@ async function main() {
   // Before any user code loads: the callable options are only observable as a callable is
   // declared (spec 13.4).
   const instrumentation = instrumentCallables(sourceDir);
+  resolveWhenDeclared(declaredParamsOfCodebase(), process.env);
   let ns;
   try {
     ns = await loadCodebase();
@@ -1626,6 +1647,8 @@ async function main() {
     log("error", `cannot load functions from ${sourceDir}: ${invocationFailure(e).diagnostic}`);
     process.exit(1);
   }
+  // Parameters are resolved before any endpoint option that references one is evaluated.
+  const paramReport = resolveCodebaseParams();
   try {
     const require = createRequire(join(sourceDir, "package.json"));
     const cjsOptions = require("firebase-functions/v2/options").getGlobalOptions();
@@ -1717,6 +1740,7 @@ async function main() {
     inspectorPort: activeInspectorPort,
     httpPort,
     manifest,
+    params: paramReport,
     appCheck: {
       firebaseFunctionsVersion: instrumentation.version,
       instrumentation: instrumentation.supported ? "ok" : instrumentation.reason,

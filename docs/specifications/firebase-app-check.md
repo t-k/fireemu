@@ -196,8 +196,10 @@ The activation contract is:
 
 | Configuration and service selection | Exchange/JWKS | Product baselines | Callable trusted protocol |
 |---|---|---|---|
-| `appCheck.enabled` omitted or `false` | unavailable | all `off` | inactive; current Functions behavior is unchanged |
-| enabled, neither `appcheck` nor `functions` selected by `--only` | unavailable | all `off` | not applicable |
+| `appCheck.enabled` omitted or `false`, and `appCheck.debugTokens` `"registered"` (an `appCheck` block, `productionExact`, the `emulator` profile) | unavailable | all `off` | inactive; current Functions behavior is unchanged |
+| no `appCheck` block under the strict profile (`appCheck.debugTokens` `"any"`, a development default) and `appcheck` or `functions` selected | available; any well-formed `UUIDv4` debug token exchanges for any app with a standard app ID, which is registered on first use | all `off` | active when every loaded codebase has `firebase-functions` 6.x or 7.x; otherwise inactive with a startup note |
+| enabled, neither `appcheck` nor `functions` selected by `--only`, and no selected product has a mode other than `off` | unavailable | all `off` | not applicable |
+| enabled, neither `appcheck` nor `functions` selected by `--only`, and a selected product has a mode other than `off` | available, and the startup banner says the verifier was included | selected services apply configured modes | not applicable |
 | enabled and `appcheck` selected, Functions not selected | available | selected non-Functions services apply configured modes | not applicable |
 | enabled and `functions` selected | available because Functions selects its App Check dependency | selected non-Functions services apply configured modes only when explicitly selected | active for callable requests, including callables without enforcement so valid app context is available |
 

@@ -455,6 +455,15 @@ impl PubSubHandle {
         self
     }
 
+    /// Whether strict dead-letter forwarding needs the resource grants production needs (the
+    /// Pub/Sub service agent as subscriber on the source subscription and publisher on the
+    /// dead-letter topic, with the project number configured). `false` forwards without them.
+    #[must_use]
+    pub fn with_dead_letter_grants_required(self, required: bool) -> Self {
+        self.state().set_dead_letter_grants_required(required);
+        self
+    }
+
     /// Configures one exact local fixture Bearer for strict admission; emulator ignores it.
     /// This does not verify Google credentials or model an IAM principal.
     #[must_use]

@@ -29,10 +29,11 @@ const observed = {
   paramInt: params.defineInt("FX_INT").value(),
   paramBoolean: params.defineBoolean("FX_BOOL").value(),
   paramList: params.defineList("FX_LIST").value(),
-  // A parameter nothing defines: the SDK answers with the empty string, and a declared
-  // default is a deploy-time value the runtime never sees.
-  paramMissing: params.defineString("FX_ABSENT").value(),
-  paramMissingWithDefault: params.defineString("FX_ABSENT_2", { default: "unused" }).value(),
+  // A parameter nothing sets takes its declared default, as it does in a deployed function.
+  // (One with neither a value nor a default refuses the codebase; the tests write their own
+  // codebase for that.)
+  paramWithDefault: params.defineString("FX_ABSENT_2", { default: "the default" }).value(),
+  paramIntDefault: params.defineInt("FX_ABSENT_3", { default: 7 }).value(),
   // Secrets are intentionally absent while the shared codebase is discovered. The declared
   // function receives its value only for the duration of its invocation.
   paramSecret: secret.value(),

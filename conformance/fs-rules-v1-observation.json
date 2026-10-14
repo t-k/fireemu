@@ -1,0 +1,1793 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Firestore REST v1 and gRPC, Identity Platform sandbox, anonymous end-user ID tokens",
+    "project": "demo-fs-rules",
+    "note": "Two recordings per program. The project, its number, the run id and run-window times are placeholders. `second` holds the other recording of rows that differed. `diagnostics` is the refusal text of a ruleset production would not compile; it is never compared."
+  },
+  "programs": {
+    "fs-rules-v1/path-wildcard/v1": {
+      "corpusDigest": "a6c0c067d251fd19d3e6edb7d1b2009c9dae8ae472d438c5b3f20d07a6bf41a8",
+      "harnessDigest": "e8c83656a7c229b681918489684c3ba3b3f63d03220e6feecbe808f309f97578",
+      "recordedAt": "2026-10-14T17:58:31.003Z",
+      "gitSha": "f83179902b461d9496673858ae00e784616f0fb6",
+      "steps": {
+        "publishes": {
+          "compiled": false
+        },
+        "group-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "group-anon": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "group-count-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "group-count-anon": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "group-grpc-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "group-count-grpc-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "group-listen-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "group-listen-anon": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "single-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "single-anon": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "single-count-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "nested-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "single-listen-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "get-top-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "get-nested-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "kindless-parent-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "kindless-parent-anon": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "kindless-root-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        },
+        "kindless-count-parent-none": {
+          "status": -1,
+          "unresolved": "ruleset path-v1 did not compile"
+        }
+      },
+      "diagnostics": {
+        "stage": "ruleset",
+        "status": 400,
+        "message": "Request contains an invalid argument."
+      }
+    },
+    "fs-rules-v1/path-wildcard/v2": {
+      "corpusDigest": "07af79499e76c4b03d35d6cb75a5e5c2e10e9b00e5b4223ac7a87a6ac7a109c5",
+      "harnessDigest": "e8c83656a7c229b681918489684c3ba3b3f63d03220e6feecbe808f309f97578",
+      "recordedAt": "2026-10-14T17:58:31.003Z",
+      "gitSha": "f83179902b461d9496673858ae00e784616f0fb6",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "group-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-anon": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-grpc-none": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-grpc-none": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "group-listen-anon": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "kind": "filter",
+              "targetId": 1,
+              "count": 3
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "single-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-count-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "nested-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "get-top-none": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "get-nested-none": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "kindless-parent-none": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "kindless-parent-anon": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "kindless-root-none": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "kindless-count-parent-none": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        }
+      },
+      "second": {
+        "group-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "kind": "filter",
+              "targetId": 1,
+              "count": 3
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        }
+      }
+    },
+    "fs-rules-v1/recursive-wildcard/v1": {
+      "corpusDigest": "a1c3c88c3e36fe4037196fa6976036e16745a10fab8ec572ec19dc2174a1f246",
+      "harnessDigest": "e8c83656a7c229b681918489684c3ba3b3f63d03220e6feecbe808f309f97578",
+      "recordedAt": "2026-10-14T17:58:31.003Z",
+      "gitSha": "f83179902b461d9496673858ae00e784616f0fb6",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "group-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-anon": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-grpc-none": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-grpc-none": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "kind": "filter",
+              "targetId": 1,
+              "count": 3
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "group-listen-anon": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "kind": "filter",
+              "targetId": 1,
+              "count": 3
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "single-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-count-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "nested-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "kind": "filter",
+              "targetId": 1,
+              "count": 1
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "get-top-none": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "get-nested-none": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "kindless-parent-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/other/o1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "kindless-parent-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/other/o1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "kindless-root-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/other/o1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "kindless-count-parent-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        }
+      }
+    },
+    "fs-rules-v1/recursive-wildcard/v2": {
+      "corpusDigest": "2567b0381a5cce58ac9eba4e63f86594e415bc6f929d9e25894dd433a02e7518",
+      "harnessDigest": "e8c83656a7c229b681918489684c3ba3b3f63d03220e6feecbe808f309f97578",
+      "recordedAt": "2026-10-14T17:58:31.003Z",
+      "gitSha": "f83179902b461d9496673858ae00e784616f0fb6",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "group-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-anon": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-grpc-none": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-count-grpc-none": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "group-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "kind": "filter",
+              "targetId": 1,
+              "count": 3
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "group-listen-anon": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "single-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-count-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "nested-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "single-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            },
+            {
+              "kind": "filter",
+              "targetId": 1,
+              "count": 1
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        },
+        "get-top-none": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "get-nested-none": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "kindless-parent-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/other/o1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "kindless-parent-anon": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/other/o1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "kindless-root-none": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/other/o1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g1/x/posts/p1",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/fsr-g2/y/posts/p2",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/posts/p0",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "kindless-count-parent-none": {
+          "status": 200,
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "n": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        }
+      },
+      "second": {
+        "group-listen-none": {
+          "listen": true,
+          "frames": [
+            {
+              "kind": "targetChange",
+              "type": "ADD",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": false
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g1/x/posts/p1",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "fsr-g2/y/posts/p2",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "documentChange",
+              "doc": "posts/p0",
+              "n": "1",
+              "targetIds": [1],
+              "removedTargetIds": []
+            },
+            {
+              "kind": "targetChange",
+              "type": "CURRENT",
+              "targetIds": [1],
+              "cause": null,
+              "resumeToken": true
+            },
+            {
+              "kind": "boundary",
+              "resumeToken": true
+            }
+          ],
+          "end": "open"
+        }
+      }
+    }
+  }
+}

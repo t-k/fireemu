@@ -1,9 +1,20 @@
 name: ci
 
+# The documentation site has its own workflow (pages.yml). Site-only changes
+# skip CI, except the docs pages: a test in crates/fireemu checks that their
+# TOML and JSON configuration tabs agree.
 on:
   pull_request:
+    paths:
+      - "**"
+      - "!site/**"
+      - "site/src/content/docs/**"
   push:
     branches: [main]
+    paths:
+      - "**"
+      - "!site/**"
+      - "site/src/content/docs/**"
   workflow_dispatch:
 
 concurrency:

@@ -7647,7 +7647,10 @@ mod tests {
             {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
+            // A Windows checkout may have CRLF line endings; the fences are matched on LF.
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
             let mut ranges = Vec::new();
             for (start, _) in text.match_indices("<Tabs syncKey=\"config-format\">") {
                 assert_eq!(path.extension().unwrap(), "mdx", "{}", path.display());

@@ -285,6 +285,41 @@ fn buckets_and_all_objects_list_what_an_export_walks() {
 }
 
 #[test]
+fn reimporting_an_old_generation_revives_its_grant_until_another_grant_cleans_it() {
+    for clean_stale_grants in [false, true] {
+        let mut store = StorageState::new(7);
+        let original = imported("a", b"first");
+        store
+            .insert_imported(original.clone(), b"first".to_vec())
+            .unwrap();
+        store
+            .insert_imported(imported("b", b"other"), b"other".to_vec())
+            .unwrap();
+        assert!(store.set_public_read(&bucket(), &object("a")));
+        store
+            .put(
+                &bucket(),
+                &object("a"),
+                b"replacement".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                t(0),
+            )
+            .unwrap();
+        assert!(!store.is_public_read(&bucket(), &object("a")));
+        if clean_stale_grants {
+            assert!(store.set_public_read(&bucket(), &object("b")));
+        }
+        store.insert_imported(original, b"first".to_vec()).unwrap();
+        assert_eq!(
+            store.is_public_read(&bucket(), &object("a")),
+            !clean_stale_grants,
+            "an unrelated grant determines whether the old generation's grant survives"
+        );
+    }
+}
+
+#[test]
 fn importing_over_an_existing_object_replaces_its_bytes_and_drops_the_old_blob() {
     let mut store = StorageState::new(7);
     store

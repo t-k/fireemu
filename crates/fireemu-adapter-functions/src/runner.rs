@@ -551,9 +551,12 @@ impl Runner {
             use std::os::windows::fs::OpenOptionsExt;
             use tokio::net::windows::named_pipe::ServerOptions;
 
-            // Synchronous pipe I/O can serialize libuv's stdout-open metadata
-            // queries behind a pending read (libuv/libuv#1273). Open both ends
-            // overlapped, and read directly through Tokio's IOCP pipe support.
+            // A synchronous read pending on the parent's end can hold up libuv's
+            // stdout-open metadata queries in the child (libuv/libuv#1273). The
+            // parent's end is overlapped and read through Tokio's IOCP support, so
+            // no synchronous read is ever pending. The child's end stays
+            // synchronous: Node writes stdout synchronously on Windows and stalls
+            // on an overlapped handle.
             let name = format!(
                 r"\\.\pipe\fireemu-runner-stdout-{}-{}",
                 std::process::id(),
@@ -568,7 +571,6 @@ impl Runner {
             let writer = std::fs::OpenOptions::new()
                 // Match libuv's write-only pipe access, including metadata queries.
                 .access_mode(0x4000_0080) // GENERIC_WRITE | FILE_READ_ATTRIBUTES
-                .custom_flags(0x4000_0000) // FILE_FLAG_OVERLAPPED
                 .open(&name)
                 .map_err(|e| format!("functions runner: cannot open stdout pipe: {e}"))?;
             reader

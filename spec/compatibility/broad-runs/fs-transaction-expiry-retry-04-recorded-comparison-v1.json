@@ -321,14 +321,14 @@
     ]
   },
   "artifact": {
-    "sourceCommit": "6af3869fec0f44e409408694a4f474bf98deec97",
+    "sourceCommit": "08a747137022bcea42c355e223882b453f0357d5",
     "runtimeInputsScheme": "binary-v1",
     "dependencyInfoInExcludedTrees": [],
     "dependencyInfoWorkspaceFiles": 267,
     "uiBundled": false,
-    "runtimeInputsDigest": "b342ca22a61809b04d18c121d0e9ca28d1e9d36e567ba95c7ccff01937b47c20",
+    "runtimeInputsDigest": "cb8a79388d2fbc0f982a317b8a17fe5d3ccc6203eefa05a6500f96282cc3275c",
     "runtimeInputCount": 346,
-    "artifactSha256": "59be4d25920642825a710ed1317edf3c8bb324b300435d9d8b0cac646ba3c046",
+    "artifactSha256": "b6153284544943c7eb83476f3f3aae5eeda152c0fb467aac2b5f931f937b46b3",
     "buildCommand": [
       "cargo",
       "build",
@@ -338,21 +338,21 @@
       "--bin",
       "fireemu"
     ],
-    "buildLogSha256": "33e4a8b014f254d87e804a976c173824acc568d88176856a34dd1600ef966a7a",
+    "buildLogSha256": "3f216a6145375a42bb2c4ad185560c19d6ca370faf9169331916630c2d98040f",
     "sourceUnchanged": true,
     "exitCode": 0
   },
   "buildReceipt": {
-    "path": "docs.local/runs/fs-transaction-postproduction-build-config-keys-1015b/build-receipt.json",
-    "sha256": "d1248b285adb73524f024559f299bf39bcfde56573e4de1ebb008312d5d888d5"
+    "path": "docs.local/runs/fs-transaction-postproduction-build-config-keys-1015c/build-receipt.json",
+    "sha256": "fed0be5829665a6e5e4d9e688c94cbcd251d5df5347f9ee4efd7fee814d9b969"
   },
   "profiles": {
     "strict": {
       "acquisitionComplete": true,
-      "sourceCommit": "6af3869fec0f44e409408694a4f474bf98deec97",
-      "artifactSha256": "59be4d25920642825a710ed1317edf3c8bb324b300435d9d8b0cac646ba3c046",
+      "sourceCommit": "08a747137022bcea42c355e223882b453f0357d5",
+      "artifactSha256": "b6153284544943c7eb83476f3f3aae5eeda152c0fb467aac2b5f931f937b46b3",
       "runtimeInputsScheme": "binary-v1",
-      "runtimeInputsDigest": "b342ca22a61809b04d18c121d0e9ca28d1e9d36e567ba95c7ccff01937b47c20",
+      "runtimeInputsDigest": "cb8a79388d2fbc0f982a317b8a17fe5d3ccc6203eefa05a6500f96282cc3275c",
       "runtimeInputCount": 346,
       "runtimeInputsClean": true,
       "pythonRuntime": {
@@ -386,12 +386,12 @@
         ]
       },
       "receipt": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015b-after-strict/receipt.json",
-        "sha256": "8a153d7cb24efe21121e3e2193bba90819742692ea968709e7b5aecaf864ba9b"
+        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015c-after-strict/receipt.json",
+        "sha256": "fb9239e1ff29e477fba13955675c51e5025f0243bc4d53d02c6e0a25ca35ae0c"
       },
       "comparison": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015b-after-strict/production-comparison.json",
-        "sha256": "dd5a132806eb2439e435c1fb0f6900630a1fb5007ff1d8c0c7e01fdc3a2e03fa"
+        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015c-after-strict/production-comparison.json",
+        "sha256": "5d07ffee856808118d63a626f8a607ba8804805cee825fc0569255f63075e579"
       },
       "results": [
         {
@@ -415,21 +415,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:15.383799Z",
+                "endedAt": "2026-10-15T08:00:27.659145Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-10-15T05:21:15.199966Z",
-                "wallSeconds": 0.18384790420532227
+                "startedAt": "2026-10-15T08:00:27.352129Z",
+                "wallSeconds": 0.3070228099822998
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:15.004176Z",
+                "endedAt": "2026-10-15T08:00:27.045221Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-10-15T05:21:14.851203Z",
-                "wallSeconds": 0.15297603607177734
+                "startedAt": "2026-10-15T08:00:26.761859Z",
+                "wallSeconds": 0.2833688259124756
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,
@@ -632,21 +632,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:15.383799Z",
+                "endedAt": "2026-10-15T08:00:27.659145Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-10-15T05:21:15.199966Z",
-                "wallSeconds": 0.18384790420532227
+                "startedAt": "2026-10-15T08:00:27.352129Z",
+                "wallSeconds": 0.3070228099822998
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:15.004176Z",
+                "endedAt": "2026-10-15T08:00:27.045221Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-10-15T05:21:14.851203Z",
-                "wallSeconds": 0.15297603607177734
+                "startedAt": "2026-10-15T08:00:26.761859Z",
+                "wallSeconds": 0.2833688259124756
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,
@@ -832,10 +832,10 @@
     },
     "emulator": {
       "acquisitionComplete": true,
-      "sourceCommit": "6af3869fec0f44e409408694a4f474bf98deec97",
-      "artifactSha256": "59be4d25920642825a710ed1317edf3c8bb324b300435d9d8b0cac646ba3c046",
+      "sourceCommit": "08a747137022bcea42c355e223882b453f0357d5",
+      "artifactSha256": "b6153284544943c7eb83476f3f3aae5eeda152c0fb467aac2b5f931f937b46b3",
       "runtimeInputsScheme": "binary-v1",
-      "runtimeInputsDigest": "b342ca22a61809b04d18c121d0e9ca28d1e9d36e567ba95c7ccff01937b47c20",
+      "runtimeInputsDigest": "cb8a79388d2fbc0f982a317b8a17fe5d3ccc6203eefa05a6500f96282cc3275c",
       "runtimeInputCount": 346,
       "runtimeInputsClean": true,
       "pythonRuntime": {
@@ -869,12 +869,12 @@
         ]
       },
       "receipt": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015b-after-emulator/receipt.json",
-        "sha256": "a0f3619141a18bdf4df4e1a5e00c1975ed326f6a17d9d9db622261deb89d3b0f"
+        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015c-after-emulator/receipt.json",
+        "sha256": "3b2cbb935a1962d3116f41060050dd6656cf53139ae9c09aa332bbd0b65fcab5"
       },
       "comparison": {
-        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015b-after-emulator/production-comparison.json",
-        "sha256": "64d16f682977d8ff090edc96afaa9e35953d2b14dbcd6fe4547299973e2bc0f1"
+        "path": "docs.local/runs/fs-transaction-recorded-local-config-keys-1015c-after-emulator/production-comparison.json",
+        "sha256": "e1f2eb573e746aecfa3bc46a071b9eb32600321ff4077092b91af162b556be6f"
       },
       "results": [
         {
@@ -914,21 +914,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:37.339044Z",
+                "endedAt": "2026-10-15T08:01:18.272265Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-10-15T05:21:37.117899Z",
-                "wallSeconds": 0.22114992141723633
+                "startedAt": "2026-10-15T08:01:17.375752Z",
+                "wallSeconds": 0.8965270519256592
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:36.898748Z",
+                "endedAt": "2026-10-15T08:01:16.801975Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-10-15T05:21:36.716791Z",
-                "wallSeconds": 0.1819608211517334
+                "startedAt": "2026-10-15T08:01:16.186094Z",
+                "wallSeconds": 0.6158878803253174
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,
@@ -1011,21 +1011,21 @@
               "finished-token/rollback-after-rollback": null,
               "idle-expiry/commit-after-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:37.339044Z",
+                "endedAt": "2026-10-15T08:01:18.272265Z",
                 "measuredSeconds": 70.0,
                 "mode": "control-clock",
                 "requestedSeconds": 70,
-                "startedAt": "2026-10-15T05:21:37.117899Z",
-                "wallSeconds": 0.22114992141723633
+                "startedAt": "2026-10-15T08:01:17.375752Z",
+                "wallSeconds": 0.8965270519256592
               },
               "idle-expiry/commit-before-idle": {
                 "checkpoints": 1,
-                "endedAt": "2026-10-15T05:21:36.898748Z",
+                "endedAt": "2026-10-15T08:01:16.801975Z",
                 "measuredSeconds": 20.0,
                 "mode": "control-clock",
                 "requestedSeconds": 20,
-                "startedAt": "2026-10-15T05:21:36.716791Z",
-                "wallSeconds": 0.1819608211517334
+                "startedAt": "2026-10-15T08:01:16.186094Z",
+                "wallSeconds": 0.6158878803253174
               },
               "idle-expiry/lock-held-before-idle": null,
               "idle-expiry/lock-released-after-idle": null,

@@ -8,12 +8,15 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-15
+
 ### Fixed
 
 - `fireemu exec` gives its command the plain `STORAGE_EMULATOR_HOST=http://host:port` unless Storage App Check is `enforced`. It used to embed a credential (`http://fireemu:<capability>@host:port`) in every run, and `@google-cloud/storage` 8.1 and later (`firebase-admin` 14.4 and later) refuse a URL with embedded credentials, so every Admin Storage call failed, and `file.publicUrl()` returned a URL `fetch` rejects. With Storage `enforced` the credential is still exported, because the Admin SDK has no other way to pass the Admin App Check bypass; there those SDK versions still fail (documented under App Check). Without Storage enforcement, a JSON API request that carries no browser `Origin` or Fetch Metadata evidence is still counted as the server-side bypass in the App Check observations, so Admin SDK traffic does not show up as a missing token. The Admin SDK no longer carries the capability there, so a `copyTo` into a bucket of another session is refused with 403 unless the request carries the owner credential. A new `sdk-latest` workflow runs the Storage and client smokes against the newest `firebase-admin` and `firebase` under `fireemu exec`.
 - Transaction tokens issued before a snapshot restore or database reset are rejected as expired in both profiles, even when a restored transaction reuses the same ID.
 - Functions runner startup preserves Windows environment variable names regardless of case and converts canonical Windows drive and UNC paths for Node. Handshake failures now report the exit status, captured stderr and the last stdout bytes.
 - Security Rules: `get()`, `exists()`, `getAfter()` and `existsAfter()` on a path that is not a document of the database (a collection path with an odd number of segments after `documents`, another database such as `/databases/other/documents/...`, or a path without `documents`) now raise an evaluation error and the request is refused, in both profiles. They used to read as a missing document, so `!exists(<such a path>)` and `get(<such a path>) == null` allowed the request, which production refuses (recorded on 2026-10-15: every such row answers 403 `PERMISSION_DENIED`, also with `!exists()` and `get() == null`) and so does the official emulator. A path to a document that does not exist is unchanged: `exists()` is `false`, `get()` is `null`. Like any Rules error it denies unless the other side of an `||` or `&&` decides the result (that mix was not recorded). Storage Rules calling `firestore.get()` and `firestore.exists()` are unchanged.
+
 ### Added
 
 - `GET /v1/firestore/missingIndexes` on the control API lists the composite indexes the strict profile served without their being defined (`firestore.missingIndexes: "report"`), so a CI job can fail on a non-empty list instead of reading standard error. Each entry has its project, database, the index in the `firestore.indexes.json` shape and production's refusal text, and `indexesJson` groups the indexes per database to merge into that file. `GET /v1/sessions/{session}/firestore/missingIndexes` lists one project's entries, and `DELETE` on either route clears them. The read answers `409` where nothing is reported (the `emulator` profile, `strict` with `"refuse"`, or Firestore not selected). The list holds 1,000 entries: past that `truncated` and `dropped` say so, and a project that lost all its indexes is refused with `409` instead of reading as empty. A session reset keeps the list; deleting the session clears it.
@@ -754,7 +757,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/t-k/fireemu/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/t-k/fireemu/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/t-k/fireemu/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/t-k/fireemu/compare/v0.18.0...v0.19.0

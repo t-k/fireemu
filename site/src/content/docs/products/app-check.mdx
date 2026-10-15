@@ -76,9 +76,45 @@ storage = "enforced"
 
 Each service accepts `off`, `unenforced` (tokens are checked and recorded, requests still pass) or `enforced` (requests without a valid token are refused before Security Rules run). A project without a registered app cannot use App Check, so an enforced service refuses every request to it.
 
-With Storage `enforced`, the Admin SDK (a server-side client library, not a browser) still has to reach Storage without a token. `fireemu exec` lets it through by putting a random per-run capability in the userinfo of `STORAGE_EMULATOR_HOST` (`http://fireemu:<capability>@host:port`), and the Storage adapter accepts it only on the JSON API and only from a request that carries no browser `Origin` or Fetch Metadata headers. Without Storage enforcement, which is the default, `STORAGE_EMULATOR_HOST` is the plain `http://host:port`.
+With Storage `enforced`, server-side code that uses the Admin SDK or `gcloud` (a client library, not a browser) still has to reach Storage without a token. Production does not apply App Check to that traffic: the Admin SDK authenticates with a service account over OAuth, and enforcement covers the Firebase Storage API the client SDKs call. The emulator has no OAuth, so `appCheck.storageServerRequests` decides how it recognises that traffic:
 
-`@google-cloud/storage` 8.1 and later (`firebase-admin` 14.4 and later) refuse a URL with embedded credentials, so with Storage `enforced` their Admin calls fail under `fireemu exec` until the Admin SDK has another way to present the capability. Until then, run server-side Storage code against `unenforced` Storage (tokens are still checked and recorded), or pin `firebase-admin` 14.3 or earlier.
+- `"loopback"` (the default) admits a request on a Cloud Storage JSON API route (`/storage/v1`, `/upload/storage/v1`, `/download/storage/v1`) that comes from a loopback peer and carries no browser evidence (no `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Referer` or `Cookie` header). A resumable upload continuation is such a request, so `file.save()` works. `fireemu exec` exports the plain `STORAGE_EMULATOR_HOST=http://host:port`, which every `@google-cloud/storage` and `firebase-admin` version accepts. The Firebase Storage API (`/v0`, what `firebase/storage` and the mobile SDKs use) always needs a token, and so does any request that looks like it came from a page or from another host. It is the same under the emulator and strict profiles and under `productionExact`, because it is production's behaviour.
+- `"capability"` admits only a per-run capability that `fireemu exec` puts in the userinfo of `STORAGE_EMULATOR_HOST` (`http://fireemu:<capability>@host:port`). `@google-cloud/storage` 8.1 and later (`firebase-admin` 14.4 and later) refuse a URL with embedded credentials, and a resumable continuation URL carries no capability, so with those versions or resumable uploads the Admin SDK fails under enforcement. Use it to prove that nothing but the capability can get through.
+
+Without Storage enforcement `STORAGE_EMULATOR_HOST` is always the plain `http://host:port`.
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+
+[appCheck]
+enabled = true
+storageServerRequests = "capability"
+
+[appCheck.services]
+storage = "enforced"
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "appCheck": {
+    "enabled": true,
+    "storageServerRequests": "capability",
+    "services": {
+      "storage": "enforced"
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 A debug token is a UUIDv4, and its digest is taken over the lowercase form. Generate a token for tests and compute its digest:
 

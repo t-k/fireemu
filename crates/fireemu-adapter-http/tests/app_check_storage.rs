@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use app_check_support as fixture;
-use fireemu_adapter_http::storage::{handle, StorageRequest, StorageResponse, StorageState};
+use fireemu_adapter_http::storage::{
+    handle, StorageRequest, StorageResponse, StorageServerRequests, StorageState,
+};
 use fireemu_core_app_check::verify::BaselineMode;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -32,6 +34,16 @@ struct Harness {
 }
 
 fn harness(mode: BaselineMode) -> Harness {
+    harness_with(mode, StorageServerRequests::Loopback)
+}
+
+/// The pre-`storageServerRequests` behaviour: only the per-run capability or the owner
+/// credential passes an `enforced` policy on the JSON API.
+fn capability_harness(mode: BaselineMode) -> Harness {
+    harness_with(mode, StorageServerRequests::Capability)
+}
+
+fn harness_with(mode: BaselineMode, server_requests: StorageServerRequests) -> Harness {
     let clock = fixture::clock();
     let app_check = fixture::app_check_state(1, clock.clone());
     let storage = StorageState {
@@ -55,6 +67,7 @@ fn harness(mode: BaselineMode) -> Harness {
         clock_observer: None,
         app_check_policy: fixture::policy(&app_check, "storage", mode),
         admin_capability: Some("storage-capability".to_owned()),
+        server_requests,
         token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
         allow_unsigned_id_tokens: false,
         control_token: None,
@@ -69,6 +82,19 @@ fn harness(mode: BaselineMode) -> Harness {
 impl Harness {
     fn call(
         &self,
+        method: &str,
+        path_and_query: &str,
+        headers: &[(&str, &str)],
+        app_check: &[&str],
+        body: &[u8],
+    ) -> StorageResponse {
+        self.call_from(false, method, path_and_query, headers, app_check, body)
+    }
+
+    /// Like [`Harness::call`], from a peer on `remote` (non-loopback) or loopback.
+    fn call_from(
+        &self,
+        remote_peer: bool,
         method: &str,
         path_and_query: &str,
         headers: &[(&str, &str)],
@@ -91,7 +117,7 @@ impl Harness {
                     .collect::<BTreeMap<_, _>>(),
                 app_check: app_check.iter().map(|v| (*v).to_owned()).collect(),
                 body: body.to_vec(),
-                remote_peer: false,
+                remote_peer,
             },
         )
     }
@@ -379,7 +405,7 @@ fn privileged_json_api_traffic_follows_the_explicit_bypass() {
 /// would be defeated by rewriting `/v0/b/...` to `/storage/v1/b/...`.
 #[test]
 fn an_unauthenticated_json_api_path_never_bypasses_app_check() {
-    let h = harness(BaselineMode::Enforced);
+    let h = capability_harness(BaselineMode::Enforced);
     h.seed_object("guarded-json.txt");
     let paths = [
         format!("/storage/v1/b/{BUCKET}/o"),
@@ -434,7 +460,7 @@ fn an_unauthenticated_json_api_path_never_bypasses_app_check() {
 /// carries the dialect's privileged credential.
 #[test]
 fn both_dialects_enforce_app_check_identically_without_a_privileged_credential() {
-    let h = harness(BaselineMode::Enforced);
+    let h = capability_harness(BaselineMode::Enforced);
     h.seed_object("both.txt");
     let firebase = h.call("GET", &format!("/v0/b/{BUCKET}/o/both.txt"), &[], &[], b"");
     let json_api = h.call(
@@ -826,7 +852,7 @@ fn the_privileged_json_api_continues_a_bound_resumable_upload() {
 /// not the privileged dialect, so it neither bypasses Security Rules nor App Check.
 #[test]
 fn a_json_api_path_with_an_end_user_credential_does_not_bypass() {
-    let h = harness(BaselineMode::Enforced);
+    let h = capability_harness(BaselineMode::Enforced);
     let denied = h.call(
         "GET",
         &format!("/storage/v1/b/{BUCKET}/o"),
@@ -858,7 +884,7 @@ fn the_firebase_dialect_never_bypasses_on_the_owner_credential_alone() {
 
 #[test]
 fn the_admin_storage_capability_bypasses_only_the_server_side_gcs_dialect() {
-    let h = harness(BaselineMode::Enforced);
+    let h = capability_harness(BaselineMode::Enforced);
     h.seed_object("admin/listed.txt");
     let authorization = admin_storage_authorization();
     let path = format!("/storage/v1/b/{BUCKET}/o?prefix=admin/");
@@ -946,7 +972,7 @@ fn the_admin_storage_capability_bypasses_only_the_server_side_gcs_dialect() {
 /// `/internal/setRules` route).
 #[test]
 fn the_admin_storage_capability_admits_the_exact_undici_header_set() {
-    let h = harness(BaselineMode::Enforced);
+    let h = capability_harness(BaselineMode::Enforced);
     h.seed_object("undici/listed.txt");
     let authorization = admin_storage_authorization();
     let path = format!("/storage/v1/b/{BUCKET}/o?prefix=undici/");
@@ -978,7 +1004,7 @@ fn the_admin_storage_capability_admits_the_exact_undici_header_set() {
 /// capability refused even though `Sec-Fetch-Mode` alone is not.
 #[test]
 fn the_admin_storage_capability_refuses_a_full_browser_header_set() {
-    let h = harness(BaselineMode::Enforced);
+    let h = capability_harness(BaselineMode::Enforced);
     let authorization = admin_storage_authorization();
     let path = format!("/storage/v1/b/{BUCKET}/o");
 
@@ -1003,6 +1029,667 @@ fn the_admin_storage_capability_refuses_a_full_browser_header_set() {
         String::from_utf8_lossy(&denied.body)
     );
     assert_eq!(body_of(&denied)["error"]["reason"], "APP_CHECK_REQUIRED");
+}
+
+// ------------------------------------------------------------------------------------------
+// Server-side Admin traffic under enforcement: `appCheck.storageServerRequests` (owner ledger
+// 1431). Production does not apply App Check to the Admin SDK's OAuth traffic; the emulator
+// recognises it by shape: a Cloud Storage JSON API route, a loopback peer, no browser evidence.
+// ------------------------------------------------------------------------------------------
+
+/// Every header a request needs to count as browser evidence, one at a time.
+const BROWSER_EVIDENCE: [(&str, &str); 5] = [
+    ("origin", "http://127.0.0.1:5173"),
+    ("sec-fetch-site", "same-origin"),
+    ("sec-fetch-dest", "empty"),
+    ("referer", "http://127.0.0.1:5173/"),
+    ("cookie", "session=1"),
+];
+
+fn session_id_of(start: &StorageResponse) -> String {
+    header(start, "location")
+        .or_else(|| header(start, "x-goog-upload-url"))
+        .expect("a session URL")
+        .split("upload_id=")
+        .nth(1)
+        .expect("the session URL carries its upload id")
+        .split('&')
+        .next()
+        .expect("an upload id")
+        .to_owned()
+}
+
+#[test]
+fn a_loopback_json_api_request_without_browser_evidence_is_admitted_under_enforcement() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("server/seeded.txt");
+    // The shapes the Admin SDK sends: no credential at all, and a bearer access token.
+    for headers in [
+        vec![],
+        vec![("authorization", "Bearer ya29.not-checked")],
+        // Node's built-in fetch attaches `sec-fetch-mode: cors` and nothing else browser-like.
+        vec![("sec-fetch-mode", "cors"), ("user-agent", "node")],
+    ] {
+        let list = h.call(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o?prefix=server/"),
+            &headers,
+            &[],
+            b"",
+        );
+        assert_eq!(
+            list.status,
+            200,
+            "{headers:?}: {}",
+            String::from_utf8_lossy(&list.body)
+        );
+        let get = h.call(
+            "GET",
+            &format!("/storage/v1/b/{BUCKET}/o/server%2Fseeded.txt"),
+            &headers,
+            &[],
+            b"",
+        );
+        assert_eq!(get.status, 200, "{headers:?}");
+        let download = h.call(
+            "GET",
+            &format!("/download/storage/v1/b/{BUCKET}/o/server%2Fseeded.txt?alt=media"),
+            &headers,
+            &[],
+            b"",
+        );
+        assert_eq!(download.status, 200, "{headers:?}");
+        assert_eq!(&download.body[..], b"hello");
+    }
+    let upload = h.call(
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?name=server/up.txt&uploadType=media"),
+        &[("content-type", "text/plain")],
+        &[],
+        b"written",
+    );
+    assert_eq!(
+        upload.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&upload.body)
+    );
+    let delete = h.call(
+        "DELETE",
+        &format!("/storage/v1/b/{BUCKET}/o/server%2Fup.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(
+        delete.status,
+        204,
+        "{}",
+        String::from_utf8_lossy(&delete.body)
+    );
+}
+
+/// Admitted server-side requests are counted as the server-side bypass, the same label the
+/// `unenforced` policy gives them.
+#[test]
+fn an_admitted_server_side_request_is_observed_as_a_bypass() {
+    use fireemu_core_app_check::CredentialCategory::Bypass;
+
+    let h = harness(BaselineMode::Enforced);
+    let before = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app")
+        .len();
+    let list = h.call("GET", &format!("/storage/v1/b/{BUCKET}/o"), &[], &[], b"");
+    assert_eq!(list.status, 200);
+    let observed = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app");
+    let fresh = &observed[before..];
+    assert_eq!(fresh.len(), 1);
+    assert!(
+        fresh[0].category == Bypass && fresh[0].admitted,
+        "{fresh:?}"
+    );
+}
+
+#[test]
+fn the_firebase_dialect_still_needs_a_token_under_loopback_server_requests() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("v0/guarded.txt");
+    for (label, headers) in [
+        ("no headers", vec![]),
+        ("owner credential", vec![OWNER]),
+        (
+            "bearer access token",
+            vec![("authorization", "Bearer ya29.x")],
+        ),
+        (
+            "capability",
+            vec![(
+                "authorization",
+                "Basic ZmlyZWVtdTpzdG9yYWdlLWNhcGFiaWxpdHk=",
+            )],
+        ),
+    ] {
+        for (method, path, body) in [
+            ("GET", format!("/v0/b/{BUCKET}/o"), &b""[..]),
+            (
+                "GET",
+                format!("/v0/b/{BUCKET}/o/v0%2Fguarded.txt"),
+                &b""[..],
+            ),
+            (
+                "DELETE",
+                format!("/v0/b/{BUCKET}/o/v0%2Fguarded.txt"),
+                &b""[..],
+            ),
+            (
+                "POST",
+                format!("/v0/b/{BUCKET}/o?name=v0/new.txt&uploadType=media"),
+                &b"x"[..],
+            ),
+        ] {
+            let denied = h.call(method, &path, &headers, &[], body);
+            assert_eq!(
+                denied.status,
+                403,
+                "{label}: {method} {path}: {}",
+                String::from_utf8_lossy(&denied.body)
+            );
+            assert_eq!(body_of(&denied)["error"]["reason"], "APP_CHECK_REQUIRED");
+        }
+    }
+    // The denied requests changed nothing.
+    let still = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/v0%2Fguarded.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(still.status, 200);
+    let created = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/v0%2Fnew.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(created.status, 404);
+}
+
+#[test]
+fn browser_evidence_keeps_a_json_api_request_ordinary_under_loopback_server_requests() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("browser/guarded.txt");
+    for (name, value) in BROWSER_EVIDENCE {
+        for (method, path, body) in [
+            ("GET", format!("/storage/v1/b/{BUCKET}/o"), &b""[..]),
+            (
+                "GET",
+                format!("/storage/v1/b/{BUCKET}/o/browser%2Fguarded.txt"),
+                &b""[..],
+            ),
+            (
+                "GET",
+                format!("/download/storage/v1/b/{BUCKET}/o/browser%2Fguarded.txt?alt=media"),
+                &b""[..],
+            ),
+            (
+                "POST",
+                format!("/upload/storage/v1/b/{BUCKET}/o?name=browser/new.txt&uploadType=media"),
+                &b"x"[..],
+            ),
+            (
+                "DELETE",
+                format!("/storage/v1/b/{BUCKET}/o/browser%2Fguarded.txt"),
+                &b""[..],
+            ),
+        ] {
+            let denied = h.call(method, &path, &[(name, value)], &[], body);
+            assert_eq!(
+                denied.status,
+                403,
+                "{name}: {method} {path}: {}",
+                String::from_utf8_lossy(&denied.body)
+            );
+            assert_eq!(body_of(&denied)["error"]["reason"], "APP_CHECK_REQUIRED");
+        }
+    }
+    // The denied requests changed nothing: the object is still there and nothing was created.
+    let kept = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/browser%2Fguarded.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(kept.status, 200);
+    let created = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/browser%2Fnew.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(created.status, 404);
+}
+
+#[test]
+fn a_non_loopback_peer_is_not_server_side() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("remote/guarded.txt");
+    let denied = h.call_from(
+        true,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/remote%2Fguarded.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(
+        denied.status,
+        403,
+        "{}",
+        String::from_utf8_lossy(&denied.body)
+    );
+    assert_eq!(body_of(&denied)["error"]["reason"], "APP_CHECK_REQUIRED");
+    let denied_upload = h.call_from(
+        true,
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?name=remote/new.txt&uploadType=media"),
+        &[("content-type", "text/plain")],
+        &[],
+        b"x",
+    );
+    assert_eq!(denied_upload.status, 403);
+    // The same request from loopback is admitted.
+    let admitted = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/remote%2Fguarded.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(admitted.status, 200);
+}
+
+/// Only the Cloud Storage JSON API routes are server-side. The XML-style object read and the
+/// form-data upload are the URLs a page navigates to or posts a form to.
+#[test]
+fn the_xml_style_read_and_the_form_upload_are_not_server_side() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("xml/guarded.txt");
+    let read = h.call("GET", &format!("/{BUCKET}/xml/guarded.txt"), &[], &[], b"");
+    assert_eq!(read.status, 403, "{}", String::from_utf8_lossy(&read.body));
+    let form = h.call(
+        "POST",
+        &format!("/{BUCKET}"),
+        &[("content-type", "multipart/form-data; boundary=x")],
+        &[],
+        b"--x--\r\n",
+    );
+    assert_eq!(form.status, 403, "{}", String::from_utf8_lossy(&form.body));
+}
+
+/// The Admin SDK's resumable `file.save()`: the start and every continuation are JSON API
+/// requests with no capability, so both pass; a client app's own bound session also continues.
+#[test]
+fn a_resumable_upload_started_and_continued_server_side_passes_under_enforcement() {
+    let h = harness(BaselineMode::Enforced);
+    let start = h.call(
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=admin/resumable.bin"),
+        &[
+            ("content-type", "application/json"),
+            ("x-upload-content-type", "application/octet-stream"),
+        ],
+        &[],
+        b"{}",
+    );
+    assert_eq!(
+        start.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&start.body)
+    );
+    let session = session_id_of(&start);
+    let path = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id={session}");
+
+    let first = h.call(
+        "PUT",
+        &path,
+        &[("content-range", "bytes 0-2/6")],
+        &[],
+        b"abc",
+    );
+    assert_eq!(
+        (first.status, header(&first, "range")),
+        (308, Some("bytes=0-2"))
+    );
+    let status = h.call("PUT", &path, &[("content-range", "bytes */6")], &[], b"");
+    assert_eq!(status.status, 308);
+    let last = h.call(
+        "PUT",
+        &path,
+        &[("content-range", "bytes 3-5/6")],
+        &[],
+        b"def",
+    );
+    assert_eq!(last.status, 200, "{}", String::from_utf8_lossy(&last.body));
+    let read = h.call(
+        "GET",
+        &format!("/download/storage/v1/b/{BUCKET}/o/admin%2Fresumable.bin?alt=media"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(&read.body[..], b"abcdef");
+}
+
+#[test]
+fn a_browser_shaped_or_remote_continuation_of_a_resumable_session_is_refused_and_leaves_it_intact()
+{
+    let h = harness(BaselineMode::Enforced);
+    let start = h.call(
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=admin/guarded.bin"),
+        &[("content-type", "application/json")],
+        &[],
+        b"{}",
+    );
+    assert_eq!(start.status, 200);
+    let session = session_id_of(&start);
+    let path = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id={session}");
+    for (name, value) in BROWSER_EVIDENCE {
+        let denied = h.call(
+            "PUT",
+            &path,
+            &[(name, value), ("content-range", "bytes 0-2/6")],
+            &[],
+            b"abc",
+        );
+        assert_eq!(
+            denied.status,
+            403,
+            "{name}: {}",
+            String::from_utf8_lossy(&denied.body)
+        );
+    }
+    let remote = h.call_from(
+        true,
+        "PUT",
+        &path,
+        &[("content-range", "bytes 0-2/6")],
+        &[],
+        b"abc",
+    );
+    assert_eq!(remote.status, 403);
+    // The refusals advanced nothing: the session still has no byte, and finishes normally.
+    let status = h.call("PUT", &path, &[("content-range", "bytes */6")], &[], b"");
+    assert_eq!(status.status, 308);
+    assert_eq!(
+        header(&status, "range"),
+        None,
+        "no byte was stored: {:?}",
+        status.headers
+    );
+    let done = h.call(
+        "PUT",
+        &path,
+        &[("content-range", "bytes 0-5/6")],
+        &[],
+        b"abcdef",
+    );
+    assert_eq!(done.status, 200);
+}
+
+/// A session id that was never issued, or that belongs to another bucket, answers as it does
+/// without App Check: the admission only decides whether the request may look the session up.
+#[test]
+fn a_foreign_or_unknown_upload_id_is_still_not_found_for_a_server_side_request() {
+    let h = harness(BaselineMode::Enforced);
+    let start = h.call(
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=admin/own.bin"),
+        &[("content-type", "application/json")],
+        &[],
+        b"{}",
+    );
+    let session = session_id_of(&start);
+    let unknown = h.call(
+        "PUT",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id=not-a-session"),
+        &[("content-range", "bytes 0-2/6")],
+        &[],
+        b"abc",
+    );
+    assert_eq!(
+        unknown.status,
+        404,
+        "{}",
+        String::from_utf8_lossy(&unknown.body)
+    );
+    let other_bucket = h.call(
+        "PUT",
+        &format!("/upload/storage/v1/b/other-bucket/o?uploadType=resumable&upload_id={session}"),
+        &[("content-range", "bytes 0-2/6")],
+        &[],
+        b"abc",
+    );
+    assert_eq!(
+        other_bucket.status,
+        404,
+        "{}",
+        String::from_utf8_lossy(&other_bucket.body)
+    );
+    // The same ids from a browser are refused by App Check before the lookup.
+    let browser = h.call(
+        "PUT",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id=not-a-session"),
+        &[
+            ("origin", "http://127.0.0.1:5173"),
+            ("content-range", "bytes 0-2/6"),
+        ],
+        &[],
+        b"abc",
+    );
+    assert_eq!(browser.status, 403);
+}
+
+/// A session a client app started (bound to its app) stays bound for other clients: a
+/// different app's token cannot continue it, while the server-side request, like the owner
+/// credential before it, can.
+#[test]
+fn a_bound_session_stays_bound_to_clients_and_is_open_to_server_side_requests() {
+    let h = harness(BaselineMode::Enforced);
+    let token = h.token();
+    let start = h.start_resumable("bound.bin", &[&token]);
+    assert_eq!(start.status, 200);
+    let session = session_id_of(&start);
+    let json_path =
+        format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id={session}");
+    let other = h.other_app_token();
+    let foreign = h.call(
+        "PUT",
+        &json_path,
+        &[
+            ("origin", "http://127.0.0.1:5173"),
+            ("content-range", "bytes 0-5/6"),
+        ],
+        &[&other],
+        b"abcdef",
+    );
+    assert_eq!(
+        foreign.status,
+        403,
+        "{}",
+        String::from_utf8_lossy(&foreign.body)
+    );
+    let server = h.call(
+        "PUT",
+        &json_path,
+        &[("content-range", "bytes 0-5/6")],
+        &[],
+        b"abcdef",
+    );
+    assert_eq!(
+        server.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&server.body)
+    );
+}
+
+/// `capability`: exactly the behaviour before the setting existed.
+#[test]
+fn capability_mode_admits_only_the_capability_and_refuses_a_credential_less_continuation() {
+    let h = capability_harness(BaselineMode::Enforced);
+    let authorization = admin_storage_authorization();
+    let list = format!("/storage/v1/b/{BUCKET}/o");
+    let refused = h.call("GET", &list, &[], &[], b"");
+    assert_eq!(refused.status, 403);
+    assert_eq!(body_of(&refused)["error"]["reason"], "APP_CHECK_REQUIRED");
+    let admitted = h.call("GET", &list, &[("authorization", &authorization)], &[], b"");
+    assert_eq!(admitted.status, 200);
+
+    // The capability starts a session; the continuation URL has no capability, so it is
+    // refused (the 8.1 / resumable limitation this mode keeps).
+    let start = h.call(
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=capability.bin"),
+        &[
+            ("authorization", &authorization),
+            ("content-type", "application/json"),
+        ],
+        &[],
+        b"{}",
+    );
+    assert_eq!(
+        start.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&start.body)
+    );
+    let session = session_id_of(&start);
+    let path = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&upload_id={session}");
+    let continuation = h.call(
+        "PUT",
+        &path,
+        &[("content-range", "bytes 0-5/6")],
+        &[],
+        b"abcdef",
+    );
+    assert_eq!(continuation.status, 403);
+    assert_eq!(
+        body_of(&continuation)["error"]["reason"],
+        "APP_CHECK_REQUIRED"
+    );
+}
+
+#[test]
+fn an_unenforced_remote_json_api_request_is_observed_as_missing() {
+    use fireemu_core_app_check::CredentialCategory::Missing;
+
+    let h = harness(BaselineMode::Unenforced);
+    let before = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app")
+        .len();
+    let r = h.call_from(
+        true,
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(r.status, 200, "unenforced admits everything");
+    let observed = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app");
+    assert!(observed[before..]
+        .iter()
+        .all(|o| o.category == Missing && o.admitted));
+}
+
+mod server_side_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// (method, path template, expected to be a Cloud Storage JSON API route)
+    fn routes() -> Vec<(&'static str, String, bool)> {
+        vec![
+            ("GET", format!("/storage/v1/b/{BUCKET}/o"), true),
+            ("GET", format!("/storage/v1/b/{BUCKET}/o/p%2Fo.txt"), true),
+            (
+                "GET",
+                format!("/download/storage/v1/b/{BUCKET}/o/p%2Fo.txt?alt=media"),
+                true,
+            ),
+            ("GET", format!("/storage/v1/b/{BUCKET}"), true),
+            ("GET", format!("/b/{BUCKET}/o"), true),
+            ("GET", "/b".to_owned(), true),
+            ("GET", format!("/v0/b/{BUCKET}/o"), false),
+            ("GET", format!("/v0/b/{BUCKET}/o/p%2Fo.txt"), false),
+            ("GET", format!("/{BUCKET}/p/o.txt"), false),
+        ]
+    }
+
+    proptest! {
+        /// Under `enforced` and no credential, a request is admitted exactly when it is a JSON
+        /// API route from a loopback peer with no browser evidence and the setting is
+        /// `loopback`; `capability` admits none of them without the capability.
+        #[test]
+        fn admission_is_the_conjunction_of_route_peer_and_browser_evidence(
+            route in 0usize..9,
+            remote in any::<bool>(),
+            evidence in proptest::collection::vec(any::<bool>(), 5),
+            sec_fetch_mode in any::<bool>(),
+            loopback in any::<bool>(),
+        ) {
+            let mode = if loopback {
+                StorageServerRequests::Loopback
+            } else {
+                StorageServerRequests::Capability
+            };
+            let h = harness_with(BaselineMode::Enforced, mode);
+            let (method, path, json_api) = routes()[route].clone();
+            let mut headers: Vec<(&str, &str)> = BROWSER_EVIDENCE
+                .iter()
+                .zip(&evidence)
+                .filter(|(_, on)| **on)
+                .map(|(pair, _)| *pair)
+                .collect();
+            if sec_fetch_mode {
+                headers.push(("sec-fetch-mode", "cors"));
+            }
+            let browser = evidence.iter().any(|on| *on);
+            let response = h.call_from(remote, method, &path, &headers, &[], b"");
+            let refused_by_app_check = response.status == 403
+                && body_of(&response)["error"]["reason"] == "APP_CHECK_REQUIRED";
+            let expected_admitted = loopback && json_api && !remote && !browser;
+            prop_assert_eq!(
+                !refused_by_app_check,
+                expected_admitted,
+                "{} {} remote={} headers={:?} -> {}",
+                method, path, remote, headers, response.status
+            );
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1221,7 +1908,7 @@ fn unenforced_server_side_json_api_traffic_is_observed_as_bypass() {
 /// request is refused, and so is its browser-shaped variant.
 #[test]
 fn an_enforced_server_side_json_api_request_without_the_capability_is_still_refused() {
-    let h = harness(BaselineMode::Enforced);
+    let h = capability_harness(BaselineMode::Enforced);
     let list = format!("/storage/v1/b/{BUCKET}/o");
     for headers in [vec![], vec![("sec-fetch-mode", "cors")]] {
         let r = h.call("GET", &list, &headers, &[], b"");
@@ -1311,6 +1998,47 @@ async fn the_storage_listener_forwards_the_app_check_field_and_refuses_duplicate
     )
     .await;
     assert!(none.starts_with("HTTP/1.1 403"), "{none}");
+    server.abort();
+}
+
+/// Over a real loopback socket the Storage transport forwards the browser evidence the
+/// server-side rule reads, and sets the peer flag from the connection: a plain JSON API
+/// request passes under `enforced`, and the same request with any browser header, or on the
+/// Firebase dialect, does not.
+#[tokio::test]
+async fn the_storage_listener_admits_server_side_json_api_requests_only() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("sock/listed.txt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("a local address");
+    let server = tokio::spawn(fireemu_adapter_http::storage_server::serve_storage(
+        listener,
+        Arc::new(h.storage),
+    ));
+    let request = |path: &str, extra: &str| {
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n")
+    };
+    let list = format!("/storage/v1/b/{BUCKET}/o?prefix=sock/");
+
+    let server_side = raw(addr, &request(&list, "")).await;
+    assert!(server_side.starts_with("HTTP/1.1 200"), "{server_side}");
+    let undici = raw(addr, &request(&list, "Sec-Fetch-Mode: cors\r\n")).await;
+    assert!(undici.starts_with("HTTP/1.1 200"), "{undici}");
+    for header in [
+        "Origin: http://localhost:5173",
+        "Sec-Fetch-Site: same-origin",
+        "Sec-Fetch-Dest: empty",
+        "Referer: http://localhost:5173/",
+        "Cookie: session=1",
+    ] {
+        let page = raw(addr, &request(&list, &format!("{header}\r\n"))).await;
+        assert!(page.starts_with("HTTP/1.1 403"), "{header}: {page}");
+        assert!(page.contains("APP_CHECK_REQUIRED"), "{header}: {page}");
+    }
+    let firebase = raw(addr, &request(&format!("/v0/b/{BUCKET}/o"), "")).await;
+    assert!(firebase.starts_with("HTTP/1.1 403"), "{firebase}");
     server.abort();
 }
 

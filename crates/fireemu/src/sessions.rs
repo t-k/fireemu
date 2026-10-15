@@ -421,6 +421,7 @@ pub(crate) mod tests {
                 clock_observer: None,
                 app_check_policy: None,
                 admin_capability: None,
+                server_requests: fireemu_adapter_http::storage::StorageServerRequests::default(),
                 token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
                 allow_unsigned_id_tokens: false,
                 control_token: None,

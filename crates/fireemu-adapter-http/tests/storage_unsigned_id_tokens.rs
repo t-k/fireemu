@@ -46,6 +46,7 @@ fn state(acceptance: TokenAcceptance, allow_unsigned_id_tokens: bool) -> Storage
         clock_observer: None,
         app_check_policy: None,
         admin_capability: None,
+        server_requests: fireemu_adapter_http::storage::StorageServerRequests::default(),
         token_acceptance: acceptance,
         allow_unsigned_id_tokens,
         control_token: None,

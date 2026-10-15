@@ -241,3 +241,51 @@ fn a_relative_path_that_only_the_working_directory_has_still_loads_with_a_note()
         "{notes}"
     );
 }
+
+#[test]
+fn the_notes_about_a_configuration_file_are_not_printed_when_the_log_is_quiet() {
+    let dir = Scratch::new("config-strict", "quiet");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("here.rules"), RULES).unwrap();
+    std::fs::write(
+        dir.join("sub").join("fireemu.json"),
+        r#"{"schemaVersion": 1, "rules": {"source": "here.rules"}, "firestore": {"rules": "unused.rules"}}"#,
+    )
+    .unwrap();
+    let args = [
+        "exec",
+        "--only",
+        "firestore",
+        "--config",
+        "sub/fireemu.json",
+        "--firestore-port",
+        "0",
+        "--http-port",
+        "0",
+        "--hub-port",
+        "0",
+        "--ui-port",
+        "0",
+    ];
+    let run = |extra: &[&str]| {
+        let mut all = args.to_vec();
+        all.extend(extra);
+        all.extend(["--", "true"]);
+        fireemu(&dir, &all)
+    };
+    let loud = run(&[]);
+    assert!(loud.status.success(), "{}", stderr(&loud));
+    let loud = stderr(&loud);
+    assert!(
+        loud.contains("is not beside the configuration file")
+            && loud.contains("firestore.rules is accepted but never read"),
+        "{loud}"
+    );
+    let quiet = run(&["--log-verbosity", "quiet"]);
+    assert!(quiet.status.success(), "{}", stderr(&quiet));
+    assert!(
+        !stderr(&quiet).contains("note:"),
+        "quiet means no notes: {}",
+        stderr(&quiet)
+    );
+}

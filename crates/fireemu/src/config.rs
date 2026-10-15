@@ -5453,6 +5453,13 @@ mod tests {
                 json!(["media-bucket", "other.example.com"]),
             ),
             ("daemon.clockStart", json!("2031-02-03T04:05:06Z")),
+            ("daemon.hubPort", json!(4411)),
+            ("daemon.uiPort", json!(4012)),
+            ("pubsub.projectNumbers", json!({"demo-app": "1234567890"})),
+            (
+                "pubsub.authentication.localBearerToken",
+                json!("fixture-token"),
+            ),
             (
                 "daemon.authProjectNumbers",
                 json!({"demo-app": 1_234_567_890}),
@@ -5878,6 +5885,17 @@ mod tests {
                 &json!({"trace": {"canonical": null}, "bind": "127.0.0.1", "auth": {"enabled": false}})
             ),
             ["bind", "auth.enabled", "trace.canonical"]
+        );
+    }
+
+    #[test]
+    fn the_deprecated_firestore_rules_key_points_at_rules_source() {
+        let notes = no_effect_notes(&json!({"firestore": {"rules": "firestore.rules"}}));
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].starts_with("firestore.rules is accepted but never read")
+                && notes[0].contains("rules.source"),
+            "{notes:?}"
         );
     }
 

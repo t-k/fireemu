@@ -839,6 +839,78 @@ async fn a_busy_holder_keeps_its_locks_past_the_lease() {
 }
 
 #[tokio::test]
+async fn restored_transaction_ids_do_not_authenticate_pre_restore_tokens() {
+    for strict in [true, false] {
+        let (mut client_a, _clock, backend, server) = start_profile_with_state(strict, None).await;
+        let mut client_b = client_a.clone();
+        let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+        backend.ensure_database(&parent).unwrap();
+        let snapshot = backend.snapshot_databases();
+        let request = pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        };
+        let old = client_a
+            .begin_transaction(request.clone())
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        backend.restore_databases(snapshot).unwrap();
+        let current = client_b
+            .begin_transaction(request)
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let stale_commit = client_a
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                transaction: old.clone(),
+                writes: vec![update_write("guard/stale", &[("v", i(1))])],
+                ..Default::default()
+            })
+            .await;
+        let document = client_b
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/guard/stale"),
+                ..Default::default()
+            })
+            .await;
+        let current_commit = client_b
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                transaction: current.clone(),
+                writes: vec![update_write("guard/current", &[("v", i(2))])],
+                ..Default::default()
+            })
+            .await;
+        let current_document = client_b
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/guard/current"),
+                ..Default::default()
+            })
+            .await;
+        server.abort();
+        let _ = server.await;
+        assert_eq!(
+            &old[..8],
+            &current[..8],
+            "restored transaction IDs stay deterministic"
+        );
+        let error = stale_commit.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Aborted);
+        assert_eq!(
+            error.message(),
+            "The referenced transaction has expired or is no longer valid."
+        );
+        assert_eq!(document.unwrap_err().code(), tonic::Code::NotFound);
+        current_commit.unwrap();
+        assert_eq!(current_document.unwrap().into_inner().fields["v"], i(2));
+    }
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn imported_databases_can_issue_identical_transaction_ids_over_grpc() {
     for strict in [true, false] {
@@ -1029,7 +1101,7 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
             ("db-000518cc", "(default)", "db-000cec18", "other", None),
         ]
         .into_iter()
-        .chain((0..24).flat_map(|index| {
+        .chain((0..32).flat_map(|index| {
             ["(default)", "other"]
                 .map(|database| ("demo-app", "(default)", "demo-app", database, Some(index)))
         })) {
@@ -1053,7 +1125,7 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
                 .unwrap()
                 .into_inner()
                 .transaction;
-            assert_eq!(original.len(), 24);
+            assert_eq!(original.len(), 32);
             let mut transaction = original.clone();
             if let Some(index) = tampered {
                 transaction[index] ^= 1;

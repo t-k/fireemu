@@ -55,7 +55,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn foreign_transaction_tokens_match_profile_over_rest() {
+fn foreign_and_restored_transaction_tokens_match_profile_over_rest() {
     for strict in [true, false] {
         let mut state = state();
         if !strict {
@@ -70,6 +70,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             state.gateway = Arc::new(gateway);
         }
         for (issuer_project, issuer_database, project, database, tampered) in [
+            ("demo-app", "(default)", "demo-app", "(default)", None),
             ("demo-app", "(default)", "demo-app", "other", None),
             ("demo-app", "(default)", "demo-other", "(default)", None),
             ("demo-app", "(default)", "demo-other", "other", None),
@@ -80,7 +81,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             ("db-000518cc", "(default)", "db-000cec18", "other", None),
         ]
         .into_iter()
-        .chain((0..24).flat_map(|index| {
+        .chain((0..32).flat_map(|index| {
             ["(default)", "other"]
                 .map(|database| ("demo-app", "(default)", "demo-app", database, Some(index)))
         })) {
@@ -93,6 +94,9 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             state.local.ensure_database(&parent).unwrap();
             let (status, seeded) = call(&state, "PATCH", &format!("{docs}/guard/read"), json!({}));
             assert_eq!(status, 200, "{seeded}");
+            let restored =
+                tampered.is_none() && project == issuer_project && database == issuer_database;
+            let snapshot = restored.then(|| state.local.snapshot_databases());
             let (status, begun) = call(
                 &state,
                 "POST",
@@ -101,8 +105,21 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             );
             assert_eq!(status, 200, "{begun}");
             let original = begun["transaction"].as_str().unwrap();
+            let retained = if let Some(snapshot) = snapshot {
+                state.local.restore_databases(snapshot).unwrap();
+                let (status, replacement) = call(
+                    &state,
+                    "POST",
+                    &format!("{issuer_docs}:beginTransaction"),
+                    json!({}),
+                );
+                assert_eq!(status, 200);
+                replacement["transaction"].as_str().unwrap().to_owned()
+            } else {
+                original.to_owned()
+            };
             let mut bytes = super::json::base64_decode(original).unwrap();
-            assert_eq!(bytes.len(), 24);
+            assert_eq!(bytes.len(), 32);
             if let Some(index) = tampered {
                 bytes[index] ^= 1;
             }
@@ -110,7 +127,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             let query_transaction = transaction.replace('+', "%2B");
             let (http, code, message) = if tampered.is_some() {
                 (400, "INVALID_ARGUMENT", "Invalid transaction.")
-            } else if !strict {
+            } else if !strict && !restored {
                 (
                     400,
                     "INVALID_ARGUMENT",
@@ -245,7 +262,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
                 &state,
                 "POST",
                 &format!("{issuer_docs}:rollback"),
-                json!({"transaction": original}),
+                json!({"transaction": retained}),
             );
             assert_eq!(
                 status, 200,

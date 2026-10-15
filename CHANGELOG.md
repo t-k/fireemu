@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Transaction tokens issued before a snapshot restore or database reset are rejected as expired in both profiles, even when a restored transaction reuses the same ID.
+
 ## [0.21.0] - 2026-10-15
 
 ### Added

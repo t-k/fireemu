@@ -2508,7 +2508,9 @@ async fn a_duplicated_browser_or_authorization_header_still_keeps_the_request_or
     }
     // A header that is not evidence may repeat, and the single header is still a process.
     for extra in [
-        "Accept: */*\r\nAccept: text/plain\r\n",
+        "X-Goog-Hash: crc32c=AAAAAA==\r\nX-Goog-Hash: md5=1B2M2Y8AsgTpgAmY7PhCfg==\r\n",
+        "Range: bytes=0-1\r\nRange: bytes=2-3\r\n",
+        "Sec-Fetch-Mode: cors\r\nSec-Fetch-Mode: cors\r\n",
         "Sec-Fetch-Mode: cors\r\n",
     ] {
         let response = raw(addr, &request(extra)).await;
@@ -2517,6 +2519,18 @@ async fn a_duplicated_browser_or_authorization_header_still_keeps_the_request_or
             "{extra:?}: {response}"
         );
     }
+    // The privileged rules route reads the same evidence: a duplicated `Origin` is a page.
+    let set_rules = |extra: &str| {
+        format!("PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}")
+    };
+    let page = raw(
+        addr,
+        &set_rules("Origin: http://localhost:5173\r\nOrigin: http://localhost:5173\r\n"),
+    )
+    .await;
+    assert!(page.starts_with("HTTP/1.1 403"), "{page}");
+    let process = raw(addr, &set_rules("")).await;
+    assert!(!process.starts_with("HTTP/1.1 403"), "{process}");
     server.abort();
 }
 

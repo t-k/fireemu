@@ -3328,7 +3328,7 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn control_state(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -3349,6 +3349,7 @@ fn control_state(
     pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
     listen_expiry: Option<fireemu_adapter_grpc::rules::ListenExpiry>,
+    missing_indexes_reported: bool,
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases and their field
@@ -3455,6 +3456,9 @@ fn control_state(
         firestore_listen_expiry: listen_expiry.map(|expiry| {
             Arc::new(move || expiry.expire()) as Arc<dyn Fn() -> usize + Send + Sync>
         }),
+        firestore_missing_indexes: Some(Arc::new(control::MissingIndexReports {
+            enabled: missing_indexes_reported,
+        })),
     }
 }
 

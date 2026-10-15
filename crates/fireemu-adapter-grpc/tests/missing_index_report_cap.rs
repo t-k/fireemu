@@ -1,7 +1,9 @@
 //! The list of reported missing indexes is bounded, and an index past the bound is neither
 //! listed nor logged again on every query. Its own test binary: it fills the process-wide list.
 
-use fireemu_adapter_grpc::gateway::{missing_index_reports, Gateway};
+use fireemu_adapter_grpc::gateway::{
+    clear_missing_index_reports, missing_index_dropped, missing_index_reports, Gateway,
+};
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
@@ -67,10 +69,47 @@ fn the_report_list_stops_at_its_bound() {
         gateway.report_missing_index(&database(1001), &accepted),
         None
     );
+    // Every query whose index could not be listed is counted, by project, so a reader of the list
+    // can tell that it is incomplete.
+    assert_eq!(missing_index_dropped(Some("demo-cap")), 3);
+    assert_eq!(missing_index_dropped(Some("demo-cap-b")), 0);
+    assert_eq!(missing_index_dropped(None), 3);
+    let other = "projects/demo-cap-b/databases/(default)";
+    assert_eq!(gateway.report_missing_index(other, &accepted), None);
+    assert_eq!(missing_index_dropped(Some("demo-cap-b")), 1);
+    assert_eq!(missing_index_dropped(Some("demo-cap")), 3);
+    assert_eq!(missing_index_dropped(None), 4);
     let reports = missing_index_reports();
     assert_eq!(reports.len(), 1000);
     assert_eq!(reports[999].database, database(999));
     assert!(reports
         .iter()
         .all(|r| r.database != database(1000) && r.database != database(1001)));
+
+    // A clear that removes nothing leaves a full list full, and its notice already said so.
+    assert_eq!(clear_missing_index_reports(Some("demo-nobody")), 0);
+    assert_eq!(
+        gateway.report_missing_index(&database(1002), &accepted),
+        None
+    );
+    // Clearing one project forgets what was dropped for it and for no other.
+    assert_eq!(clear_missing_index_reports(Some("demo-cap-b")), 0);
+    assert_eq!(missing_index_dropped(Some("demo-cap-b")), 0);
+    assert_eq!(missing_index_dropped(Some("demo-cap")), 4);
+    // Clearing makes room again, and a list that fills a second time says so a second time.
+    assert_eq!(clear_missing_index_reports(None), 1000);
+    assert!(missing_index_reports().is_empty());
+    assert_eq!(missing_index_dropped(None), 0);
+    for n in 0..1000 {
+        assert!(gateway
+            .report_missing_index(&database(n), &accepted)
+            .is_some());
+    }
+    let over = gateway
+        .report_missing_index(&database(1000), &accepted)
+        .unwrap();
+    assert!(
+        over.contains("more than 1000 distinct missing composite indexes"),
+        "{over}"
+    );
 }

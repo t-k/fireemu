@@ -7,7 +7,7 @@ import { createTestWorld, withTestWorld } from '../fireemu/testing.mjs';
 
 const binary = process.env.FIREEMU_TEST_BINARY;
 const native = { skip: !binary, timeout: 30_000 };
-const options = { binaryPath: binary, env:{...process.env,NODE_PATH:''}, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard',backend:'native'} } };
+const options = { binaryPath: binary, env:{...process.env,NODE_PATH:''}, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard'} } };
 
 test('startup failure removes private directories and leaves parent environment unchanged', async () => {
   const parent = {...process.env};
@@ -336,4 +336,34 @@ test('real Functions imports, trial boundaries, Rules and module globals belong 
     await new Promise(resolve=>setTimeout(resolve,10));
   }
   assert.fail('blocked runner survived forced world retirement');
+});
+
+test('TOML world configuration starts and resets from the creation snapshot', native, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-toml-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = join(root, 'fireemu.toml');
+  const { execFileSync } = await import('node:child_process');
+  execFileSync(binary, ['init', '--yes', '--profile', 'strict'], { cwd: root, timeout: 10_000 });
+  await withTestWorld({ ...options, config }, async world => {
+    const generation = world.generation;
+    await writeFile(config, 'invalid replacement');
+    await world.reset();
+    assert.equal(world.generation, generation + 1);
+    assert.equal(world.projectId, options.projectId);
+    assert.ok(world.endpoints.auth.port > 0);
+  });
+});
+
+test('invalid TOML startup names the format and path and removes private directories', native, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'fireemu-world-toml-error-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = join(root, 'broken.toml');
+  await writeFile(config, 'schemaVersion = [');
+  await assert.rejects(createTestWorld({ ...options, config, tempRoot: root }), error => {
+    assert.ok(error.message.includes('TOML'));
+    assert.ok(error.message.includes(config));
+    return true;
+  });
+  const { readdir } = await import('node:fs/promises');
+  assert.deepEqual(await readdir(root), ['broken.toml']);
 });

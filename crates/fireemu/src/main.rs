@@ -321,6 +321,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail_for(command, &e),
         },
+        Some("__test-world-config") => match test_world_config_command(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail_for(command, &e),
+        },
         Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
             Ok((options, None)) => daemon::run(options, None),
             Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
@@ -364,6 +368,22 @@ fn main() -> ExitCode {
         },
         _ => usage(),
     }
+}
+
+/// Private bridge for the npm snapshot helper: parse without discovery, defaults or services.
+fn test_world_config_command(args: &[String]) -> Result<(), CliError> {
+    let [path] = args else {
+        return Err(CliError::usage(
+            "__test-world-config requires one config path",
+        ));
+    };
+    let path = Path::new(path);
+    let is_toml = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"));
+    let (document, _) = read_config_file(path, is_toml)?;
+    println!("{document}");
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]

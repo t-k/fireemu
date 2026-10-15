@@ -2,6 +2,29 @@
 import { constants } from 'node:fs';
 import { cp, mkdir, readFile, writeFile, realpath, symlink, lstat, stat, unlink, readdir, readlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve, relative, sep, delimiter, isAbsolute } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { resolveBinary, ensureExecutable } from './binary.mjs';
+
+const runFile = promisify(execFile);
+
+async function readConfiguration(path, options) {
+  const format = path.toLowerCase().endsWith('.toml') ? 'TOML' : 'JSON';
+  try {
+    if (format === 'JSON') return JSON.parse(await readFile(path, 'utf8'));
+    const binary = resolveBinary(options.binaryPath ? resolve(options.binaryPath) : undefined);
+    if (!binary) throw Error('install the fireemu platform package or supply binaryPath');
+    ensureExecutable(binary.path);
+    // Use the CLI parser so TOML types and rejection rules cannot drift between callers.
+    const { stdout } = await runFile(binary.path, ['__test-world-config', path], {
+      encoding: 'utf8', windowsHide: true, timeout: options.startupTimeoutMs ?? 60_000,
+      killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024, signal: options.signal,
+    });
+    return JSON.parse(stdout);
+  } catch (cause) {
+    throw Error(`Cannot read ${format} configuration ${JSON.stringify(path)}: ${cause.stderr?.trim() || cause.message}`, { cause });
+  }
+}
 
 export async function snapshotInputs(options, root) {
   const cwd=resolve(options.cwd??process.cwd());
@@ -86,7 +109,7 @@ export async function snapshotInputs(options, root) {
   };
   let input=options.config??{schemaVersion:1};
   let configBase=cwd;
-  if(typeof input==='string'){const path=resolve(cwd,input);input=JSON.parse(await readFile(path,'utf8'));configBase=dirname(path);}
+  if(typeof input==='string'){const path=resolve(cwd,input);input=await readConfiguration(path,options);configBase=dirname(path);}
   let config;
   if(input.schemaVersion===undefined){config={schemaVersion:1,firebaseJson:await snapshotFirebase(input,configBase)};}
   else{

@@ -738,3 +738,33 @@ fn a_firebaserc_is_skipped_only_when_anyone_can_write_it() {
         stderr(&output)
     );
 }
+
+#[test]
+fn test_world_config_uses_the_cli_toml_parser_without_starting_services() {
+    let dir = scratch("test-world-config");
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .current_dir(&dir)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    write(
+        &dir.join("fireemu.TOML"),
+        "schemaVersion = 1\nprofile = \"strict\"\n[functions]\nsource = \"not-created\"\n",
+    );
+    let output = run(&["__test-world-config", "fireemu.TOML"]);
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["profile"], "strict");
+    assert_eq!(value["functions"]["source"], "not-created");
+    write(&dir.join("invalid.toml"), "profile = \"strict\"\n");
+    let output = run(&["__test-world-config", "invalid.toml"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("schemaVersion"), "{stderr}");
+    assert!(stderr.contains("invalid.toml"), "{stderr}");
+    let output = run(&["__test-world-config"]);
+    assert_eq!(output.status.code(), Some(2));
+}

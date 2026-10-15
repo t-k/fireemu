@@ -127,7 +127,7 @@ async function assertIgnored(path) {
 const realGrpc = (ctx) => ({ grpc: createGrpcAdapter(ctx) });
 
 /** The real effects of a production recording. */
-function productionDeps() {
+export function productionDeps() {
   return {
     now: () => Date.now(),
     readLedger: async (path) => (existsSync(path) ? readFile(path, "utf8") : ""),
@@ -365,8 +365,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (mode === "preflight") {
     const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
     const ledgerText = ledger && existsSync(ledger) ? await readFile(ledger, "utf8") : "";
-    const target = await productionTarget(await sandboxWebConfig());
     const taskId = taskIdFor(selectPrograms());
+    const target = await productionTarget(await sandboxWebConfig());
     console.log(JSON.stringify(await preflight(target, ledgerText, { taskId }), null, 2));
   } else if (mode === "record-production") {
     const result = await recordProduction(process.env, productionDeps());

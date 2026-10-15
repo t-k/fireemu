@@ -2636,7 +2636,7 @@ fn default_runner_for_codebase(
     })?;
     Ok(vec![
         program.display().to_string(),
-        script.path.display().to_string(),
+        fireemu_adapter_functions::runner::node_path(&script.path.to_string_lossy()).into_owned(),
     ])
 }
 
@@ -2977,6 +2977,8 @@ async fn start_codebase(
         })?
         .to_string_lossy()
         .into_owned();
+    #[cfg(windows)]
+    let source = fireemu_adapter_functions::runner::node_path(&source).into_owned();
     let mut command = if let Some(command) = cfg.functions_runner.clone() {
         command
     } else {

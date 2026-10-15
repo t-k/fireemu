@@ -6,6 +6,230 @@
     "note": "Two recordings per program. The project, its number, the run id and run-window times are placeholders. `second` holds the other recording of rows that differed. `diagnostics` is the refusal text of a ruleset production would not compile; it is never compared."
   },
   "programs": {
+    "fs-rules-v1/bad-path/core": {
+      "corpusDigest": "c25be1bfae251849f73131679a26e5b32ec41520999611562b645a948717d75f",
+      "harnessDigest": "7ec264288f69f2916a640991b158b90f89a89a5fbcfaa4cc7edd21057b7981cb",
+      "recordedAt": "2026-10-15T01:39:20.177Z",
+      "gitSha": "88391c0e5303c60a9079041a49c811ebc16d099e",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "ctl-exists-real": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr8-ctl-exists-real/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "ctl-missing-not-exists": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr8-ctl-missing-not-exists/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "ctl-real-not-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "ctl-missing-get-null": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr8-ctl-missing-get-null/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "dyn-doc-exists": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr8-dyn-doc-exists/real\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "coll-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "coll-not-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "coll-get-null": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "nested-coll-not-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "dyn-coll-not-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        }
+      }
+    },
+    "fs-rules-v1/bad-path/default-literal": {
+      "corpusDigest": "be0e96b172b5de6bf677ab9718a7b32b7ec41ce4952c226c9410722fd784528e",
+      "harnessDigest": "7ec264288f69f2916a640991b158b90f89a89a5fbcfaa4cc7edd21057b7981cb",
+      "recordedAt": "2026-10-15T01:39:20.177Z",
+      "gitSha": "88391c0e5303c60a9079041a49c811ebc16d099e",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "default-literal-exists": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr8-default-literal-exists/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "default-literal-missing-not-exists": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr8-default-literal-missing-not-exists/x\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        }
+      }
+    },
+    "fs-rules-v1/bad-path/no-documents": {
+      "corpusDigest": "23c3ae952469b5394786e4fe5ff545ff1b4af13a4d692a39e47c37b19f8f2001",
+      "harnessDigest": "7ec264288f69f2916a640991b158b90f89a89a5fbcfaa4cc7edd21057b7981cb",
+      "recordedAt": "2026-10-15T01:39:20.177Z",
+      "gitSha": "88391c0e5303c60a9079041a49c811ebc16d099e",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "nodocs-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "nodocs-not-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "nodocs-get-null": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        }
+      }
+    },
+    "fs-rules-v1/bad-path/other-database": {
+      "corpusDigest": "a1d58a26a7cbbfa68a1edc92fa2a4827c8e8e467e37fed6e18a6f9e6aea5c59d",
+      "harnessDigest": "7ec264288f69f2916a640991b158b90f89a89a5fbcfaa4cc7edd21057b7981cb",
+      "recordedAt": "2026-10-15T01:39:20.177Z",
+      "gitSha": "88391c0e5303c60a9079041a49c811ebc16d099e",
+      "steps": {
+        "publishes": {
+          "compiled": true
+        },
+        "other-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "other-not-exists": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "other-get-null": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        }
+      }
+    },
     "fs-rules-v1/path-wildcard/v1": {
       "corpusDigest": "a6c0c067d251fd19d3e6edb7d1b2009c9dae8ae472d438c5b3f20d07a6bf41a8",
       "harnessDigest": "e8c83656a7c229b681918489684c3ba3b3f63d03220e6feecbe808f309f97578",

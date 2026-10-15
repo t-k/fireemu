@@ -301,6 +301,37 @@ pub struct Snapshot {
     pub parts: Vec<Option<SnapshotPart>>,
 }
 
+/// One composite index the strict profile served without being defined
+/// (`firestore.missingIndexes: "report"`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingIndexEntry {
+    /// `projects/<p>/databases/<d>`.
+    pub database: String,
+    /// The `firestore.indexes.json` entry that serves the query, as JSON text.
+    pub fragment: String,
+    /// Production's refusal of the query, with the console link that creates the index.
+    pub message: String,
+}
+
+/// The missing-index reports of the Firestore gateway, which the control API serves and clears
+/// without depending on the gRPC adapter.
+pub trait MissingIndexHook: Send + Sync {
+    /// Whether the daemon reports missing indexes at all: the strict profile with
+    /// `firestore.missingIndexes` set to `"report"`. Elsewhere an empty list says nothing.
+    fn enabled(&self) -> bool;
+
+    /// Every report, in the order first seen.
+    fn reports(&self) -> Vec<MissingIndexEntry>;
+
+    /// How many queries of `project` (all projects when `None`) were served with a missing index
+    /// that is not in [`Self::reports`] because the list was full.
+    fn dropped(&self, project: Option<&str>) -> usize;
+
+    /// Forgets the reports of `project` (all of them when `None`), with the count of what was
+    /// dropped for it, and says how many reports it removed.
+    fn clear(&self, project: Option<&str>) -> usize;
+}
+
 /// Shared control-plane state.
 pub struct ControlState {
     /// The virtual clock shared by every adapter.
@@ -361,6 +392,9 @@ pub struct ControlState {
     /// at its one-hour lifetime, and answers how many streams it ended
     /// (`POST /v1/firestore/listen:expire`). `None` when no Firestore enforcer runs.
     pub firestore_listen_expiry: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
+    /// The Firestore gateway's missing-index reports (`GET`/`DELETE
+    /// /v1/firestore/missingIndexes`). `None` when no Firestore gateway runs.
+    pub firestore_missing_indexes: Option<Arc<dyn MissingIndexHook>>,
     /// Every control request needs the control token, from a process as from a page, except
     /// the health checks: set with `network.allowNonLoopbackHosts`, where a forwarder in the
     /// listener's network namespace (`kubectl port-forward`, a sidecar proxy) delivers another
@@ -377,6 +411,98 @@ fn expire_listen_streams(state: &ControlState) -> JsonResponse {
             "FAILED_PRECONDITION : no Firestore Security Rules enforcer runs (rules.executionMode is disabled or Firestore is not selected), so no end-user Listen stream is held",
         ),
     }
+}
+
+/// Where one session's missing-index reports are served, and the same list for every project.
+/// Privileged for every method, like the resource report: the entries name the collections and
+/// fields the queries under test filter and order on.
+pub const MISSING_INDEXES_SUFFIX: &str = "/firestore/missingIndexes";
+const MISSING_INDEXES_PATH: &str = "/v1/firestore/missingIndexes";
+
+/// `GET`/`DELETE /v1/firestore/missingIndexes` (every project) and
+/// `/v1/sessions/{s}/firestore/missingIndexes` (the session's project).
+///
+/// `GET` lists the composite indexes the strict profile served under `firestore.missingIndexes:
+/// "report"`, each with production's refusal text and the entry to add, and `indexesJson` groups
+/// the entries per database as `firestore.indexes.json` holds them. The list is bounded: when
+/// queries were served whose index did not fit, the answer says `truncated` and how many were
+/// `dropped`, and a project that lost every one of its indexes is refused (409) instead of
+/// answering an empty list. It is refused (409) too where nothing is reported, since an empty
+/// list there would pass a check it cannot support. `DELETE` forgets the list and the dropped
+/// count (200 with how many entries, also where nothing is reported). A session reset leaves the
+/// list alone.
+fn missing_indexes_route(
+    state: &ControlState,
+    method: &str,
+    project: Option<&str>,
+) -> JsonResponse {
+    let hook = state.firestore_missing_indexes.as_ref();
+    match method {
+        "DELETE" => ok(json!({"cleared": hook.map_or(0, |h| h.clear(project))})),
+        "GET" => match hook {
+            Some(hook) if hook.enabled() => {
+                let prefix = project.map(|p| format!("projects/{p}/databases/"));
+                let entries: Vec<MissingIndexEntry> = hook
+                    .reports()
+                    .into_iter()
+                    .filter(|e| prefix.as_ref().is_none_or(|p| e.database.starts_with(p)))
+                    .collect();
+                let dropped = hook.dropped(project);
+                if entries.is_empty() && dropped > 0 {
+                    return error(
+                        409,
+                        &format!(
+                            "FAILED_PRECONDITION : {dropped} quer{} of this project were served with a missing composite index that is not listed, because the list is full; the list is incomplete, not empty. DELETE it and run again",
+                            if dropped == 1 { "y" } else { "ies" }
+                        ),
+                    );
+                }
+                let mut answer = missing_indexes_json(&entries);
+                answer["truncated"] = json!(dropped > 0);
+                answer["dropped"] = json!(dropped);
+                ok(answer)
+            }
+            _ => error(
+                409,
+                "FAILED_PRECONDITION : missing composite indexes are reported only under the strict profile with firestore.missingIndexes set to \"report\" and Firestore selected; with \"refuse\" the query fails instead, the emulator profile assumes every index, and nothing is reported when Firestore is not selected",
+            ),
+        },
+        _ => error(
+            400,
+            "INVALID_ARGUMENT : the missing-index reports are read with GET and cleared with DELETE",
+        ),
+    }
+}
+
+fn missing_indexes_json(entries: &[MissingIndexEntry]) -> Value {
+    let mut grouped = serde_json::Map::new();
+    let listed: Vec<Value> = entries
+        .iter()
+        .map(|entry| {
+            // The fragment is JSON by construction; text that is not stays visible as a string.
+            let index = serde_json::from_str::<Value>(&entry.fragment)
+                .unwrap_or_else(|_| Value::String(entry.fragment.clone()));
+            let (project, database) = entry
+                .database
+                .strip_prefix("projects/")
+                .and_then(|rest| rest.split_once("/databases/"))
+                .unwrap_or(("", entry.database.as_str()));
+            grouped
+                .entry(entry.database.clone())
+                .or_insert_with(|| json!({"indexes": []}))["indexes"]
+                .as_array_mut()
+                .expect("created as an array")
+                .push(index.clone());
+            json!({
+                "project": project,
+                "database": database,
+                "name": entry.database,
+                "index": index,
+                "message": entry.message,
+            })
+        })
+        .collect();
+    json!({"count": listed.len(), "missingIndexes": listed, "indexesJson": grouped})
 }
 
 /// Where the App Check observations of one session are served.
@@ -405,7 +531,9 @@ pub fn is_no_store_path(path: &str) -> bool {
     path.starts_with("/v1/sessions/")
         && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
             || is_resources_path(path)
-            || is_rules_requests_path(path))
+            || is_rules_requests_path(path)
+            || is_missing_indexes_path(path))
+        || path == MISSING_INDEXES_PATH
 }
 
 /// The diagnostics routes are privileged for pages on every method, read included (see
@@ -420,6 +548,8 @@ fn diagnostics_guard(
         "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method"
     } else if is_rules_requests_path(path) {
         "CONTROL_TOKEN_REQUIRED : the Security Rules request trace needs Authorization: Bearer <control token> on every method"
+    } else if is_missing_indexes_path(path) {
+        "CONTROL_TOKEN_REQUIRED : the missing-index reports need Authorization: Bearer <control token> on every method"
     } else {
         return None;
     };
@@ -436,6 +566,12 @@ fn diagnostics_guard(
 fn is_resources_path(path: &str) -> bool {
     path.starts_with("/v1/sessions/")
         && (path.ends_with(RESOURCES_SUFFIX) || path.ends_with(RESOURCES_ASSERT_SUFFIX))
+}
+
+/// Whether a query-stripped path is a missing-index report route.
+fn is_missing_indexes_path(path: &str) -> bool {
+    path == MISSING_INDEXES_PATH
+        || (path.starts_with("/v1/sessions/") && path.ends_with(MISSING_INDEXES_SUFFIX))
 }
 
 /// Whether a query-stripped path is the Security Rules request trace route.
@@ -654,6 +790,7 @@ pub fn handle_with(
             }
         }
         ("POST", "/v1/firestore/listen:expire") => expire_listen_streams(state),
+        (m, MISSING_INDEXES_PATH) => missing_indexes_route(state, m, None),
         ("GET" | "PUT" | "DELETE", "/v1/storage/rules") => {
             let _admitted = state.barrier.as_ref().map(|b| b.admit());
             storage_rules_route(&state.storage_rules, method, body)
@@ -1122,6 +1259,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if action == "rules/requests" {
         return rules_requests_route(state, method, is_default);
     }
+    if action == "firestore/missingIndexes" {
+        return missing_indexes_route(state, method, Some(&project));
+    }
     if action == "firestore/ttl:sweep" {
         return ttl_sweep_route(state, method, &project);
     }
@@ -1220,6 +1360,11 @@ fn delete_session(state: &ControlState, session: &str, project: &str) -> JsonRes
             500,
             &format!("INTERNAL : session {session:?} was wiped but not deregistered: {e}"),
         );
+    }
+    // The project is gone: what was reported for it goes too, so one created again under the
+    // same name starts with an empty list.
+    if let Some(hook) = &state.firestore_missing_indexes {
+        hook.clear(Some(project));
     }
     ok(json!({"session": session, "project": project, "deleted": true}))
 }
@@ -2581,7 +2726,8 @@ pub fn browser_guard(
     let origin = headers.origin.as_deref()?;
     let privileged = (method != "GET" && !path.starts_with("/health/"))
         || is_resources_path(path)
-        || is_rules_requests_path(path);
+        || is_rules_requests_path(path)
+        || is_missing_indexes_path(path);
     let presented = headers
         .authorization
         .as_deref()

@@ -1295,6 +1295,7 @@ mod tests {
             timers_virtual: true,
             tasks_virtual: false,
         };
+        let trace_path = dir.join("fireemu-runner-trace.log");
         let runner = std::sync::Arc::new(
             Runner::spawn(
                 &[
@@ -1310,6 +1311,7 @@ mod tests {
                 Some(&dir.to_string_lossy()),
                 &[
                     ("GCLOUD_PROJECT".into(), "demo-clock".into()),
+                    ("FIREEMU_RUNNER_TRACE".into(), "1".into()),
                     (
                         "FIREEMU_CLOCK_JSON".into(),
                         policy.runner_options(clock.snapshot()).to_string(),
@@ -1318,7 +1320,10 @@ mod tests {
                 std::time::Duration::from_secs(5),
             )
             .await
-            .unwrap(),
+            .unwrap_or_else(|error| {
+                let trace = std::fs::read_to_string(&trace_path);
+                panic!("{error}; startup trace file: {trace:?}");
+            }),
         );
         assert_eq!(runner.hello().clock.as_ref().unwrap()["version"], 1);
         clock.advance(LogicalDuration::from_millis(1000)).unwrap();
@@ -1348,6 +1353,27 @@ mod tests {
         );
         runner.shutdown().await;
         assert!(!runner.is_alive());
+        let trace = std::fs::read_to_string(&trace_path).unwrap();
+        for (index, line) in trace.lines().enumerate() {
+            assert!(
+                line.starts_with(&format!("[runner trace {}] ", index + 1)),
+                "{trace}"
+            );
+        }
+        for step in [
+            "process start",
+            "runner imports complete",
+            "argv parsed",
+            "source resolved",
+            "clock preamble installed",
+            "stdin frame reader installed",
+            "user module import start",
+            "user module import end",
+            "hello about to be written",
+            "hello written",
+        ] {
+            assert!(trace.contains(&format!("] {step}\n")), "{trace}");
+        }
     }
 
     #[tokio::test]
@@ -1403,17 +1429,22 @@ mod tests {
             super::node_path(&source).into_owned(),
             super::node_path(&script).into_owned(),
         );
+        let trace_path = std::path::Path::new(&source).join("fireemu-runner-trace.log");
         let runner = super::Runner::spawn(
             &["node".into(), script, "--source".into(), source.clone()],
             Some(&source),
             &[
                 ("GCLOUD_PROJECT".into(), "demo-http".into()),
+                ("FIREEMU_RUNNER_TRACE".into(), "1".into()),
                 ("FIREEMU_RUNNER_SECRET".into(), "test-http-secret".into()),
             ],
             std::time::Duration::from_secs(5),
         )
         .await
-        .unwrap();
+        .unwrap_or_else(|error| {
+            let trace = std::fs::read_to_string(&trace_path);
+            panic!("{error}; startup trace file: {trace:?}");
+        });
         let port = runner
             .hello()
             .http_port
@@ -1430,6 +1461,13 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.ends_with("hello:/world"), "{response}");
         assert!(!runner.is_alive());
+        let trace = std::fs::read_to_string(&trace_path).unwrap();
+        assert!(
+            trace.starts_with("[runner trace 1] process start\n"),
+            "{trace}"
+        );
+        assert!(trace.contains("hello written\n"), "{trace}");
+        assert!(trace.contains("HTTP server ready\n"), "{trace}");
     }
 
     #[cfg(unix)]

@@ -1444,6 +1444,11 @@ pub struct AppCheckConfig {
     pub storage: fireemu_core_app_check::verify::BaselineMode,
     /// `debugTokens`.
     pub debug_tokens: AppCheckDebugTokens,
+    /// `storageServerRequests`: how server-side Cloud Storage JSON API traffic passes an
+    /// `enforced` Storage policy. The same in every profile and under `productionExact`:
+    /// production does not apply App Check to the Admin SDK's OAuth traffic, so `loopback`
+    /// is already its behaviour and `capability` is the stricter, opt-in alternative.
+    pub storage_server_requests: fireemu_adapter_http::storage::StorageServerRequests,
     /// Whether the `appCheck` block names `enabled` itself, which then decides alone.
     pub enabled_explicit: bool,
 }
@@ -1477,6 +1482,7 @@ impl AppCheckConfig {
             firestore: fireemu_core_app_check::verify::BaselineMode::Off,
             storage: fireemu_core_app_check::verify::BaselineMode::Off,
             debug_tokens: AppCheckDebugTokens::Registered,
+            storage_server_requests: fireemu_adapter_http::storage::StorageServerRequests::Loopback,
             enabled_explicit: false,
         }
     }
@@ -1979,6 +1985,7 @@ impl RuntimeConfig {
             "appCheck.enabled" => Some(json!(self.app_check.enabled)),
             "appCheck.tokenSigning" => Some(json!(match self.app_check.token_signing { AppCheckSigning::InstanceRsa => "instance-rsa" })),
             "appCheck.tokenTtlSeconds" => Some(json!(self.app_check.token_ttl_seconds)),
+            "appCheck.storageServerRequests" => Some(json!(self.app_check.storage_server_requests.as_config_str())),
             "appCheck.apps" => Some(json!(self.app_check.apps.iter().map(|app| json!({"projectId": app.project_id, "projectNumber": app.project_number, "appId": app.app_id, "enabled": app.enabled, "debugTokenSha256": app.debug_token_sha256})).collect::<Vec<_>>())),
             "appCheck.services.auth" | "appCheck.services.firestore" | "appCheck.services.storage" => {
                 use fireemu_core_app_check::verify::BaselineMode;
@@ -4497,13 +4504,14 @@ impl RuntimeConfig {
     fn parse_app_check(
         section: &serde_json::Map<String, Value>,
     ) -> Result<AppCheckConfig, ConfigError> {
-        const KEYS: [&str; 6] = [
+        const KEYS: [&str; 7] = [
             "enabled",
             "tokenSigning",
             "tokenTtlSeconds",
             "apps",
             "services",
             "debugTokens",
+            "storageServerRequests",
         ];
         const APP_KEYS: [&str; 5] = [
             "projectId",
@@ -4533,6 +4541,17 @@ impl RuntimeConfig {
                 .and_then(AppCheckDebugTokens::parse_config)
                 .ok_or_else(|| {
                     ConfigError("appCheck.debugTokens must be \"any\" or \"registered\"".into())
+                })?;
+        }
+        if let Some(value) = section.get("storageServerRequests") {
+            cfg.storage_server_requests = value
+                .as_str()
+                .and_then(fireemu_adapter_http::storage::StorageServerRequests::parse_config)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "appCheck.storageServerRequests must be \"loopback\" or \"capability\""
+                            .into(),
+                    )
                 })?;
         }
         if let Some(mode) = section.get("tokenSigning") {
@@ -5632,6 +5651,11 @@ mod tests {
             ("appCheck.enabled", json!(false), "default"),
             ("appCheck.tokenSigning", json!("instance-rsa"), "default"),
             ("appCheck.tokenTtlSeconds", json!(3600), "default"),
+            (
+                "appCheck.storageServerRequests",
+                json!("loopback"),
+                "default",
+            ),
             ("appCheck.apps", json!([]), "default"),
             ("appCheck.services.auth", json!("off"), "default"),
             ("appCheck.services.firestore", json!("off"), "default"),
@@ -6015,6 +6039,10 @@ mod tests {
                 (
                     "appCheck.tokenTtlSeconds",
                     json!(cfg.app_check.token_ttl_seconds),
+                ),
+                (
+                    "appCheck.storageServerRequests",
+                    json!(cfg.app_check.storage_server_requests.as_config_str()),
                 ),
                 (
                     "pubsub.pushMinimumRedeliveryIntervalMillis",
@@ -7675,6 +7703,62 @@ mod tests {
                 &json!({"schemaVersion": 1, "appCheck": {"debugTokens": bad}})
             )
             .is_err());
+        }
+    }
+
+    /// `appCheck.storageServerRequests` is the same everywhere: `loopback` unless the file says
+    /// `capability`, whatever the profile, `productionExact` or an `appCheck` block do.
+    #[test]
+    fn storage_server_requests_is_loopback_in_every_profile_unless_set() {
+        use fireemu_adapter_http::storage::StorageServerRequests::{Capability, Loopback};
+        let load = |config: Value| {
+            let mut input = json!({"schemaVersion": 1});
+            for (key, value) in config.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            RuntimeConfig::from_json(&input)
+                .unwrap()
+                .app_check
+                .storage_server_requests
+        };
+        for base in [
+            json!({}),
+            json!({"profile": "emulator"}),
+            json!({"profile": "strict"}),
+            json!({"productionExact": true}),
+            json!({"appCheck": {"enabled": true}}),
+            json!({"appCheck": {"enabled": true, "services": {"storage": "enforced"}}}),
+        ] {
+            assert_eq!(load(base.clone()), Loopback, "{base}");
+        }
+        let capability = |mut config: Value| {
+            let app_check = config
+                .as_object_mut()
+                .unwrap()
+                .entry("appCheck")
+                .or_insert_with(|| json!({}));
+            app_check["storageServerRequests"] = json!("capability");
+            config
+        };
+        for base in [
+            json!({}),
+            json!({"profile": "emulator"}),
+            json!({"productionExact": true}),
+        ] {
+            assert_eq!(load(capability(base.clone())), Capability, "{base}");
+        }
+        assert_eq!(
+            load(json!({"appCheck": {"storageServerRequests": "loopback"}})),
+            Loopback
+        );
+        for bad in [json!("all"), json!("Loopback"), json!(true), json!(null)] {
+            assert!(
+                RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "appCheck": {"storageServerRequests": bad}})
+                )
+                .is_err(),
+                "{bad}"
+            );
         }
     }
 

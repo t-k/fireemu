@@ -242,10 +242,11 @@ fn only_selects_the_variables_the_command_receives() {
 }
 
 /// The Admin Storage capability rides in `STORAGE_EMULATOR_HOST` only while Storage App Check
-/// is `enforced` (the Admin bypass needs it); every other mode keeps the plain endpoint, which
+/// is `enforced` *and* `appCheck.storageServerRequests` is `capability` (the Admin bypass needs
+/// it then). The default `loopback` and every other mode keep the plain endpoint, which
 /// `@google-cloud/storage` 8.1 and later require. The capability never reaches the logs.
 #[test]
-fn the_admin_storage_capability_is_in_the_endpoint_only_under_storage_enforcement() {
+fn the_admin_storage_capability_is_in_the_endpoint_only_for_enforced_capability_mode() {
     let dir = scratch("storage-enforced");
     let template = r#"{
   "schemaVersion": 1,
@@ -254,14 +255,33 @@ fn the_admin_storage_capability_is_in_the_endpoint_only_under_storage_enforcemen
   "appCheck": {
     "enabled": true,
     "apps": [{ "projectId": "demo-exec", "projectNumber": "1234567890", "appId": "1:1234567890:web:local-test-app" }],
-    "services": { "storage": "MODE" }
+    SERVER_REQUESTS"services": { "storage": "MODE" }
   }
 }
 "#;
-    for (mode, enforced) in [("enforced", true), ("unenforced", false), ("off", false)] {
-        let config = dir.join(format!("fireemu-{mode}.json"));
-        std::fs::write(&config, template.replace("MODE", mode)).unwrap();
-        let out = dir.join(format!("env-{mode}.txt"));
+    for (server_requests, mode, carries_capability) in [
+        // The default: the Storage adapter admits the server-side request by shape.
+        (None, "enforced", false),
+        (Some("loopback"), "enforced", false),
+        (Some("capability"), "enforced", true),
+        (None, "unenforced", false),
+        (None, "off", false),
+        (Some("capability"), "unenforced", false),
+        (Some("capability"), "off", false),
+    ] {
+        let label = format!("{}-{mode}", server_requests.unwrap_or("default"));
+        let config = dir.join(format!("fireemu-{label}.json"));
+        let server_requests_line = server_requests.map_or_else(String::new, |value| {
+            format!("\"storageServerRequests\": \"{value}\",\n    ")
+        });
+        std::fs::write(
+            &config,
+            template
+                .replace("SERVER_REQUESTS", &server_requests_line)
+                .replace("MODE", mode),
+        )
+        .unwrap();
+        let out = dir.join(format!("env-{label}.txt"));
         let output = daemon()
             .args(["--config"])
             .arg(&config)
@@ -271,12 +291,12 @@ fn the_admin_storage_capability_is_in_the_endpoint_only_under_storage_enforcemen
             .unwrap();
         assert!(
             output.status.success(),
-            "{mode}: {}",
+            "{label}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         let env = env_file(&out);
         let endpoint = &env["STORAGE_EMULATOR_HOST"];
-        if enforced {
+        if carries_capability {
             let capability = endpoint
                 .strip_prefix("http://fireemu:")
                 .and_then(|rest| rest.split_once('@'))
@@ -301,7 +321,7 @@ fn the_admin_storage_capability_is_in_the_endpoint_only_under_storage_enforcemen
             assert_eq!(
                 endpoint,
                 &format!("http://{}", env["FIREBASE_STORAGE_EMULATOR_HOST"]),
-                "{mode}"
+                "{label}"
             );
         }
     }

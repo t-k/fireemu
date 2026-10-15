@@ -144,6 +144,17 @@ await check("Admin Storage lists objects while App Check enforcement remains ena
   return { count: files.length };
 });
 
+// Production does not apply App Check to the Admin SDK's service-account traffic, so under the
+// default appCheck.storageServerRequests ("loopback") a resumable save passes enforcement with
+// no token and no capability: the continuation URL carries neither. storage-appcheck-admin.mjs
+// covers this (and the refusals) with any firebase-admin version.
+await check("Admin Storage saves resumably while App Check enforcement remains enabled", async () => {
+  const file = getAdminStorage(adminApp).bucket().file(`appcheck/admin-${Date.now()}.txt`);
+  await file.save(Buffer.from("hello admin"), { contentType: "text/plain", resumable: true });
+  const [bytes] = await file.download();
+  return { text: bytes.toString() };
+});
+
 // The callable path: the Web SDK's own Functions client attaches the App Check token, and the
 // daemon verifies it before the runner ever decodes it.
 await check("an enforceAppCheck callable receives the verified app", async () => {

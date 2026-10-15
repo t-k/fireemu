@@ -75,7 +75,7 @@ jobs:
           set -eu
           dir="$RUNNER_TEMP/sdk-latest"
           mkdir -p "$dir"
-          cp tools/sdk-smoke/storage.mjs tools/sdk-smoke/client.mjs "$dir/"
+          cp tools/sdk-smoke/storage.mjs tools/sdk-smoke/client.mjs tools/sdk-smoke/storage-appcheck-admin.mjs "$dir/"
           admin="$(npm view firebase-admin version)"
           client="$(npm view firebase version)"
           cd "$dir"
@@ -99,6 +99,7 @@ jobs:
           dir="$RUNNER_TEMP/sdk-latest"
           bin="$PWD/target/debug/fireemu"
           config="$PWD/tools/sdk-smoke/fireemu.smoke.json"
+          appcheck_config="$PWD/tools/sdk-smoke/fireemu.appcheck.json"
           cd "$dir"
           for smoke in storage client; do
             echo "::group::$smoke (strict smoke config)"
@@ -107,4 +108,9 @@ jobs:
           done
           echo "::group::storage (default configuration)"
           "$bin" exec --project demo-app --hub-port 0 -- node storage.mjs
+          echo "::endgroup::"
+          # Storage App Check enforced: the Admin SDK still gets through on the plain endpoint
+          # (appCheck.storageServerRequests "loopback"), resumable uploads included.
+          echo "::group::storage-appcheck-admin (Storage App Check enforced)"
+          "$bin" exec --config "$appcheck_config" --project demo-app --only storage --hub-port 0 -- node storage-appcheck-admin.mjs
           echo "::endgroup::"

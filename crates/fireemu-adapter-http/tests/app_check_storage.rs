@@ -1670,6 +1670,24 @@ mod server_side_properties {
             ("GET", format!("/storage/v1/b/{BUCKET}"), true),
             ("GET", format!("/b/{BUCKET}/o"), true),
             ("GET", "/b".to_owned(), true),
+            (
+                "POST",
+                format!("/storage/v1/b/{BUCKET}/o/p%2Fo.txt/copyTo/b/{BUCKET}/o/copy.txt"),
+                true,
+            ),
+            ("POST", format!("/b/{BUCKET}/o/p%2Fo.txt/acl"), true),
+            (
+                "DELETE",
+                format!("/b/{BUCKET}/o/p%2Fo.txt/acl/allUsers"),
+                true,
+            ),
+            (
+                "POST",
+                format!("/upload/storage/v1/b/{BUCKET}/o?name=u.txt&uploadType=media"),
+                true,
+            ),
+            ("PATCH", format!("/storage/v1/b/{BUCKET}/o/p%2Fo.txt"), true),
+            ("POST", format!("/{BUCKET}"), false),
             ("GET", format!("/v0/b/{BUCKET}/o"), false),
             ("GET", format!("/v0/b/{BUCKET}/o/p%2Fo.txt"), false),
             ("GET", format!("/{BUCKET}/p/o.txt"), false),
@@ -1682,7 +1700,7 @@ mod server_side_properties {
         /// `loopback`; `capability` admits none of them without the capability.
         #[test]
         fn admission_is_the_conjunction_of_route_peer_and_browser_evidence(
-            route in 0usize..9,
+            route in 0..routes().len(),
             remote in any::<bool>(),
             evidence in proptest::collection::vec(any::<bool>(), 5),
             sec_fetch_mode in any::<bool>(),

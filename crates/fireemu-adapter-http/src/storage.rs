@@ -3226,7 +3226,6 @@ fn is_server_side_json_api(route: &Route, req: &StorageRequest) -> bool {
         Route::GcsListBuckets
             | Route::GcsList { .. }
             | Route::GcsBucket { .. }
-            | Route::GcsBucketShort { .. }
             | Route::GcsObject { .. }
             | Route::GcsCopy { .. }
             | Route::GcsAcl { .. }

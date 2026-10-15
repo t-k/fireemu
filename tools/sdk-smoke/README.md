@@ -61,6 +61,12 @@ suite) needs, and what leaves the other smokes working without attaching a token
   guards its `indexedDB` token cache. The SDK never dials the local exchange endpoint itself
   (`@firebase/app-check` hard-codes the production base URL), which is why the provider calls
   the daemon and hands the JWT back.
+- `storage-appcheck-admin.mjs`: the Admin Storage client under Storage App Check `enforced` with
+  the default `appCheck.storageServerRequests` (`loopback`): resumable and simple saves, download,
+  list, exists and delete pass with no token and no capability on the plain
+  `STORAGE_EMULATOR_HOST`, while the Firebase Storage API without a token and a JSON API request
+  carrying `Origin` or Fetch Metadata are still refused. It needs only `firebase-admin`, so it
+  runs with the latest version in the `sdk-latest` workflow. Run with `fireemu exec --config tools/sdk-smoke/fireemu.appcheck.json --project demo-app --only storage --hub-port 0 -- node tools/sdk-smoke/storage-appcheck-admin.mjs`.
 - `appcheck-debug.mjs`: the pinned Web SDK's built-in debug provider sends `debug_token` through a fetch redirect to the local App Check exchange. Run with `fireemu exec --config tools/sdk-smoke/fireemu.appcheck.json --project demo-app --only appcheck --http-port 0 --hub-port 0 --logging-port 0 -- node tools/sdk-smoke/appcheck-debug.mjs`; the script requires a loopback App Check host and does not contact Google.
 - `missing-index.mjs`: the `firebase` client SDK against a strict-profile gateway that declares
   exactly one composite index (`missing-index.indexes.json`, reached through
@@ -125,7 +131,7 @@ fireemu exec --config tools/sdk-smoke/fireemu.appcheck.json \
   -- sh -c 'cd tools/sdk-smoke && npm run smoke:appcheck'
 ```
 
-Exit code 0 means every check passed; the JSON output lists each check. The App Check smoke uses the pinned `firebase-admin@14.3.0` Storage client to list the object uploaded by the Web SDK while Storage enforcement remains enabled.
+Exit code 0 means every check passed; the JSON output lists each check. The App Check smoke uses the pinned `firebase-admin@14.3.0` Storage client to list the object uploaded by the Web SDK and to save one resumably while Storage enforcement remains enabled.
 
 `txn-order.mjs` probes transaction ordering with the web and Admin SDKs: a write before a read fails client-side with `Firestore transactions require all reads to be executed before all writes.` (the SDKs buffer writes until Commit, so the daemon, like production, never sees a misordered transaction), and a well-ordered transaction commits.
 

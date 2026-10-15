@@ -76,6 +76,7 @@ fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> Storage
         clock_observer: None,
         app_check_policy: None,
         admin_capability: None,
+        server_requests: fireemu_adapter_http::storage::StorageServerRequests::default(),
         token_acceptance,
         allow_unsigned_id_tokens: token_acceptance == TokenAcceptance::EmulatorMock,
         control_token: Some(CONTROL_TOKEN.to_owned()),

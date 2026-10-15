@@ -285,6 +285,97 @@ fn buckets_and_all_objects_list_what_an_export_walks() {
 }
 
 #[test]
+fn reimporting_an_old_generation_never_revives_its_grant() {
+    for versioned in [false, true] {
+        for change in [
+            "put",
+            "copy",
+            "resumable",
+            "import",
+            "delete",
+            "delete_generation",
+        ] {
+            for intervening_grant in [false, true] {
+                let mut store = StorageState::new(7);
+                store.set_versioning(&bucket(), versioned);
+                let original = imported("a", b"first");
+                store
+                    .insert_imported(original.clone(), b"first".to_vec())
+                    .unwrap();
+                store
+                    .insert_imported(imported("b", b"other"), b"other".to_vec())
+                    .unwrap();
+                assert!(store.set_public_read(&bucket(), &object("a")));
+                match change {
+                    "put" => store.put(
+                        &bucket(),
+                        &object("a"),
+                        b"replacement".to_vec(),
+                        NewMetadata::default(),
+                        Precondition::default(),
+                        t(0),
+                    ),
+                    "copy" => store.copy(
+                        (&bucket(), &object("b")),
+                        (&bucket(), &object("a")),
+                        None,
+                        Precondition::default(),
+                        t(0),
+                    ),
+                    "resumable" => {
+                        let upload = store
+                            .begin_upload(
+                                &bucket(),
+                                &object("a"),
+                                NewMetadata::default(),
+                                Precondition::default(),
+                                Some(1),
+                                t(0),
+                            )
+                            .unwrap();
+                        store.append_upload(&upload, 0, b"x", t(0)).unwrap();
+                        store.finalize_upload(&upload, t(0))
+                    }
+                    "import" => {
+                        let mut replacement = original.clone();
+                        replacement.generation += 1;
+                        store.insert_imported(replacement, b"first".to_vec())
+                    }
+                    "delete" => {
+                        store.delete(&bucket(), &object("a"), Precondition::default(), t(0))
+                    }
+                    "delete_generation" => store.delete_generation(
+                        &bucket(),
+                        &object("a"),
+                        original.generation,
+                        Precondition::default(),
+                    ),
+                    _ => unreachable!(),
+                }
+                .unwrap();
+                assert!(!store.is_public_read(&bucket(), &object("a")));
+                let archived = store.noncurrent_versions(&bucket(), &object("a"));
+                if versioned && !matches!(change, "import" | "delete_generation") {
+                    assert_eq!(archived.len(), 1);
+                    assert_eq!(archived[0].object.generation, original.generation);
+                    assert_eq!(store.bytes(&archived[0].object), b"first");
+                } else {
+                    assert!(archived.is_empty());
+                }
+                if intervening_grant {
+                    assert!(store.set_public_read(&bucket(), &object("b")));
+                }
+                store.insert_imported(original, b"first".to_vec()).unwrap();
+                assert!(
+                    !store.is_public_read(&bucket(), &object("a")),
+                    "an old grant must not revive: change={change}, versioned={versioned}, intervening_grant={intervening_grant}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn importing_over_an_existing_object_replaces_its_bytes_and_drops_the_old_blob() {
     let mut store = StorageState::new(7);
     store

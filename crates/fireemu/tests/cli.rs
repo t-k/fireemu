@@ -798,7 +798,7 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
     write(
         &dir,
         "chosen.json",
-        r#"{"schemaVersion":1,"profile":"emulator","firebaseJson":"missing.json","events":{"maxAttempts":0},"auth":{"authorizedDomains":[42,true,null],"totp":{},"providers":{"oidc":[{"name":"oidc.test","issuer":"https://issuer.example","clientId":"client","enabled":false}]},"quota":{"signUpQuotaConfig":{"quota":"1","startTime":"2026-01-01T00:00:00Z","quotaDuration":"0.5s"}}},"limits":{"enforcement":"observe"}}"#,
+        r#"{"schemaVersion":1,"profile":"emulator","firebaseJson":"missing.json","events":{"maxAttempts":7},"auth":{"authorizedDomains":[42,true,null],"totp":{},"providers":{"oidc":[{"name":"oidc.test","issuer":"https://issuer.example","clientId":"client","enabled":false}]},"quota":{"signUpQuotaConfig":{"quota":"1","startTime":"2026-01-01T00:00:00Z","quotaDuration":"0.5s"}}},"limits":{"enforcement":"observe"}}"#,
     );
     write(
         &dir,
@@ -841,7 +841,7 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
             serde_json::json!("demo-selected"),
             ".firebaserc",
         ),
-        ("events.maxAttempts", serde_json::json!(1), "explicit"),
+        ("events.maxAttempts", serde_json::json!(7), "explicit"),
         (
             "auth.authorizedDomains",
             serde_json::json!(["42", "true"]),

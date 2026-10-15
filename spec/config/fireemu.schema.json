@@ -5,7 +5,7 @@
   "description": "Single source of truth for the daemon configuration (spec section 17). Unknown keys are errors everywhere. Cross-field constraints that JSON Schema cannot express are enforced by tools/config-schema-check and by the Rust config loader.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "profile", "firestore"],
+  "required": ["schemaVersion"],
   "properties": {
     "$schema": {
       "type": "string",
@@ -117,10 +117,13 @@
     "firestore": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["edition", "apiMode"],
       "properties": {
         "edition": { "enum": ["standard", "enterprise"] },
         "apiMode": { "enum": ["native", "mongodb-compatible"] },
+        "rules": {
+          "type": "string",
+          "description": "Deprecated, and never read: the Firestore rules file is rules.source in this file or firestore.rules in firebase.json. Kept so that configuration files written with this key keep loading; the daemon says at start-up that it has no effect."
+        },
         "location": {
           "type": "string",
           "minLength": 1,
@@ -728,6 +731,7 @@
       "properties": {
         "enabled": { "type": "boolean", "default": false },
         "debugTokens": { "enum": ["any", "registered"], "default": "any", "description": "Which debug tokens the exchange accepts. The strict profile's development default is \"any\" when there is no appCheck block: any well-formed UUIDv4 debug token exchanges for any app with a standard app ID, which is registered on first use, so an enforceAppCheck callable works without registering apps or computing digests (a missing or malformed token is still refused). \"registered\" is production's rule, where only apps from apps[] with a registered digest exchange; it is the default under productionExact, under the emulator profile, and in any appCheck block that does not set this key." },
+        "storageServerRequests": { "enum": ["loopback", "capability"], "default": "loopback", "description": "How server-side Cloud Storage JSON API traffic (the Admin SDK, gcloud) passes appCheck.services.storage \"enforced\". \"loopback\" admits a /storage/v1, /upload/storage/v1 or /download/storage/v1 request from a loopback peer that addresses a loopback Host (a DNS-rebound name is refused) and carries no browser evidence (no Origin, Sec-Fetch-Site, Sec-Fetch-Dest, Referer or Cookie header) and no \"Authorization: Firebase <token>\" client credential, a resumable upload continuation included; fireemu exec then exports the plain STORAGE_EMULATOR_HOST=http://host:port. Production does not apply App Check to the Admin SDK, which authenticates with a service account over OAuth, so this is production's behaviour, and productionExact does not change it. \"capability\" admits only the per-run capability fireemu exec carries as userinfo in STORAGE_EMULATOR_HOST (http://fireemu:<capability>@host:port), which @google-cloud/storage 8.1 and later (firebase-admin 14.4 and later) refuse, and which a resumable continuation URL does not carry. The Firebase Storage API (/v0, the client SDKs) always needs an App Check token under enforcement." },
         "tokenSigning": { "enum": ["instance-rsa"], "default": "instance-rsa" },
         "tokenTtlSeconds": { "type": "integer", "minimum": 1800, "maximum": 604800, "default": 3600 },
         "apps": {
@@ -774,6 +778,18 @@
         "tasksPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "pubsubPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "loggingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "hubPort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port of the Emulator Hub, the same setting as emulators.hub.port in firebase.json and --hub-port. The default is the official 4400, best effort: a busy default disables discovery, a busy explicit port is an error. 0 turns the hub off."
+        },
+        "uiPort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port of the web UI, the same setting as emulators.ui.port in firebase.json and --ui-port. The default is the official 4000, best effort: a busy default disables the UI, a busy explicit port is an error. 0 turns the UI off."
+        },
         "clockStart": { "type": "string", "format": "date-time" },
         "seed": { "type": "integer", "minimum": 0 },
         "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" },
@@ -829,6 +845,23 @@
           "minimum": 0,
           "maximum": 600000,
           "default": 0
+        },
+        "projectNumbers": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+          "description": "The real Pub/Sub project number of each source project, as a positive decimal string, used to name the service agent a dead-letter grant is for. Independent of the Auth project numbers. Under the strict profile, naming a number selects deadLetterAuthorization \"iam\" unless that key is set."
+        },
+        "authentication": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "localBearerToken": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A local fixture credential: under the strict profile the Pub/Sub endpoint then accepts only one Authorization header exactly equal to \"Bearer <token>\". The emulator profile ignores it. Never reuse a production credential."
+            }
+          },
+          "description": "Strict-profile admission of Pub/Sub requests."
         },
         "deadLetterAuthorization": {
           "enum": ["implicit", "iam"],

@@ -44,6 +44,7 @@
 
 mod config;
 mod config_discovery;
+mod config_shape;
 mod control;
 mod daemon;
 mod doctor;
@@ -66,7 +67,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_core_auth::store::AuthStore;
-use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+use fireemu_core_rules::runtime::{LoadedRules, RulesCompilationCache, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::LogicalInstant;
 #[cfg(windows)]
@@ -1530,7 +1531,13 @@ fn load_project_config(
             let (json, canonical) = config_document(raw, path)?;
             if canonical {
                 sources.canonical = Some(path.clone());
-                let config = RuntimeConfig::from_json(&json)?;
+                let config = RuntimeConfig::from_json(&json).map_err(|error| {
+                    CliError::refused(format!(
+                        "{}: {}",
+                        diagnostic_path(path),
+                        diagnostic_text(&error.0)
+                    ))
+                })?;
                 if raw.verbosity > Verbosity::Quiet {
                     for note in config::no_effect_notes(&json) {
                         eprintln!("note: {}: {note}", diagnostic_path(path));
@@ -1828,8 +1835,9 @@ struct BoundAddrs {
 /// fireemu additionally sets `GOOGLE_CLOUD_PROJECT` next to `GCLOUD_PROJECT`.
 ///
 /// `STORAGE_EMULATOR_HOST` is the plain `http://host:port`, like the official CLI, except
-/// while Storage App Check is `enforced`: then it also carries the per-run Admin Storage
-/// capability (see the comment at the push).
+/// while Storage App Check is `enforced` with `appCheck.storageServerRequests` set to
+/// `capability`: then it also carries the per-run Admin Storage capability (see the comment at
+/// the push).
 fn child_environment(
     cfg: &RuntimeConfig,
     only: &Selection,
@@ -1863,11 +1871,14 @@ fn child_environment(
         ));
         // The Admin Storage capability rides in the URL userinfo, the only channel the
         // unmodified Google client forwards to a custom endpoint, and only while Storage App
-        // Check enforcement makes the Admin bypass necessary. `@google-cloud/storage` 8.1 and
-        // later (`firebase-admin` 14.4 and later) refuse a URL with embedded credentials, so
-        // every other run gets the plain endpoint those versions can use.
+        // Check enforcement makes it necessary: `appCheck.storageServerRequests = "capability"`
+        // under `enforced`. `@google-cloud/storage` 8.1 and later (`firebase-admin` 14.4 and
+        // later) refuse a URL with embedded credentials, so every other run, `loopback`
+        // included, gets the plain endpoint those versions can use.
         let endpoint = if only.app_check_mode(&cfg.app_check, config::AppCheckService::Storage)
             == fireemu_core_app_check::verify::BaselineMode::Enforced
+            && cfg.app_check.storage_server_requests
+                == fireemu_adapter_http::storage::StorageServerRequests::Capability
         {
             format!("http://fireemu:{storage_admin_capability}@{addr}")
         } else {
@@ -2233,12 +2244,16 @@ fn reportable_exit_code(code: i32) -> u8 {
     u8::try_from(code).unwrap_or(1)
 }
 
-fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
+fn load_rules(
+    cfg: &RuntimeConfig,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedRules, String> {
     match &cfg.rules_file {
         Some(path) => {
             let source =
                 std::fs::read_to_string(path).map_err(|e| format!("rules source {path}: {e}"))?;
-            LoadedRules::from_source(&source)
+            compilations
+                .load(&source)
                 .map_err(|e| format!("rules source {path} does not parse: {e}"))
         }
         None => Ok(LoadedRules::default()),
@@ -2250,15 +2265,22 @@ struct LoadedStorageRules {
     watched: Vec<(String, Arc<RulesetSlot>)>,
 }
 
-fn read_storage_rules(path: &str) -> Result<LoadedRules, String> {
+fn read_storage_rules(
+    path: &str,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedRules, String> {
     let source =
         std::fs::read_to_string(path).map_err(|e| format!("storage rules source {path}: {e}"))?;
-    LoadedRules::from_source(&source)
+    compilations
+        .load(&source)
         .map_err(|e| format!("storage rules source {path} does not parse: {e}"))
 }
 
-fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
-    let loaded = load_storage_rules_registry(cfg)?;
+fn load_storage_rules(
+    cfg: &RuntimeConfig,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedStorageRules, String> {
+    let loaded = load_storage_rules_registry(cfg, compilations)?;
     loaded
         .registry
         .set_configured_buckets(cfg.storage_buckets.iter().cloned());
@@ -2271,10 +2293,13 @@ fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String>
     Ok(loaded)
 }
 
-fn load_storage_rules_registry(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
+fn load_storage_rules_registry(
+    cfg: &RuntimeConfig,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedStorageRules, String> {
     if cfg.storage_rules_by_target.is_empty() {
         let loaded = match &cfg.storage_rules_file {
-            Some(path) => read_storage_rules(path)?,
+            Some(path) => read_storage_rules(path, compilations)?,
             None => LoadedRules::default(),
         };
         let slot = Arc::new(RulesetSlot::new(loaded));
@@ -2296,7 +2321,7 @@ fn load_storage_rules_registry(cfg: &RuntimeConfig) -> Result<LoadedStorageRules
     let mut by_bucket = std::collections::BTreeMap::new();
     let mut watched = Vec::new();
     for (target, path) in &cfg.storage_rules_by_target {
-        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path)?));
+        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path, compilations)?));
         let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
             format!("Storage rules target {target:?} has no resolved bucket mapping")
         })?;
@@ -2642,6 +2667,7 @@ fn storage_state(
         clock_observer,
         app_check_policy,
         admin_capability: Some(admin_capability),
+        server_requests: cfg.app_check.storage_server_requests,
         token_acceptance: cfg.token_acceptance,
         allow_unsigned_id_tokens: cfg.auth_allow_unsigned_id_tokens,
         control_token: Some(control_token),
@@ -3549,6 +3575,60 @@ mod config_reload_tests {
     const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
     const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
 
+    #[test]
+    fn storage_startup_keeps_identical_targets_independent_and_reports_the_failing_path() {
+        let dir = scratch("identical-storage-startup");
+        let first_path = dir.join("first.rules").display().to_string();
+        let second_path = dir.join("second.rules").display().to_string();
+        std::fs::write(&first_path, STORAGE_DENY).unwrap();
+        std::fs::write(&second_path, STORAGE_DENY).unwrap();
+        let cfg = RuntimeConfig {
+            storage_rules_by_target: std::collections::BTreeMap::from([
+                ("first".to_owned(), first_path.clone()),
+                ("second".to_owned(), second_path.clone()),
+            ]),
+            storage_buckets_by_target: std::collections::BTreeMap::from([
+                ("first".to_owned(), vec!["first.test".to_owned()]),
+                ("second".to_owned(), vec!["second.test".to_owned()]),
+            ]),
+            ..RuntimeConfig::default()
+        };
+        let loaded =
+            load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default()).unwrap();
+        let first = &loaded.watched[0].1;
+        let second = &loaded.watched[1].1;
+        assert!(!Arc::ptr_eq(first, second));
+        assert!(Arc::ptr_eq(
+            first.snapshot().unwrap().ruleset.as_ref().unwrap(),
+            second.snapshot().unwrap().ruleset.as_ref().unwrap(),
+        ));
+        assert_eq!(first.replace_source(STORAGE_ALLOW).unwrap(), 1);
+        assert_eq!(
+            second.snapshot().unwrap().source.as_deref(),
+            Some(STORAGE_DENY)
+        );
+        assert_eq!(second.snapshot().unwrap().generation(), 0);
+
+        std::fs::write(&second_path, "invalid rules").unwrap();
+        let Err(error) = load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
+        else {
+            panic!("invalid second target must fail startup");
+        };
+        assert_eq!(
+            error,
+            format!(
+                "storage rules source {second_path} does not parse: {}",
+                LoadedRules::from_source("invalid rules").unwrap_err()
+            )
+        );
+        std::fs::remove_file(&second_path).unwrap();
+        let Err(error) = load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
+        else {
+            panic!("missing second target must fail startup");
+        };
+        assert!(error.starts_with(&format!("storage rules source {second_path}: ")));
+    }
+
     /// A scratch directory removed when the test ends, also when an assertion fails first.
     struct Scratch(std::path::PathBuf);
 
@@ -4034,6 +4114,109 @@ mod config_reload_tests {
         .expect("the file present before supervisor start should reconcile");
         drop(rules);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn canonical_rules_reload_when_firebase_declares_only_indexes() {
+        let dir = scratch("canonical_rules_reload_when_firebase_declares_only_indexes");
+        let path = dir.join("firestore.rules");
+        std::fs::write(&path, RULES_ONE).unwrap();
+        let mut cfg = RuntimeConfig::from_json(&serde_json::json!({
+            "schemaVersion": 1, "rules": {"source": path}
+        }))
+        .unwrap();
+        cfg.apply_firebase_json(
+            &serde_json::json!({"firestore": {"indexes": "unused.indexes.json"}}),
+            &dir,
+            &Selection::default(),
+        )
+        .unwrap();
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let backend = index_backend(INDEXES_ONE);
+        let barrier = backend.barrier();
+        let storage = LoadedStorageRules {
+            registry: Arc::new(
+                fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(
+                    std::collections::BTreeMap::new(),
+                ),
+            ),
+            watched: Vec::new(),
+        };
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &rules,
+            &std::collections::BTreeMap::new(),
+            &storage,
+            &barrier,
+        );
+        std::fs::write(&path, RULES_TWO).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the retained canonical file should reload after an edit");
+    }
+
+    #[tokio::test]
+    async fn canonical_indexes_reload_when_firebase_declares_only_rules() {
+        let dir = scratch("canonical_indexes_reload_when_firebase_declares_only_rules");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let mut cfg = RuntimeConfig::from_json(&serde_json::json!({
+            "schemaVersion": 1, "firestore": {"indexFile": path}
+        }))
+        .unwrap();
+        cfg.apply_firebase_json(
+            &serde_json::json!({"firestore": {"rules": "unused.rules"}}),
+            &dir,
+            &Selection::default(),
+        )
+        .unwrap();
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let backend = index_backend(INDEXES_ONE);
+        let barrier = backend.barrier();
+        let storage = LoadedStorageRules {
+            registry: Arc::new(
+                fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(
+                    std::collections::BTreeMap::new(),
+                ),
+            ),
+            watched: Vec::new(),
+        };
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &rules,
+            &std::collections::BTreeMap::new(),
+            &storage,
+            &barrier,
+        );
+        std::fs::write(&path, INDEXES_TWO).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if backend
+                    .indexes_for_database("(default)")
+                    .composites()
+                    .first()
+                    .is_some_and(|index| index.collection_group.as_str() == "other")
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the retained canonical file should reload after an edit");
     }
 
     #[tokio::test]
@@ -4835,6 +5018,7 @@ mod network_exposure_tests {
 mod storage_endpoint_tests {
     use super::{child_environment, BoundAddrs, RuntimeConfig};
     use crate::config::Selection;
+    use fireemu_adapter_http::storage::StorageServerRequests;
     use fireemu_core_app_check::verify::BaselineMode;
 
     const CAPABILITY: &str = "0123456789abcdef0123456789abcdef";
@@ -4870,6 +5054,12 @@ mod storage_endpoint_tests {
         cfg
     }
 
+    fn capability_config(mode: BaselineMode) -> RuntimeConfig {
+        let mut cfg = config_with_storage(mode);
+        cfg.app_check.storage_server_requests = StorageServerRequests::Capability;
+        cfg
+    }
+
     /// `@google-cloud/storage` 8.1 and later refuse a URL with embedded credentials, so the
     /// Admin Storage endpoint is the plain `http://host:port` unless Storage App Check
     /// enforcement is the reason to carry the capability.
@@ -4888,16 +5078,36 @@ mod storage_endpoint_tests {
         );
     }
 
+    /// The default, `loopback`, needs no capability: the Storage adapter admits the server-side
+    /// request by its shape, so the Admin SDK (any version) gets the plain endpoint even while
+    /// Storage App Check is `enforced`.
     #[test]
-    fn enforced_storage_app_check_keeps_the_admin_capability_in_the_endpoint() {
-        let endpoint = storage_endpoint(
-            &config_with_storage(BaselineMode::Enforced),
-            &Selection::default(),
+    fn enforced_storage_app_check_exports_the_plain_endpoint_by_default() {
+        let all = Selection::default();
+        assert_eq!(
+            RuntimeConfig::default().app_check.storage_server_requests,
+            StorageServerRequests::Loopback
         );
         assert_eq!(
-            endpoint,
+            storage_endpoint(&config_with_storage(BaselineMode::Enforced), &all),
+            Some("http://127.0.0.1:9199".to_owned())
+        );
+    }
+
+    #[test]
+    fn capability_mode_keeps_the_admin_capability_in_the_endpoint_only_while_enforced() {
+        let all = Selection::default();
+        assert_eq!(
+            storage_endpoint(&capability_config(BaselineMode::Enforced), &all),
             Some(format!("http://fireemu:{CAPABILITY}@127.0.0.1:9199"))
         );
+        for mode in [BaselineMode::Off, BaselineMode::Unenforced] {
+            assert_eq!(
+                storage_endpoint(&capability_config(mode), &all),
+                Some("http://127.0.0.1:9199".to_owned()),
+                "{mode:?}"
+            );
+        }
     }
 
     fn any_mode() -> impl proptest::strategy::Strategy<Value = BaselineMode> {
@@ -4911,13 +5121,15 @@ mod storage_endpoint_tests {
     proptest::proptest! {
         /// Whatever the three products are set to, and whichever services `--only` leaves
         /// selected, the endpoint carries the capability exactly when the effective Storage
-        /// mode is `enforced`; it is always `http://host:port` otherwise, and never leaks the
-        /// capability into the browser-facing `FIREBASE_STORAGE_EMULATOR_HOST`.
+        /// mode is `enforced` and `storageServerRequests` is `capability`; it is always
+        /// `http://host:port` otherwise, and never leaks the capability into the
+        /// browser-facing `FIREBASE_STORAGE_EMULATOR_HOST`.
         #[test]
         fn the_capability_is_present_exactly_when_the_effective_storage_mode_is_enforced(
             auth in any_mode(),
             firestore in any_mode(),
             storage in any_mode(),
+            capability_mode in proptest::bool::ANY,
             appcheck_selected in proptest::bool::ANY,
             functions_selected in proptest::bool::ANY,
         ) {
@@ -4926,6 +5138,9 @@ mod storage_endpoint_tests {
             cfg.app_check.auth = auth;
             cfg.app_check.firestore = firestore;
             cfg.app_check.storage = storage;
+            if capability_mode {
+                cfg.app_check.storage_server_requests = StorageServerRequests::Capability;
+            }
             let only = Selection {
                 appcheck: appcheck_selected,
                 functions: functions_selected,
@@ -4936,7 +5151,7 @@ mod storage_endpoint_tests {
                 env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
             };
             let endpoint = value("STORAGE_EMULATOR_HOST").expect("storage is selected");
-            if storage == BaselineMode::Enforced {
+            if storage == BaselineMode::Enforced && capability_mode {
                 // `enforces_selected` keeps the verifier whatever `--only` names.
                 proptest::prop_assert_eq!(
                     endpoint,

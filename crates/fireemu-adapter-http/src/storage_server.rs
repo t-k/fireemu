@@ -425,6 +425,7 @@ async fn respond(
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     let mut headers = std::collections::BTreeMap::new();
+    let mut duplicated: Vec<&str> = Vec::new();
     for name in FORWARDED_HEADERS {
         // The App Check field is the one multi-valued member: a collapsed single value would
         // hide a duplicate, which must classify as malformed (spec 7.3).
@@ -433,12 +434,33 @@ async fn respond(
         }
         let values = req.headers().get_all(*name);
         let mut values = values.iter();
-        let value = values.next().and_then(|v| v.to_str().ok());
+        let first = values.next();
+        // Browser evidence is decided by the header being present, not by its bytes being
+        // text: a value `to_str` refuses (non-ASCII) is kept, lossily, so it still counts. The
+        // same holds for `Authorization`, whose scheme decides whether a request is the client
+        // SDK's. Every other header with such a value stays absent, as before.
+        let value = first.and_then(|v| match v.to_str() {
+            Ok(text) => Some(text.to_owned()),
+            Err(_)
+                if *name == "authorization"
+                    || fireemu_core_session::loopback::BROWSER_METADATA_HEADERS.contains(name) =>
+            {
+                Some(String::from_utf8_lossy(v.as_bytes()).into_owned())
+            }
+            Err(_) => None,
+        });
         if values.next().is_some() {
             headers.insert((*name).to_owned(), String::new());
+            duplicated.push(*name);
         } else if let Some(value) = value {
-            headers.insert((*name).to_owned(), value.to_owned());
+            headers.insert((*name).to_owned(), value);
         }
+    }
+    if !duplicated.is_empty() {
+        headers.insert(
+            crate::storage::DUPLICATED_HEADERS_KEY.to_owned(),
+            duplicated.join(","),
+        );
     }
     let app_check: Vec<String> = req
         .headers()

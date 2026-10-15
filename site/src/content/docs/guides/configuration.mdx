@@ -45,7 +45,7 @@ firebaseJson = "firebase.json"
 `up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
 
 1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML (case-insensitive, including `.TOML`) and every other extension as JSON. A TOML configuration must set `schemaVersion = 1`; it is never read as a `firebase.json`, which is JSON only. `--firebase-json` always reads JSON.
-2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used.
+2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used. Relative paths inside a canonical file (`rules.source`, `storage.rules`, `functions.source`, `firestore.indexFile` and the other file settings) are read from the working directory, whichever directory the file is in; only `firebaseJson` and the paths inside a `firebase.json` are read from the file's own directory.
 3. Otherwise, the nearest `firebase.json` is loaded: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. The `.firebaserc` beside it is read too.
 4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
 
@@ -69,7 +69,7 @@ Two common setups run into this rule:
 
 ## Validate your configuration
 
-`fireemu.toml` is validated at startup, and a value Fireemu does not accept stops it with an error. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
+`fireemu.toml` is validated at startup, and a value Fireemu does not accept stops it with an error. A key the schema does not list and a value of the wrong type are refused in both formats by `up`, `exec` and `config show`, naming the file, the key and the type it should have had, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. Integer settings refuse floats even when their value is integral: write `8080` rather than `8080.0`, as the error message suggests. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
 
 `fireemu capabilities` prints the capability manifest for the profile your configuration resolves to.
 

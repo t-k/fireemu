@@ -113,6 +113,7 @@ async fn handle_connection(
             .write_all(&encode_text_frame(frame))
             .await?;
     }
+    drop(sub.history);
 
     loop {
         tokio::select! {

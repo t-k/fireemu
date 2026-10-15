@@ -8,6 +8,22 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-15
+
+### Changed
+
+- A canonical configuration (`fireemu.toml` or `fireemu.json`) is now checked against the configuration schema when it loads. A key the schema does not list and a value of the wrong type used to be skipped without a word (`"port": "8080"` fell back to the default, a misspelt key did nothing); both are now refused by `up`, `exec` and `config show` with the file, the key's path and the expected type, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. A port above 65535 is refused too. Values outside the schema's ranges or choices are now refused, including `events.maxAttempts: 0` and `functions.maxGlobalConcurrency: 0` (previously raised silently to 1), negative ports, `daemon.seed: -1` (previously ignored while `config show` reported "explicit"), values outside the enums of `storage.persistence`, `storage.mode`, `rules.diagnostics.format` and `auth.secretMaterialization`, and integers written as floats (`8080.0`). A configuration that only worked because a typo was ignored stops with an error naming the key.
+- The configuration schema now lists `daemon.hubPort`, `daemon.uiPort`, `pubsub.projectNumbers` and `pubsub.authentication.localBearerToken`, which the daemon already read, and no longer requires `profile` or `firestore`, which have defaults (`strict`, Standard Native). `firestore.rules` is listed as deprecated: it was never read, loads as before and now prints a start-up note pointing at `rules.source`. A `limits.catalog` of the other Firestore edition, `firestore.pipeline.executionMode: "proxy"`, `firestore.textSearch.fidelity: "upstream-proxy"`, `visibilityPolicy: "virtual-lag"` without a lag, and `strict-validation-only` with an exact score precision are refused, as the schema examples say.
+- Identical Security Rules sources are compiled once at startup instead of once per Firestore database or Storage target; each target keeps its own diagnostics and reload.
+- A Firestore write that matches several Functions triggers builds its document payload once, and event dispatch no longer rescans the whole pending backlog on every pass. Event ids, payloads and ordering are unchanged.
+
+### Fixed
+
+- A `firebase.json` without a `storage`, `functions` or `firestore` section no longer drops the canonical configuration's `storage.rules`, `functions.source`, `rules.source` or `firestore.indexFile`: a section the `firebase.json` declares overrides, and a file it leaves out is kept. Before, a canonical `storage.rules` was silently lost whenever the referenced `firebase.json` had no `storage` entry, and Storage then ran with no Security Rules.
+- Logging WebSocket connections release their replay snapshots after sending history, allowing evicted log payloads to be freed while clients remain connected without changing frame contents, ordering, or lag handling.
+- Storage public-read state of a replaced or deleted generation no longer comes back on re-import; making an object public no longer scans every public object.
+- With Storage App Check `enforced`, a Cloud Storage JSON API request (`/storage/v1`, `/upload/storage/v1`, `/download/storage/v1`) from a loopback peer that carries no browser evidence (no `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Referer` or `Cookie` header) addresses a loopback `Host` (a DNS-rebound name is refused) and does not present the client SDK's `Authorization: Firebase <token>` credential is admitted without an App Check token and counted as the server-side bypass, because production does not apply App Check to the Admin SDK's service-account traffic. Resumable upload continuations are covered, so `file.save()` works; `fireemu exec` exports the plain `STORAGE_EMULATOR_HOST=http://host:port`, so `firebase-admin` 14.4 and later (`@google-cloud/storage` 8.1 and later) work under enforcement. The Admin SDK inside a Cloud Function gets the same plain endpoint and passes too. The Firebase Storage API (`/v0`) still needs a token, and so do browser-shaped and non-loopback requests, the XML-style object read and the form upload. The new `appCheck.storageServerRequests` selects the rule: `"loopback"` (the default, the same under every profile and `productionExact`) or `"capability"`, which keeps the previous behaviour (only the per-run capability in the `STORAGE_EMULATOR_HOST` userinfo, which those SDK versions refuse and a resumable continuation does not carry). Any local non-browser process therefore passes `enforced` Storage without a token under `"loopback"`; use `"capability"` when enforcement must prove a client presented one, and note that a container reaching the emulator through a non-loopback host name needs a token or `"capability"`. In an `unenforced` Storage policy the observation labels changed: every Cloud Storage dialect request without browser evidence used to count as the server-side bypass, and now only the same shape does (a JSON API route, including the short `/b/{bucket}` spelling, from a loopback peer with a loopback `Host` and without an `Authorization: Firebase` credential). A non-loopback peer, a non-loopback `Host`, an `Authorization: Firebase` request, the XML-style object read, the form upload and the 501 catch-all now count as a missing token. Nothing is admitted or refused differently there.
+
 ## [0.22.0] - 2026-10-15
 
 ### Fixed
@@ -757,7 +773,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/t-k/fireemu/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/t-k/fireemu/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/t-k/fireemu/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/t-k/fireemu/compare/v0.19.0...v0.20.0

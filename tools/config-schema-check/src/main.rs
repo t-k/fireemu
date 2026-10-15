@@ -12,8 +12,8 @@
 //!
 //! 1. `standard` edition never combines with `mongodb-compatible` API mode;
 //! 2. `limits.catalog` must belong to the configured edition;
-//! 3. `limits.queryCatalog` is required (`firestore-standard-query-*`) for Standard and must be
-//!    `null` for Enterprise;
+//! 3. `limits.queryCatalog`, when given, is `firestore-standard-query-*` for Standard (an explicit
+//!    `null` is refused; leaving it out is valid) and must be `null` for Enterprise;
 //! 4. `pipeline.executionMode = proxy` and `textSearch.fidelity = upstream-proxy` forward to a
 //!    real Firestore backend, which no local emulator does; both are declared and refused;
 //! 5. `visibilityPolicy = virtual-lag` requires a non-null `visibilityLag`;
@@ -101,8 +101,16 @@ fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
     }
 
     match (edition, str_at(cfg, &["limits", "queryCatalog"])) {
+        // An absent key is valid (`fireemu init` writes `edition = "standard"` alone, and the
+        // Rust loader accepts it); only an explicit null contradicts the Standard edition.
         ("standard", None) => {
-            problems.push("standard edition requires limits.queryCatalog".to_owned());
+            if cfg
+                .pointer("/limits/queryCatalog")
+                .is_some_and(Value::is_null)
+            {
+                problems
+                    .push("standard edition cannot declare limits.queryCatalog null".to_owned());
+            }
         }
         ("standard", Some(q)) => {
             if !root.join("spec/limits").join(format!("{q}.json")).is_file() {
@@ -185,21 +193,23 @@ fn eventarc_authentication_problems(cfg: &Value) -> Vec<String> {
     problems
 }
 
-/// Declared tenants under the strict profile (the default): production creates tenants only in a
-/// project that allows them, so `auth.tenants` needs `auth.multiTenant.allowTenants: true`. The
-/// Rust loader enforces the same rule.
+/// Declared tenants need the project's multi-tenancy switch. Production creates tenants only in a
+/// project that allows them; the strict profile's development default switches that on, so the
+/// rule applies only under strict when the document declares the switch off, or under `productionExact`, which
+/// restores production's "off until enabled". The Rust loader enforces the same rule.
 fn auth_tenant_problems(cfg: &Value) -> Vec<String> {
     let declared = cfg
         .pointer("/auth/tenants")
         .and_then(Value::as_array)
         .is_some_and(|tenants| !tenants.is_empty());
-    let allowed = cfg
+    let switch = cfg
         .pointer("/auth/multiTenant/allowTenants")
-        .and_then(Value::as_bool)
-        == Some(true);
-    if declared && !allowed && str_at(cfg, &["profile"]) != Some("emulator") {
+        .and_then(Value::as_bool);
+    let production_exact = cfg.get("productionExact").and_then(Value::as_bool) == Some(true);
+    let strict = str_at(cfg, &["profile"]) != Some("emulator");
+    if strict && declared && (switch == Some(false) || (production_exact && switch != Some(true))) {
         return vec![
-            "auth.tenants needs auth.multiTenant.allowTenants: true under the strict profile"
+            "auth.tenants needs auth.multiTenant.allowTenants: true (declared off, or productionExact)"
                 .to_owned(),
         ];
     }
@@ -566,6 +576,26 @@ fn main() -> ExitCode {
                 eprintln!("error: {p}");
             }
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn emulator_tenants_ignore_the_off_switch() {
+        for exact in [false, true] {
+            let mut cfg = json!({"profile": "emulator", "productionExact": exact,
+                "auth": {"multiTenant": {"allowTenants": false},
+                    "tenants": [{"tenantId": "acme", "displayName": "Acme"}]}});
+            assert!(auth_tenant_problems(&cfg).is_empty());
+            cfg["profile"] = json!("strict");
+            assert_eq!(auth_tenant_problems(&cfg).len(), 1);
+            cfg["auth"]["multiTenant"]["allowTenants"] = json!(true);
+            assert!(auth_tenant_problems(&cfg).is_empty());
         }
     }
 }

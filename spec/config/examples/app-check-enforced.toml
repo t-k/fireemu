@@ -15,6 +15,7 @@ apiMode = "native"
 enabled = true
 tokenSigning = "instance-rsa"
 tokenTtlSeconds = 3600
+storageServerRequests = "loopback"
 
 [[appCheck.apps]]
 projectId = "demo-app"

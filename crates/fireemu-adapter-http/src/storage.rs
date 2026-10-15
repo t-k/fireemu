@@ -122,6 +122,45 @@ pub enum DefaultBuckets {
     AppspotCom,
 }
 
+/// How server-side Cloud Storage JSON API traffic (the Admin SDK, `gcloud`) passes an `enforced`
+/// Storage App Check policy (`appCheck.storageServerRequests`).
+///
+/// Production does not apply App Check to that traffic: the Admin SDK authenticates with a
+/// service account over OAuth, and the enforcement covers the Firebase Storage API the client
+/// SDKs use. The emulator has no OAuth, so it recognises such a request by its shape instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StorageServerRequests {
+    /// A JSON API request from a loopback peer with no browser evidence passes. Resumable
+    /// upload continuations pass too, because they are JSON API requests.
+    #[default]
+    Loopback,
+    /// Only the per-run capability `fireemu exec` puts in `STORAGE_EMULATOR_HOST` (or the
+    /// owner credential) passes. `@google-cloud/storage` 8.1 and later refuse that URL, and a
+    /// resumable continuation carries no capability, so both fail under enforcement.
+    Capability,
+}
+
+impl StorageServerRequests {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "loopback" => Some(Self::Loopback),
+            "capability" => Some(Self::Capability),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Capability => "capability",
+        }
+    }
+}
+
 /// Why [`StorageRulesRegistry::replace_source`] refused a source.
 #[derive(Debug)]
 pub enum StorageRulesSourceError {
@@ -834,6 +873,9 @@ pub struct StorageState {
     /// Per-run capability used only by the Admin Storage SDK endpoint inherited by an
     /// `exec` child. It is distinct from the owner and control credentials.
     pub admin_capability: Option<String>,
+    /// How server-side Cloud Storage JSON API traffic passes an `enforced` App Check policy
+    /// (`appCheck.storageServerRequests`).
+    pub server_requests: StorageServerRequests,
     /// How a caller's ID token is verified before Storage Rules see it: the compatibility
     /// profile decides (`emulator` admits the official emulator's mock tokens, `strict`
     /// does not).
@@ -1002,9 +1044,31 @@ pub struct StorageRequest {
     pub remote_peer: bool,
 }
 
+/// The `headers` key under which the transport lists, comma separated and lowercase, the
+/// forwarded headers that appeared more than once (their own entry is folded to an empty
+/// value). It is not a forwarded header name, so a client cannot supply it.
+pub(crate) const DUPLICATED_HEADERS_KEY: &str = "x-fireemu-duplicated-headers";
+
 impl StorageRequest {
     fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).map(String::as_str)
+    }
+
+    /// Whether the header appeared more than once.
+    fn was_duplicated(&self, name: &str) -> bool {
+        self.header(DUPLICATED_HEADERS_KEY)
+            .is_some_and(|listed| listed.split(',').any(|duplicated| duplicated == name))
+    }
+
+    /// Whether the request carries browser evidence
+    /// ([`fireemu_core_session::loopback::carries_browser_metadata`]). A browser header that
+    /// appeared more than once is present, not absent: the transport folds it to an empty
+    /// value, which must not erase the evidence.
+    fn carries_browser_evidence(&self) -> bool {
+        fireemu_core_session::loopback::carries_browser_metadata(|name| self.header(name))
+            || fireemu_core_session::loopback::BROWSER_METADATA_HEADERS
+                .iter()
+                .any(|name| self.was_duplicated(name))
     }
 }
 
@@ -1302,7 +1366,7 @@ fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option
         .is_some_and(|expected| crate::control::token_matches(presented, expected));
     let forbidden = |message: &str| Some(StorageResponse::json(403, &json!({"message": message})));
     match fireemu_core_session::loopback::privileged_route_admission(
-        fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)),
+        req.carries_browser_evidence(),
         req.header("origin"),
         token_ok,
     ) {
@@ -3158,7 +3222,7 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
     // evidence (Node's built-in `fetch` always sends it), so it must not fall out of this
     // capability's reach the way it did before this guard shared
     // [`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`] with the privileged route.
-    if fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)) {
+    if req.carries_browser_evidence() {
         return false;
     }
     let expected = format!(
@@ -3168,24 +3232,82 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
     fireemu_adapter_support::secret::constant_time_eq(presented.as_bytes(), expected.as_bytes())
 }
 
-/// Whether a credential-less JSON API request is labelled the server-side bypass in the App
-/// Check observations, which is all this decides.
+/// Whether a request is server-side Cloud Storage JSON API traffic: the Admin SDK or `gcloud`,
+/// which production authenticates with a service account over OAuth and App Check does not
+/// apply to. The emulator has no OAuth, so it recognises the shape: a JSON API route (the
+/// XML-style object read and the form-data upload are what a page navigates to or posts a form
+/// to, and the Firebase dialect is the client SDK's), a loopback peer that addressed a loopback
+/// `Host`, no `Firebase` client credential, and no browser evidence
+/// ([`fireemu_core_session::loopback::carries_browser_metadata`], the rule the capability
+/// follows; `Sec-Fetch-Mode` alone is Node's built-in `fetch`).
+///
+/// Whether that shape is *admitted* under `enforced` is `appCheck.storageServerRequests`
+/// ([`server_side_bypass`]); under `unenforced` it only labels the observation.
+fn is_server_side_json_api(json_api_route: bool, req: &StorageRequest) -> bool {
+    json_api_route
+        && !req.remote_peer
+        // A page whose name was rebound to a loopback address (DNS rebinding) is same-origin
+        // for the browser, so it sends no `Origin`, and over plain HTTP to a non-loopback name
+        // no Fetch Metadata and no `Referer` either: its `Host` is what gives it away.
+        && req
+            .host
+            .as_deref()
+            .is_some_and(fireemu_core_session::loopback::authority_is_loopback)
+        && !req.carries_browser_evidence()
+        && !carries_client_sdk_credential(req)
+}
+
+/// Whether a route is a Cloud Storage JSON API route, judged on the route the request *named*:
+/// the short bucket spelling `/b/{bucket}` is one although the emulator profile later serves it
+/// as the official emulator does (an object read, the 501 catch-all).
+fn is_json_api_route(route: &Route) -> bool {
+    matches!(
+        route,
+        Route::GcsListBuckets
+            | Route::GcsList { .. }
+            | Route::GcsBucket { .. }
+            | Route::GcsBucketShort { .. }
+            | Route::GcsObject { .. }
+            | Route::GcsCopy { .. }
+            | Route::GcsAcl { .. }
+            | Route::GcsAclEntry { .. }
+            | Route::GcsUpload { .. }
+    )
+}
+
+/// Whether the request presents the Firebase client SDK's credential scheme
+/// (`Authorization: Firebase <ID token>`). The Admin SDK and `gcloud` send an OAuth `Bearer`
+/// token or nothing, so this is an end-user request that happens to name a JSON API path and
+/// stays an ordinary request for App Check (coordinator ruling, 2026-10-15).
+fn carries_client_sdk_credential(req: &StorageRequest) -> bool {
+    // More than one `Authorization` is never the Admin SDK's: fail closed.
+    req.was_duplicated("authorization")
+        || req
+            .header("authorization")
+            .and_then(|value| value.split_whitespace().next())
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("firebase"))
+}
+
+/// Whether [`is_server_side_json_api`] counts as the server-side bypass of this policy.
 ///
 /// Without Storage enforcement `exec` gives the Admin SDK the plain endpoint and no capability,
-/// so its traffic would be counted as a missing token. Under `enforced` nothing changes: only
-/// the capability or the owner credential bypasses, so this is `false` there and can never turn
-/// a refusal into an admission. Under `off` there is no policy and nothing is classified. An
-/// `unenforced` policy admits every request whatever the label, and it binds no upload session
-/// (`app_check_admission`), so the label has no effect on what is admitted. Browser evidence
-/// ([`fireemu_core_session::loopback::carries_browser_metadata`]) keeps a request an ordinary
-/// one, as it does for the capability.
-fn observed_as_server_side(state: &StorageState, dialect: Dialect, req: &StorageRequest) -> bool {
-    dialect == Dialect::Gcs
-        && state
-            .app_check_policy
-            .as_ref()
-            .is_some_and(|policy| policy.mode() != BaselineMode::Enforced)
-        && !fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name))
+/// so its traffic would be counted as a missing token; an `unenforced` policy admits every
+/// request whatever the label, and it binds no upload session (`app_check_admission`), so there
+/// the label changes no decision. Under `enforced` the label is an admission:
+/// `appCheck.storageServerRequests = "loopback"` admits the shape, `"capability"` never does
+/// (only the capability or the owner credential bypasses, as they did before the setting). A
+/// resumable continuation is a JSON API request and follows the same rule, which is why it
+/// passes in `loopback` and not in `capability`. Under `off` there is no policy and nothing is
+/// classified.
+fn server_side_bypass(state: &StorageState, json_api_route: bool, req: &StorageRequest) -> bool {
+    state
+        .app_check_policy
+        .as_ref()
+        .is_some_and(|policy| match policy.mode() {
+            BaselineMode::Enforced => state.server_requests == StorageServerRequests::Loopback,
+            _ => true,
+        })
+        && is_server_side_json_api(json_api_route, req)
 }
 
 /// A name no object can have: it holds a line feed, or is longer than an object name may be.
@@ -3360,6 +3482,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     let Ok(route) = route(&req.method, &req.path) else {
         return plain_status(400);
     };
+    let json_api_route = is_json_api_route(&route);
     // The short spelling of the bucket resource is served as the long one under strict and
     // answered as the official emulator answers it otherwise (see `Route::GcsBucketShort`).
     let route = match route {
@@ -3474,7 +3597,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
             &route,
             &req.method,
             &params,
-            json_api_authenticated || observed_as_server_side(state, dialect, &req),
+            json_api_authenticated || server_side_bypass(state, json_api_route, &req),
         );
         match app_check_admission(
             state,

@@ -2519,13 +2519,13 @@ async fn a_duplicated_browser_or_authorization_header_still_keeps_the_request_or
             "{extra:?}: {response}"
         );
     }
-    // The privileged rules route reads the same evidence: a duplicated `Origin` is a page.
+    // The privileged rules route reads the same evidence: a duplicated `Sec-Fetch-Site` is a page.
     let set_rules = |extra: &str| {
         format!("PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}")
     };
     let page = raw(
         addr,
-        &set_rules("Origin: http://localhost:5173\r\nOrigin: http://localhost:5173\r\n"),
+        &set_rules("Sec-Fetch-Site: same-origin\r\nSec-Fetch-Site: same-origin\r\n"),
     )
     .await;
     assert!(page.starts_with("HTTP/1.1 403"), "{page}");

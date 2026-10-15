@@ -5397,6 +5397,8 @@ impl FunctionsRuntime {
         for function in inner.running.values() {
             *running_counts.entry(function.clone()).or_default() += 1;
         }
+        // The inner lock excludes concurrent enqueue, retry release and completion. This pass only leases/starts existing records; faults do not enqueue, and spawned work must acquire the same lock. Queue-head traversal therefore sees the same ready set as a snapshot.
+        let dispatch_outbox_len = inner.outbox.len();
         let mut ready = inner
             .outbox
             .dispatchable_queue_heads()
@@ -5411,6 +5413,16 @@ impl FunctionsRuntime {
                 break;
             }
             if !inner.payloads.contains_key(&id) {
+                if let Some(next) = inner
+                    .outbox
+                    .next_dispatchable_in_queue(&function_name, (time, id))
+                {
+                    ready.insert((next, function_name));
+                    #[cfg(test)]
+                    {
+                        inner.dispatch_candidate_visits += 1;
+                    }
+                }
                 continue;
             }
             let Some(spec) = self.manifest.get(&function_name) else {
@@ -5555,6 +5567,11 @@ impl FunctionsRuntime {
                 }
             });
         }
+        debug_assert_eq!(
+            inner.outbox.len(),
+            dispatch_outbox_len,
+            "dispatch must not enqueue or remove outbox records while holding the inner lock"
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6532,6 +6549,44 @@ mod task_completion_tests {
                 "encode each before/after document once across all triggers"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_missing_head_payload_does_not_block_the_next_event_of_the_same_function() {
+        let runtime = runtime().await;
+        let next_id = {
+            let mut inner = runtime.inner.lock().unwrap();
+            for _ in 0..2 {
+                assert!(FunctionsRuntime::enqueue(
+                    &mut inner,
+                    runtime.config.session,
+                    super::EventSource::Firestore,
+                    "ok",
+                    "example.event",
+                    "documents/backlog",
+                    runtime.now(),
+                    &json!({"data": {}}),
+                    None,
+                ));
+            }
+            let ids = inner
+                .outbox
+                .dispatchable()
+                .map(|event| event.event_id)
+                .collect::<Vec<_>>();
+            assert_eq!(ids.len(), 2);
+            inner.payloads.remove(&ids[0]);
+            ids[1]
+        };
+        runtime.dispatch_ready();
+        let dispatched = runtime
+            .inner
+            .lock()
+            .unwrap()
+            .running
+            .contains_key(&format!("{}-1", next_id.value()));
+        runtime.shutdown().await;
+        assert!(dispatched, "the next event in the same queue must dispatch");
     }
 
     #[tokio::test]

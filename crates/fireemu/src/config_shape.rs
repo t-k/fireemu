@@ -517,6 +517,142 @@ mod tests {
     }
 
     #[test]
+    fn every_kind_of_value_is_named_and_recognised() {
+        let values = [
+            (json!(null), "null", "null"),
+            (json!(true), "boolean", "a boolean"),
+            (json!(1), "integer", "an integer"),
+            (json!(-1), "integer", "an integer"),
+            (json!(u64::MAX), "integer", "an integer"),
+            (json!(1.5), "number", "a number"),
+            (json!("x"), "string", "a string"),
+            (json!([]), "array", "an array"),
+            (json!({}), "object", "an object"),
+        ];
+        for (value, kind, said) in &values {
+            assert_eq!(found(value), *said, "{value}");
+            assert_eq!(expected(kind), *said, "{kind}");
+            // `kind_of` does not tell an integer from another number.
+            let schema_kind = if *kind == "integer" { "number" } else { kind };
+            assert_eq!(kind_of(value), schema_kind, "{value}");
+            for (other, other_kind, _) in &values {
+                let matches =
+                    *kind == *other_kind || (*kind == "number" && *other_kind == "integer");
+                assert_eq!(
+                    is_kind(other, kind),
+                    matches,
+                    "{other} is {other_kind}; asked for {kind}"
+                );
+            }
+        }
+        assert_eq!(expected("duration"), "a value of another type");
+        assert!(
+            is_kind(&json!(1), "duration"),
+            "an unknown type constrains nothing"
+        );
+    }
+
+    #[test]
+    fn a_type_list_names_every_alternative() {
+        let error =
+            check(&json!({"schemaVersion": 1, "auth": {"authorizedDomains": "x"}})).unwrap_err();
+        assert_eq!(
+            error.0,
+            "auth.authorizedDomains must be an array or null, found a string"
+        );
+        let error = check_node(
+            &json!({}),
+            &json!({"type": ["string", "number", "boolean"]}),
+            &json!([]),
+            "k",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "k must be a string or a number or a boolean, found an array"
+        );
+    }
+
+    #[test]
+    fn an_enum_names_its_kind_only_when_the_value_is_of_another_kind() {
+        let error = check(&json!({"schemaVersion": 1, "profile": "bogus"})).unwrap_err();
+        assert_eq!(error.0, "profile must be one of \"strict\", \"emulator\"");
+        let error = check(&json!({"schemaVersion": 1, "profile": 5})).unwrap_err();
+        assert_eq!(
+            error.0,
+            "profile must be a string (one of \"strict\", \"emulator\"), found an integer"
+        );
+        // Choices of different kinds name no single kind.
+        let mixed = json!({"enum": [1, "a"]});
+        assert_eq!(
+            check_node(&json!({}), &mixed, &json!(true), "k").unwrap_err(),
+            "k must be one of 1, \"a\""
+        );
+        let numbers = json!({"enum": [1, 2]});
+        assert_eq!(
+            check_node(&json!({}), &numbers, &json!(3), "k").unwrap_err(),
+            "k must be one of 1, 2"
+        );
+        assert_eq!(
+            check_node(&json!({}), &numbers, &json!("1"), "k").unwrap_err(),
+            "k must be a number (one of 1, 2), found a string"
+        );
+        check_node(&json!({}), &numbers, &json!(2), "k").unwrap();
+    }
+
+    #[test]
+    fn alternatives_that_name_no_type_report_the_first_complaint() {
+        let none = json!({"oneOf": []});
+        assert_eq!(
+            check_node(&json!({}), &none, &json!(1), "k").unwrap_err(),
+            "k matches no allowed shape"
+        );
+        let untyped = json!({"oneOf": [{"const": 1}, {"const": 2}]});
+        assert_eq!(
+            check_node(&json!({}), &untyped, &json!(3), "k").unwrap_err(),
+            "k must be 1"
+        );
+        check_node(&json!({}), &untyped, &json!(2), "k").unwrap();
+    }
+
+    #[test]
+    fn a_map_checks_each_value_against_the_schema_of_its_values() {
+        let map = json!({"type": "object", "additionalProperties": {"type": "integer"}});
+        check_node(&json!({}), &map, &json!({"a": 1, "b": 2}), "m").unwrap();
+        assert_eq!(
+            check_node(&json!({}), &map, &json!({"a": 1, "b": "x"}), "m").unwrap_err(),
+            "m.b must be an integer, found a string"
+        );
+        let open = json!({"type": "object"});
+        check_node(&json!({}), &open, &json!({"anything": "x"}), "m").unwrap();
+    }
+
+    #[test]
+    fn a_catalog_must_belong_to_the_edition_the_file_names() {
+        let load = |edition: Option<&str>, catalog: &str| {
+            let mut document = json!({"schemaVersion": 1, "limits": {"catalog": catalog}});
+            if let Some(edition) = edition {
+                document["firestore"] = json!({"edition": edition});
+            }
+            check(&document)
+        };
+        let standard = "firestore-standard-2026-08-25";
+        let enterprise = "firestore-enterprise-native-2026-08-27";
+        load(Some("standard"), standard).unwrap();
+        load(Some("enterprise"), enterprise).unwrap();
+        // Without an edition there is nothing to contradict.
+        load(None, standard).unwrap();
+        load(None, enterprise).unwrap();
+        for (edition, catalog) in [("standard", enterprise), ("enterprise", standard)] {
+            let error = load(Some(edition), catalog).unwrap_err();
+            assert!(
+                error.0.contains("does not belong to firestore.edition"),
+                "{edition} {catalog}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_number_below_the_schema_s_minimum_is_refused_not_raised_to_it() {
         // `events.maxAttempts` used to be raised to 1 without a word.
         let error = refusal(json!({"events": {"maxAttempts": 0}}));

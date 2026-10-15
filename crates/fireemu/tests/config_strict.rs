@@ -214,3 +214,30 @@ fn a_referenced_firebase_json_without_sections_does_not_drop_the_canonical_files
     assert_eq!(shown(&output, "storage.rules"), "storage.rules");
     assert_eq!(shown(&output, "functions.source"), "fns");
 }
+
+#[test]
+fn a_relative_path_that_only_the_working_directory_has_still_loads_with_a_note() {
+    let dir = Scratch::new("config-strict", "fallback");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("here.rules"), RULES).unwrap();
+    std::fs::write(dir.join("both.rules"), RULES).unwrap();
+    std::fs::write(dir.join("sub").join("both.rules"), RULES).unwrap();
+    std::fs::write(
+        dir.join("sub").join("fireemu.json"),
+        r#"{"schemaVersion": 1, "rules": {"source": "here.rules"}, "storage": {"rules": "both.rules"}}"#,
+    )
+    .unwrap();
+    let output = fireemu(
+        &dir,
+        &["config", "show", "--json", "--config", "sub/fireemu.json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(shown(&output, "rules.source"), "here.rules");
+    assert_eq!(shown(&output, "storage.rules"), "sub/both.rules");
+    let notes = stderr(&output);
+    assert!(
+        notes.contains("rules.source \"here.rules\" is not beside the configuration file")
+            && !notes.contains("storage.rules \"both.rules\" is not beside"),
+        "{notes}"
+    );
+}

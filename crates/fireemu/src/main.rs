@@ -1540,7 +1540,12 @@ fn load_project_config(
                 })?;
                 // Paths in the file are read from the directory the file is in, as the
                 // paths in a firebase.json are, not from wherever the command was started.
-                config.rebase_relative_paths(&project_dir(path));
+                let notes = config.rebase_relative_paths(&project_dir(path), &|p| p.exists());
+                if raw.verbosity > Verbosity::Quiet {
+                    for note in notes {
+                        eprintln!("note: {}: {note}", diagnostic_path(path));
+                    }
+                }
                 if raw.verbosity > Verbosity::Quiet {
                     for note in config::no_effect_notes(&json) {
                         eprintln!("note: {}: {note}", diagnostic_path(path));

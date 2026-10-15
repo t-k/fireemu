@@ -1786,27 +1786,49 @@ pub fn explicit_no_effect_keys(input: &Value) -> Vec<&'static str> {
 
 impl RuntimeConfig {
     /// Makes the relative file paths a canonical configuration named relative to `base`, the
-    /// directory the file is in. A `base` of `.` (the file is in the working directory) and an
-    /// absolute path change nothing. `functions.runner` is a command, not a path, and stays.
-    pub fn rebase_relative_paths(&mut self, base: &std::path::Path) {
+    /// directory the file is in, and returns a note for each path it had to leave alone.
+    ///
+    /// Until 0.22 these paths were read from the working directory. A path that is not beside
+    /// the file but does exist there keeps meaning the working directory's file, with a note,
+    /// so that a configuration written for the old rule still loads. A `base` of `.` (the file
+    /// is in the working directory), an absolute path and `functions.runner` (a command, not a
+    /// file) change nothing.
+    pub fn rebase_relative_paths(
+        &mut self,
+        base: &std::path::Path,
+        exists: &dyn Fn(&std::path::Path) -> bool,
+    ) -> Vec<String> {
+        let mut notes = Vec::new();
         if base == std::path::Path::new(".") {
-            return;
+            return notes;
         }
-        for path in [
-            &mut self.rules_file,
-            &mut self.storage_rules_file,
-            &mut self.index_file,
-            &mut self.text_index_file,
-            &mut self.functions_source,
-            &mut self.functions_manifest,
+        for (key, path) in [
+            ("rules.source", &mut self.rules_file),
+            ("storage.rules", &mut self.storage_rules_file),
+            ("firestore.indexFile", &mut self.index_file),
+            (
+                "firestore.textIndexDefinitionFile",
+                &mut self.text_index_file,
+            ),
+            ("functions.source", &mut self.functions_source),
+            ("functions.manifest", &mut self.functions_manifest),
         ] {
-            if let Some(relative) = path
-                .as_mut()
-                .filter(|p| !std::path::Path::new(p.as_str()).is_absolute())
-            {
-                *relative = base.join(&*relative).to_string_lossy().into_owned();
+            let Some(relative) = path.as_mut() else {
+                continue;
+            };
+            if std::path::Path::new(relative.as_str()).is_absolute() {
+                continue;
+            }
+            let beside = base.join(&*relative);
+            if exists(&beside) || !exists(std::path::Path::new(relative.as_str())) {
+                *relative = beside.to_string_lossy().into_owned();
+            } else {
+                notes.push(format!(
+                    "{key} {relative:?} is not beside the configuration file, so the file in the working directory is used; relative paths are read from the directory of the configuration file, and the working directory is a deprecated fallback"
+                ));
             }
         }
+        notes
     }
 }
 
@@ -8219,7 +8241,8 @@ mod tests {
             "functions": {"source": "fns", "manifest": "m.json", "runner": ["runner.sh", "arg"]}
         }))
         .unwrap();
-        cfg.rebase_relative_paths(std::path::Path::new("sub"));
+        let notes = cfg.rebase_relative_paths(std::path::Path::new("sub"), &|_| false);
+        assert!(notes.is_empty(), "{notes:?}");
         let under = |name: &str| {
             std::path::Path::new("sub")
                 .join(name)
@@ -8244,6 +8267,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_relative_path_found_only_in_the_working_directory_keeps_meaning_that_file_with_a_note() {
+        let load = || {
+            RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "rules": {"source": "a.rules"},
+                "storage": {"rules": "b.rules"},
+                "functions": {"source": "fns"}
+            }))
+            .unwrap()
+        };
+        let under = |name: &str| {
+            std::path::Path::new("sub")
+                .join(name)
+                .to_string_lossy()
+                .into_owned()
+        };
+        let sub = std::path::Path::new("sub");
+        // a.rules exists in both places, b.rules only in the working directory, fns only beside.
+        let exists = |path: &std::path::Path| {
+            ["a.rules", "b.rules", "sub/a.rules", "sub/fns"]
+                .iter()
+                .any(|known| path == std::path::Path::new(known))
+        };
+        let mut cfg = load();
+        let notes = cfg.rebase_relative_paths(sub, &exists);
+        assert_eq!(
+            cfg.rules_file,
+            Some(under("a.rules")),
+            "beside the file wins"
+        );
+        assert_eq!(
+            cfg.storage_rules_file.as_deref(),
+            Some("b.rules"),
+            "the fallback"
+        );
+        assert_eq!(cfg.functions_source, Some(under("fns")));
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].starts_with("storage.rules \"b.rules\" is not beside the configuration file"),
+            "{notes:?}"
+        );
+        // Found in neither place, the path is the one beside the file, so the error names it.
+        let mut cfg = load();
+        assert!(cfg.rebase_relative_paths(sub, &|_| false).is_empty());
+        assert_eq!(cfg.storage_rules_file, Some(under("b.rules")));
+    }
+
     proptest::proptest! {
         #[test]
         fn rebasing_joins_exactly_the_relative_paths_and_nothing_under_the_working_directory(
@@ -8258,9 +8329,11 @@ mod tests {
             });
             let mut cfg = RuntimeConfig::from_json(&document).unwrap();
             let before = files_of(&cfg);
-            cfg.rebase_relative_paths(std::path::Path::new("."));
+            let notes = cfg.rebase_relative_paths(std::path::Path::new("."), &|_| true);
+            proptest::prop_assert!(notes.is_empty());
             proptest::prop_assert_eq!(files_of(&cfg), before.clone());
-            cfg.rebase_relative_paths(std::path::Path::new(&base));
+            let notes = cfg.rebase_relative_paths(std::path::Path::new(&base), &|_| false);
+            proptest::prop_assert!(notes.is_empty());
             let joined = std::path::Path::new(&base).join(&relative).to_string_lossy().into_owned();
             proptest::prop_assert_eq!(cfg.rules_file, Some(joined));
             proptest::prop_assert_eq!(cfg.storage_rules_file, Some(absolute));

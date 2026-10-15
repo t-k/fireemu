@@ -8,10 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-15
+
 ### Changed
 
 - A canonical configuration (`fireemu.toml` or `fireemu.json`) is now checked against the configuration schema when it loads. A key the schema does not list and a value of the wrong type used to be skipped without a word (`"port": "8080"` fell back to the default, a misspelt key did nothing); both are now refused by `up`, `exec` and `config show` with the file, the key's path and the expected type, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. A port above 65535 is refused too. Values outside the schema's ranges or choices are now refused, including `events.maxAttempts: 0` and `functions.maxGlobalConcurrency: 0` (previously raised silently to 1), negative ports, `daemon.seed: -1` (previously ignored while `config show` reported "explicit"), values outside the enums of `storage.persistence`, `storage.mode`, `rules.diagnostics.format` and `auth.secretMaterialization`, and integers written as floats (`8080.0`). A configuration that only worked because a typo was ignored stops with an error naming the key.
 - The configuration schema now lists `daemon.hubPort`, `daemon.uiPort`, `pubsub.projectNumbers` and `pubsub.authentication.localBearerToken`, which the daemon already read, and no longer requires `profile` or `firestore`, which have defaults (`strict`, Standard Native). `firestore.rules` is listed as deprecated: it was never read, loads as before and now prints a start-up note pointing at `rules.source`. A `limits.catalog` of the other Firestore edition, `firestore.pipeline.executionMode: "proxy"`, `firestore.textSearch.fidelity: "upstream-proxy"`, `visibilityPolicy: "virtual-lag"` without a lag, and `strict-validation-only` with an exact score precision are refused, as the schema examples say.
+- Identical Security Rules sources are compiled once at startup instead of once per Firestore database or Storage target; each target keeps its own diagnostics and reload.
+- A Firestore write that matches several Functions triggers builds its document payload once, and event dispatch no longer rescans the whole pending backlog on every pass. Event ids, payloads and ordering are unchanged.
 
 ### Fixed
 
@@ -769,7 +773,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/t-k/fireemu/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/t-k/fireemu/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/t-k/fireemu/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/t-k/fireemu/compare/v0.19.0...v0.20.0

@@ -1788,7 +1788,7 @@ impl RuntimeConfig {
     /// Makes the relative file paths a canonical configuration named relative to `base`, the
     /// directory the file is in, and returns a note for each path it had to leave alone.
     ///
-    /// Until 0.22 these paths were read from the working directory. A path that is not beside
+    /// These paths used to be read from the working directory. A path that is not beside
     /// the file but does exist there keeps meaning the working directory's file, with a note,
     /// so that a configuration written for the old rule still loads. A `base` of `.` (the file
     /// is in the working directory), an absolute path and `functions.runner` (a command, not a

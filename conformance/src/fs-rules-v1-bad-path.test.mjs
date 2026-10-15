@@ -4,6 +4,7 @@
 // uses are the test's choice, not claims about production.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import { createContext, SANDBOX_PROJECT } from "./fs-rules/harness.mjs";
@@ -17,6 +18,7 @@ import {
   PRINCIPALS,
   PROGRAMS,
   programDigest,
+  RULESET_TEXT,
   rulesetSource,
   validateCorpus,
 } from "./fs-rules-v1/corpus.mjs";
@@ -140,6 +142,14 @@ test("the cases cover collection paths, another database, the (default) literal 
     "exists(/databases/(default)/documents/fsr8-ctl/real)",
   );
   assert.equal(exprs["nodocs-not-exists"], "!exists(/databases/$(database)/fsr8-ctl/real)");
+  assert.equal(exprs["other-exists"], "exists(/databases/other/documents/fsr8-ctl/real)");
+  assert.equal(
+    exprs["default-literal-missing-not-exists"],
+    "!exists(/databases/(default)/documents/fsr8-ctl/absent)",
+  );
+  assert.equal(exprs["nodocs-exists"], "exists(/databases/$(database)/fsr8-ctl/real)");
+  assert.equal(exprs["nodocs-get-null"], "get(/databases/$(database)/fsr8-ctl/real) == null");
+  assert.equal(BAD_PATH_CASES.length, 18);
 });
 
 test("a ruleset whose compile is uncertain is alone in its program", () => {
@@ -165,6 +175,19 @@ test("program digests are per program, follow the program's own ruleset and leav
     programDigest(core),
   );
   assert.equal(others.length, 3);
+});
+
+test("a program digest covers its JSON and the rulesets it can publish, as FS-3 recorded it", () => {
+  const sha = (text) => createHash("sha256").update(text).digest("hex");
+  // FS-3 programs: the JSON and every FS-3 ruleset, byte for byte what the FS-3 fixture holds.
+  for (const program of PROGRAMS)
+    assert.equal(programDigest(program), sha(`${JSON.stringify(program)}\n${RULESET_TEXT}`));
+  // FS-8 programs: the JSON and the program's own ruleset source.
+  for (const program of BAD_PATH_PROGRAMS)
+    assert.equal(
+      programDigest(program),
+      sha(`${JSON.stringify(program)}\n${rulesetSource(program.ruleset)}`),
+    );
 });
 
 test("the corpus names no sandbox, address, number or absolute path", () => {

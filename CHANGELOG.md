@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Storage public-read state of a replaced or deleted generation no longer comes back on re-import; making an object public no longer scans every public object.
+
 ## [0.22.0] - 2026-10-15
 
 ### Fixed

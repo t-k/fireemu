@@ -3,7 +3,9 @@
 //! carries it.
 
 use fireemu_core_storage::name::{BucketName, ObjectName};
-use fireemu_core_storage::store::{NewMetadata, Precondition, StorageState};
+use fireemu_core_storage::store::{
+    ImportedObject, MetadataPatch, NewMetadata, Precondition, StorageState,
+};
 use fireemu_core_types::time::LogicalInstant;
 
 fn t(n: i64) -> LogicalInstant {
@@ -127,10 +129,55 @@ fn a_snapshot_carries_the_bit_of_the_buckets_it_captured() {
     assert!(live.is_public_read(&bucket("bucket-two"), &name("a.txt")));
 }
 
+#[test]
+fn metadata_updates_and_reimporting_the_live_generation_preserve_its_grant() {
+    let mut store = StorageState::new(1);
+    let b = bucket("bucket-one");
+    let n = name("a.txt");
+    put(&mut store, "bucket-one", "a.txt");
+    assert!(store.set_public_read(&b, &n));
+    let meta = store
+        .update_metadata(
+            &b,
+            &n,
+            &MetadataPatch::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    assert!(store.is_public_read(&b, &n));
+    let bytes = store.bytes(&meta).to_vec();
+    store
+        .insert_imported(
+            ImportedObject {
+                bucket: meta.bucket,
+                name: meta.name,
+                generation: meta.generation,
+                metageneration: meta.metageneration,
+                content_type: meta.content_type,
+                content_disposition: meta.content_disposition,
+                content_encoding: meta.content_encoding,
+                content_language: meta.content_language,
+                cache_control: meta.cache_control,
+                custom: meta.custom,
+                custom_defined: meta.custom_defined,
+                time_created: meta.time_created,
+                updated: meta.updated,
+                download_tokens: meta.download_tokens,
+                md5: Some(meta.md5),
+                crc32c: Some(meta.crc32c),
+                size: Some(meta.size),
+            },
+            bytes,
+        )
+        .unwrap();
+    assert!(store.is_public_read(&b, &n));
+}
+
 mod model {
     use super::*;
     use proptest::prelude::*;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[derive(Debug, Clone)]
     enum Step {
@@ -188,6 +235,86 @@ mod model {
                         store.is_public_read(&b, &name(&format!("o{k}"))),
                         public.contains(&k),
                         "o{} after {:?}", k, s
+                    );
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn visible_public_state_matches_the_old_lazy_cleanup_except_revival(
+            steps in proptest::collection::vec((0u8..5, 0u8..3, 1u64..9), 0..80),
+        ) {
+            let mut store = StorageState::new(1);
+            let b = bucket("bucket-one");
+            let mut old_live = BTreeMap::new();
+            let mut old_grants = BTreeSet::new();
+            let mut old_next_generation = 0;
+            for (i, &(op, key, generation)) in steps.iter().enumerate() {
+                let n = name(&format!("o{key}"));
+                let at = t(i64::try_from(i).unwrap());
+                match op {
+                    0 => {
+                        old_next_generation += 1;
+                        old_live.insert(key, old_next_generation);
+                        let meta = store.put(&b, &n, b"x".to_vec(), NewMetadata::default(), Precondition::default(), at).unwrap();
+                        prop_assert_eq!(meta.generation, old_next_generation);
+                    }
+                    1 => {
+                        let existed = old_live.remove(&key).is_some();
+                        prop_assert_eq!(store.delete(&b, &n, Precondition::default(), at).is_ok(), existed);
+                    }
+                    2 => {
+                        if let Some(&live) = old_live.get(&key) {
+                            // The old implementation cleaned every stale grant only on a grant.
+                            old_grants.retain(|(k, g)| old_live.get(k) == Some(g));
+                            old_grants.insert((key, live));
+                        }
+                        prop_assert_eq!(store.set_public_read(&b, &n), old_live.contains_key(&key));
+                    }
+                    3 => {
+                        let removed = old_live.get(&key).is_some_and(|&g| old_grants.remove(&(key, g)));
+                        prop_assert_eq!(store.clear_public_read(&b, &n), removed);
+                    }
+                    4 => {
+                        // Exclude only imports that would revive an old generation's stale grant.
+                        if old_live.get(&key) != Some(&generation) && old_grants.contains(&(key, generation)) {
+                            continue;
+                        }
+                        store.insert_imported(ImportedObject {
+                            bucket: b.clone(),
+                            name: n,
+                            generation,
+                            metageneration: 1,
+                            content_type: "text/plain".to_owned(),
+                            content_disposition: None,
+                            content_encoding: None,
+                            content_language: None,
+                            cache_control: None,
+                            custom: BTreeMap::new(),
+                            custom_defined: false,
+                            time_created: at,
+                            updated: at,
+                            download_tokens: Vec::new(),
+                            md5: None,
+                            crc32c: None,
+                            size: Some(1),
+                        }, b"x".to_vec()).unwrap();
+                        old_live.insert(key, generation);
+                        old_next_generation = old_next_generation.max(generation);
+                    }
+                    _ => unreachable!(),
+                }
+                for k in 0u8..3 {
+                    let n = name(&format!("o{k}"));
+                    prop_assert_eq!(store.get(&b, &n).map(|m| m.generation), old_live.get(&k).copied());
+                    prop_assert_eq!(
+                        store.is_public_read(&b, &n),
+                        old_live.get(&k).is_some_and(|&g| old_grants.contains(&(k, g))),
+                        "object {} after step {}: {:?}", k, i, steps[i]
                     );
                 }
             }

@@ -90,6 +90,8 @@ const LOG_BUFFER_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const STDERR_LINE_BYTE_LIMIT: usize = 256 * 1024;
 const STDERR_TRUNCATION_MARKER: &str = "...[truncated]";
 static RUNNER_SANDBOX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static RUNNER_PIPE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Converts canonical Windows drive/UNC paths to paths accepted by Node's loaders.
 /// Call only at the Windows Node boundary; other device namespaces stay unchanged.
@@ -544,6 +546,38 @@ impl Runner {
         for (k, v) in child_environment {
             cmd.env(k, v);
         }
+        #[cfg(windows)]
+        let stdout_source = {
+            use std::os::windows::fs::OpenOptionsExt;
+            use tokio::net::windows::named_pipe::ServerOptions;
+
+            // Synchronous pipe I/O can serialize libuv's stdout-open metadata
+            // queries behind a pending read (libuv/libuv#1273). Open both ends
+            // overlapped, and read directly through Tokio's IOCP pipe support.
+            let name = format!(
+                r"\\.\pipe\fireemu-runner-stdout-{}-{}",
+                std::process::id(),
+                RUNNER_PIPE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            );
+            let reader = ServerOptions::new()
+                .access_outbound(false)
+                .first_pipe_instance(true)
+                .max_instances(1)
+                .create(&name)
+                .map_err(|e| format!("functions runner: cannot create stdout pipe: {e}"))?;
+            let writer = std::fs::OpenOptions::new()
+                // Match libuv's write-only pipe access, including metadata queries.
+                .access_mode(0x4000_0080) // GENERIC_WRITE | FILE_READ_ATTRIBUTES
+                .custom_flags(0x4000_0000) // FILE_FLAG_OVERLAPPED
+                .open(&name)
+                .map_err(|e| format!("functions runner: cannot open stdout pipe: {e}"))?;
+            reader
+                .connect()
+                .await
+                .map_err(|e| format!("functions runner: cannot connect stdout pipe: {e}"))?;
+            cmd.stdout(Stdio::from(writer));
+            reader
+        };
         #[cfg(not(windows))]
         let mut child = cmd
             .spawn()
@@ -573,11 +607,6 @@ impl Runner {
         #[cfg(not(windows))]
         let stdout_source = child
             .stdout
-            .take()
-            .ok_or_else(|| "functions runner: no stdout".to_owned())?;
-        #[cfg(windows)]
-        let stdout_source = child
-            .stdout()
             .take()
             .ok_or_else(|| "functions runner: no stdout".to_owned())?;
         #[cfg(not(windows))]
@@ -1242,6 +1271,73 @@ mod tests {
     }
 
     #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_node_stdout_getter_completes_with_a_pending_parent_read() {
+        for _ in 0..4 {
+            let result = super::Runner::spawn(
+                &[
+                    "node".into(),
+                    "-e".into(),
+                    r"
+                    setTimeout(() => {
+                        process.stdout;
+                        require('node:fs').writeSync(2, 'ok\n');
+                    }, 100);
+                    "
+                    .into(),
+                ],
+                None,
+                &[],
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+            let error = match result {
+                Ok(runner) => {
+                    runner.shutdown().await;
+                    panic!("getter-only probe must exit without hello");
+                }
+                Err(error) => error,
+            };
+            assert!(error.contains("exited before its hello"), "{error}");
+            assert!(
+                error.contains("exit status: 0; captured stderr: \"ok\""),
+                "{error}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_node_stdout_writes_a_frame_with_a_pending_parent_read() {
+        for _ in 0..4 {
+            let runner = super::Runner::spawn(
+                &[
+                    "node".into(),
+                    "-e".into(),
+                    r"
+                    setTimeout(() => {
+                        const payload = JSON.stringify({type:'hello',runner:'windows-pipe'});
+                        process.stdout.write(Buffer.concat([
+                            Buffer.from(`${Buffer.byteLength(payload)}\n`), Buffer.from(payload),
+                        ]));
+                        process.stdin.once('data', () => process.exit(0));
+                    }, 100);
+                    "
+                    .into(),
+                ],
+                None,
+                &[],
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+            assert_eq!(runner.hello().runner, "windows-pipe");
+            runner.shutdown().await;
+            assert!(!runner.is_alive());
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     fn child_env_inherits_windows_variable_names_case_insensitively() {
         const PROBE: &str = "FIREEMU_WINDOWS_ENV_PROBE";
@@ -1284,7 +1380,7 @@ mod tests {
         let dir = trusted_temp::TrustedTempDir::new("application-clock");
         std::fs::write(dir.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
         std::fs::write(dir.join("index.cjs"), r"
-            const fs=require('node:fs'); const imported=Date.now();
+            const fs=require('node:fs'); const imported=Date.now(); console.log('import console'); process.stdout.write('import stdout\n');
             const fn=async()=>{fs.writeFileSync('observed.json',JSON.stringify([imported,Date.now(),+new Date()])); await new Promise(r=>setTimeout(r,5)); fs.writeFileSync('timer.json',JSON.stringify(Date.now()));};
             fn.run=fn; fn.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
             module.exports={clock:fn};
@@ -1353,6 +1449,10 @@ mod tests {
         );
         runner.shutdown().await;
         assert!(!runner.is_alive());
+        let logs = runner.logs_since(None);
+        for message in ["import console", "import stdout"] {
+            assert!(logs.lines.iter().any(|l| l.display() == message));
+        }
         let trace = std::fs::read_to_string(&trace_path).unwrap();
         for (index, line) in trace.lines().enumerate() {
             assert!(

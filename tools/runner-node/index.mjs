@@ -18,6 +18,23 @@ const {setTimeout, clearTimeout} = timers;
 import { execFileSync, spawn } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
 
+import { createRuntimeClock } from "./clock.mjs";
+import { instrumentCallables } from "./callable-app-check.mjs";
+import { removeAppCheckToken, withholdsAppCheckToken } from "./app-check-token.mjs";
+import { blockingFailure } from "./blocking-error.mjs";
+import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
+import { blockingResult } from "./blocking-response.mjs";
+import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
+import { invocationFailure } from "./invocation-error.mjs";
+import { InvocationBudget, readFrames } from "./protocol.mjs";
+import { deliverSchedule, v1ScheduleContext } from "./schedule-delivery.mjs";
+import { collectFunctions, exportNamespace } from "./discovery.mjs";
+import { resolveDeclaredParams, resolveWhenDeclared } from "./params.mjs";
+import { FrameWriter } from "./output.mjs";
+import { installDiagnosticOutput } from "./diagnostic-output.mjs";
+import { trackHttpResponse } from "./http-lifecycle.mjs";
+import { createHttpAdmission } from "./http-admission.mjs";
+
 const startupTraceEnabled = process.env.FIREEMU_RUNNER_TRACE === '1';
 const startupTracePath = startupTraceEnabled ? join(process.cwd(), 'fireemu-runner-trace.log') : undefined;
 let startupTraceSequence = 0;
@@ -32,39 +49,6 @@ function startupTrace(step) {
 }
 startupTrace('process start');
 
-// Load local dependencies after the first marker to expose import-time stalls.
-startupTrace('import clock.mjs');
-const { createRuntimeClock } = await import("./clock.mjs");
-startupTrace('import callable-app-check.mjs');
-const { instrumentCallables } = await import("./callable-app-check.mjs");
-startupTrace('import app-check-token.mjs');
-const { removeAppCheckToken, withholdsAppCheckToken } = await import("./app-check-token.mjs");
-startupTrace('import blocking-error.mjs');
-const { blockingFailure } = await import("./blocking-error.mjs");
-startupTrace('import blocking-event.mjs');
-const { blockingEvent, loadIdentityParsers, portedIdentityParsers } = await import("./blocking-event.mjs");
-startupTrace('import blocking-response.mjs');
-const { blockingResult } = await import("./blocking-response.mjs");
-startupTrace('import log-context.mjs');
-const { boundLogMessage, createInvocationLogger } = await import("./log-context.mjs");
-startupTrace('import invocation-error.mjs');
-const { invocationFailure } = await import("./invocation-error.mjs");
-startupTrace('import protocol.mjs');
-const { InvocationBudget, readFrames } = await import("./protocol.mjs");
-startupTrace('import schedule-delivery.mjs');
-const { deliverSchedule, v1ScheduleContext } = await import("./schedule-delivery.mjs");
-startupTrace('import discovery.mjs');
-const { collectFunctions, exportNamespace } = await import("./discovery.mjs");
-startupTrace('import params.mjs');
-const { resolveDeclaredParams, resolveWhenDeclared } = await import("./params.mjs");
-startupTrace('import output.mjs');
-const { FrameWriter } = await import("./output.mjs");
-startupTrace('import diagnostic-output.mjs');
-const { installDiagnosticOutput } = await import("./diagnostic-output.mjs");
-startupTrace('import http-lifecycle.mjs');
-const { trackHttpResponse } = await import("./http-lifecycle.mjs");
-startupTrace('import http-admission.mjs');
-const { createHttpAdmission } = await import("./http-admission.mjs");
 startupTrace('runner imports complete');
 
 // Keep one best-effort terminal diagnostic available after ordinary output

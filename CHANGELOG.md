@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- `fireemu exec` gives its command the plain `STORAGE_EMULATOR_HOST=http://host:port` unless Storage App Check is `enforced`. It used to embed a credential (`http://fireemu:<capability>@host:port`) in every run, and `@google-cloud/storage` 8.1 and later (`firebase-admin` 14.4 and later) refuse a URL with embedded credentials, so every Admin Storage call failed, and `file.publicUrl()` returned a URL `fetch` rejects. With Storage `enforced` the credential is still exported, because the Admin SDK has no other way to pass the Admin App Check bypass; there those SDK versions still fail (documented under App Check). A new `sdk-latest` workflow runs the Storage and client smokes against the newest `firebase-admin` and `firebase` under `fireemu exec`.
+
 ## [0.21.0] - 2026-10-15
 
 ### Added

@@ -18,7 +18,7 @@ npx fireemu exec -- node ./scripts/seed.mjs
 | `FIRESTORE_EMULATOR_HOST`, `FIREBASE_FIRESTORE_EMULATOR_ADDRESS` | Firestore `host:port` |
 | `FIREBASE_AUTH_EMULATOR_HOST` | Authentication `host:port` |
 | `FIREBASE_STORAGE_EMULATOR_HOST` | Storage `host:port` |
-| `STORAGE_EMULATOR_HOST` | Storage URL for the Cloud Storage client libraries |
+| `STORAGE_EMULATOR_HOST` | Storage URL (`http://host:port`) for the Cloud Storage client libraries; with Storage App Check `enforced` it also carries a per-run Admin capability (see [App Check](../../products/app-check/)) |
 | `PUBSUB_EMULATOR_HOST` | Pub/Sub `host:port`, when Pub/Sub runs |
 | `CLOUD_EVENTARC_EMULATOR_HOST` | Eventarc URL, when Functions run |
 | `CLOUD_TASKS_EMULATOR_HOST` | Cloud Tasks `host:port`, when Functions run |

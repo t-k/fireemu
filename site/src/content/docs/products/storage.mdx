@@ -31,11 +31,23 @@ The `emulator` profile keeps the official emulator's behavior for all of these.
 
 ### Listing a prefix with single-segment attachment rules
 
-A current local limitation can make `list()` or `listAll()` return 403 even when uploading and getting an attachment succeeds. Fireemu evaluates list authorization against the requested prefix with its trailing `/` removed. For `prefix=teams/T/requests/R/&delimiter=/`, that path is `teams/T/requests/R`, so a rule matching `/teams/{team}/requests/{id}/{attachment}` has no segment for `{attachment}` and does not reach its membership condition.
+Fireemu currently differs from production Firebase when authorizing some list prefixes. For `prefix=teams/T/requests/R/&delimiter=/`, a rule matching `/teams/{team}/requests/{id}/{attachment}` with `allow list: if member(team)` can authorize production listing even though the prefix itself has no `{attachment}` segment. Fireemu evaluates the concrete prefix with its trailing `/` removed, so it returns 403 before reaching the membership condition.
 
-The [Firebase granular operations documentation](https://firebase.google.com/docs/storage/security/core-syntax#granular_operations) shows `allow list` inside a single-object wildcard match. The case above has not yet been compared against production Firebase with identical rules; treat it as an unresolved compatibility question, not a confirmed production rule.
+A targeted production comparison on 2026-10-16 used an authenticated UID-to-team membership predicate, separate upload/get controls, and the following three rule variants. Here the ancestor prefix is `teams/T/requests/`; the request prefix is `teams/T/requests/R/`.
 
-As a local workaround, add an explicit parent match with only `allow list`, alongside your existing object rules:
+| Rules granting `list` to the member | Prefix | Delimiter | Production | Fireemu `strict` |
+| --- | --- | --- | --- | --- |
+| Single attachment capture | Request | `/` | 200 | 403 |
+| Single attachment capture | Request | Omitted | 403 | 403 |
+| Same rules plus explicit parent match | Request | `/` | 200 | 200 |
+| Same rules plus explicit parent match | Request | Omitted | 403 | 200 |
+| Same rules plus explicit parent match | Ancestor | `/` | 200 | 403 |
+| Same rules plus recursive `list` match | Request | `/` or omitted | 200 | 200 |
+| Same rules plus recursive `list` match | Ancestor | `/` | 200 | 403 |
+
+Empty request prefixes produced the same authorization decisions as populated ones. Non-members, anonymous callers and a member listing another team's request were denied in both targets. These observations establish the listed compatibility defects; they do not establish behavior for attachment-dependent conditions, Firestore-backed membership checks, or other delimiters. The [Firebase granular operations documentation](https://firebase.google.com/docs/storage/security/core-syntax#granular_operations) is useful background, but the table reflects measured requests.
+
+For the SDK's `delimiter=/` request, an explicit parent match remains a local workaround alongside existing attachment rules:
 
 ```text
 match /teams/{team}/requests/{id} {
@@ -43,9 +55,9 @@ match /teams/{team}/requests/{id} {
 }
 ```
 
-Here `member(team)` means your existing authenticated membership check. Keep the existing attachment `get`, `create`, `update` and `delete` conditions unchanged. Do not replace them with a broad recursive `allow read`: `read` includes both `get` and `list`. Listing permission exposes names under the prefix even when a particular object's content cannot be read; it does not grant content access or filter the list to objects with `get` permission.
+This changes production permissions too: in the measured rules it also permits listing the ancestor's child prefixes. Do not use a passing local ancestor-denial test as proof that production denies that listing. Fireemu also over-allows the delimiter-free request under this workaround, so a local success does not establish production permission for recursive enumeration.
 
-Test the requested prefix with a member, a non-member and an anonymous caller, and also test a different team, an empty request prefix and an ancestor prefix. If membership is team-wide, another request in the same team is also listable; add request-level authorization only if your application requires it. The workaround's local coverage does not establish production equivalence.
+Keep attachment `get`, `create`, `update` and `delete` conditions unchanged. Do not replace them with a broad recursive `allow read`: `read` includes both `get` and `list`. Listing permission exposes names under the prefix even when a particular object's content cannot be read; it does not grant content access or filter the list to objects with `get` permission. Validate the exact list prefix, delimiter and caller against production when relying on these boundaries. The comparison identifies the defect; it does not fix Fireemu's authorization implementation.
 
 ### Buckets that do not exist
 

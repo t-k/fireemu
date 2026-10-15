@@ -9439,7 +9439,10 @@ service firebase.storage {
                 403,
             );
         }
-        // The 403 without the parent rule records a local limitation, not a production oracle.
+        // These assertions characterize current local behavior, not desired production parity.
+        // Production observations on 2026-10-16 allow the single-capture request with delimiter=/,
+        // and adding the parent rule also allows the ancestor listing rejected below.
+        // See site/src/content/docs/products/storage.mdx before changing authorization expectations.
         let own_status = if parent_list { 200 } else { 403 };
         for (prefix, credential, expected) in [
             (

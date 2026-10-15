@@ -10,14 +10,15 @@
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { existsSync, readFileSync, readlinkSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readlinkSync, writeSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { createServer } from "node:http";
 import timers from "node:timers";
 const {setTimeout, clearTimeout} = timers;
-import { createRuntimeClock } from "./clock.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
+
+import { createRuntimeClock } from "./clock.mjs";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { removeAppCheckToken, withholdsAppCheckToken } from "./app-check-token.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
@@ -34,10 +35,28 @@ import { installDiagnosticOutput } from "./diagnostic-output.mjs";
 import { trackHttpResponse } from "./http-lifecycle.mjs";
 import { createHttpAdmission } from "./http-admission.mjs";
 
+const startupTraceEnabled = process.env.FIREEMU_RUNNER_TRACE === '1';
+const startupTracePath = startupTraceEnabled ? join(process.cwd(), 'fireemu-runner-trace.log') : undefined;
+let startupTraceSequence = 0;
+function startupTrace(step) {
+  if (!startupTraceEnabled) return;
+  const line = `[runner trace ${++startupTraceSequence}] ${step}\n`;
+  // Record first so a stalled stderr pipe cannot hide the last startup step.
+  try { appendFileSync(startupTracePath, line); }
+  catch { /* stderr still reports startup when the working directory is read-only. */ }
+  try { writeSync(2, line); }
+  catch { /* The file remains available when stderr is broken. */ }
+}
+startupTrace('process start');
+
+startupTrace('runner imports complete');
+
 // Keep one best-effort terminal diagnostic available after ordinary output
 // admission closes. It is only used when stderr has no pending data, never to
 // bypass a failed/stalled diagnostic channel or grow its queue.
+startupTrace('stderr initialization start');
 const terminalDiagnosticWrite = process.stderr.write.bind(process.stderr);
+startupTrace('stderr initialization complete');
 let outputFailed = false;
 const diagnosticOutput = installDiagnosticOutput(process.stderr, {
   onError() {
@@ -47,6 +66,8 @@ const diagnosticOutput = installDiagnosticOutput(process.stderr, {
     process.exit(2);
   },
 });
+startupTrace('diagnostic output installed');
+startupTrace('stdout initialization start');
 const frameOutput = new FrameWriter(process.stdout, {
   onError(error) {
     outputFailed = true;
@@ -61,6 +82,7 @@ const frameOutput = new FrameWriter(process.stdout, {
     } finally { process.exit(2); }
   },
 });
+startupTrace('stdout frame writer installed');
 let finishingOutput = false;
 let groupCleanupPromise = Promise.resolve(true);
 function finishOutput() {
@@ -106,7 +128,9 @@ function runnerProcessGroup() {
 
 // Capture the group before user code can spawn children or replace process information.
 const daemonManagedRunner = process.env.FIREEMU_RUNNER === '1';
+startupTrace('process group initialization start');
 const ownedProcessGroup = daemonManagedRunner ? runnerProcessGroup() : null;
+startupTrace('process group initialization complete');
 let inputCleanupStarted = false;
 let explicitShutdown = false;
 let deferredExitCleanup = false;
@@ -198,12 +222,16 @@ function killOwnedGroupOnExit() {
   catch { /* The group has already ended or signaling was denied. */ }
 }
 process.on('exit', killOwnedGroupOnExit);
+startupTrace('stdin initialization start');
 process.stdin.on('close', () => {
   if (!explicitShutdown) cleanupProcessGroupOnInputClose();
   finishOutput();
 });
+startupTrace('stdin initialization complete');
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
+startupTrace('stdout redirected');
 
+startupTrace('local environment initialization start');
 const localSecrets = (() => {
   const encoded = process.env.FIREEMU_LOCAL_SECRETS_JSON;
   delete process.env.FIREEMU_LOCAL_SECRETS_JSON;
@@ -211,6 +239,7 @@ const localSecrets = (() => {
   const parsed = JSON.parse(encoded);
   return new Map(Object.entries(parsed).filter(([, value]) => typeof value === "string"));
 })();
+startupTrace('local environment initialization complete');
 let functionEnvironmentQueue = Promise.resolve();
 const sharedFunctionInvocations = new Set();
 let activeSharedEnvironments = 0;
@@ -321,7 +350,9 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+startupTrace('argv parsed');
 const sourceDir = resolve(args.source);
+startupTrace('source resolved');
 process.env.FUNCTIONS_EMULATOR = process.env.FUNCTIONS_EMULATOR || "true";
 process.env.FUNCTION_TARGET = process.env.FUNCTION_TARGET || "";
 process.env.FUNCTION_SIGNATURE_TYPE = process.env.FUNCTION_SIGNATURE_TYPE || "";
@@ -420,6 +451,7 @@ function restoreLocalSecrets(saved) {
 }
 
 async function loadCodebase() {
+  startupTrace('user entry resolution start');
   const pkgPath = join(sourceDir, "package.json");
   let main = "index.js";
   if (existsSync(pkgPath)) {
@@ -432,7 +464,9 @@ async function loadCodebase() {
   }
   const entry = resolve(sourceDir, main);
   if (!existsSync(entry)) throw new Error(`functions entry point ${entry} does not exist`);
+  startupTrace('user module import start');
   const mod = await import(pathToFileURL(entry).href);
+  startupTrace('user module import end');
   return exportNamespace(mod);
 }
 
@@ -1560,15 +1594,18 @@ function resolveCodebaseParams() {
 }
 
 async function main() {
+  startupTrace('clock preamble start');
   const clockOptions = JSON.parse(process.env.FIREEMU_CLOCK_JSON ?? '{}');
   const runtimeClock = createRuntimeClock(clockOptions);
   let clockRevision = BigInt(clockOptions.revision ?? '0');
   runtimeClock.install();
+  startupTrace('clock preamble installed');
   let functions;
   let manifest;
   let runnerReady = false;
   const activeInvocations = new InvocationBudget();
   // Read before loading user code, which may await indefinitely after spawning children.
+  startupTrace('stdin frame reader start');
   readFrames(
     process.stdin,
     (msg, payloadBytes) => {
@@ -1636,10 +1673,15 @@ async function main() {
       try { process.stderr.write(`${error.message}\n`); } finally { process.exit(2); }
     },
   );
+  startupTrace('stdin frame reader installed');
   // Before any user code loads: the callable options are only observable as a callable is
   // declared (spec 13.4).
+  startupTrace('callable instrumentation start');
   const instrumentation = instrumentCallables(sourceDir);
+  startupTrace('callable instrumentation complete');
+  startupTrace('parameter initialization start');
   resolveWhenDeclared(declaredParamsOfCodebase(), process.env);
+  startupTrace('parameter initialization complete');
   let ns;
   try {
     ns = await loadCodebase();
@@ -1648,7 +1690,10 @@ async function main() {
     process.exit(1);
   }
   // Parameters are resolved before any endpoint option that references one is evaluated.
+  startupTrace('parameter resolution start');
   const paramReport = resolveCodebaseParams();
+  startupTrace('parameter resolution complete');
+  startupTrace('global options inspection start');
   try {
     const require = createRequire(join(sourceDir, "package.json"));
     const cjsOptions = require("firebase-functions/v2/options").getGlobalOptions();
@@ -1666,6 +1711,8 @@ async function main() {
   } catch (e) {
     log("warn", `cannot inspect firebase-functions global options: ${invocationFailure(e).message}`);
   }
+  startupTrace('global options inspection complete');
+  startupTrace('function discovery start');
   const discovered = collectFunctions(ns);
   functions = discovered.functions;
   const { broken } = discovered;
@@ -1709,6 +1756,7 @@ async function main() {
         reason: d.ignored.reason,
       })),
   };
+  startupTrace('function discovery complete');
   let httpPort;
   if (
     manifest.functions.some(
@@ -1719,7 +1767,9 @@ async function main() {
     )
   ) {
     try {
+      startupTrace('HTTP server start');
       const server = await makeHttpServer(functions, manifest);
+      startupTrace('HTTP server ready');
       if (server) httpPort = server.address().port;
       else
         log(
@@ -1731,6 +1781,7 @@ async function main() {
     }
   }
   activeInspectorPort = inspectorPort();
+  startupTrace('hello about to be written');
   send({
     type: "hello",
     runner: "node",
@@ -1750,6 +1801,7 @@ async function main() {
       graphs: instrumentation.graphs,
     },
   });
+  startupTrace('hello written');
   runnerReady = true;
 }
 

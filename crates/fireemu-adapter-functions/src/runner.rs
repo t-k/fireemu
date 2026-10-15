@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 #[cfg(not(windows))]
 use tokio::process::Child;
 use tokio::process::{ChildStdin, Command};
@@ -90,6 +90,22 @@ const LOG_BUFFER_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const STDERR_LINE_BYTE_LIMIT: usize = 256 * 1024;
 const STDERR_TRUNCATION_MARKER: &str = "...[truncated]";
 static RUNNER_SANDBOX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Converts canonical Windows drive/UNC paths to paths accepted by Node's loaders.
+/// Call only at the Windows Node boundary; other device namespaces stay unchanged.
+#[must_use]
+pub fn node_path(path: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc}").into();
+    }
+    if let Some(drive) = path.strip_prefix(r"\\?\") {
+        let bytes = drive.as_bytes();
+        if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && &bytes[1..3] == b":\\" {
+            return drive.into();
+        }
+    }
+    path.into()
+}
 
 /// One retained runner line with the metadata needed by the official Logging stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,6 +427,8 @@ fn child_env(extra: &[(String, String)]) -> Result<(Vec<(String, String)>, PathB
     let mut env: Vec<(String, String)> = std::env::vars_os()
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(k, _)| {
+            #[cfg(windows)]
+            let k = &k.to_ascii_uppercase();
             INHERITED_ENV.contains(&k.as_str())
                 || INHERITED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
         })
@@ -553,12 +571,12 @@ impl Runner {
             .take()
             .ok_or_else(|| "functions runner: no stdin".to_owned())?;
         #[cfg(not(windows))]
-        let stdout = child
+        let stdout_source = child
             .stdout
             .take()
             .ok_or_else(|| "functions runner: no stdout".to_owned())?;
         #[cfg(windows)]
-        let stdout = child
+        let stdout_source = child
             .stdout()
             .take()
             .ok_or_else(|| "functions runner: no stdout".to_owned())?;
@@ -587,7 +605,7 @@ impl Runner {
             ),
         };
         let logs = Arc::new(Mutex::new(LogBuffer::default()));
-        {
+        let mut stderr_task = {
             let label = label.clone();
             let logs = logs.clone();
             tokio::spawn(async move {
@@ -598,8 +616,30 @@ impl Runner {
                         l.push(RunnerLog::raw(line));
                     }
                 }
-            });
-        }
+            })
+        };
+        // Retain the actual wire bytes, including malformed/partial frames, without
+        // changing the protocol parser. Both the pipe and the diagnostic tail are bounded.
+        let stdout_tail = Arc::new(Mutex::new(VecDeque::new()));
+        let (mut captured_stdout, stdout) = tokio::io::duplex(4096);
+        let stdout_capture = stdout_tail.clone();
+        tokio::spawn(async move {
+            let mut source = stdout_source;
+            let mut chunk = [0_u8; 4096];
+            while let Ok(count) = source.read(&mut chunk).await {
+                if count == 0 {
+                    break;
+                }
+                if let Ok(mut tail) = stdout_capture.lock() {
+                    tail.extend(&chunk[..count]);
+                    let excess = tail.len().saturating_sub(4096);
+                    tail.drain(..excess);
+                }
+                if captured_stdout.write_all(&chunk[..count]).await.is_err() {
+                    break;
+                }
+            }
+        });
         let waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let clock_status = Arc::new(Mutex::new(Value::Null));
@@ -712,20 +752,62 @@ impl Runner {
             });
         }
         let hello = match tokio::time::timeout(hello_timeout, hello_rx).await {
-            Ok(Ok(h)) => h,
-            Ok(Err(_)) => {
+            Ok(Ok(h)) => Ok(h),
+            Ok(Err(_)) => Err("functions runner exited before its hello".to_owned()),
+            Err(_) => Err(format!(
+                "functions runner sent no hello within {}s",
+                hello_timeout.as_secs()
+            )),
+        };
+        let hello = match hello {
+            Ok(hello) => hello,
+            Err(reason) => {
                 #[cfg(unix)]
-                kill_process_group(child.id());
-                let _ = kill_child(&mut child).await;
-                return Err("functions runner exited before its hello".to_owned());
-            }
-            Err(_) => {
+                let process_group = child.id();
+                // stdout can close just before process termination, or while the
+                // process remains alive. Preserve a natural exit status before cleanup.
+                #[cfg(not(windows))]
+                let exited = tokio::time::timeout(Duration::from_millis(250), child.wait()).await;
+                #[cfg(windows)]
+                let exited =
+                    tokio::time::timeout(Duration::from_millis(250), child.inner_mut().wait())
+                        .await;
+                let status = match exited {
+                    Ok(Ok(status)) => status
+                        .code()
+                        .map_or_else(|| status.to_string(), |code| code.to_string()),
+                    Ok(Err(error)) => format!("unavailable: {error}"),
+                    Err(_) => "still running; terminated after handshake failure".to_owned(),
+                };
                 #[cfg(unix)]
-                kill_process_group(child.id());
+                kill_process_group(process_group);
                 let _ = kill_child(&mut child).await;
+                if tokio::time::timeout(Duration::from_millis(250), &mut stderr_task)
+                    .await
+                    .is_err()
+                {
+                    stderr_task.abort();
+                }
+                let stderr = logs
+                    .lock()
+                    .map(|logs| {
+                        logs.since(None)
+                            .lines
+                            .iter()
+                            .map(RunnerLog::display)
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                let stdout = stdout_tail
+                    .lock()
+                    .map(|tail| {
+                        String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>())
+                            .into_owned()
+                    })
+                    .unwrap_or_default();
                 return Err(format!(
-                    "functions runner sent no hello within {}s",
-                    hello_timeout.as_secs()
+                    "{reason}; exit status: {status}; captured stderr: {stderr:?}; last stdout bytes: {stdout:?}"
                 ));
             }
         };
@@ -1098,13 +1180,108 @@ fn kill_process_group(pid: Option<u32>) {
 
 #[cfg(test)]
 mod tests {
+    /// How long a test waits for a real Node child's hello: the daemon's own wait. A cold Node
+    /// start on a loaded Windows CI runner takes longer than 5 s, and every failure seen there
+    /// was a child that had not run a line of JS yet.
+    const NODE_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
     use super::{child_env, LogBuffer, RunnerLog, LOG_CAPACITY};
 
+    #[test]
+    fn node_paths_preserve_drive_unc_and_non_verbatim_paths() {
+        for (input, expected) in [
+            (r"\\?\C:\functions\index.mjs", r"C:\functions\index.mjs"),
+            (r"\\?\z:\space # %\index.mjs", r"z:\space # %\index.mjs"),
+            (
+                r"\\?\UNC\server\share\index.mjs",
+                r"\\server\share\index.mjs",
+            ),
+            (r"C:\functions\index.mjs", r"C:\functions\index.mjs"),
+            (r"\\server\share\index.mjs", r"\\server\share\index.mjs"),
+            ("/tmp/functions/index.mjs", "/tmp/functions/index.mjs"),
+            (
+                r"\\?\Volume{example}\index.mjs",
+                r"\\?\Volume{example}\index.mjs",
+            ),
+        ] {
+            assert_eq!(super::node_path(input), expected);
+        }
+    }
+
     #[tokio::test]
-    #[cfg_attr(
-        windows,
-        ignore = "the bundled runner closes stdout before its hello on windows-latest; under investigation (issue functions-runner-exits-before-hello-on-windows.md)"
-    )]
+    async fn early_runner_exit_reports_status_stderr_and_stdout_tail() {
+        for output in ["", "partial", "3\n{", "9".repeat(8192).as_str()] {
+            let script = format!(
+                "require('node:fs').writeSync(1, {}); require('node:fs').writeSync(2, 'startup failed\\r\\n'); process.exit(23);",
+                serde_json::to_string(output).unwrap()
+            );
+            let result = super::Runner::spawn(
+                &["node".to_owned(), "-e".to_owned(), script],
+                None,
+                &[],
+                NODE_HELLO_TIMEOUT,
+            )
+            .await;
+            let error = match result {
+                Ok(runner) => {
+                    runner.shutdown().await;
+                    panic!("runner must fail before hello");
+                }
+                Err(error) => error,
+            };
+            assert!(error.contains("exited before its hello"), "{error}");
+            assert!(
+                error.contains("exit status: 23; captured stderr:"),
+                "{error}"
+            );
+            assert!(
+                error.contains("captured stderr: \"startup failed\""),
+                "{error}"
+            );
+            let tail = &output[output.len().saturating_sub(4096)..];
+            assert!(
+                error.contains(&format!("last stdout bytes: {tail:?}")),
+                "{error}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn child_env_inherits_windows_variable_names_case_insensitively() {
+        const PROBE: &str = "FIREEMU_WINDOWS_ENV_PROBE";
+        if std::env::var(PROBE).as_deref() == Ok("1") {
+            let (environment, sandbox) = child_env(&[]).unwrap();
+            for name in ["PATH", "SYSTEMROOT", "VOLTA_FIREEMU_VALID"] {
+                assert!(
+                    environment
+                        .iter()
+                        .any(|(key, _)| key.eq_ignore_ascii_case(name)),
+                    "missing {name}"
+                );
+            }
+            std::fs::remove_dir_all(sandbox).unwrap();
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runner::tests::child_env_inherits_windows_variable_names_case_insensitively",
+            ])
+            .env(PROBE, "1")
+            .env("Path", std::env::var_os("PATH").unwrap())
+            .env("SystemRoot", std::env::var_os("SYSTEMROOT").unwrap())
+            .env("Volta_FIREEMU_VALID", "retained")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
     async fn bundled_runner_installs_dates_before_import_and_drains_timers() {
         use super::{InvokeOutcome, Runner};
         use fireemu_core_session::clock::VirtualClock;
@@ -1123,6 +1300,7 @@ mod tests {
             timers_virtual: true,
             tasks_virtual: false,
         };
+        let trace_path = dir.join("fireemu-runner-trace.log");
         let runner = std::sync::Arc::new(
             Runner::spawn(
                 &[
@@ -1138,15 +1316,19 @@ mod tests {
                 Some(&dir.to_string_lossy()),
                 &[
                     ("GCLOUD_PROJECT".into(), "demo-clock".into()),
+                    ("FIREEMU_RUNNER_TRACE".into(), "1".into()),
                     (
                         "FIREEMU_CLOCK_JSON".into(),
                         policy.runner_options(clock.snapshot()).to_string(),
                     ),
                 ],
-                std::time::Duration::from_secs(5),
+                NODE_HELLO_TIMEOUT,
             )
             .await
-            .unwrap(),
+            .unwrap_or_else(|error| {
+                let trace = std::fs::read_to_string(&trace_path);
+                panic!("{error}; startup trace file: {trace:?}");
+            }),
         );
         assert_eq!(runner.hello().clock.as_ref().unwrap()["version"], 1);
         clock.advance(LogicalDuration::from_millis(1000)).unwrap();
@@ -1176,6 +1358,121 @@ mod tests {
         );
         runner.shutdown().await;
         assert!(!runner.is_alive());
+        let trace = std::fs::read_to_string(&trace_path).unwrap();
+        for (index, line) in trace.lines().enumerate() {
+            assert!(
+                line.starts_with(&format!("[runner trace {}] ", index + 1)),
+                "{trace}"
+            );
+        }
+        for step in [
+            "process start",
+            "runner imports complete",
+            "argv parsed",
+            "source resolved",
+            "clock preamble installed",
+            "stdin frame reader installed",
+            "user module import start",
+            "user module import end",
+            "hello about to be written",
+            "hello written",
+        ] {
+            assert!(trace.contains(&format!("] {step}\n")), "{trace}");
+        }
+    }
+
+    #[tokio::test]
+    async fn bundled_runner_serves_an_http_function_without_the_sdk() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let root = trusted_temp::TrustedTempDir::new("runner-http");
+        let source = root.join("source # % unicode-\u{65e5}");
+        std::fs::create_dir_all(source.join("node_modules/express")).unwrap();
+        std::fs::write(source.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
+        std::fs::write(
+            source.join("index.cjs"),
+            r"
+            function hello(req, res) { res.end('hello:' + req.url); }
+            hello.__endpoint = {platform:'gcfv2',httpsTrigger:{}};
+            module.exports = {hello};
+        ",
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("node_modules/express/package.json"),
+            r#"{"name":"express","version":"5.0.0","main":"index.cjs"}"#,
+        )
+        .unwrap();
+        // Exercise the real runner and HTTP socket without installing Express or the SDK.
+        std::fs::write(source.join("node_modules/express/index.cjs"), r"
+            module.exports = function() {
+                let route;
+                const app = (req, res) => {
+                    const parts = req.url.split('/');
+                    req.params = {project:parts[1],region:parts[2],name:parts[3]};
+                    route(req, res);
+                };
+                app.use = () => {};
+                app.all = (_, handler) => {route = handler;};
+                return app;
+            };
+            for (const parser of ['json','text','urlencoded','raw']) module.exports[parser] = () => () => {};
+        ").unwrap();
+        let source = std::fs::canonicalize(&source)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let script = std::fs::canonicalize(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/runner-node/index.mjs"
+        ))
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+        #[cfg(windows)]
+        let (source, script) = (
+            super::node_path(&source).into_owned(),
+            super::node_path(&script).into_owned(),
+        );
+        let trace_path = std::path::Path::new(&source).join("fireemu-runner-trace.log");
+        let runner = super::Runner::spawn(
+            &["node".into(), script, "--source".into(), source.clone()],
+            Some(&source),
+            &[
+                ("GCLOUD_PROJECT".into(), "demo-http".into()),
+                ("FIREEMU_RUNNER_TRACE".into(), "1".into()),
+                ("FIREEMU_RUNNER_SECRET".into(), "test-http-secret".into()),
+            ],
+            NODE_HELLO_TIMEOUT,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            let trace = std::fs::read_to_string(&trace_path);
+            panic!("{error}; startup trace file: {trace:?}");
+        });
+        let port = runner
+            .hello()
+            .http_port
+            .expect("HTTP server announced in hello");
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            socket.write_all(b"GET /demo-http/us-central1/hello/world HTTP/1.1\r\nHost: localhost\r\nx-fireemu-runner-secret: test-http-secret\r\nConnection: close\r\n\r\n").await.unwrap();
+            let mut response = String::new();
+            socket.read_to_string(&mut response).await.unwrap();
+            response
+        }).await;
+        runner.shutdown().await;
+        let response = response.unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("hello:/world"), "{response}");
+        assert!(!runner.is_alive());
+        let trace = std::fs::read_to_string(&trace_path).unwrap();
+        assert!(
+            trace.starts_with("[runner trace 1] process start\n"),
+            "{trace}"
+        );
+        assert!(trace.contains("hello written\n"), "{trace}");
+        assert!(trace.contains("HTTP server ready\n"), "{trace}");
     }
 
     #[cfg(unix)]
@@ -1601,7 +1898,7 @@ sys.stdin.readline()
             &["python3".to_owned(), "-c".to_owned(), script.to_owned()],
             None,
             &[],
-            std::time::Duration::from_secs(5),
+            NODE_HELLO_TIMEOUT,
         )
         .await
         .unwrap();

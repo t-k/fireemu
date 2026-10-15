@@ -383,6 +383,17 @@ pub trait DocumentAccess {
     fn get_after(&self, _segments: &[String]) -> Option<Option<RulesValue>> {
         None
     }
+
+    /// Whether `segments` names a document of the database being served. A collection path
+    /// (an odd number of segments after `documents`), another database and a path without the
+    /// `documents` segment are not documents; Firestore rules raise an evaluation error for
+    /// `get()` / `exists()` / `getAfter()` / `existsAfter()` on them (FS-8: production answered
+    /// `PERMISSION_DENIED` for `exists`, `!exists` and `get() == null` alike), where a document
+    /// path that holds nothing is a missing document. Storage rules never ask. The default
+    /// accepts every path.
+    fn is_document_path(&self, _segments: &[String]) -> bool {
+        true
+    }
 }
 
 /// No document access: `get()` / `exists()` are unsupported.
@@ -3695,6 +3706,13 @@ impl<'a> Evaluator<'a> {
                     .into(),
             ));
         };
+        // Not a read: a path that is no document is refused before it is charged or cached.
+        if self.service == RulesService::Firestore && !access.is_document_path(&key.1) {
+            return Err(soft(format!(
+                "/{} is not a document of this database",
+                key.1.join("/")
+            )));
+        }
         // The budget counts documents, not calls: get() and getAfter() of one path are one
         // access, as production counts them (FS-RULES, 2026-09-24).
         let reads = self

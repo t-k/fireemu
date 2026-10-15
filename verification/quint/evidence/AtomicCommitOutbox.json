@@ -55,7 +55,7 @@
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-adapter-functions/src/runtime.rs": "ed54d040f94642af6518cfd467c831b380129f859411a065c3017c234c785598",
-    "crates/fireemu-adapter-grpc/src/local.rs": "7fa051e832d22fa607b6835f79253a0797bdda1d21a015ffe5e4c8c42d2f6ece",
+    "crates/fireemu-adapter-grpc/src/local.rs": "0c1e4d51af37d77a2c35057db4a13adcd48eb40e9cc1c1f6e8fbba53fc73db6e",
     "crates/fireemu-core-firestore/src/store.rs": "b57616d2ef461779a91cdeb902e65666ba6e65d40a86c85eb45dfff0a13d77cf",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
@@ -64,7 +64,7 @@
     "verification/quint/bin/process-group": "842349d6136e1fbb9f2c6015cbdcae5b9a972e4e795a27cca473251a15968798",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/AtomicCommitOutbox.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "12d896419005a66a786c2f166861d458f7ec5796242d321a686df3e9ae0b2115",
+    "verification/quint/evidence/cargo-authority.json": "3e55248894c81e5abf62c00cb466957690b7c78bb81d17ad7dc4ee99cb0cca2f",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
     "verification/quint/mutations/AtomicCommitOutbox.json": "999711b541d6268b7f72ae3469e44f9376863b68168101bfe48181210a77d097",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",

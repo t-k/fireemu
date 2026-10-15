@@ -188,8 +188,12 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     assert_eq!(env["GCLOUD_PROJECT"], "demo-exec");
     assert_eq!(env["FIREEMU_CONTROL_TOKEN"].len(), 32);
     assert!(env["FIREEMU_CONTROL_URL"].starts_with("http://127.0.0.1:"));
-    assert!(env["STORAGE_EMULATOR_HOST"].starts_with("http://fireemu:"));
-    assert!(env["STORAGE_EMULATOR_HOST"].contains("@127.0.0.1:"));
+    // No Storage App Check enforcement: the plain endpoint that `@google-cloud/storage` 8.1 and
+    // later accept (they refuse a URL with embedded credentials).
+    assert_eq!(
+        env["STORAGE_EMULATOR_HOST"],
+        format!("http://{}", env["FIREBASE_STORAGE_EMULATOR_HOST"])
+    );
     for key in [
         "FIRESTORE_EMULATOR_HOST",
         "FIREBASE_AUTH_EMULATOR_HOST",
@@ -204,12 +208,6 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     assert!(stdout.starts_with("fireemu exec\n"), "{stdout}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let token = &env["FIREEMU_CONTROL_TOKEN"];
-    let storage_capability = env["STORAGE_EMULATOR_HOST"]
-        .split_once("http://fireemu:")
-        .and_then(|(_, rest)| rest.split_once('@'))
-        .map(|(capability, _)| capability)
-        .expect("the Admin Storage endpoint carries its scoped capability");
-    assert_eq!(storage_capability.len(), 32);
     assert!(
         !stdout.contains(token),
         "the success log exposed the control capability"
@@ -217,10 +215,6 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     assert!(
         !stderr.contains(token),
         "the shutdown log exposed the control capability"
-    );
-    assert!(
-        !stdout.contains(storage_capability) && !stderr.contains(storage_capability),
-        "the logs exposed the Admin Storage capability"
     );
     assert!(!stdout.contains("FIREEMU_CONTROL_TOKEN="));
     assert!(!stderr.contains("FIREEMU_CONTROL_TOKEN="));
@@ -245,6 +239,72 @@ fn only_selects_the_variables_the_command_receives() {
     assert!(env.contains_key("FIREBASE_AUTH_EMULATOR_HOST"));
     assert!(!env.contains_key("FIREBASE_STORAGE_EMULATOR_HOST"));
     assert!(!env.contains_key("STORAGE_EMULATOR_HOST"));
+}
+
+/// The Admin Storage capability rides in `STORAGE_EMULATOR_HOST` only while Storage App Check
+/// is `enforced` (the Admin bypass needs it); every other mode keeps the plain endpoint, which
+/// `@google-cloud/storage` 8.1 and later require. The capability never reaches the logs.
+#[test]
+fn the_admin_storage_capability_is_in_the_endpoint_only_under_storage_enforcement() {
+    let dir = scratch("storage-enforced");
+    let template = r#"{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firestore": { "edition": "standard", "apiMode": "native" },
+  "appCheck": {
+    "enabled": true,
+    "apps": [{ "projectId": "demo-exec", "projectNumber": "1234567890", "appId": "1:1234567890:web:local-test-app" }],
+    "services": { "storage": "MODE" }
+  }
+}
+"#;
+    for (mode, enforced) in [("enforced", true), ("unenforced", false), ("off", false)] {
+        let config = dir.join(format!("fireemu-{mode}.json"));
+        std::fs::write(&config, template.replace("MODE", mode)).unwrap();
+        let out = dir.join(format!("env-{mode}.txt"));
+        let output = daemon()
+            .args(["--config"])
+            .arg(&config)
+            .args(["--project", "demo-exec", "--", "/bin/sh", "-c"])
+            .arg(format!("env > {}", out.display()))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let env = env_file(&out);
+        let endpoint = &env["STORAGE_EMULATOR_HOST"];
+        if enforced {
+            let capability = endpoint
+                .strip_prefix("http://fireemu:")
+                .and_then(|rest| rest.split_once('@'))
+                .map(|(capability, address)| {
+                    assert_eq!(address, env["FIREBASE_STORAGE_EMULATOR_HOST"]);
+                    capability
+                })
+                .expect("the enforced Admin Storage endpoint carries its scoped capability");
+            assert_eq!(capability.len(), 32);
+            // The browser endpoint stays plain, and the capability never reaches the logs.
+            assert!(!env["FIREBASE_STORAGE_EMULATOR_HOST"].contains('@'));
+            let logs = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                !logs.contains(capability),
+                "the logs exposed the Admin Storage capability"
+            );
+        } else {
+            assert_eq!(
+                endpoint,
+                &format!("http://{}", env["FIREBASE_STORAGE_EMULATOR_HOST"]),
+                "{mode}"
+            );
+        }
+    }
 }
 
 /// A canonical configuration with App Check enabled for one app of `demo-exec`.
@@ -976,8 +1036,7 @@ fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
                 );
             }
         }
-        // Bare host:port everywhere except the Admin Storage endpoint. Its URL userinfo is
-        // the only channel the unmodified Google client forwards to a custom endpoint.
+        // Bare host:port everywhere except `STORAGE_EMULATOR_HOST`, which carries the scheme.
         if want_fs {
             assert!(env["FIRESTORE_EMULATOR_HOST"].starts_with("127.0.0.1:"));
             assert_eq!(
@@ -987,13 +1046,11 @@ fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
         }
         if want_st {
             assert!(env["FIREBASE_STORAGE_EMULATOR_HOST"].starts_with("127.0.0.1:"));
-            let endpoint = &env["STORAGE_EMULATOR_HOST"];
-            let (capability, address) = endpoint
-                .strip_prefix("http://fireemu:")
-                .and_then(|rest| rest.split_once('@'))
-                .unwrap_or_else(|| panic!("{label}: malformed Admin Storage endpoint"));
-            assert_eq!(capability.len(), 32, "{label}");
-            assert_eq!(address, env["FIREBASE_STORAGE_EMULATOR_HOST"], "{label}");
+            assert_eq!(
+                env["STORAGE_EMULATOR_HOST"],
+                format!("http://{}", env["FIREBASE_STORAGE_EMULATOR_HOST"]),
+                "{label}"
+            );
         }
         assert!(
             !env.contains_key("FIREBASE_DATABASE_EMULATOR_HOST"),

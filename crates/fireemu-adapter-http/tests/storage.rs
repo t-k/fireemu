@@ -4434,6 +4434,79 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
     }
 }
 
+/// A copy into a bucket of another session needs the privileged JSON API credential. Without
+/// Storage enforcement `exec` exports no capability, so an Admin SDK copy across sessions is
+/// refused (403) and the owner credential or the capability is what authorizes it.
+#[test]
+fn a_copy_into_another_session_needs_the_owner_credential_or_the_capability() {
+    let mut s = state(Some(ALLOW_ALL_RULES));
+    let mut tenancy = fireemu_core_session::tenancy::Tenancy::new("demo-app");
+    tenancy.register("demo-b", &[], &[]).unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    s.admin_capability = Some("storage-capability".to_owned());
+    let seed = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?name=src.txt&uploadType=media"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "text/plain"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(seed.status, 200, "{}", String::from_utf8_lossy(&seed.body));
+    let copy = |target: &str| {
+        format!("/storage/v1/b/{BUCKET}/o/src.txt/copyTo/b/demo-b.appspot.com/o/{target}")
+    };
+    let capability = format!(
+        "Basic {}",
+        fireemu_core_storage::hash::base64(b"fireemu:storage-capability")
+    );
+    for (label, headers, want) in [
+        ("no credential", vec![], 403),
+        (
+            "a bearer that is not the owner credential",
+            vec![("authorization", "Bearer user")],
+            403,
+        ),
+        (
+            "a wrong capability",
+            vec![("authorization", "Basic ZmlyZWVtdTp3cm9uZw==")],
+            403,
+        ),
+        (
+            "the owner credential",
+            vec![("authorization", "Bearer owner")],
+            200,
+        ),
+        (
+            "the capability",
+            vec![("authorization", capability.as_str())],
+            200,
+        ),
+    ] {
+        let r = handle(
+            &s,
+            req("POST", &copy(&format!("{want}.txt")), &headers, b""),
+        );
+        assert_eq!(
+            r.status,
+            want,
+            "{label}: {}",
+            String::from_utf8_lossy(&r.body)
+        );
+        if want == 403 {
+            assert!(
+                String::from_utf8_lossy(&r.body)
+                    .contains("the destination bucket belongs to another project"),
+                "{label}"
+            );
+        }
+    }
+}
+
 #[test]
 fn drop_connection_faults_mark_the_response_for_the_server_to_close() {
     use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};

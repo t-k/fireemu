@@ -10,14 +10,14 @@
 import { join } from "node:path";
 
 import { SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
-import { corpusDigest, PROGRAMS, programDigest, validateCorpus } from "./corpus.mjs";
+import { corpusDigest, programDigest, validateCorpus } from "./corpus.mjs";
 import {
   confirmedNoAuthRecording,
   estimatedUsd,
   fixtureText,
   recentAbort,
   selectPrograms,
-  TASK_ID,
+  taskIdFor,
 } from "./judge.mjs";
 
 /**
@@ -36,15 +36,16 @@ export async function recordProduction(env, deps) {
     throw new Error("FIREEMU_SANDBOX_LEDGER and FIREEMU_FS3_PRIVATE_DIR are required");
   await deps.assertCleanTree();
   const ledgerText = await deps.readLedger(ledger);
-  const aborted = recentAbort(ledgerText, deps.now());
+  const programs = selectPrograms(undefined, env);
+  const taskId = taskIdFor(programs);
+  const aborted = recentAbort(ledgerText, deps.now(), taskId);
   if (aborted)
     throw new Error(`the last run ended ${aborted.outcome} at ${aborted.ts}; wait an hour`);
-  const programs = selectPrograms(PROGRAMS, env);
   const corpusRequests = validateCorpus(programs);
   const operatorConfirmation = confirmedNoAuthRecording(env, deps.now());
   const web = await deps.sandboxWebConfig();
   const target = await deps.productionTarget(web);
-  const { report, problems } = await deps.preflight(target, ledgerText);
+  const { report, problems } = await deps.preflight(target, ledgerText, taskId);
   if (problems.length) throw new Error(`preflight: ${problems.join("; ")}`);
   const meta = {
     sha: await deps.gitSha(),
@@ -61,7 +62,7 @@ export async function recordProduction(env, deps) {
   await deps.makeRunDir(runDir);
   await deps.appendLedger(
     ledger,
-    `${JSON.stringify({ ts: meta.startedAt, event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: programs.length, operatorConfirmation })}\n`,
+    `${JSON.stringify({ ts: meta.startedAt, event: "started", taskId, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: programs.length, operatorConfirmation })}\n`,
   );
 
   const state = { stop: false };
@@ -144,7 +145,7 @@ export async function recordProduction(env, deps) {
         requests,
         estimatedUsd: estimatedUsd(requests),
         outcome,
-        taskId: TASK_ID,
+        taskId,
         programs: meta.programs,
         publications: recordings.flatMap((r) => r.publications ?? []).length,
         closureReady: recordings.length > 0 && recordings.every((r) => r.closureReady === true),

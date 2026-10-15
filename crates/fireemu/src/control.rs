@@ -45,6 +45,38 @@ pub fn load_text_indexes(
     Ok(set)
 }
 
+/// The Firestore gateway's missing-index reports, served by `/v1/firestore/missingIndexes`.
+pub struct MissingIndexReports {
+    /// Whether this run reports at all: the strict profile with `firestore.missingIndexes` set
+    /// to `"report"`, and Firestore selected.
+    pub enabled: bool,
+}
+
+impl fireemu_adapter_http::control::MissingIndexHook for MissingIndexReports {
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn reports(&self) -> Vec<fireemu_adapter_http::control::MissingIndexEntry> {
+        fireemu_adapter_grpc::gateway::missing_index_reports()
+            .into_iter()
+            .map(|r| fireemu_adapter_http::control::MissingIndexEntry {
+                database: r.database,
+                fragment: r.fragment,
+                message: r.message,
+            })
+            .collect()
+    }
+
+    fn dropped(&self, project: Option<&str>) -> usize {
+        fireemu_adapter_grpc::gateway::missing_index_dropped(project)
+    }
+
+    fn clear(&self, project: Option<&str>) -> usize {
+        fireemu_adapter_grpc::gateway::clear_missing_index_reports(project)
+    }
+}
+
 /// Which refusals of `firebase deploy` an index file is checked against when it loads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexFileChecks {
@@ -412,6 +444,68 @@ pub fn capabilities_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The route reads the gateway's list, what it dropped past its bound, and clears both.
+    #[test]
+    fn missing_index_reports_are_the_gateways_with_what_it_dropped() {
+        use fireemu_adapter_http::control::MissingIndexHook as _;
+        use fireemu_core_firestore::index::IndexValidationPolicy;
+        use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+        use fireemu_core_firestore::value::Value as FsValue;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+
+        let gateway = fireemu_adapter_grpc::gateway::Gateway {
+            enforce_limits: true,
+            ctx: fireemu_core_firestore::index::PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::ProductionReport,
+            },
+            indexes: IndexSet::default(),
+        };
+        let field = |path: &str, op, value| FilterExpr::Field {
+            field: FieldPath::parse(path).unwrap(),
+            op,
+            value,
+        };
+        let accepted = gateway
+            .validate_query(
+                &Query::new(QueryScope::collection(
+                    None,
+                    CollectionId::try_new("tasks").unwrap(),
+                ))
+                .with_filter(FilterExpr::And(vec![
+                    field("done", FieldOp::Equal, FsValue::Boolean(false)),
+                    field("priority", FieldOp::GreaterThan, FsValue::Integer(1)),
+                ])),
+            )
+            .unwrap();
+        for n in 0..1000 {
+            let database = format!("projects/demo-wire/databases/db-{n}");
+            assert!(gateway.report_missing_index(&database, &accepted).is_some());
+        }
+        let overflow = "projects/demo-over/databases/(default)";
+        assert!(gateway.report_missing_index(overflow, &accepted).is_some());
+        assert_eq!(gateway.report_missing_index(overflow, &accepted), None);
+
+        let hook = MissingIndexReports { enabled: true };
+        assert!(hook.enabled());
+        assert!(!MissingIndexReports { enabled: false }.enabled());
+        let reports = hook.reports();
+        assert_eq!(reports.len(), 1000);
+        assert_eq!(reports[7].database, "projects/demo-wire/databases/db-7");
+        assert!(reports[7]
+            .fragment
+            .contains("\"collectionGroup\": \"tasks\""));
+        assert!(reports[7].message.contains("The query requires an index"));
+        assert_eq!(hook.dropped(Some("demo-over")), 2);
+        assert_eq!(hook.dropped(Some("demo-wire")), 0);
+        assert_eq!(hook.dropped(None), 2);
+        assert_eq!(hook.clear(Some("demo-over")), 0);
+        assert_eq!(hook.dropped(None), 0);
+        assert_eq!(hook.clear(Some("demo-wire")), 1000);
+        assert!(hook.reports().is_empty());
+    }
 
     #[test]
     fn capabilities_include_explicit_and_derived_development_defaults() {

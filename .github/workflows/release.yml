@@ -111,8 +111,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
+      # No pnpm cache: the assets built here are embedded in every published binary, and a pnpm
+      # cache entry in the main scope can be written by any workflow run on main.
       - run: pnpm -C ui install --frozen-lockfile
       - run: pnpm -C ui build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

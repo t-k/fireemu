@@ -1656,6 +1656,110 @@ service cloud.firestore {
     h.handle.abort();
 }
 
+/// FS-8: production answered `PERMISSION_DENIED` for `exists()`, `!exists()` and `get() == null`
+/// on a path that is no document of the database (a collection path, another database, no
+/// `documents` segment). A missing document stays `false` / `null`. Both profiles: the official
+/// emulator denies them too.
+#[tokio::test]
+async fn get_and_exists_on_a_path_that_is_no_document_raise_an_error() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let docs = "/databases/$(database)/documents";
+    let cases: [(&str, String, bool); 12] = [
+        ("real", format!("exists({docs}/ctl/real)"), true),
+        ("missing", format!("!exists({docs}/ctl/absent)"), true),
+        (
+            "missing-null",
+            format!("get({docs}/ctl/absent) == null"),
+            true,
+        ),
+        ("coll-not-exists", format!("!exists({docs}/ctl)"), false),
+        ("coll-null", format!("get({docs}/ctl) == null"), false),
+        (
+            "nested-coll",
+            format!("!exists({docs}/ctl/real/sub)"),
+            false,
+        ),
+        ("dyn-coll", format!("!exists({docs}/$(id))"), false),
+        (
+            "other-db",
+            "!exists(/databases/other/documents/ctl/real)".to_owned(),
+            false,
+        ),
+        (
+            "other-db-null",
+            "get(/databases/other/documents/ctl/real) == null".to_owned(),
+            false,
+        ),
+        (
+            "no-documents",
+            "!exists(/databases/$(database)/ctl/real)".to_owned(),
+            false,
+        ),
+        (
+            "no-documents-null",
+            "get(/databases/$(database)/ctl/real) == null".to_owned(),
+            false,
+        ),
+        (
+            "default-literal",
+            "exists(/databases/(default)/documents/ctl/real)".to_owned(),
+            true,
+        ),
+    ];
+    let matches = cases
+        .iter()
+        .fold(String::new(), |rules, (name, condition, _)| {
+            format!("{rules}    match /{name}/{{id}} {{ allow get, write: if {condition}; }}\n")
+        });
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';\nservice cloud.firestore {{\n  match /databases/{{database}}/documents {{\n{matches}  }}\n}}"
+        ))
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("ctl/real", &[("v", s("1"))])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    for (name, condition, allowed) in &cases {
+        let read = h
+            .client
+            .get_document(with_bearer(get(&format!("{name}/x")), &alice_token))
+            .await;
+        // An allowed read of a document that is not there is NOT_FOUND, a refused one is not.
+        let code = read.unwrap_err().code();
+        assert_eq!(
+            code,
+            if *allowed {
+                tonic::Code::NotFound
+            } else {
+                tonic::Code::PermissionDenied
+            },
+            "{condition}"
+        );
+        // The same rule decides a write.
+        let write = h
+            .client
+            .commit(with_bearer(
+                commit(vec![set_write(&format!("{name}/x"), &[("v", s("1"))])]),
+                &alice_token,
+            ))
+            .await;
+        assert_eq!(write.is_ok(), *allowed, "{condition}");
+        if !allowed {
+            assert_eq!(
+                write.unwrap_err().code(),
+                tonic::Code::PermissionDenied,
+                "{condition}"
+            );
+        }
+    }
+    h.handle.abort();
+}
+
 #[tokio::test]
 async fn nested_create_lazily_evaluates_optional_parent_fields() {
     let mut h = start().await;

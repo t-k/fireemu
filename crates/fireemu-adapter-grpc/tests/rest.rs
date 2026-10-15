@@ -4881,7 +4881,10 @@ fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     let (status, fresh_read) = call(
         &s,
         "GET",
-        &format!("{DOCS}/retry-contention/locked?transaction={fresh}"),
+        &format!(
+            "{DOCS}/retry-contention/locked?transaction={}",
+            fresh.replace('+', "%2B")
+        ),
         Value::Null,
     );
     assert_eq!(status, 200, "{fresh_read}");

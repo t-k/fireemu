@@ -1841,6 +1841,10 @@ struct BoundAddrs {
 /// Like the official CLI, selected endpoints override inherited values; endpoints for other
 /// emulators remain inherited so removing a routing variable cannot send a SDK to production.
 /// fireemu additionally sets `GOOGLE_CLOUD_PROJECT` next to `GCLOUD_PROJECT`.
+///
+/// `STORAGE_EMULATOR_HOST` is the plain `http://host:port`, like the official CLI, except
+/// while Storage App Check is `enforced`: then it also carries the per-run Admin Storage
+/// capability (see the comment at the push).
 fn child_environment(
     cfg: &RuntimeConfig,
     only: &Selection,
@@ -1872,10 +1876,19 @@ fn child_environment(
             "FIREBASE_STORAGE_EMULATOR_HOST".to_owned(),
             addr.to_string(),
         ));
-        env.push((
-            "STORAGE_EMULATOR_HOST".to_owned(),
-            format!("http://fireemu:{storage_admin_capability}@{addr}"),
-        ));
+        // The Admin Storage capability rides in the URL userinfo, the only channel the
+        // unmodified Google client forwards to a custom endpoint, and only while Storage App
+        // Check enforcement makes the Admin bypass necessary. `@google-cloud/storage` 8.1 and
+        // later (`firebase-admin` 14.4 and later) refuse a URL with embedded credentials, so
+        // every other run gets the plain endpoint those versions can use.
+        let endpoint = if only.app_check_mode(&cfg.app_check, config::AppCheckService::Storage)
+            == fireemu_core_app_check::verify::BaselineMode::Enforced
+        {
+            format!("http://fireemu:{storage_admin_capability}@{addr}")
+        } else {
+            format!("http://{addr}")
+        };
+        env.push(("STORAGE_EMULATOR_HOST".to_owned(), endpoint));
     }
     if let Some(addr) = addrs.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), addr.to_string()));
@@ -3330,7 +3343,7 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn control_state(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -3351,6 +3364,7 @@ fn control_state(
     pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
     listen_expiry: Option<fireemu_adapter_grpc::rules::ListenExpiry>,
+    missing_indexes_reported: bool,
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases and their field
@@ -3457,6 +3471,9 @@ fn control_state(
         firestore_listen_expiry: listen_expiry.map(|expiry| {
             Arc::new(move || expiry.expire()) as Arc<dyn Fn() -> usize + Send + Sync>
         }),
+        firestore_missing_indexes: Some(Arc::new(control::MissingIndexReports {
+            enabled: missing_indexes_reported,
+        })),
     }
 }
 
@@ -4826,5 +4843,144 @@ mod network_exposure_tests {
             "{warnings:?}"
         );
         assert!(warnings[0].contains("control API answers loopback peers only"));
+    }
+}
+
+#[cfg(test)]
+mod storage_endpoint_tests {
+    use super::{child_environment, BoundAddrs, RuntimeConfig};
+    use crate::config::Selection;
+    use fireemu_core_app_check::verify::BaselineMode;
+
+    const CAPABILITY: &str = "0123456789abcdef0123456789abcdef";
+
+    fn addrs() -> BoundAddrs {
+        let loopback = |port: u16| Some(std::net::SocketAddr::from(([127, 0, 0, 1], port)));
+        BoundAddrs {
+            firestore: loopback(8080),
+            auth: loopback(9099),
+            storage: loopback(9199),
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            pubsub: None,
+            hub: None,
+            ui: None,
+            logging: None,
+            control: std::net::SocketAddr::from(([127, 0, 0, 1], 9099)),
+        }
+    }
+
+    fn storage_endpoint(cfg: &RuntimeConfig, only: &Selection) -> Option<String> {
+        child_environment(cfg, only, &addrs(), "control-token", CAPABILITY)
+            .into_iter()
+            .find(|(name, _)| name == "STORAGE_EMULATOR_HOST")
+            .map(|(_, value)| value)
+    }
+
+    fn config_with_storage(mode: BaselineMode) -> RuntimeConfig {
+        let mut cfg = RuntimeConfig::default();
+        cfg.app_check.enabled = true;
+        cfg.app_check.storage = mode;
+        cfg
+    }
+
+    /// `@google-cloud/storage` 8.1 and later refuse a URL with embedded credentials, so the
+    /// Admin Storage endpoint is the plain `http://host:port` unless Storage App Check
+    /// enforcement is the reason to carry the capability.
+    #[test]
+    fn the_admin_storage_endpoint_is_plain_unless_storage_app_check_is_enforced() {
+        let plain = Some("http://127.0.0.1:9199".to_owned());
+        let all = Selection::default();
+        assert_eq!(storage_endpoint(&RuntimeConfig::default(), &all), plain);
+        assert_eq!(
+            storage_endpoint(&config_with_storage(BaselineMode::Off), &all),
+            plain
+        );
+        assert_eq!(
+            storage_endpoint(&config_with_storage(BaselineMode::Unenforced), &all),
+            plain
+        );
+    }
+
+    #[test]
+    fn enforced_storage_app_check_keeps_the_admin_capability_in_the_endpoint() {
+        let endpoint = storage_endpoint(
+            &config_with_storage(BaselineMode::Enforced),
+            &Selection::default(),
+        );
+        assert_eq!(
+            endpoint,
+            Some(format!("http://fireemu:{CAPABILITY}@127.0.0.1:9199"))
+        );
+    }
+
+    fn any_mode() -> impl proptest::strategy::Strategy<Value = BaselineMode> {
+        proptest::prop_oneof![
+            proptest::strategy::Just(BaselineMode::Off),
+            proptest::strategy::Just(BaselineMode::Unenforced),
+            proptest::strategy::Just(BaselineMode::Enforced),
+        ]
+    }
+
+    proptest::proptest! {
+        /// Whatever the three products are set to, and whichever services `--only` leaves
+        /// selected, the endpoint carries the capability exactly when the effective Storage
+        /// mode is `enforced`; it is always `http://host:port` otherwise, and never leaks the
+        /// capability into the browser-facing `FIREBASE_STORAGE_EMULATOR_HOST`.
+        #[test]
+        fn the_capability_is_present_exactly_when_the_effective_storage_mode_is_enforced(
+            auth in any_mode(),
+            firestore in any_mode(),
+            storage in any_mode(),
+            appcheck_selected in proptest::bool::ANY,
+            functions_selected in proptest::bool::ANY,
+        ) {
+            let mut cfg = RuntimeConfig::default();
+            cfg.app_check.enabled = true;
+            cfg.app_check.auth = auth;
+            cfg.app_check.firestore = firestore;
+            cfg.app_check.storage = storage;
+            let only = Selection {
+                appcheck: appcheck_selected,
+                functions: functions_selected,
+                ..Selection::default()
+            };
+            let env = child_environment(&cfg, &only, &addrs(), "control-token", CAPABILITY);
+            let value = |name: &str| {
+                env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+            };
+            let endpoint = value("STORAGE_EMULATOR_HOST").expect("storage is selected");
+            if storage == BaselineMode::Enforced {
+                // `enforces_selected` keeps the verifier whatever `--only` names.
+                proptest::prop_assert_eq!(
+                    endpoint,
+                    format!("http://fireemu:{CAPABILITY}@127.0.0.1:9199")
+                );
+            } else {
+                proptest::prop_assert_eq!(endpoint, "http://127.0.0.1:9199".to_owned());
+            }
+            proptest::prop_assert_eq!(
+                value("FIREBASE_STORAGE_EMULATOR_HOST"),
+                Some("127.0.0.1:9199".to_owned())
+            );
+            proptest::prop_assert!(env.iter().all(|(n, v)| n == "STORAGE_EMULATOR_HOST"
+                || !v.contains(CAPABILITY)));
+        }
+    }
+
+    /// The capability follows the policy the Storage adapter actually holds: another product's
+    /// enforcement never adds it.
+    #[test]
+    fn only_the_effective_storage_mode_decides_the_capability() {
+        let all = Selection::default();
+        let mut firestore_only = RuntimeConfig::default();
+        firestore_only.app_check.enabled = true;
+        firestore_only.app_check.firestore = BaselineMode::Enforced;
+        firestore_only.app_check.auth = BaselineMode::Enforced;
+        assert_eq!(
+            storage_endpoint(&firestore_only, &all).as_deref(),
+            Some("http://127.0.0.1:9199")
+        );
     }
 }

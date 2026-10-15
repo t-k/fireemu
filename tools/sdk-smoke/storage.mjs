@@ -60,7 +60,10 @@ const put = await fetch(`http://${authHost}/v1/storage/rules`, {
 if (!put.ok) throw new Error(`PUT /v1/storage/rules failed: ${put.status}`);
 
 // ---- Admin SDK ----
-process.env.STORAGE_EMULATOR_HOST = `http://${storageHost}`;
+// `fireemu exec` exports STORAGE_EMULATOR_HOST itself; the smoke keeps whatever it gave so a
+// regression in that value (for example credentials in the URL, which @google-cloud/storage 8.1
+// and later refuse) fails here. Only a bare run without exec derives it from the storage host.
+process.env.STORAGE_EMULATOR_HOST ??= `http://${storageHost}`;
 const adminApp = initializeAdminApp({ projectId: project, storageBucket: bucketName });
 const bucket = getAdminStorage(adminApp).bucket();
 await check("admin save + download", async () => {
@@ -69,6 +72,12 @@ await check("admin save + download", async () => {
   const [buf] = await file.download();
   const [meta] = await file.getMetadata();
   return { text: buf.toString(), size: meta.size, contentType: meta.contentType, custom: meta.metadata };
+});
+await check("admin publicUrl embeds no credentials, so fetch accepts it", async () => {
+  const url = bucket.file("public/hello.txt").publicUrl();
+  if (new URL(url).username) throw new Error(`publicUrl embeds credentials: ${new URL(url).origin}`);
+  const res = await fetch(url);
+  return { status: res.status, text: await res.text() };
 });
 await check("admin resumable save", async () => {
   const file = bucket.file("public/big.bin");

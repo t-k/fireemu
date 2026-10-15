@@ -84,22 +84,29 @@ pub struct StateReader<'a> {
     pub version: Option<CommitVersion>,
 }
 
-/// Rules path segments (`databases/{db}/documents/...`) → document path in the request's
-/// project. Other databases are unreachable (`None`).
-fn rules_segments_to_path(parent: &Parent, segments: &[String]) -> Option<DocumentPath> {
+/// The document segments of a Rules path (`databases/{db}/documents/<collection>/<id>/...`),
+/// when it names a document of the request's own database. A collection path (an odd number
+/// of segments after `documents`, or none), another database and a path without the
+/// `documents` segment name no document of this database (`None`): `get()` / `exists()` on
+/// them raise an evaluation error, as production does (FS-8), where a document path that
+/// holds nothing is a missing document.
+fn document_segments<'a>(parent: &Parent, segments: &'a [String]) -> Option<&'a [String]> {
     let [db_literal, db, docs_literal, rest @ ..] = segments else {
         return None;
     };
-    if db_literal != "databases"
-        || docs_literal != "documents"
-        || rest.is_empty()
-        || rest.len() % 2 != 0
-    {
-        return None;
-    }
-    if db != parent.database.as_str() {
-        return None;
-    }
+    (db_literal == "databases"
+        && docs_literal == "documents"
+        && !rest.is_empty()
+        && rest.len() % 2 == 0
+        && db == parent.database.as_str())
+    .then_some(rest)
+}
+
+/// Rules path segments → document path in the request's project. `None`: not a document
+/// path of this database (see [`document_segments`]), or an id the store cannot hold, which
+/// reads as a missing document.
+fn rules_segments_to_path(parent: &Parent, segments: &[String]) -> Option<DocumentPath> {
+    let rest = document_segments(parent, segments)?;
     DocumentPath::parse(&parent.project, &parent.database, &rest.join("/")).ok()
 }
 
@@ -110,6 +117,10 @@ impl DocumentAccess for StateReader<'_> {
             Some(v) => self.db.get_at(&path, v).map(resource_value),
             None => self.db.get(&path).map(resource_value),
         }
+    }
+
+    fn is_document_path(&self, segments: &[String]) -> bool {
+        document_segments(self.parent, segments).is_some()
     }
 }
 
@@ -136,6 +147,10 @@ impl DocumentAccess for AggregateReader<'_> {
         }
         self.inner.get_after(segments)
     }
+
+    fn is_document_path(&self, segments: &[String]) -> bool {
+        self.inner.is_document_path(segments)
+    }
 }
 
 /// `get()` over the current state and `getAfter()` over the state the commit being
@@ -160,6 +175,10 @@ impl DocumentAccess for WriteReader<'_> {
             Some(staged) => staged.as_ref().map(resource_value),
             None => self.db.get(&path).map(resource_value),
         })
+    }
+
+    fn is_document_path(&self, segments: &[String]) -> bool {
+        document_segments(self.parent, segments).is_some()
     }
 }
 
@@ -2283,6 +2302,91 @@ mod tests {
             RulesValue::Map(values)
                 if values.get("score") == Some(&RulesValue::Int(6))
         ));
+    }
+
+    fn parent_of(database: &str) -> crate::decode::Parent {
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+        crate::decode::Parent {
+            project: ProjectId::try_new("p").unwrap(),
+            database: DatabaseId::try_new(database).unwrap(),
+            document: None,
+        }
+    }
+
+    fn strings(segments: &[&str]) -> Vec<String> {
+        segments.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn only_an_even_path_under_documents_of_the_own_database_is_a_document_path() {
+        use super::document_segments;
+        let parent = parent_of("(default)");
+        let document = strings(&["databases", "(default)", "documents", "c", "d"]);
+        assert_eq!(document_segments(&parent, &document), Some(&document[3..]));
+        for not_a_document in [
+            // A collection, a nested collection and the database root.
+            &["databases", "(default)", "documents", "c"][..],
+            &["databases", "(default)", "documents", "c", "d", "e"],
+            &["databases", "(default)", "documents"],
+            // Another database, no `documents`, and a path outside `databases`.
+            &["databases", "other", "documents", "c", "d"],
+            &["databases", "(default)", "c", "d"],
+            &["databases", "(default)"],
+            &["c", "d"],
+            &[],
+            // The literals are exact.
+            &["Databases", "(default)", "documents", "c", "d"],
+            &["databases", "(default)", "Documents", "c", "d"],
+        ] {
+            assert_eq!(
+                document_segments(&parent, &strings(not_a_document)),
+                None,
+                "{not_a_document:?}"
+            );
+        }
+        // A named database is its own database; `(default)` is another one there.
+        let named = parent_of("tenant-a");
+        let own = strings(&["databases", "tenant-a", "documents", "c", "d"]);
+        assert!(document_segments(&named, &own).is_some());
+        assert!(document_segments(&named, &document).is_none());
+    }
+
+    #[test]
+    fn an_unstorable_id_reads_as_a_missing_document_not_an_invalid_path() {
+        use super::rules_segments_to_path;
+        let parent = parent_of("(default)");
+        // `__x__` is reserved: the official emulator reads it as missing (404), not as an error.
+        let reserved = strings(&["databases", "(default)", "documents", "__x__", "d"]);
+        assert!(super::document_segments(&parent, &reserved).is_some());
+        assert!(rules_segments_to_path(&parent, &reserved).is_none());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn a_path_is_a_document_path_exactly_when_its_shape_says_so(
+            database in proptest::prop_oneof![
+                proptest::strategy::Just("(default)"),
+                proptest::strategy::Just("other"),
+            ],
+            documents in proptest::prop_oneof![
+                proptest::strategy::Just("documents"),
+                proptest::strategy::Just("docs"),
+            ],
+            rest in proptest::collection::vec("[a-z]{1,3}", 0..7),
+        ) {
+            use super::document_segments;
+            let parent = parent_of("(default)");
+            let mut segments = vec!["databases".to_owned(), database.to_owned(), documents.to_owned()];
+            segments.extend(rest.iter().cloned());
+            let expected = database == "(default)"
+                && documents == "documents"
+                && !rest.is_empty()
+                && rest.len() % 2 == 0;
+            proptest::prop_assert_eq!(document_segments(&parent, &segments).is_some(), expected);
+            if expected {
+                proptest::prop_assert_eq!(document_segments(&parent, &segments), Some(&segments[3..]));
+            }
+        }
     }
 
     #[test]

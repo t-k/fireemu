@@ -81,7 +81,9 @@ jobs:
           cd "$dir"
           npm init -y > /dev/null
           npm install --ignore-scripts --no-audit --no-fund "firebase-admin@$admin" "firebase@$client"
-          storage="$(node -p "require('@google-cloud/storage/package.json').version")"
+          # Not require('<pkg>/package.json'): @google-cloud/storage does not export that subpath.
+          storage="$(npm query '#@google-cloud/storage' | node -p "JSON.parse(require('node:fs').readFileSync(0, 'utf8')).map((p) => p.version).join(', ')")"
+          [ -n "$storage" ] || { echo "@google-cloud/storage is not installed"; exit 1; }
           echo "firebase-admin $admin, firebase $client, @google-cloud/storage $storage"
           {
             echo "### SDK versions under test"

@@ -9,8 +9,6 @@ use std::process::{Command, Output, Stdio};
 
 use scratch::Scratch;
 
-const RULES: &str = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}\n";
-
 fn fireemu(cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .current_dir(cwd)

@@ -79,7 +79,9 @@ await withTestWorld(settings, async world => {
 
 Each world owns one daemon, OS-assigned service ports, a control token, private temporary directories and a creation snapshot of configuration, Rules, indexes, Functions sources, dependency links and optional import data. Even the same project ID is independent across worlds. Hub, UI and logging listeners are disabled in this helper. Defaults are a pinned `2026-01-01T00:00:00Z`, seed 1, virtual Date/Tasks and native JavaScript timers.
 
-`config` accepts a configuration object or path; `firebaseJson`, `functionsSource`, `cwd`, `import`, `projectId`, `clockStart`, `seed`, `services` and `clock` select the initial inputs. `binaryPath` can select a development binary. Input files and linked Functions dependencies are copied before readiness; later caller changes do not affect reset. This has an upfront disk/time cost for large dependency graphs. Do not put a world's temporary directory inside its Functions source.
+`config` accepts a configuration object or a path to `fireemu.toml`, `fireemu.json` or `firebase.json`. TOML is parsed by the same native loader as the CLI (including case-insensitive `.toml` extensions); keep the npm helper and native binary at the same version. Canonical resource paths remain relative to `cwd`, while `firebaseJson` is relative to the configuration file and its resource paths are relative to that Firebase file. You can reuse `fireemu init` output directly: `createTestWorld({ cwd: process.cwd(), config: 'fireemu.toml' })`. In v0.23.0 the helper accepts only JSON files or objects; when staying on that release, keep JSON as the single configuration source and pass its path explicitly rather than maintaining a TOML copy.
+
+`firebaseJson`, `functionsSource`, `cwd`, `import`, `projectId`, `clockStart`, `seed`, `services` and `clock` select the initial inputs. `binaryPath` can select a development binary. Input files and linked Functions dependencies are copied before readiness; later caller changes do not affect reset. This has an upfront disk/time cost for large dependency graphs. Do not put a world's temporary directory inside its Functions source.
 
 Configured Functions also snapshot and relocate `NODE_PATH` search directories. If global dependency roots are unused by the codebase, select `env: { ...process.env, NODE_PATH: '' }` to exclude them from the snapshot. Worlds without configured Functions clear this extra search path. The helper supplies its own `FIREBASE_CONFIG` and emulator routes, including to SDK default-app initialization; inherited configuration and child environment overrides cannot redirect them to another world.
 
@@ -92,3 +94,45 @@ Configured Functions also snapshot and relocate `NODE_PATH` search directories. 
 A retirement error still attempts to stop every owned daemon and retains unresolved cleanup handles for another `dispose()` attempt. User-created detached subprocesses that leave an owned Unix process group require caller supervision; the helper reports a held output pipe instead of silently declaring disposal complete.
 
 The authenticated `--ready-file <path>` daemon option publishes endpoint discovery atomically in a private file without overwriting an existing descriptor. It contains a control capability and is withdrawn on graceful shutdown. The helper keeps it inside the private generation directory and removes the directory after forced retirement.
+
+## Resolve control URLs
+
+`FIREEMU_CONTROL_URL` (also in `world.environment`) is a base URL ending in `/v1/`, for example `http://127.0.0.1:9099/v1/`. The readiness descriptor's `controlUrl` and `world.endpoints.control.url` are origins without that path. Do not concatenate a documented `/v1/...` path onto the environment variable.
+
+```js
+const base = world.environment.FIREEMU_CONTROL_URL;
+const absolute = new URL('/v1/sessions/default:awaitIdle', base);
+const relative = new URL('sessions/default:awaitIdle', base);
+// Both resolve to http://host:port/v1/sessions/default:awaitIdle.
+const response = await fetch(absolute, {
+  method: 'POST',
+  headers: { authorization: `Bearer ${world.environment.FIREEMU_CONTROL_TOKEN}` },
+});
+if (!response.ok) throw new Error(`awaitIdle failed: ${response.status}`);
+
+// The helper accepts a full API path directly.
+await world.control('POST', '/v1/sessions/default:awaitIdle');
+```
+
+With `fireemu exec`, use `process.env.FIREEMU_CONTROL_URL` and `process.env.FIREEMU_CONTROL_TOKEN` in the child instead. A leading `/` resolves from the origin; a path without it resolves relative to `/v1/`. Use the leading `/v1/` form when working from `world.endpoints.control.url`.
+
+## TOTP enrollment consumes a code
+
+Successful TOTP enrollment consumes the accepted time step. Reusing that code to sign in in the same step returns `auth/invalid-verification-code`; this can be replay prevention rather than clock skew or an incorrect secret. A step at or below the factor's last accepted step remains unusable even if it is inside the allowed clock-skew window. Advancing time backwards does not make it reusable.
+
+For an enrollment-then-login test, pin the world clock, generate the enrollment code at that instant, advance by the enrolled secret's period (usually 30 seconds), then generate a new code at the new instant. Advancing the daemon alone does not advance the parent test process's `Date.now()`.
+
+```js
+const start = Date.parse('2026-01-01T00:00:00Z');
+await withTestWorld({ services: ['auth'], clockStart: new Date(start).toISOString() }, async world => {
+  // Application test helpers; generateTotp must accept an explicit timestamp.
+  const { secret, periodSeconds } = await beginTotpEnrollment(world);
+  await finishTotpEnrollment(world, generateTotp(secret, start));
+  const stepMillis = periodSeconds * 1000;
+  await world.clock.advance(stepMillis);
+  await signOutAndBeginMfaSignIn(world);
+  await finishTotpSignIn(world, generateTotp(secret, start + stepMillis));
+});
+```
+
+Use the secret's actual period and matching algorithm/digit count. Keep invalid-code responses generic; this recipe does not add externally visible distinctions between an expired, incorrect or reused code.

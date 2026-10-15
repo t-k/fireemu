@@ -159,3 +159,77 @@ initializeAppCheck(app, { provider: new CustomProvider({ getToken: exchangeDebug
 `enforceAppCheck: true` on a callable refuses a call without a valid token with 401 before the function runs, and a valid token fills `request.app`. Replay protection is not supported: a call that presents a valid token to a callable with `consumeAppCheckToken: true` is refused with 501 `APP_CHECK_REPLAY_UNSUPPORTED`, so a test can never pass on a token that production would have consumed.
 
 Tokens are signed with a key that belongs to one daemon instance and are invalidated by a session reset or snapshot restore, so a token does not carry over between runs.
+
+## Ordinary HTTP functions (`onRequest`)
+
+Unlike a callable, an `onRequest` handler receives the `X-Firebase-AppCheck` header without automatic verification or `request.app`. Your handler must verify it and decide what a verified app may do. `enforceAppCheck` on a callable does not protect a separate HTTP endpoint.
+
+The Node Admin SDK's `getAppCheck().verifyToken()` uses Google's JWKS, including in firebase-admin 14.5.0; it has no App Check emulator host switch. A token signed by Fireemu therefore fails that verification. See the [Admin SDK verifier](https://github.com/firebase/firebase-admin-node/blob/v14.5.0/src/app-check/token-verifier.ts). Keep the Admin SDK verification path in production.
+
+### Endpoint discovery in each process
+
+| Process | Available routing |
+| --- | --- |
+| `fireemu exec` child or `world.environment` | `FIREEMU_APP_CHECK_EMULATOR_HOST` and `FIREEMU_APP_CHECK_JWKS_URL` when App Check is available. The JWKS URL is `http://host:port/v1/jwks`. |
+| Bundled Functions runner | `FUNCTIONS_EMULATOR=true` and, when Auth is selected, `FIREBASE_AUTH_EMULATOR_HOST`. The App Check variables above are currently not injected into this process. |
+| Parent test process | World variables are not installed into `process.env`; use `world.environment` explicitly. |
+
+For a loopback test world that selects Auth, the runner can derive `/v1/jwks` from `FIREBASE_AUTH_EMULATOR_HOST`: Auth and App Check share this listener. Select both Auth and App Check availability for this recipe. Do not derive the key URL from a request header or an unverified token. This example deliberately supports loopback only.
+
+### Local signature and claim verification example
+
+Install `jose` in the Functions package. The project number, project ID and allowed app IDs below must come from your test configuration. The allowed app set must reflect the enabled apps you intend this endpoint to admit.
+
+```js
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { getAppCheck } from 'firebase-admin/app-check';
+
+const projectId = 'demo-app';
+const projectNumber = '1234567890';
+const allowedApps = new Set(['1:1234567890:web:local-test-app']);
+let localKeys;
+
+export async function verifyHttpAppCheck(token) {
+  if (process.env.FUNCTIONS_EMULATOR !== 'true') {
+    return getAppCheck().verifyToken(token);
+  }
+  if (!localKeys) {
+    const host = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+    if (!host) throw new Error('Select Auth to locate the local App Check JWKS');
+    const url = new URL(`http://${host}`);
+    if (!['127.0.0.1', '[::1]'].includes(url.hostname) || !url.port ||
+        url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+      throw new Error('Expected a loopback Auth host:port');
+    }
+    url.pathname = '/v1/jwks';
+    localKeys = createRemoteJWKSet(url);
+  }
+  const now = new Date();
+  const { payload, protectedHeader } = await jwtVerify(token, localKeys, {
+    algorithms: ['RS256'],
+    issuer: `https://firebaseappcheck.googleapis.com/${projectNumber}`,
+    requiredClaims: ['sub', 'aud', 'iat', 'exp', 'jti'],
+    currentDate: now,
+    clockTolerance: 0,
+  });
+  const audiences = [`projects/${projectNumber}`, `projects/${projectId}`];
+  if (protectedHeader.typ !== 'JWT' ||
+      typeof protectedHeader.kid !== 'string' || !protectedHeader.kid ||
+      !Array.isArray(payload.aud) || !audiences.every(a => payload.aud.includes(a)) ||
+      !allowedApps.has(payload.sub) ||
+      !Number.isInteger(payload.iat) || !Number.isInteger(payload.exp) ||
+      payload.iat > Math.floor(now.getTime() / 1000) || payload.exp <= payload.iat ||
+      typeof payload.jti !== 'string' || !payload.jti) {
+    throw new Error('Invalid local App Check token');
+  }
+  return { ...payload, app_id: payload.sub };
+}
+```
+
+Call this from your `onRequest` handler with `req.get('X-Firebase-AppCheck')`. Reject a missing header or verification failure with a generic 401 before running application logic. Do not return verification details or log tokens. App Check identifies an app, not a user: keep your Auth and membership checks as well.
+
+The example's `new Date()` must use the same clock as token exchange. Test worlds default to virtual Date in Functions; a plain daemon using a pinned clock also needs `functions.clock.date = "virtual"`. The parent test process and `world.run` children retain native Date, so copying this verifier there requires explicitly supplying the world time.
+
+**This is signature and claim verification, not Fireemu's full verifier.** A JWKS does not expose the current project epoch or app registry. The example cannot reject a previously issued token after an in-place session reset, snapshot restore, project deletion or app disablement while the same signing key remains usable. Checking only that `fireemu_epoch` exists would not fix this. It also does not implement token consumption or replay protection.
+
+For tests using this recipe, recreate the whole world with `world.reset()` (or dispose and create another world), including the Functions runner, and obtain a fresh token. That replaces the daemon keys and verifier cache. Do not treat this workaround as proof of the daemon's epoch invalidation behavior; use its callable verification boundary to test that behavior.

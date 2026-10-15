@@ -29,6 +29,24 @@ Under `strict` the Storage emulator also refuses what production refuses and the
 
 The `emulator` profile keeps the official emulator's behavior for all of these.
 
+### Listing a prefix with single-segment attachment rules
+
+A current local limitation can make `list()` or `listAll()` return 403 even when uploading and getting an attachment succeeds. Fireemu evaluates list authorization against the requested prefix with its trailing `/` removed. For `prefix=teams/T/requests/R/&delimiter=/`, that path is `teams/T/requests/R`, so a rule matching `/teams/{team}/requests/{id}/{attachment}` has no segment for `{attachment}` and does not reach its membership condition.
+
+The [Firebase granular operations documentation](https://firebase.google.com/docs/storage/security/core-syntax#granular_operations) shows `allow list` inside a single-object wildcard match. The case above has not yet been compared against production Firebase with identical rules; treat it as an unresolved compatibility question, not a confirmed production rule.
+
+As a local workaround, add an explicit parent match with only `allow list`, alongside your existing object rules:
+
+```text
+match /teams/{team}/requests/{id} {
+  allow list: if member(team);
+}
+```
+
+Here `member(team)` means your existing authenticated membership check. Keep the existing attachment `get`, `create`, `update` and `delete` conditions unchanged. Do not replace them with a broad recursive `allow read`: `read` includes both `get` and `list`. Listing permission exposes names under the prefix even when a particular object's content cannot be read; it does not grant content access or filter the list to objects with `get` permission.
+
+Test the requested prefix with a member, a non-member and an anonymous caller, and also test a different team, an empty request prefix and an ancestor prefix. If membership is team-wide, another request in the same team is also listable; add request-level authorization only if your application requires it. The workaround's local coverage does not establish production equivalence.
+
 ### Buckets that do not exist
 
 Production answers 404 `The specified bucket does not exist.` for an object operation on a bucket nobody created. The Storage emulator serves it instead, and creates the bucket on the first write, so a test needs no setup. Under `strict` it prints one `note:` line on standard error the first time an object is written to a bucket that is not a default bucket of the project (`<project>.appspot.com` or `<project>.firebasestorage.app`), a `firebase.json` storage target, imported data, a bucket a deployed Storage trigger names, or listed in the configuration. A typo in a bucket name is visible that way. To silence the note for a bucket that exists in production, list it:

@@ -9366,3 +9366,146 @@ fn a_storage_rules_denial_reaches_the_denial_log() {
     );
     assert_eq!(denial.conditions[0].outcome, "false");
 }
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn storage_rules_parent_list_workaround_preserves_leaf_permissions() {
+    for parent_list in [false, true] {
+        let rules = r"
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function member(team) {
+      return request.auth != null && request.auth.uid == team;
+    }
+    match /teams/{team}/requests/{id}/{attachment} {
+      allow get, create: if member(team) && attachment == 'allowed.txt';
+      allow list: if member(team);
+    }
+    PARENT_LIST
+  }
+}
+"
+        .replace(
+            "PARENT_LIST",
+            if parent_list {
+                "match /teams/{team}/requests/{id} { allow list: if member(team); }"
+            } else {
+                ""
+            },
+        );
+        let s = state(Some(&rules));
+        let (uid, authorization) = user_token(&s);
+        let outsider_authorization = {
+            let store = s.auth.default_store();
+            let mut store = store.lock().unwrap();
+            let outsider = store
+                .create_user(NewUser::email("outsider@example.com"), START)
+                .unwrap();
+            let claims = store.id_token_claims(&outsider, None, START).unwrap();
+            format!(
+                "Firebase {}",
+                fireemu_core_auth::jwt::encode_unsigned(&claims)
+            )
+        };
+        // UID equality stands in for membership to isolate path matching from Firestore lookups.
+        let folder = format!("teams/{uid}/requests/request-a");
+        let allowed = format!("{folder}/allowed.txt");
+        assert_eq!(upload_as(&s, &allowed, &authorization), 200);
+        let blocked = format!("{folder}/blocked.txt");
+        assert_eq!(upload_as(&s, &blocked, &authorization), 403);
+        assert_eq!(upload_as(&s, &blocked, "Bearer owner"), 200);
+        for (object, expected) in [(&allowed, 200), (&blocked, 403)] {
+            let url = format!("/v0/b/{BUCKET}/o/{}", object.replace('/', "%2F"));
+            assert_eq!(
+                handle(
+                    &s,
+                    req(
+                        "GET",
+                        &format!("{url}?alt=media"),
+                        &[("authorization", &authorization)],
+                        b""
+                    )
+                )
+                .status,
+                expected,
+            );
+            assert_eq!(
+                handle(
+                    &s,
+                    req("DELETE", &url, &[("authorization", &authorization)], b"")
+                )
+                .status,
+                403,
+            );
+        }
+        // The 403 without the parent rule records a local limitation, not a production oracle.
+        let own_status = if parent_list { 200 } else { 403 };
+        for (prefix, credential, expected) in [
+            (
+                format!("{folder}/"),
+                Some(authorization.as_str()),
+                own_status,
+            ),
+            (
+                format!("teams/{uid}/requests/empty-request/"),
+                Some(authorization.as_str()),
+                own_status,
+            ),
+            (
+                format!("{folder}/"),
+                Some(outsider_authorization.as_str()),
+                403,
+            ),
+            (format!("{folder}/"), None, 403),
+            (
+                "teams/another-team/requests/request-a/".to_owned(),
+                Some(authorization.as_str()),
+                403,
+            ),
+            (
+                format!("teams/{uid}/requests/"),
+                Some(authorization.as_str()),
+                403,
+            ),
+            (String::new(), Some(authorization.as_str()), 403),
+        ] {
+            let headers: Vec<_> = credential
+                .map(|value| ("authorization", value))
+                .into_iter()
+                .collect();
+            let response = handle(
+                &s,
+                req(
+                    "GET",
+                    &format!(
+                        "/v0/b/{BUCKET}/o?prefix={}&delimiter=%2F",
+                        prefix.replace('/', "%2F")
+                    ),
+                    &headers,
+                    b"",
+                ),
+            );
+            assert_eq!(
+                response.status,
+                expected,
+                "parent_list={parent_list}, prefix={prefix:?}, authenticated={}",
+                credential.is_some()
+            );
+            if expected == 403 {
+                assert!(json_body(&response).get("items").is_none());
+                assert!(json_body(&response).get("prefixes").is_none());
+            } else if prefix == format!("{folder}/") {
+                let body = json_body(&response);
+                let names: Vec<_> = body["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["name"].as_str().unwrap())
+                    .collect();
+                assert!(names.contains(&allowed.as_str()));
+                assert!(names.contains(&blocked.as_str()));
+            }
+        }
+    }
+}

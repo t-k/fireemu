@@ -40,6 +40,10 @@ note: firestore: Security Rules denied get on "notes/n1" in "database (default)"
 - Set `rules.denialLog` to `"off"` in `fireemu.toml` to silence these lines, for example in a suite that asserts many denials. The answer to the client is the same either way.
 - When the UI is running, its Rules page lists the decided requests from the start of the run, with what every expression evaluated to. The control API serves the same trace at `GET /v1/sessions/default/rules/requests`.
 
+## `get()` and `exists()` on a path that is not a document
+
+`get()` and `exists()` take a path to a document of the database the request runs in. A path to a collection (`/databases/$(database)/documents/users`, an odd number of segments after `documents`), to another database (`/databases/other/documents/users/u1`) or without `documents` (`/databases/$(database)/users/u1`) names no document, and the rule raises an evaluation error: the request is refused, whatever surrounds the call. `!exists(...)` and `get(...) == null` do not read it as "missing" and allow; production refuses them too, and so does the official emulator. A path to a document that does not exist stays a missing document: `exists()` is `false` and `get()` is `null`. A missing document id from a mistyped path is the usual cause, so the denial log's line `was an error` points at the call.
+
 ## Unit testing with mock tokens
 
 `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client SDKs' `mockUserToken` option send an unsigned mock ID token. Fireemu accepts it by default, also under `strict`, and builds `request.auth` from its claims as the official emulator does. Under `strict` only that exact token shape is accepted; every other token is verified, expiry included.

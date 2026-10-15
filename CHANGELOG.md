@@ -10,7 +10,6 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
-- Functions runners on Windows use overlapped stdout pipe handles so Node can initialize `process.stdout` while the daemon is reading; user stdout still goes to stderr.
 - Functions runner startup preserves Windows environment variable names regardless of case and converts canonical Windows drive and UNC paths for Node. Handshake failures now report the exit status, captured stderr and the last stdout bytes.
 
 ## [0.21.0] - 2026-10-15

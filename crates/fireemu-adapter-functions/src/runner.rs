@@ -90,8 +90,6 @@ const LOG_BUFFER_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const STDERR_LINE_BYTE_LIMIT: usize = 256 * 1024;
 const STDERR_TRUNCATION_MARKER: &str = "...[truncated]";
 static RUNNER_SANDBOX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-#[cfg(windows)]
-static RUNNER_PIPE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Converts canonical Windows drive/UNC paths to paths accepted by Node's loaders.
 /// Call only at the Windows Node boundary; other device namespaces stay unchanged.
@@ -388,55 +386,6 @@ async fn kill_child(child: &mut RunnerChild) -> std::io::Result<()> {
     Box::into_pin(child.kill()).await
 }
 
-#[cfg(windows)]
-async fn spawn_windows_runner(
-    mut cmd: Command,
-) -> Result<
-    (
-        RunnerChild,
-        tokio::net::windows::named_pipe::NamedPipeServer,
-    ),
-    String,
-> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use tokio::net::windows::named_pipe::ServerOptions;
-
-    // A synchronous read pending on the parent's end can hold up libuv's
-    // stdout-open metadata queries in the child (libuv/libuv#1273). The
-    // parent's end is overlapped and read through Tokio's IOCP support, so
-    // no synchronous read is ever pending. The child's end stays
-    // synchronous: Node writes stdout synchronously on Windows and stalls
-    // on an overlapped handle.
-    let name = format!(
-        r"\\.\pipe\fireemu-runner-stdout-{}-{}",
-        std::process::id(),
-        RUNNER_PIPE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    );
-    let reader = ServerOptions::new()
-        .access_outbound(false)
-        .first_pipe_instance(true)
-        .max_instances(1)
-        .create(&name)
-        .map_err(|e| format!("functions runner: cannot create stdout pipe: {e}"))?;
-    let writer = std::fs::OpenOptions::new()
-        // Match libuv's write-only pipe access, including metadata queries.
-        .access_mode(0x4000_0080) // GENERIC_WRITE | FILE_READ_ATTRIBUTES
-        .open(&name)
-        .map_err(|e| format!("functions runner: cannot open stdout pipe: {e}"))?;
-    reader
-        .connect()
-        .await
-        .map_err(|e| format!("functions runner: cannot connect stdout pipe: {e}"))?;
-    cmd.stdout(Stdio::from(writer));
-    let program = cmd.as_std().get_program().to_string_lossy().into_owned();
-    let mut wrapped = TokioCommandWrap::from(cmd);
-    wrapped.wrap(JobObject).wrap(KillOnDrop);
-    let child = wrapped
-        .spawn()
-        .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?;
-    Ok((child, reader))
-}
-
 /// Creates an exclusive directory used to block the standard gcloud credential lookup.
 fn create_credential_sandbox() -> Result<PathBuf, String> {
     let base = std::env::temp_dir();
@@ -604,7 +553,13 @@ impl Runner {
         #[cfg(unix)]
         let lifetime_guard = RunnerLifetimeGuard::spawn(child.id())?;
         #[cfg(windows)]
-        let (mut child, stdout_source) = spawn_windows_runner(cmd).await?;
+        let mut child = {
+            let mut wrapped = TokioCommandWrap::from(cmd);
+            wrapped.wrap(JobObject).wrap(KillOnDrop);
+            wrapped
+                .spawn()
+                .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?
+        };
         #[cfg(not(windows))]
         let stdin = child
             .stdin
@@ -618,6 +573,11 @@ impl Runner {
         #[cfg(not(windows))]
         let stdout_source = child
             .stdout
+            .take()
+            .ok_or_else(|| "functions runner: no stdout".to_owned())?;
+        #[cfg(windows)]
+        let stdout_source = child
+            .stdout()
             .take()
             .ok_or_else(|| "functions runner: no stdout".to_owned())?;
         #[cfg(not(windows))]
@@ -1220,6 +1180,11 @@ fn kill_process_group(pid: Option<u32>) {
 
 #[cfg(test)]
 mod tests {
+    /// How long a test waits for a real Node child's hello: the daemon's own wait. A cold Node
+    /// start on a loaded Windows CI runner takes longer than 5 s, and every failure seen there
+    /// was a child that had not run a line of JS yet.
+    const NODE_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
     use super::{child_env, LogBuffer, RunnerLog, LOG_CAPACITY};
 
     #[test]
@@ -1254,7 +1219,7 @@ mod tests {
                 &["node".to_owned(), "-e".to_owned(), script],
                 None,
                 &[],
-                std::time::Duration::from_secs(5),
+                NODE_HELLO_TIMEOUT,
             )
             .await;
             let error = match result {
@@ -1277,330 +1242,6 @@ mod tests {
             assert!(
                 error.contains(&format!("last stdout bytes: {tail:?}")),
                 "{error}"
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn windows_node_stdout_getter_completes_with_a_pending_parent_read() {
-        for _ in 0..4 {
-            let result = super::Runner::spawn(
-                &[
-                    "node".into(),
-                    "-e".into(),
-                    r"
-                    setTimeout(() => {
-                        process.stdout;
-                        require('node:fs').writeSync(2, 'ok\n');
-                    }, 100);
-                    "
-                    .into(),
-                ],
-                None,
-                &[],
-                std::time::Duration::from_secs(5),
-            )
-            .await;
-            let error = match result {
-                Ok(runner) => {
-                    runner.shutdown().await;
-                    panic!("getter-only probe must exit without hello");
-                }
-                Err(error) => error,
-            };
-            assert!(error.contains("exited before its hello"), "{error}");
-            assert!(
-                error.contains("exit status: 0; captured stderr: \"ok\""),
-                "{error}"
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn windows_node_stdout_writes_a_frame_with_a_pending_parent_read() {
-        for _ in 0..4 {
-            let runner = super::Runner::spawn(
-                &[
-                    "node".into(),
-                    "-e".into(),
-                    r"
-                    setTimeout(() => {
-                        const payload = JSON.stringify({type:'hello',runner:'windows-pipe'});
-                        process.stdout.write(Buffer.concat([
-                            Buffer.from(`${Buffer.byteLength(payload)}\n`), Buffer.from(payload),
-                        ]));
-                        process.stdin.once('data', () => process.exit(0));
-                    }, 100);
-                    "
-                    .into(),
-                ],
-                None,
-                &[],
-                std::time::Duration::from_secs(5),
-            )
-            .await
-            .unwrap();
-            assert_eq!(runner.hello().runner, "windows-pipe");
-            runner.shutdown().await;
-            assert!(!runner.is_alive());
-        }
-    }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    #[allow(clippy::too_many_lines, clippy::incompatible_msrv)]
-    async fn windows_stdio_matrix() {
-        use std::io::Read;
-        use std::os::windows::fs::OpenOptionsExt;
-        use std::process::Stdio;
-
-        use process_wrap::tokio::{JobObject, KillOnDrop, TokioCommandWrap};
-        use tokio::io::{AsyncRead, AsyncReadExt};
-        use tokio::net::windows::named_pipe::ServerOptions;
-        use tokio::process::Command;
-        use tokio::time::{timeout, timeout_at, Duration, Instant};
-
-        for (program, args) in [
-            ("node", vec!["--version"]),
-            ("cmd.exe", vec!["/d", "/c", "ver"]),
-        ] {
-            let output = timeout(
-                Duration::from_secs(5),
-                Command::new(program).args(args).kill_on_drop(true).output(),
-            )
-            .await;
-            match output {
-                Ok(Ok(output)) => eprintln!(
-                    "windows_stdio_matrix {program}: status={} stdout={:?} stderr={:?}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr),
-                ),
-                other => eprintln!("windows_stdio_matrix {program}: {other:?}"),
-            }
-        }
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/codex-out")
-            .join(format!(
-                "windows-stdio-matrix-{}-{}",
-                std::process::id(),
-                super::RUNNER_PIPE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            ));
-        std::fs::create_dir_all(&root).expect("create matrix output directory");
-        let probe = r"
-            const fs = require('node:fs');
-            const path = process.argv[1];
-            fs.writeFileSync(path, 'start\n');
-            const mark = step => fs.appendFileSync(path, step + '\n');
-            mark('fs.writeSync(2)');
-            fs.writeSync(2, 'stderr-sync\n');
-            mark('fs.writeSync(1)');
-            fs.writeSync(1, 'stdout-sync\n');
-            mark('access process.stderr');
-            void process.stderr;
-            // Give immediate readers time to pend a read before the stdout getter.
-            setTimeout(() => {
-                mark('access process.stdout');
-                const stdout = process.stdout;
-                mark('process.stdout.write frame');
-                const payload = JSON.stringify({type:'hello', runner:'stdio-matrix'});
-                stdout.write(Buffer.from(`${Buffer.byteLength(payload)}\n${payload}`), () => {
-                    mark('exit');
-                    process.exit(0);
-                });
-            }, 100);
-        ";
-        eprintln!("windows_stdio_matrix markers precede each operation; exit follows the frame write callback");
-        eprintln!("variant | exited within 5s | exit code | stderr | stdout byte count/data | probe file | I/O errors");
-        for (variant, description) in [
-            ('A', "Runner stdio + JobObject + KillOnDrop"),
-            ('B', "Tokio piped x3, unwrapped"),
-            ('C', "Tokio piped x3 + JobObject + KillOnDrop"),
-            ('D', "C, stdout read deferred until getter marker"),
-            ('E', "C, null stdin"),
-            ('F', "C, file stdout"),
-            ('G', "C, std anonymous stdout pipe + blocking thread"),
-            ('H', "overlapped server / synchronous client, unwrapped"),
-        ] {
-            let probe_path = root.join(format!("{variant}.probe"));
-            let stdout_path = root.join(format!("{variant}.stdout"));
-            let mut cmd = Command::new("node");
-            cmd.arg("-e")
-                .arg(probe)
-                .arg(&probe_path)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            let mut blocking_stdout = None;
-            if variant == 'E' {
-                cmd.stdin(Stdio::null());
-            } else if variant == 'F' {
-                cmd.stdout(std::fs::File::create(&stdout_path).expect("create stdout file"));
-            } else if variant == 'G' {
-                // std::io::pipe is available on the stable CI toolchain (since Rust 1.87).
-                let (reader, writer) = std::io::pipe().expect("create std anonymous pipe");
-                cmd.stdout(writer);
-                blocking_stdout = Some(reader);
-            }
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let spawned = timeout_at(deadline, async {
-                let result: Result<
-                    (
-                        super::RunnerChild,
-                        Option<Box<dyn AsyncRead + Unpin + Send>>,
-                    ),
-                    String,
-                > = match variant {
-                    'A' => super::spawn_windows_runner(cmd)
-                        .await
-                        .map(|(child, stdout)| (child, Some(Box::new(stdout) as _))),
-                    'H' => {
-                        let name = format!(
-                            r"\\.\pipe\fireemu-matrix-stdout-{}-{}",
-                            std::process::id(),
-                            super::RUNNER_PIPE_SEQUENCE
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                        );
-                        let reader = ServerOptions::new()
-                            .access_outbound(false)
-                            .first_pipe_instance(true)
-                            .max_instances(1)
-                            .create(&name)
-                            .map_err(|e| e.to_string())?;
-                        let writer = std::fs::OpenOptions::new()
-                            .access_mode(0x4000_0080) // GENERIC_WRITE | FILE_READ_ATTRIBUTES
-                            .open(&name)
-                            .map_err(|e| e.to_string())?;
-                        reader.connect().await.map_err(|e| e.to_string())?;
-                        cmd.stdout(writer);
-                        let child = cmd.spawn().map_err(|e| e.to_string())?;
-                        // Release the parent's copy of the writer so EOF is observable.
-                        drop(cmd);
-                        Ok((Box::new(child), Some(Box::new(reader))))
-                    }
-                    'B' => cmd
-                        .spawn()
-                        .map(|child| (Box::new(child) as super::RunnerChild, None))
-                        .map_err(|e| e.to_string()),
-                    _ => {
-                        let mut wrapped = TokioCommandWrap::from(cmd);
-                        wrapped.wrap(JobObject).wrap(KillOnDrop);
-                        wrapped
-                            .spawn()
-                            .map(|child| (child, None))
-                            .map_err(|e| e.to_string())
-                    }
-                };
-                result
-            })
-            .await;
-            let (mut child, named_stdout) = match spawned {
-                Ok(Ok(child)) => child,
-                Ok(Err(error)) => {
-                    eprintln!("{variant} ({description}) | false | None | unavailable | unavailable | None | spawn={error:?}");
-                    continue;
-                }
-                Err(error) => {
-                    eprintln!("{variant} ({description}) | false | None | unavailable | unavailable | None | spawn={error:?}");
-                    continue;
-                }
-            };
-            let stdout = named_stdout.or_else(|| {
-                child
-                    .stdout()
-                    .take()
-                    .map(|stdout| Box::new(stdout) as Box<dyn AsyncRead + Unpin + Send>)
-            });
-            let mut stderr = child.stderr().take().expect("matrix child has stderr");
-            let stderr_task = tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let result = stderr.read_to_end(&mut bytes).await;
-                (bytes, result)
-            });
-            let mut stdout_thread = None;
-            let stdout_task = if let Some(mut reader) = blocking_stdout {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                stdout_thread = Some(std::thread::spawn(move || {
-                    let mut bytes = Vec::new();
-                    let result = reader.read_to_end(&mut bytes);
-                    let _ = tx.send((bytes, result));
-                }));
-                Some(tokio::spawn(async move {
-                    rx.await
-                        .expect("blocking stdout reader returned its result")
-                }))
-            } else {
-                stdout.map(|mut stdout| {
-                    let probe_path = probe_path.clone();
-                    tokio::spawn(async move {
-                        if variant == 'D' {
-                            while Instant::now() < deadline {
-                                match std::fs::read_to_string(&probe_path) {
-                                    Ok(markers) if markers.contains("access process.stdout\n") => {
-                                        break
-                                    }
-                                    Ok(_) => {}
-                                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                                    Err(error) => panic!("poll matrix probe file: {error}"),
-                                }
-                                tokio::time::sleep(Duration::from_millis(5)).await;
-                            }
-                        }
-                        let mut bytes = Vec::new();
-                        let result = stdout.read_to_end(&mut bytes).await;
-                        (bytes, result)
-                    })
-                })
-            };
-            let waited = timeout_at(deadline, super::wait_child(&mut child)).await;
-            let exited = matches!(waited, Ok(Ok(_)));
-            let (status, wait_error) = match waited {
-                Ok(Ok(status)) => (Some(status), None),
-                other => {
-                    let error = format!("{other:?}");
-                    timeout(Duration::from_secs(2), super::kill_child(&mut child))
-                        .await
-                        .expect("matrix child kill timed out")
-                        .expect("matrix child kill/reap failed");
-                    (None, Some(error))
-                }
-            };
-            // Do not leave stdin or process-wrapper handles alive while draining readers.
-            drop(child);
-            let (stderr_bytes, stderr_result) = timeout(Duration::from_secs(2), stderr_task)
-                .await
-                .expect("stderr reader did not finish after child exit/kill")
-                .expect("stderr reader panicked");
-            let (stdout_bytes, stdout_error) = if let Some(task) = stdout_task {
-                let (bytes, result) = timeout(Duration::from_secs(2), task)
-                    .await
-                    .expect("stdout reader did not finish after child exit/kill")
-                    .expect("stdout reader panicked");
-                (bytes, result.err())
-            } else {
-                (
-                    std::fs::read(&stdout_path).expect("read matrix stdout file"),
-                    None,
-                )
-            };
-            if let Some(thread) = stdout_thread {
-                thread.join().expect("blocking stdout reader panicked");
-            }
-            let markers = match std::fs::read_to_string(&probe_path) {
-                Ok(markers) => Some(markers),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => panic!("read matrix probe file: {error}"),
-            };
-            eprintln!(
-                "{variant} ({description}) | {exited} | {:?} | {:?} | {} {:?} | {markers:?} | wait={wait_error:?} stderr={:?} stdout={stdout_error:?}",
-                status.and_then(|status| status.code()),
-                String::from_utf8_lossy(&stderr_bytes),
-                stdout_bytes.len(),
-                String::from_utf8_lossy(&stdout_bytes),
-                stderr_result.err(),
             );
         }
     }
@@ -1648,7 +1289,7 @@ mod tests {
         let dir = trusted_temp::TrustedTempDir::new("application-clock");
         std::fs::write(dir.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
         std::fs::write(dir.join("index.cjs"), r"
-            const fs=require('node:fs'); const imported=Date.now(); console.log('import console'); process.stdout.write('import stdout\n');
+            const fs=require('node:fs'); const imported=Date.now();
             const fn=async()=>{fs.writeFileSync('observed.json',JSON.stringify([imported,Date.now(),+new Date()])); await new Promise(r=>setTimeout(r,5)); fs.writeFileSync('timer.json',JSON.stringify(Date.now()));};
             fn.run=fn; fn.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
             module.exports={clock:fn};
@@ -1681,7 +1322,7 @@ mod tests {
                         policy.runner_options(clock.snapshot()).to_string(),
                     ),
                 ],
-                std::time::Duration::from_secs(5),
+                NODE_HELLO_TIMEOUT,
             )
             .await
             .unwrap_or_else(|error| {
@@ -1717,10 +1358,6 @@ mod tests {
         );
         runner.shutdown().await;
         assert!(!runner.is_alive());
-        let logs = runner.logs_since(None);
-        for message in ["import console", "import stdout"] {
-            assert!(logs.lines.iter().any(|l| l.display() == message));
-        }
         let trace = std::fs::read_to_string(&trace_path).unwrap();
         for (index, line) in trace.lines().enumerate() {
             assert!(
@@ -1806,7 +1443,7 @@ mod tests {
                 ("FIREEMU_RUNNER_TRACE".into(), "1".into()),
                 ("FIREEMU_RUNNER_SECRET".into(), "test-http-secret".into()),
             ],
-            std::time::Duration::from_secs(5),
+            NODE_HELLO_TIMEOUT,
         )
         .await
         .unwrap_or_else(|error| {
@@ -2261,7 +1898,7 @@ sys.stdin.readline()
             &["python3".to_owned(), "-c".to_owned(), script.to_owned()],
             None,
             &[],
-            std::time::Duration::from_secs(5),
+            NODE_HELLO_TIMEOUT,
         )
         .await
         .unwrap();

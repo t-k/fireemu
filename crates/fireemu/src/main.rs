@@ -44,6 +44,7 @@
 
 mod config;
 mod config_discovery;
+mod config_shape;
 mod control;
 mod daemon;
 mod doctor;
@@ -1530,7 +1531,16 @@ fn load_project_config(
             let (json, canonical) = config_document(raw, path)?;
             if canonical {
                 sources.canonical = Some(path.clone());
-                let config = RuntimeConfig::from_json(&json)?;
+                let mut config = RuntimeConfig::from_json(&json).map_err(|error| {
+                    CliError::refused(format!(
+                        "{}: {}",
+                        diagnostic_path(path),
+                        diagnostic_text(&error.0)
+                    ))
+                })?;
+                // Paths in the file are read from the directory the file is in, as the
+                // paths in a firebase.json are, not from wherever the command was started.
+                config.rebase_relative_paths(&project_dir(path));
                 if raw.verbosity > Verbosity::Quiet {
                     for note in config::no_effect_notes(&json) {
                         eprintln!("note: {}: {note}", diagnostic_path(path));

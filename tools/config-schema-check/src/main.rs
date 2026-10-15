@@ -185,21 +185,22 @@ fn eventarc_authentication_problems(cfg: &Value) -> Vec<String> {
     problems
 }
 
-/// Declared tenants under the strict profile (the default): production creates tenants only in a
-/// project that allows them, so `auth.tenants` needs `auth.multiTenant.allowTenants: true`. The
-/// Rust loader enforces the same rule.
+/// Declared tenants need the project's multi-tenancy switch. Production creates tenants only in a
+/// project that allows them; the strict profile's development default switches that on, so the
+/// rule applies when the document declares the switch off, or under `productionExact`, which
+/// restores production's "off until enabled". The Rust loader enforces the same rule.
 fn auth_tenant_problems(cfg: &Value) -> Vec<String> {
     let declared = cfg
         .pointer("/auth/tenants")
         .and_then(Value::as_array)
         .is_some_and(|tenants| !tenants.is_empty());
-    let allowed = cfg
+    let switch = cfg
         .pointer("/auth/multiTenant/allowTenants")
-        .and_then(Value::as_bool)
-        == Some(true);
-    if declared && !allowed && str_at(cfg, &["profile"]) != Some("emulator") {
+        .and_then(Value::as_bool);
+    let production_exact = cfg.get("productionExact").and_then(Value::as_bool) == Some(true);
+    if declared && (switch == Some(false) || (production_exact && switch != Some(true))) {
         return vec![
-            "auth.tenants needs auth.multiTenant.allowTenants: true under the strict profile"
+            "auth.tenants needs auth.multiTenant.allowTenants: true (declared off, or productionExact)"
                 .to_owned(),
         ];
     }

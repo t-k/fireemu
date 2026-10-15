@@ -22,7 +22,7 @@ use fireemu_core_auth::store::{
     AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
 };
 use fireemu_core_firestore::index::PlanningContext;
-use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+use fireemu_core_rules::runtime::{LoadedRules, RulesCompilationCache, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
@@ -2049,7 +2049,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         registry.set_new_project_provider_config_seeds(cfg.auth_provider_seeds.clone());
         apply_auth_password_policy_overrides(&cfg, &registry)?;
         apply_auth_config_overrides(&cfg, &registry)?;
-        let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
+        let mut compilations = RulesCompilationCache::default();
+        let rules = Arc::new(RulesetSlot::new(load_rules(&cfg, &mut compilations)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
             if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
@@ -2059,14 +2060,16 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 Some(path) => {
                     let source = std::fs::read_to_string(path)
                         .map_err(|error| format!("rules source {path}: {error}"))?;
-                    LoadedRules::from_source(&source)
+                    compilations
+                        .load(&source)
                         .map_err(|error| format!("rules source {path} does not parse: {error}"))?
                 }
                 None => LoadedRules::default(),
             };
             database_rules.insert(database.clone(), Arc::new(RulesetSlot::new(loaded)));
         }
-        let storage_rules = load_storage_rules(&cfg)?;
+        let storage_rules = load_storage_rules(&cfg, &mut compilations)?;
+        drop(compilations);
         start_firestore_config_reload_supervisors(
             &cfg,
             &backend,

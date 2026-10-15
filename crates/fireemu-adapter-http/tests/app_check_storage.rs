@@ -1329,6 +1329,8 @@ fn the_xml_style_read_and_the_form_upload_are_not_server_side() {
     h.seed_object("xml/guarded.txt");
     let read = h.call("GET", &format!("/{BUCKET}/xml/guarded.txt"), &[], &[], b"");
     assert_eq!(read.status, 403, "{}", String::from_utf8_lossy(&read.body));
+    // App Check refused it, not the private-object AccessDenied of the XML-style read.
+    assert_eq!(body_of(&read)["error"]["reason"], "APP_CHECK_REQUIRED");
     let form = h.call(
         "POST",
         &format!("/{BUCKET}"),
@@ -1653,12 +1655,36 @@ fn storage_server_requests_spellings_round_trip() {
     }
 }
 
+/// Every route of the table: a plain loopback request is admitted exactly on the Cloud Storage
+/// JSON API routes, under `loopback`, and never under `capability`.
+#[test]
+fn every_json_api_route_is_server_side_and_no_other_route_is() {
+    for (mode, expect_admitted) in [
+        (StorageServerRequests::Loopback, true),
+        (StorageServerRequests::Capability, false),
+    ] {
+        let h = harness_with(BaselineMode::Enforced, mode);
+        for (method, path, json_api) in server_side_properties::routes() {
+            let response = h.call(method, &path, &[], &[], b"");
+            let refused = response.status == 403
+                && body_of(&response)["error"]["reason"] == "APP_CHECK_REQUIRED";
+            assert_eq!(
+                !refused,
+                expect_admitted && json_api,
+                "{mode:?}: {method} {path} -> {} {}",
+                response.status,
+                String::from_utf8_lossy(&response.body)
+            );
+        }
+    }
+}
+
 mod server_side_properties {
     use super::*;
     use proptest::prelude::*;
 
     /// (method, path template, expected to be a Cloud Storage JSON API route)
-    fn routes() -> Vec<(&'static str, String, bool)> {
+    pub(super) fn routes() -> Vec<(&'static str, String, bool)> {
         vec![
             ("GET", format!("/storage/v1/b/{BUCKET}/o"), true),
             ("GET", format!("/storage/v1/b/{BUCKET}/o/p%2Fo.txt"), true),
@@ -1701,10 +1727,12 @@ mod server_side_properties {
         #[test]
         fn admission_is_the_conjunction_of_route_peer_and_browser_evidence(
             route in 0..routes().len(),
-            remote in any::<bool>(),
-            evidence in proptest::collection::vec(any::<bool>(), 5),
+            // Weighted so that a case without browser evidence, from a loopback peer, under
+            // `loopback`, is common enough for every route to be admitted several times.
+            remote in proptest::bool::weighted(0.2),
+            evidence in proptest::collection::vec(proptest::bool::weighted(0.1), 5),
             sec_fetch_mode in any::<bool>(),
-            loopback in any::<bool>(),
+            loopback in proptest::bool::weighted(0.8),
         ) {
             let mode = if loopback {
                 StorageServerRequests::Loopback

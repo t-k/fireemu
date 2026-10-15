@@ -1136,6 +1136,100 @@ fn storage_observations_name_the_operation_and_never_carry_the_token() {
     );
 }
 
+/// Without enforcement `exec` gives the Admin SDK no capability (the plain
+/// `STORAGE_EMULATOR_HOST`), so its JSON API traffic is recognised by its dialect and by the
+/// absence of browser evidence. That recognition only labels the observation (counters and UI):
+/// an `unenforced` policy admits everything either way.
+#[test]
+fn unenforced_server_side_json_api_traffic_is_observed_as_bypass() {
+    use fireemu_core_app_check::CredentialCategory::{Bypass, Missing};
+
+    let h = harness(BaselineMode::Unenforced);
+    h.seed_object("obs/admin.txt");
+    let before = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app")
+        .len();
+    let list = format!("/storage/v1/b/{BUCKET}/o?prefix=obs/");
+    // The header set Node's fetch sends from a script (`sec-fetch-mode` only) is a process.
+    for (label, headers) in [
+        ("no headers", vec![]),
+        ("undici sec-fetch-mode", vec![("sec-fetch-mode", "cors")]),
+    ] {
+        let r = h.call("GET", &list, &headers, &[], b"");
+        assert_eq!(
+            r.status,
+            200,
+            "{label}: {}",
+            String::from_utf8_lossy(&r.body)
+        );
+    }
+    let upload = h.call(
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?name=obs/up.txt&uploadType=media"),
+        &[("content-type", "text/plain")],
+        &[],
+        b"hello",
+    );
+    assert_eq!(upload.status, 200);
+    let observed = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app");
+    let fresh = &observed[before..];
+    assert_eq!(fresh.len(), 3);
+    assert!(
+        fresh.iter().all(|o| o.category == Bypass && o.admitted),
+        "{fresh:?}"
+    );
+
+    // Near misses stay what they were: browser evidence on the JSON API, and the Firebase
+    // dialect without a token, are `missing`; both are still admitted, as `unenforced` admits.
+    let browser = h.call(
+        "GET",
+        &list,
+        &[("origin", "http://127.0.0.1:5173")],
+        &[],
+        b"",
+    );
+    let fetch_metadata = h.call("GET", &list, &[("sec-fetch-site", "same-origin")], &[], b"");
+    let firebase = h.call("GET", &format!("/v0/b/{BUCKET}/o"), &[], &[], b"");
+    // The Firebase dialect then stops at its own missing Security Rules (400), not at App Check.
+    for r in [&browser, &fetch_metadata, &firebase] {
+        assert_ne!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
+    }
+    let observed = h
+        .app_check
+        .registry
+        .read()
+        .expect("readable")
+        .observations("demo-app");
+    let tail = &observed[before + 3..];
+    assert_eq!(tail.len(), 3);
+    assert!(
+        tail.iter().all(|o| o.category == Missing && o.admitted),
+        "{tail:?}"
+    );
+}
+
+/// The label never changes a decision: under `enforced` the same credential-less JSON API
+/// request is refused, and so is its browser-shaped variant.
+#[test]
+fn an_enforced_server_side_json_api_request_without_the_capability_is_still_refused() {
+    let h = harness(BaselineMode::Enforced);
+    let list = format!("/storage/v1/b/{BUCKET}/o");
+    for headers in [vec![], vec![("sec-fetch-mode", "cors")]] {
+        let r = h.call("GET", &list, &headers, &[], b"");
+        assert_eq!(r.status, 403);
+        assert_eq!(body_of(&r)["error"]["reason"], "APP_CHECK_REQUIRED");
+    }
+}
+
 #[test]
 fn an_off_storage_service_classifies_nothing() {
     let h = harness(BaselineMode::Off);

@@ -76,6 +76,10 @@ storage = "enforced"
 
 Each service accepts `off`, `unenforced` (tokens are checked and recorded, requests still pass) or `enforced` (requests without a valid token are refused before Security Rules run). A project without a registered app cannot use App Check, so an enforced service refuses every request to it.
 
+With Storage `enforced`, the Admin SDK (a server-side client library, not a browser) still has to reach Storage without a token. `fireemu exec` lets it through by putting a random per-run capability in the userinfo of `STORAGE_EMULATOR_HOST` (`http://fireemu:<capability>@host:port`), and the Storage adapter accepts it only on the JSON API and only from a request that carries no browser `Origin` or Fetch Metadata headers. Without Storage enforcement, which is the default, `STORAGE_EMULATOR_HOST` is the plain `http://host:port`.
+
+`@google-cloud/storage` 8.1 and later (`firebase-admin` 14.4 and later) refuse a URL with embedded credentials, so with Storage `enforced` their Admin calls fail under `fireemu exec` until the Admin SDK has another way to present the capability. Until then, run server-side Storage code against `unenforced` Storage (tokens are still checked and recorded), or pin `firebase-admin` 14.3 or earlier.
+
 A debug token is a UUIDv4, and its digest is taken over the lowercase form. Generate a token for tests and compute its digest:
 
 ```sh

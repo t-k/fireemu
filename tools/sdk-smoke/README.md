@@ -26,7 +26,10 @@ suite) needs, and what leaves the other smokes working without attaching a token
   existing ID token's `auth_time` to share a second, then requires both refresh paths to
   succeed.
 - `storage.mjs`: `firebase-admin` storage (JSON API) and `firebase/storage` (Firebase
-  protocol, resumable uploads) with Storage Rules; needs `FIREBASE_STORAGE_EMULATOR_HOST`.
+  protocol, resumable uploads) with Storage Rules; needs `FIREBASE_STORAGE_EMULATOR_HOST`. It keeps
+  the `STORAGE_EMULATOR_HOST` that `fireemu exec` exports, so run it under `exec`. The
+  `sdk-latest` workflow runs `storage.mjs` and `client.mjs` against the newest `firebase-admin`
+  and `firebase` (installed in a scratch directory, not from the lockfile).
 - `storage-quota.mjs`: the Web Storage SDK against `storage.maxStoredBytes` = 1,024
   (`fireemu.storage-quota.json`): an upload past the bound must fail at once with
   `storage/quota-exceeded` (a 402), not after the SDK's 5xx retry loop. Run it with

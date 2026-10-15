@@ -3214,27 +3214,43 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
 /// which production authenticates with a service account over OAuth and App Check does not
 /// apply to. The emulator has no OAuth, so it recognises the shape: a JSON API route (the
 /// XML-style object read and the form-data upload are what a page navigates to or posts a form
-/// to, and the Firebase dialect is the client SDK's), a loopback peer, no `Firebase` client
-/// credential, and no browser evidence
+/// to, and the Firebase dialect is the client SDK's), a loopback peer that addressed a loopback
+/// `Host`, no `Firebase` client credential, and no browser evidence
 /// ([`fireemu_core_session::loopback::carries_browser_metadata`], the rule the capability
 /// follows; `Sec-Fetch-Mode` alone is Node's built-in `fetch`).
 ///
 /// Whether that shape is *admitted* under `enforced` is `appCheck.storageServerRequests`
 /// ([`server_side_bypass`]); under `unenforced` it only labels the observation.
-fn is_server_side_json_api(route: &Route, req: &StorageRequest) -> bool {
+fn is_server_side_json_api(json_api_route: bool, req: &StorageRequest) -> bool {
+    json_api_route
+        && !req.remote_peer
+        // A page whose name was rebound to a loopback address (DNS rebinding) is same-origin
+        // for the browser, so it sends no `Origin`, and over plain HTTP to a non-loopback name
+        // no Fetch Metadata and no `Referer` either: its `Host` is what gives it away.
+        && req
+            .host
+            .as_deref()
+            .is_some_and(fireemu_core_session::loopback::authority_is_loopback)
+        && !fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name))
+        && !carries_client_sdk_credential(req)
+}
+
+/// Whether a route is a Cloud Storage JSON API route, judged on the route the request *named*:
+/// the short bucket spelling `/b/{bucket}` is one although the emulator profile later serves it
+/// as the official emulator does (an object read, the 501 catch-all).
+fn is_json_api_route(route: &Route) -> bool {
     matches!(
         route,
         Route::GcsListBuckets
             | Route::GcsList { .. }
             | Route::GcsBucket { .. }
+            | Route::GcsBucketShort { .. }
             | Route::GcsObject { .. }
             | Route::GcsCopy { .. }
             | Route::GcsAcl { .. }
             | Route::GcsAclEntry { .. }
             | Route::GcsUpload { .. }
-    ) && !req.remote_peer
-        && !fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name))
-        && !carries_client_sdk_credential(req)
+    )
 }
 
 /// Whether the request presents the Firebase client SDK's credential scheme
@@ -3258,7 +3274,7 @@ fn carries_client_sdk_credential(req: &StorageRequest) -> bool {
 /// resumable continuation is a JSON API request and follows the same rule, which is why it
 /// passes in `loopback` and not in `capability`. Under `off` there is no policy and nothing is
 /// classified.
-fn server_side_bypass(state: &StorageState, route: &Route, req: &StorageRequest) -> bool {
+fn server_side_bypass(state: &StorageState, json_api_route: bool, req: &StorageRequest) -> bool {
     state
         .app_check_policy
         .as_ref()
@@ -3266,7 +3282,7 @@ fn server_side_bypass(state: &StorageState, route: &Route, req: &StorageRequest)
             BaselineMode::Enforced => state.server_requests == StorageServerRequests::Loopback,
             _ => true,
         })
-        && is_server_side_json_api(route, req)
+        && is_server_side_json_api(json_api_route, req)
 }
 
 /// A name no object can have: it holds a line feed, or is longer than an object name may be.
@@ -3441,6 +3457,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     let Ok(route) = route(&req.method, &req.path) else {
         return plain_status(400);
     };
+    let json_api_route = is_json_api_route(&route);
     // The short spelling of the bucket resource is served as the long one under strict and
     // answered as the official emulator answers it otherwise (see `Route::GcsBucketShort`).
     let route = match route {
@@ -3555,7 +3572,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
             &route,
             &req.method,
             &params,
-            json_api_authenticated || server_side_bypass(state, &route, &req),
+            json_api_authenticated || server_side_bypass(state, json_api_route, &req),
         );
         match app_check_admission(
             state,

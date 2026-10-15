@@ -433,11 +433,20 @@ async fn respond(
         }
         let values = req.headers().get_all(*name);
         let mut values = values.iter();
-        let value = values.next().and_then(|v| v.to_str().ok());
+        let first = values.next();
+        // Browser evidence is decided by the header being present, not by its bytes being
+        // text: a value `to_str` refuses (non-ASCII) is kept, lossily, so it still counts.
+        let value = first.and_then(|v| match v.to_str() {
+            Ok(text) => Some(text.to_owned()),
+            Err(_) if fireemu_core_session::loopback::BROWSER_METADATA_HEADERS.contains(name) => {
+                Some(String::from_utf8_lossy(v.as_bytes()).into_owned())
+            }
+            Err(_) => None,
+        });
         if values.next().is_some() {
             headers.insert((*name).to_owned(), String::new());
         } else if let Some(value) = value {
-            headers.insert((*name).to_owned(), value.to_owned());
+            headers.insert((*name).to_owned(), value);
         }
     }
     let app_check: Vec<String> = req

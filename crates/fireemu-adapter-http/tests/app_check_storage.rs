@@ -101,6 +101,29 @@ impl Harness {
         app_check: &[&str],
         body: &[u8],
     ) -> StorageResponse {
+        self.call_full(
+            remote_peer,
+            Some("127.0.0.1:9199"),
+            method,
+            path_and_query,
+            headers,
+            app_check,
+            body,
+        )
+    }
+
+    /// Like [`Harness::call_from`], with an explicit `Host` (`None`: the request has none).
+    #[allow(clippy::too_many_arguments)]
+    fn call_full(
+        &self,
+        remote_peer: bool,
+        host: Option<&str>,
+        method: &str,
+        path_and_query: &str,
+        headers: &[(&str, &str)],
+        app_check: &[&str],
+        body: &[u8],
+    ) -> StorageResponse {
         let (path, query) = path_and_query
             .split_once('?')
             .map_or((path_and_query, ""), |(p, q)| (p, q));
@@ -110,7 +133,7 @@ impl Harness {
                 method: method.to_owned(),
                 path: path.to_owned(),
                 query: query.to_owned(),
-                host: Some("127.0.0.1:9199".to_owned()),
+                host: host.map(str::to_owned),
                 headers: headers
                     .iter()
                     .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -1683,6 +1706,207 @@ fn a_firebase_client_credential_on_a_json_api_path_is_not_server_side() {
     );
 }
 
+/// DNS rebinding: a page on `http://evil.example:9199` whose name was rebound to 127.0.0.1
+/// sends a same-origin request with no `Origin`, no Fetch Metadata (the URL is not potentially
+/// trustworthy), no `Referer` and no `Cookie`. Only its `Host` gives it away.
+#[test]
+fn a_request_whose_host_is_not_loopback_is_not_server_side() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("rebind/guarded.txt");
+    let path = format!("/storage/v1/b/{BUCKET}/o/rebind%2Fguarded.txt");
+    for host in [
+        Some("evil.example:9199"),
+        Some("evil.example"),
+        Some("localhost.:9199"),
+        Some("127.0.0.1.nip.io:9199"),
+        Some("localhost.evil.example:9199"),
+        Some("host.containers.internal:9199"),
+        Some("127.0.0.1@evil.example:9199"),
+        Some("127.0.0.1:99999"),
+        Some(""),
+        None,
+    ] {
+        for (method, route, body) in [
+            ("GET", path.clone(), &b""[..]),
+            ("GET", format!("/storage/v1/b/{BUCKET}/o"), &b""[..]),
+            (
+                "POST",
+                format!("/upload/storage/v1/b/{BUCKET}/o?name=rebind/new.txt&uploadType=media"),
+                &b"x"[..],
+            ),
+            ("DELETE", path.clone(), &b""[..]),
+        ] {
+            let denied = h.call_full(false, host, method, &route, &[], &[], body);
+            assert_eq!(
+                denied.status,
+                403,
+                "{host:?}: {method} {route}: {}",
+                String::from_utf8_lossy(&denied.body)
+            );
+            assert_eq!(
+                body_of(&denied)["error"]["reason"],
+                "APP_CHECK_REQUIRED",
+                "{host:?}"
+            );
+        }
+    }
+    for host in [
+        "127.0.0.1:9199",
+        "127.0.0.1",
+        "localhost:9199",
+        "LOCALHOST:9199",
+        "[::1]:9199",
+        "127.1.2.3:9199",
+    ] {
+        let admitted = h.call_full(false, Some(host), "GET", &path, &[], &[], b"");
+        assert_eq!(
+            admitted.status,
+            200,
+            "{host}: {}",
+            String::from_utf8_lossy(&admitted.body)
+        );
+    }
+    // Nothing the rebound page sent changed the store.
+    let kept = h.call("GET", &path, &[], &[], b"");
+    assert_eq!(kept.status, 200);
+    let created = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/rebind%2Fnew.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(created.status, 404);
+}
+
+/// The short bucket spelling `/b/{bucket}` the Admin SDK uses for `getMetadata()` and
+/// `setMetadata()` is a JSON API route whatever the profile later does with it.
+#[test]
+fn the_short_bucket_spelling_is_server_side_and_a_browser_still_is_not() {
+    // Under the emulator profile the spelling falls through to the official emulator's routes
+    // (an object read, the 501 catch-all) before dispatch; under strict it is the bucket
+    // resource. The admission follows the spelling the request used, not what it became.
+    for emulator_profile in [false, true] {
+        let mut h = harness(BaselineMode::Enforced);
+        if emulator_profile {
+            h.storage.token_acceptance = fireemu_core_auth::jwt::TokenAcceptance::EmulatorMock;
+        }
+        short_bucket_cases(&h, emulator_profile);
+    }
+}
+
+fn short_bucket_cases(h: &Harness, emulator_profile: bool) {
+    for method in ["GET", "PATCH"] {
+        let admitted = h.call(method, &format!("/b/{BUCKET}"), &[], &[], b"{}");
+        let refused =
+            admitted.status == 403 && body_of(&admitted)["error"]["reason"] == "APP_CHECK_REQUIRED";
+        assert!(
+            !refused,
+            "emulator profile {emulator_profile}: {method}: {}",
+            String::from_utf8_lossy(&admitted.body)
+        );
+        let browser = h.call(
+            method,
+            &format!("/b/{BUCKET}"),
+            &[("origin", "http://127.0.0.1:5173")],
+            &[],
+            b"{}",
+        );
+        assert_eq!(browser.status, 403, "{method}");
+        assert_eq!(
+            body_of(&browser)["error"]["reason"],
+            "APP_CHECK_REQUIRED",
+            "{method}"
+        );
+    }
+}
+
+/// Under `unenforced` the shape only labels the observation. Everything that is not a
+/// loopback, browser-free, non-client-credential JSON API request is a missing token, in either
+/// `storageServerRequests` mode.
+#[test]
+fn unenforced_observation_labels_follow_the_server_side_shape() {
+    use fireemu_core_app_check::CredentialCategory::{Bypass, Missing};
+
+    for mode in [
+        StorageServerRequests::Loopback,
+        StorageServerRequests::Capability,
+    ] {
+        let h = harness_with(BaselineMode::Unenforced, mode);
+        h.seed_object("labels/o.txt");
+        let list = format!("/storage/v1/b/{BUCKET}/o?prefix=labels/");
+        let observe = |remote: bool,
+                       host: Option<&str>,
+                       method: &str,
+                       path: &str,
+                       headers: &[(&str, &str)]| {
+            let before = h
+                .app_check
+                .registry
+                .read()
+                .expect("readable")
+                .observations("demo-app")
+                .len();
+            let r = h.call_full(remote, host, method, path, headers, &[], b"x");
+            // The XML-style read of a private object is refused for its own reasons (403
+            // AccessDenied); what `unenforced` never does is refuse for App Check.
+            assert!(
+                body_of(&r)["error"]["reason"]
+                    .as_str()
+                    .is_none_or(|reason| !reason.starts_with("APP_CHECK")),
+                "unenforced never refuses for App Check: {method} {path}"
+            );
+            let observed = h
+                .app_check
+                .registry
+                .read()
+                .expect("readable")
+                .observations("demo-app");
+            assert_eq!(observed.len(), before + 1, "{method} {path}");
+            observed[before].category
+        };
+        let host = Some("127.0.0.1:9199");
+        assert_eq!(observe(false, host, "GET", &list, &[]), Bypass, "{mode:?}");
+        assert_eq!(
+            observe(true, host, "GET", &list, &[]),
+            Missing,
+            "{mode:?} remote peer"
+        );
+        assert_eq!(
+            observe(false, Some("evil.example:9199"), "GET", &list, &[]),
+            Missing,
+            "{mode:?} foreign host"
+        );
+        assert_eq!(
+            observe(
+                false,
+                host,
+                "GET",
+                &list,
+                &[("authorization", "Firebase t")]
+            ),
+            Missing,
+            "{mode:?} client credential"
+        );
+        assert_eq!(
+            observe(false, host, "GET", &format!("/{BUCKET}/labels/o.txt"), &[]),
+            Missing,
+            "{mode:?} XML-style read"
+        );
+        assert_eq!(
+            observe(
+                false,
+                host,
+                "POST",
+                &format!("/{BUCKET}"),
+                &[("content-type", "multipart/form-data; boundary=x")]
+            ),
+            Missing,
+            "{mode:?} form upload"
+        );
+    }
+}
+
 /// The configuration spellings round-trip, and nothing else parses (the loader refuses it).
 #[test]
 fn storage_server_requests_spellings_round_trip() {
@@ -1751,6 +1975,8 @@ mod server_side_properties {
             ("GET", format!("/storage/v1/b/{BUCKET}"), true),
             ("GET", format!("/b/{BUCKET}/o"), true),
             ("GET", "/b".to_owned(), true),
+            ("GET", format!("/b/{BUCKET}"), true),
+            ("PATCH", format!("/b/{BUCKET}"), true),
             (
                 "POST",
                 format!("/storage/v1/b/{BUCKET}/o/p%2Fo.txt/copyTo/b/{BUCKET}/o/copy.txt"),
@@ -1788,6 +2014,7 @@ mod server_side_properties {
             evidence in proptest::collection::vec(proptest::bool::weighted(0.1), 5),
             sec_fetch_mode in any::<bool>(),
             client_credential in proptest::bool::weighted(0.15),
+            host in 0usize..4,
             loopback in proptest::bool::weighted(0.8),
         ) {
             let mode = if loopback {
@@ -1810,16 +2037,17 @@ mod server_side_properties {
                 headers.push(("authorization", "Firebase not-a-real-token"));
             }
             let browser = evidence.iter().any(|on| *on);
-            let response = h.call_from(remote, method, &path, &headers, &[], b"");
+            let host_name = [Some("127.0.0.1:9199"), Some("localhost:9199"), Some("evil.example:9199"), None][host];
+            let response = h.call_full(remote, host_name, method, &path, &headers, &[], b"");
             let refused_by_app_check = response.status == 403
                 && body_of(&response)["error"]["reason"] == "APP_CHECK_REQUIRED";
             let expected_admitted =
-                loopback && json_api && !remote && !browser && !client_credential;
+                loopback && json_api && !remote && !browser && !client_credential && host < 2;
             prop_assert_eq!(
                 !refused_by_app_check,
                 expected_admitted,
-                "{} {} remote={} headers={:?} -> {}",
-                method, path, remote, headers, response.status
+                "{} {} remote={} host={:?} headers={:?} -> {}",
+                method, path, remote, host_name, headers, response.status
             );
         }
     }
@@ -2075,12 +2303,13 @@ fn an_off_storage_service_classifies_nothing() {
 // ------------------------------------------------------------------------------------------
 
 async fn raw(addr: std::net::SocketAddr, request: &str) -> String {
+    raw_bytes(addr, request.as_bytes()).await
+}
+
+async fn raw_bytes(addr: std::net::SocketAddr, request: &[u8]) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .expect("write the request");
+    stream.write_all(request).await.expect("write the request");
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
@@ -2172,6 +2401,51 @@ async fn the_storage_listener_admits_server_side_json_api_requests_only() {
     }
     let firebase = raw(addr, &request(&format!("/v0/b/{BUCKET}/o"), "")).await;
     assert!(firebase.starts_with("HTTP/1.1 403"), "{firebase}");
+    server.abort();
+}
+
+/// A browser header whose value is not ASCII is still browser evidence: presence decides, not
+/// the decoded value, so the bytes cannot be used to make a page look like a process.
+#[tokio::test]
+async fn a_non_ascii_browser_header_still_keeps_the_request_ordinary() {
+    let h = harness(BaselineMode::Enforced);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("a local address");
+    let server = tokio::spawn(fireemu_adapter_http::storage_server::serve_storage(
+        listener,
+        Arc::new(h.storage),
+    ));
+    let list = format!("/storage/v1/b/{BUCKET}/o");
+    for header in [
+        "Cookie",
+        "Referer",
+        "Sec-Fetch-Site",
+        "Sec-Fetch-Dest",
+        "Origin",
+    ] {
+        let mut request =
+            format!("GET {list} HTTP/1.1\r\nHost: 127.0.0.1\r\n{header}: ").into_bytes();
+        request.extend_from_slice(&[0xff, 0xfe, b'x']);
+        request.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+        let response = raw_bytes(addr, &request).await;
+        assert!(
+            !response.starts_with("HTTP/1.1 200"),
+            "{header}: {response}"
+        );
+        assert!(
+            response.contains("APP_CHECK_REQUIRED") || response.starts_with("HTTP/1.1 403"),
+            "{header}: {response}"
+        );
+    }
+    // The same request without the header is a process and passes.
+    let plain = raw(
+        addr,
+        &format!("GET {list} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(plain.starts_with("HTTP/1.1 200"), "{plain}");
     server.abort();
 }
 

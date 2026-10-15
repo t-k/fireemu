@@ -51,6 +51,86 @@ Production refuses a query whose composite index is not defined. The official em
 
 The `emulator` profile always runs the query, as the official emulator does.
 
+### Fail a CI job on a missing index
+
+The report on standard error is easy to miss in a CI log. Under `strict` with `"report"`, the control API also lists every index that was missing, so a job can fail on a non-empty list. Turn the report on:
+
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
+```toml
+schemaVersion = 1
+profile = "strict"
+
+[firestore]
+missingIndexes = "report"
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firestore": {
+    "missingIndexes": "report"
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+`fireemu exec` gives its command `FIREEMU_CONTROL_URL` (ending in `/v1/`) and `FIREEMU_CONTROL_TOKEN`, so the script that runs your tests can check the list when they are done:
+
+```sh
+npx fireemu exec -- sh -c '
+  npm test
+  status=$?
+  curl -fsS -H "Authorization: Bearer $FIREEMU_CONTROL_TOKEN" \
+    "${FIREEMU_CONTROL_URL}firestore/missingIndexes" > missing-indexes.json || exit 1
+  [ "$(jq .count missing-indexes.json)" = 0 ] || { jq .indexesJson missing-indexes.json; exit 1; }
+  exit $status
+'
+```
+
+`GET /v1/firestore/missingIndexes` answers:
+
+```json
+{
+  "count": 1,
+  "missingIndexes": [
+    {
+      "project": "demo-app",
+      "database": "(default)",
+      "name": "projects/demo-app/databases/(default)",
+      "index": {
+        "collectionGroup": "notes",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "owner", "order": "ASCENDING" },
+          { "fieldPath": "created", "order": "ASCENDING" }
+        ]
+      },
+      "message": "The query requires an index. You can create it here: https://console.firebase.google.com/..."
+    }
+  ],
+  "indexesJson": {
+    "projects/demo-app/databases/(default)": {
+      "indexes": [{ "collectionGroup": "notes", "queryScope": "COLLECTION", "fields": ["..."] }]
+    }
+  }
+}
+```
+
+- Each entry is one index per database, in the order it was first needed, with production's refusal text. `indexesJson` groups the entries per database in the shape `firestore.indexes.json` holds, so you can merge the `indexes` array of a database into that file.
+- `GET /v1/sessions/{session}/firestore/missingIndexes` lists only the session's project. A session `reset` does not clear the list, so a suite that resets between cases still reports every index it missed. The list holds at most 1,000 entries.
+- `DELETE` on either route clears the list (all projects, or the session's project) and answers `{"cleared": <count>}`. An index that is needed again afterwards is reported again.
+- Where nothing is reported (the `emulator` profile, or `strict` with `"refuse"`), `GET` answers `409` with `FAILED_PRECONDITION`, so a check that depends on the list cannot pass on an empty answer. `DELETE` still answers `{"cleared": 0}`.
+- A page in a browser needs `Authorization: Bearer <control token>` for both methods, as for the resource report, because the entries name the fields your queries filter and order on.
+- With `fireemu/testing`, call `world.control('GET', '/v1/firestore/missingIndexes')`.
+
 ### Checks on `firestore.indexes.json`
 
 Under `strict`, Fireemu refuses at start-up (and keeps the previous indexes when the file changes while it runs) what `firebase deploy` refuses, and the message names the entry:

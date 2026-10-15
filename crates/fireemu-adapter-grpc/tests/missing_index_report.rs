@@ -3,7 +3,8 @@
 //! reports the index once per database in production's words.
 
 use fireemu_adapter_grpc::gateway::{
-    database_name, missing_index_reports, Gateway, MISSING_INDEX_REPORTED,
+    clear_missing_index_reports, database_name, missing_index_reports, Gateway,
+    MISSING_INDEX_REPORTED,
 };
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{
@@ -198,6 +199,44 @@ fn neither_refuse_mode_nor_the_emulator_profile_reports_through_the_strict_regis
     assert!(missing_index_reports()
         .iter()
         .all(|report| report.database != database));
+}
+
+/// A CI job clears the list between runs: only the named project's entries go, the rest keep their
+/// order, and a cleared index is reported (and logged) again the next time a query needs it.
+#[test]
+fn clearing_forgets_one_project_or_all_and_a_cleared_index_is_reported_again() {
+    let gateway = gateway(IndexValidationPolicy::ProductionReport);
+    let accepted = gateway.validate_query(&needs_composite()).unwrap();
+    let mine = |id: &str| format!("projects/demo-clear-a/databases/{id}");
+    let other = "projects/demo-clear-b/databases/(default)".to_owned();
+    for database in [mine("one"), other.clone(), mine("two")] {
+        assert!(gateway.report_missing_index(&database, &accepted).is_some());
+    }
+    let listed = |prefix: &str| {
+        missing_index_reports()
+            .into_iter()
+            .filter(|r| r.database.starts_with(prefix))
+            .map(|r| r.database)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(listed("projects/demo-clear-a/"), [mine("one"), mine("two")]);
+
+    assert_eq!(clear_missing_index_reports(Some("demo-clear-a")), 2);
+    assert!(listed("projects/demo-clear-a/").is_empty());
+    assert_eq!(listed("projects/demo-clear-b/"), [other.as_str()]);
+    // A project that is a prefix of another's name is not that project.
+    assert_eq!(clear_missing_index_reports(Some("demo-clear")), 0);
+    assert_eq!(listed("projects/demo-clear-b/"), [other.as_str()]);
+    assert_eq!(clear_missing_index_reports(Some("demo-clear-a")), 0);
+
+    // Reported again after the clear, with its log line.
+    assert!(gateway
+        .report_missing_index(&mine("one"), &accepted)
+        .is_some());
+    assert_eq!(gateway.report_missing_index(&other, &accepted), None);
+
+    assert!(clear_missing_index_reports(None) >= 2);
+    assert!(missing_index_reports().is_empty());
 }
 
 fn gateway_refusal_message(database: &str) -> String {

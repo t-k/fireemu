@@ -34,6 +34,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         control_token: "test-token".to_owned(),
         app_check: None,
         firestore_listen_expiry: None,
+        firestore_missing_indexes: None,
         require_control_token: false,
         barrier: None,
         snapshot_hooks: Vec::new(),

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `GET /v1/firestore/missingIndexes` on the control API lists the composite indexes the strict profile served without their being defined (`firestore.missingIndexes: "report"`), so a CI job can fail on a non-empty list instead of reading standard error. Each entry has its project, database, the index in the `firestore.indexes.json` shape and production's refusal text, and `indexesJson` groups the indexes per database to merge into that file. `GET /v1/sessions/{session}/firestore/missingIndexes` lists one project's entries, and `DELETE` on either route clears them. The read answers `409` where nothing is reported (the `emulator` profile, or `strict` with `"refuse"`); a session reset keeps the list.
+
 ## [0.21.0] - 2026-10-15
 
 ### Added

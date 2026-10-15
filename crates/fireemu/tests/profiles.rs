@@ -183,6 +183,14 @@ impl Daemon {
         u16::try_from(emulators["firestore"]["port"].as_u64().unwrap()).unwrap()
     }
 
+    /// The control API's port: it shares the Auth listener, which the Hub lists.
+    fn control_port(&self) -> u16 {
+        let (status, body) = http(self.hub_port, "GET", "/emulators", None);
+        assert_eq!(status, 200, "{body}");
+        let emulators: serde_json::Value = serde_json::from_str(&body).unwrap();
+        u16::try_from(emulators["auth"]["port"].as_u64().unwrap()).unwrap()
+    }
+
     /// A query that needs a composite index nothing configured: an equality filter and an
     /// order by another field.
     fn unindexed_query(&self) -> (u16, String) {
@@ -258,6 +266,131 @@ fn the_strict_profile_runs_a_query_without_its_composite_index_and_reports_it_on
         stderr.contains("Add to firestore.indexes.json:\n{\n  \"collectionGroup\": \"notes\""),
         "{stderr}"
     );
+}
+
+/// The reported indexes are readable and clearable through the control API, so a CI job can fail
+/// on any of them; where nothing is reported, the read says so instead of answering "none".
+#[test]
+fn the_control_api_lists_and_clears_the_missing_indexes_a_report_run_served() {
+    let strict = Daemon::start_with("strict-route", "strict", r#""missingIndexes": "report", "#);
+    let control = strict.control_port();
+    let (status, body) = http(control, "GET", "/v1/firestore/missingIndexes", None);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["count"],
+        0
+    );
+
+    for _ in 0..2 {
+        let (status, body) = strict.unindexed_query_with(http_as_owner);
+        assert_eq!(status, 200, "{body}");
+    }
+    let database = "projects/demo-profile/databases/(default)";
+    // The query names `demo-profile`, which is not the default session's project, so only a
+    // session of that project sees it.
+    let (status, body) = http(
+        control,
+        "POST",
+        "/v1/sessions",
+        Some(r#"{"name": "queried", "project": "demo-profile"}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = http(
+        control,
+        "GET",
+        "/v1/sessions/default/firestore/missingIndexes",
+        None,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["count"],
+        0,
+        "{body}"
+    );
+    for path in [
+        "/v1/firestore/missingIndexes",
+        "/v1/sessions/queried/firestore/missingIndexes",
+    ] {
+        let (status, body) = http(control, "GET", path, None);
+        assert_eq!(status, 200, "{path}: {body}");
+        let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(list["count"], 1, "{path}: reported once: {body}");
+        let entry = &list["missingIndexes"][0];
+        assert_eq!(entry["name"], database, "{body}");
+        assert_eq!(entry["project"], "demo-profile");
+        assert_eq!(entry["index"]["collectionGroup"], "notes");
+        assert_eq!(entry["index"]["queryScope"], "COLLECTION");
+        assert_eq!(
+            entry["index"]["fields"][0],
+            serde_json::json!({"fieldPath": "owner", "order": "ASCENDING"})
+        );
+        assert!(
+            entry["message"]
+                .as_str()
+                .unwrap()
+                .contains("The query requires an index. You can create it here:"),
+            "{body}"
+        );
+        assert_eq!(
+            list["indexesJson"][database]["indexes"][0], entry["index"],
+            "{body}"
+        );
+    }
+
+    // Clearing forgets the list; the same query reports it again.
+    let (status, body) = http(control, "DELETE", "/v1/firestore/missingIndexes", None);
+    assert_eq!((status, body.as_str()), (200, r#"{"cleared":1}"#));
+    let (_, body) = http(control, "GET", "/v1/firestore/missingIndexes", None);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["count"],
+        0
+    );
+    let (status, body) = strict.unindexed_query_with(http_as_owner);
+    assert_eq!(status, 200, "{body}");
+    let (_, body) = http(
+        control,
+        "DELETE",
+        "/v1/sessions/default/firestore/missingIndexes",
+        None,
+    );
+    assert_eq!(body, r#"{"cleared":0}"#, "another project's reports stay");
+    let (_, body) = http(
+        control,
+        "DELETE",
+        "/v1/sessions/queried/firestore/missingIndexes",
+        None,
+    );
+    assert_eq!(body, r#"{"cleared":1}"#);
+    let stderr = strict.stop_with_stderr();
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.contains("served a query without its composite index"))
+            .count(),
+        2,
+        "reported again after the clear:\n{stderr}"
+    );
+}
+
+#[test]
+fn the_control_api_refuses_to_list_missing_indexes_where_none_are_reported() {
+    // The strict default refuses the query, and the emulator profile assumes every index: an
+    // empty list in either would pass a check it cannot support.
+    for (name, profile) in [("strict-default", "strict"), ("emulator-route", "emulator")] {
+        let daemon = Daemon::start_with(name, profile, "");
+        let control = daemon.control_port();
+        for path in [
+            "/v1/firestore/missingIndexes",
+            "/v1/sessions/default/firestore/missingIndexes",
+        ] {
+            let (status, body) = http(control, "GET", path, None);
+            assert_eq!(status, 409, "{profile} {path}: {body}");
+            assert!(body.contains("FAILED_PRECONDITION"), "{body}");
+        }
+        let (status, body) = http(control, "DELETE", "/v1/firestore/missingIndexes", None);
+        assert_eq!((status, body.as_str()), (200, r#"{"cleared":0}"#));
+        daemon.stop();
+    }
 }
 
 #[test]

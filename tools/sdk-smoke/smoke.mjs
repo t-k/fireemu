@@ -36,7 +36,9 @@ try {
   const added = await db.collection("users").add({ name: "Auto" });
   check("add auto id", added.id.length === 20, added.id);
   try {
-    await db.collection("users").where("name", "==", "x").where("age", "==", 1).get();
+    // An equality filter plus an order on another field needs a composite index; two equality
+    // filters do not, because production merges the automatic single-field indexes.
+    await db.collection("users").where("name", "==", "x").orderBy("age").get();
     check("missing composite index rejected", false);
   } catch (e) {
     check("missing composite index rejected", e.code === 9 || /index/i.test(e.message), e.message.slice(0, 80));

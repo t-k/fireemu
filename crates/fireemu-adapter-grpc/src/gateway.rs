@@ -157,6 +157,9 @@ const MAX_MISSING_INDEX_REPORTS: usize = 1000;
 static MISSING_INDEX_REPORTS: std::sync::Mutex<Vec<MissingIndexReport>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Whether the "list is full" line has been written since the list last had room.
+static OVER_BOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Whether a report is the first of its (database, index).
 enum Noted {
     New,
@@ -198,6 +201,27 @@ pub fn missing_index_reports() -> Vec<MissingIndexReport> {
         .lock()
         .map(|reports| reports.clone())
         .unwrap_or_default()
+}
+
+/// Forgets the recorded reports of `project`, or every report when it is `None`, and returns how
+/// many it removed. A forgotten index is recorded and logged again the next time a query needs it,
+/// so a CI job can clear the list between runs.
+pub fn clear_missing_index_reports(project: Option<&str>) -> usize {
+    let Ok(mut reports) = MISSING_INDEX_REPORTS.lock() else {
+        return 0;
+    };
+    let before = reports.len();
+    match project {
+        Some(project) => {
+            let prefix = format!("projects/{project}/databases/");
+            reports.retain(|report| !report.database.starts_with(&prefix));
+        }
+        None => reports.clear(),
+    }
+    if reports.len() < MAX_MISSING_INDEX_REPORTS {
+        OVER_BOUND.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    before - reports.len()
 }
 
 /// Strict gateway configuration.
@@ -291,8 +315,6 @@ impl Gateway {
             Noted::Seen => return None,
             Noted::New => missing_index_log_line(&report),
             Noted::OverBound => {
-                static OVER_BOUND: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
                 if OVER_BOUND.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     return None;
                 }

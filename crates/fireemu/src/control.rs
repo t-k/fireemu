@@ -45,6 +45,34 @@ pub fn load_text_indexes(
     Ok(set)
 }
 
+/// The Firestore gateway's missing-index reports, served by `/v1/firestore/missingIndexes`.
+pub struct MissingIndexReports {
+    /// Whether this run reports at all: the strict profile with `firestore.missingIndexes` set
+    /// to `"report"`, and Firestore selected.
+    pub enabled: bool,
+}
+
+impl fireemu_adapter_http::control::MissingIndexHook for MissingIndexReports {
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn reports(&self) -> Vec<fireemu_adapter_http::control::MissingIndexEntry> {
+        fireemu_adapter_grpc::gateway::missing_index_reports()
+            .into_iter()
+            .map(|r| fireemu_adapter_http::control::MissingIndexEntry {
+                database: r.database,
+                fragment: r.fragment,
+                message: r.message,
+            })
+            .collect()
+    }
+
+    fn clear(&self, project: Option<&str>) -> usize {
+        fireemu_adapter_grpc::gateway::clear_missing_index_reports(project)
+    }
+}
+
 /// Which refusals of `firebase deploy` an index file is checked against when it loads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexFileChecks {

@@ -1,7 +1,7 @@
 //! The list of reported missing indexes is bounded, and an index past the bound is neither
 //! listed nor logged again on every query. Its own test binary: it fills the process-wide list.
 
-use fireemu_adapter_grpc::gateway::{missing_index_reports, Gateway};
+use fireemu_adapter_grpc::gateway::{clear_missing_index_reports, missing_index_reports, Gateway};
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
@@ -73,4 +73,26 @@ fn the_report_list_stops_at_its_bound() {
     assert!(reports
         .iter()
         .all(|r| r.database != database(1000) && r.database != database(1001)));
+
+    // A clear that removes nothing leaves a full list full, and its notice already said so.
+    assert_eq!(clear_missing_index_reports(Some("demo-nobody")), 0);
+    assert_eq!(
+        gateway.report_missing_index(&database(1002), &accepted),
+        None
+    );
+    // Clearing makes room again, and a list that fills a second time says so a second time.
+    assert_eq!(clear_missing_index_reports(None), 1000);
+    assert!(missing_index_reports().is_empty());
+    for n in 0..1000 {
+        assert!(gateway
+            .report_missing_index(&database(n), &accepted)
+            .is_some());
+    }
+    let over = gateway
+        .report_missing_index(&database(1000), &accepted)
+        .unwrap();
+    assert!(
+        over.contains("more than 1000 distinct missing composite indexes"),
+        "{over}"
+    );
 }

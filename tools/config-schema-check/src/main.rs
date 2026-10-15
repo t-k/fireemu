@@ -12,8 +12,8 @@
 //!
 //! 1. `standard` edition never combines with `mongodb-compatible` API mode;
 //! 2. `limits.catalog` must belong to the configured edition;
-//! 3. `limits.queryCatalog` is required (`firestore-standard-query-*`) for Standard and must be
-//!    `null` for Enterprise;
+//! 3. `limits.queryCatalog`, when given, is `firestore-standard-query-*` for Standard (an explicit
+//!    `null` is refused; leaving it out is valid) and must be `null` for Enterprise;
 //! 4. `pipeline.executionMode = proxy` and `textSearch.fidelity = upstream-proxy` forward to a
 //!    real Firestore backend, which no local emulator does; both are declared and refused;
 //! 5. `visibilityPolicy = virtual-lag` requires a non-null `visibilityLag`;
@@ -101,8 +101,16 @@ fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
     }
 
     match (edition, str_at(cfg, &["limits", "queryCatalog"])) {
+        // An absent key is valid (`fireemu init` writes `edition = "standard"` alone, and the
+        // Rust loader accepts it); only an explicit null contradicts the Standard edition.
         ("standard", None) => {
-            problems.push("standard edition requires limits.queryCatalog".to_owned());
+            if cfg
+                .pointer("/limits/queryCatalog")
+                .is_some_and(Value::is_null)
+            {
+                problems
+                    .push("standard edition cannot declare limits.queryCatalog null".to_owned());
+            }
         }
         ("standard", Some(q)) => {
             if !root.join("spec/limits").join(format!("{q}.json")).is_file() {

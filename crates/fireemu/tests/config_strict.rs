@@ -1,7 +1,6 @@
 //! A canonical configuration file is checked against the schema: an unknown key or a value of
 //! the wrong type is refused naming the file, the key's path and the type it should have had,
 //! the same way for `fireemu.toml` and `fireemu.json` and for `up`, `exec` and `config show`.
-//! Its relative paths are read from the directory the file is in.
 
 mod scratch;
 
@@ -117,95 +116,6 @@ fn shown(output: &Output, key: &str) -> serde_json::Value {
 }
 
 #[test]
-fn relative_paths_are_read_from_the_directory_of_the_configuration_file() {
-    for (file, text) in [
-        (
-            "fireemu.json",
-            r#"{"schemaVersion": 1, "rules": {"source": "firestore.rules"}, "storage": {"rules": "storage.rules"}, "firestore": {"indexFile": "indexes.json"}, "functions": {"source": "fns"}}"#,
-        ),
-        (
-            "fireemu.toml",
-            "schemaVersion = 1\n[rules]\nsource = \"firestore.rules\"\n[storage]\nrules = \"storage.rules\"\n[firestore]\nindexFile = \"indexes.json\"\n[functions]\nsource = \"fns\"\n",
-        ),
-    ] {
-        let dir = Scratch::new("config-strict", "relative");
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        std::fs::write(dir.join("sub").join(file), text).unwrap();
-        let config = format!("sub/{file}");
-        let output = fireemu(&dir, &["config", "show", "--json", "--config", &config]);
-        assert!(output.status.success(), "{}", stderr(&output));
-        assert_eq!(shown(&output, "rules.source"), "sub/firestore.rules", "{file}");
-        assert_eq!(shown(&output, "storage.rules"), "sub/storage.rules", "{file}");
-        assert_eq!(shown(&output, "firestore.indexFile"), "sub/indexes.json", "{file}");
-        assert_eq!(shown(&output, "functions.source"), "sub/fns", "{file}");
-    }
-}
-
-#[test]
-fn an_absolute_path_and_a_file_in_the_working_directory_keep_their_paths() {
-    let dir = Scratch::new("config-strict", "absolute");
-    let absolute = dir.join("elsewhere.rules");
-    std::fs::write(
-        dir.join("fireemu.json"),
-        format!(
-            r#"{{"schemaVersion": 1, "rules": {{"source": {}}}, "storage": {{"rules": "storage.rules"}}}}"#,
-            serde_json::to_string(&absolute).unwrap()
-        ),
-    )
-    .unwrap();
-    let output = fireemu(
-        &dir,
-        &["config", "show", "--json", "--config", "fireemu.json"],
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(shown(&output, "rules.source"), absolute.to_str().unwrap());
-    assert_eq!(shown(&output, "storage.rules"), "storage.rules");
-}
-
-#[test]
-fn exec_loads_rules_beside_a_configuration_file_named_from_another_directory() {
-    let dir = Scratch::new("config-strict", "exec");
-    std::fs::create_dir_all(dir.join("sub")).unwrap();
-    std::fs::write(dir.join("sub").join("firestore.rules"), RULES).unwrap();
-    std::fs::write(
-        dir.join("sub").join("fireemu.toml"),
-        "schemaVersion = 1\n[rules]\nsource = \"firestore.rules\"\n",
-    )
-    .unwrap();
-    let output = fireemu(
-        &dir,
-        &[
-            "exec",
-            "--only",
-            "firestore",
-            "--config",
-            "sub/fireemu.toml",
-            "--firestore-port",
-            "0",
-            "--http-port",
-            "0",
-            "--hub-port",
-            "0",
-            "--ui-port",
-            "0",
-            "--",
-            "true",
-        ],
-    );
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        stdout(&output),
-        stderr(&output)
-    );
-    assert!(
-        stdout(&output).contains("enforced from"),
-        "the rules file beside the configuration was not loaded:\n{}",
-        stdout(&output)
-    );
-}
-
-#[test]
 fn a_referenced_firebase_json_without_sections_does_not_drop_the_canonical_files() {
     let dir = Scratch::new("config-strict", "layering");
     std::fs::write(
@@ -229,40 +139,11 @@ fn a_referenced_firebase_json_without_sections_does_not_drop_the_canonical_files
 }
 
 #[test]
-fn a_relative_path_that_only_the_working_directory_has_still_loads_with_a_note() {
-    let dir = Scratch::new("config-strict", "fallback");
-    std::fs::create_dir_all(dir.join("sub")).unwrap();
-    std::fs::write(dir.join("here.rules"), RULES).unwrap();
-    std::fs::write(dir.join("both.rules"), RULES).unwrap();
-    std::fs::write(dir.join("sub").join("both.rules"), RULES).unwrap();
-    std::fs::write(
-        dir.join("sub").join("fireemu.json"),
-        r#"{"schemaVersion": 1, "rules": {"source": "here.rules"}, "storage": {"rules": "both.rules"}}"#,
-    )
-    .unwrap();
-    let output = fireemu(
-        &dir,
-        &["config", "show", "--json", "--config", "sub/fireemu.json"],
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(shown(&output, "rules.source"), "here.rules");
-    assert_eq!(shown(&output, "storage.rules"), "sub/both.rules");
-    let notes = stderr(&output);
-    assert!(
-        notes.contains("rules.source \"here.rules\" is not beside the configuration file")
-            && !notes.contains("storage.rules \"both.rules\" is not beside"),
-        "{notes}"
-    );
-}
-
-#[test]
 fn the_notes_about_a_configuration_file_are_not_printed_when_the_log_is_quiet() {
     let dir = Scratch::new("config-strict", "quiet");
-    std::fs::create_dir_all(dir.join("sub")).unwrap();
-    std::fs::write(dir.join("here.rules"), RULES).unwrap();
     std::fs::write(
-        dir.join("sub").join("fireemu.json"),
-        r#"{"schemaVersion": 1, "rules": {"source": "here.rules"}, "firestore": {"rules": "unused.rules"}}"#,
+        dir.join("fireemu.json"),
+        r#"{"schemaVersion": 1, "firestore": {"rules": "unused.rules"}}"#,
     )
     .unwrap();
     let args = [
@@ -270,7 +151,7 @@ fn the_notes_about_a_configuration_file_are_not_printed_when_the_log_is_quiet() 
         "--only",
         "firestore",
         "--config",
-        "sub/fireemu.json",
+        "fireemu.json",
         "--firestore-port",
         "0",
         "--http-port",
@@ -288,11 +169,10 @@ fn the_notes_about_a_configuration_file_are_not_printed_when_the_log_is_quiet() 
     };
     let loud = run(&[]);
     assert!(loud.status.success(), "{}", stderr(&loud));
-    let loud = stderr(&loud);
     assert!(
-        loud.contains("is not beside the configuration file")
-            && loud.contains("firestore.rules is accepted but never read"),
-        "{loud}"
+        stderr(&loud).contains("firestore.rules is accepted but never read"),
+        "{}",
+        stderr(&loud)
     );
     let quiet = run(&["--log-verbosity", "quiet"]);
     assert!(quiet.status.success(), "{}", stderr(&quiet));
@@ -301,4 +181,24 @@ fn the_notes_about_a_configuration_file_are_not_printed_when_the_log_is_quiet() 
         "quiet means no notes: {}",
         stderr(&quiet)
     );
+}
+
+/// The base of a canonical file's relative paths is the working directory, whichever directory
+/// the file is in (`firebaseJson` is the exception: it is read from the file's directory).
+#[test]
+fn relative_paths_in_a_canonical_file_are_read_from_the_working_directory() {
+    let dir = Scratch::new("config-strict", "cwd-base");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(
+        dir.join("sub").join("fireemu.json"),
+        r#"{"schemaVersion": 1, "rules": {"source": "firestore.rules"}, "storage": {"rules": "storage.rules"}}"#,
+    )
+    .unwrap();
+    let output = fireemu(
+        &dir,
+        &["config", "show", "--json", "--config", "sub/fireemu.json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(shown(&output, "rules.source"), "firestore.rules");
+    assert_eq!(shown(&output, "storage.rules"), "storage.rules");
 }

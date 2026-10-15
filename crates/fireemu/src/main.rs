@@ -1531,21 +1531,13 @@ fn load_project_config(
             let (json, canonical) = config_document(raw, path)?;
             if canonical {
                 sources.canonical = Some(path.clone());
-                let mut config = RuntimeConfig::from_json(&json).map_err(|error| {
+                let config = RuntimeConfig::from_json(&json).map_err(|error| {
                     CliError::refused(format!(
                         "{}: {}",
                         diagnostic_path(path),
                         diagnostic_text(&error.0)
                     ))
                 })?;
-                // Paths in the file are read from the directory the file is in, as the
-                // paths in a firebase.json are, not from wherever the command was started.
-                let notes = config.rebase_relative_paths(&project_dir(path), &|p| p.exists());
-                if raw.verbosity > Verbosity::Quiet {
-                    for note in notes {
-                        eprintln!("note: {}: {note}", diagnostic_path(path));
-                    }
-                }
                 if raw.verbosity > Verbosity::Quiet {
                     for note in config::no_effect_notes(&json) {
                         eprintln!("note: {}: {note}", diagnostic_path(path));

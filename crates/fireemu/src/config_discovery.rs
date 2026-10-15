@@ -1,10 +1,9 @@
 //! Which configuration files `up` and `exec` load when neither `--config` nor `--firebase-json`
 //! is given.
 //!
-//! A `fireemu.toml` or `fireemu.json` is looked for in the working directory only: the user
-//! chose to run there, so the file is the one they expect, while one found in a parent could be
-//! someone else's. Its relative paths (`rules.source`, `storage.rules`, `functions.source`) are
-//! read from the directory the file is in, which here is the working directory. A `firebase.json` is looked for the way
+//! A `fireemu.toml` or `fireemu.json` is looked for in the working directory only: its paths (`rules.source`,
+//! `storage.rules`, `functions.source`) are read relative to the working directory, so one
+//! found in a parent would point at the wrong files. A `firebase.json` is looked for the way
 //! firebase-tools 15.28.2 finds it (`detectProjectRoot`): in the working directory, then in
 //! each parent up to the filesystem root, and the first one found wins. Its paths are relative
 //! to its own directory, which is also where `.firebaserc` is read from.

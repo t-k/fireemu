@@ -781,8 +781,10 @@ pub struct StorageState {
     noncurrent: BTreeMap<(BucketName, ObjectName, u64), NoncurrentVersion>,
     /// The generations whose ACL grants `allUsers` read, by `(bucket, name, generation)`. An ACL
     /// belongs to one generation, so an overwrite starts again from the bucket's default (private);
-    /// entries of generations that are gone are inert and are dropped the next time one is added.
+    /// grants are dropped when a generation stops being live, so importing it cannot revive them.
     public_read: BTreeSet<(BucketName, ObjectName, u64)>,
+    #[cfg(test)]
+    public_read_object_checks: usize,
 }
 
 fn blob_bytes(blobs: &BTreeMap<BlobId, Arc<Vec<u8>>>) -> u64 {
@@ -847,6 +849,8 @@ impl StorageState {
             versioning: BTreeMap::new(),
             noncurrent: BTreeMap::new(),
             public_read: BTreeSet::new(),
+            #[cfg(test)]
+            public_read_object_checks: 0,
         }
     }
 
@@ -1103,6 +1107,8 @@ impl StorageState {
             versioning,
             noncurrent,
             public_read,
+            #[cfg(test)]
+            public_read_object_checks: 0,
         }
     }
 
@@ -1774,6 +1780,10 @@ impl StorageState {
         self.next_blob = next_blob;
         self.next_generation = next_generation;
         let replaced = self.objects.insert(key, meta);
+        if let Some(old) = &replaced {
+            self.public_read
+                .remove(&(old.bucket.clone(), old.name.clone(), old.generation));
+        }
         match (replaced, archive) {
             // The replaced generation is kept, blob and all.
             (Some(old), Some(version)) => {
@@ -1892,6 +1902,10 @@ impl StorageState {
     /// `predefinedAcl=publicRead` write). `false`, and nothing changes, when the object does not
     /// exist.
     pub fn set_public_read(&mut self, bucket: &BucketName, name: &ObjectName) -> bool {
+        #[cfg(test)]
+        {
+            self.public_read_object_checks += 1;
+        }
         let Some(generation) = self
             .objects
             .get(&(bucket.clone(), name.clone()))
@@ -1899,12 +1913,6 @@ impl StorageState {
         else {
             return false;
         };
-        let objects = &self.objects;
-        self.public_read.retain(|(b, n, g)| {
-            objects
-                .get(&(b.clone(), n.clone()))
-                .is_some_and(|m| m.generation == *g)
-        });
         self.public_read
             .insert((bucket.clone(), name.clone(), generation));
         true
@@ -2107,6 +2115,8 @@ impl StorageState {
             };
             let reservation = admit(std::slice::from_ref(&event))?;
             self.objects.remove(&key);
+            self.public_read
+                .remove(&(bucket.clone(), name.clone(), meta.generation));
             self.noncurrent
                 .insert((key.0, key.1, meta.generation), version);
             self.events.push(event);
@@ -2119,6 +2129,8 @@ impl StorageState {
         };
         let reservation = admit(std::slice::from_ref(&event))?;
         self.objects.remove(&key);
+        self.public_read
+            .remove(&(bucket.clone(), name.clone(), meta.generation));
         self.remove_blob(meta.blob);
         self.events.push(event);
         Ok((meta, reservation))
@@ -2165,6 +2177,8 @@ impl StorageState {
             };
             let reservation = admit(std::slice::from_ref(&event))?;
             self.objects.remove(&key);
+            self.public_read
+                .remove(&(bucket.clone(), name.clone(), meta.generation));
             self.remove_blob(meta.blob);
             self.events.push(event);
             return Ok((meta, reservation));
@@ -2185,6 +2199,7 @@ impl StorageState {
         };
         let reservation = admit(std::slice::from_ref(&event))?;
         self.noncurrent.remove(&version_key);
+        self.public_read.remove(&version_key);
         self.remove_blob(meta.blob);
         self.events.push(event);
         Ok((meta, reservation))
@@ -2552,6 +2567,10 @@ impl StorageState {
             .objects
             .insert((object.bucket, object.name), meta.clone())
         {
+            if old.generation != meta.generation {
+                self.public_read
+                    .remove(&(old.bucket, old.name, old.generation));
+            }
             self.remove_blob(old.blob);
         }
         self.insert_blob(blob, Arc::new(bytes));
@@ -3288,6 +3307,35 @@ impl MetadataPatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn making_an_object_public_checks_only_that_object() {
+        for count in [256, 16, 1] {
+            let mut state = StorageState::new(1);
+            let bucket = BucketName::try_new("bucket-one").unwrap();
+            for i in 0..count {
+                let name = ObjectName::try_new(format!("object-{i}")).unwrap();
+                state
+                    .put(
+                        &bucket,
+                        &name,
+                        Vec::new(),
+                        NewMetadata::default(),
+                        Precondition::default(),
+                        LogicalInstant::UNIX_EPOCH,
+                    )
+                    .unwrap();
+                assert!(state.set_public_read(&bucket, &name));
+            }
+            state.public_read_object_checks = 0;
+            assert!(state.set_public_read(&bucket, &ObjectName::try_new("object-0").unwrap()));
+            assert_eq!(
+                state.public_read_object_checks, 1,
+                "public objects: {count}"
+            );
+            assert_eq!(state.public_read.len(), count);
+        }
+    }
 
     #[test]
     fn aggregate_upload_byte_budget_is_exact_and_released_on_cancel() {

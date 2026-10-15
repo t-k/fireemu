@@ -17,6 +17,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - A `firebase.json` without a `storage`, `functions` or `firestore` section no longer drops the canonical configuration's `storage.rules`, `functions.source`, `rules.source` or `firestore.indexFile`: a section the `firebase.json` declares overrides, and a file it leaves out is kept. Before, a canonical `storage.rules` was silently lost whenever the referenced `firebase.json` had no `storage` entry, and Storage then ran with no Security Rules.
 - Logging WebSocket connections release their replay snapshots after sending history, allowing evicted log payloads to be freed while clients remain connected without changing frame contents, ordering, or lag handling.
+- Storage public-read state of a replaced or deleted generation no longer comes back on re-import; making an object public no longer scans every public object.
 
 ## [0.22.0] - 2026-10-15
 

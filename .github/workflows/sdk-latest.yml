@@ -15,21 +15,27 @@ on:
     paths:
       - .github/workflows/sdk-latest.yml
       - crates/fireemu/src/main.rs
+      - crates/fireemu/src/config.rs
       - crates/fireemu/src/daemon.rs
       - crates/fireemu-adapter-http/src/storage*.rs
       - tools/sdk-smoke/storage.mjs
       - tools/sdk-smoke/client.mjs
       - tools/sdk-smoke/fireemu.smoke.json
+      - tools/sdk-smoke/package.json
+      - tools/sdk-smoke/package-lock.json
   push:
     branches: [main]
     paths:
       - .github/workflows/sdk-latest.yml
       - crates/fireemu/src/main.rs
+      - crates/fireemu/src/config.rs
       - crates/fireemu/src/daemon.rs
       - crates/fireemu-adapter-http/src/storage*.rs
       - tools/sdk-smoke/storage.mjs
       - tools/sdk-smoke/client.mjs
       - tools/sdk-smoke/fireemu.smoke.json
+      - tools/sdk-smoke/package.json
+      - tools/sdk-smoke/package-lock.json
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -53,9 +59,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
+      # This job runs unpinned npm packages, so it restores the Rust cache but never saves one:
+      # a cache entry written here (main scope on push and schedule) could be restored by a
+      # release build. No setup-node cache either, for the same reason.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: sdk-latest
+          save-if: "false"
       - name: build fireemu from this commit
         run: cargo build --locked -p fireemu
       # Not the lockfile: the point is the release a new user gets today. The smokes are copied

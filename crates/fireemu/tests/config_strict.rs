@@ -76,14 +76,27 @@ fn every_command_refuses_a_misspelt_key_or_a_wrong_type_naming_the_file_the_key_
     }
 }
 
+/// Gives `path` an explicit mode, so that discovery's ownership and write-permission checks do
+/// not depend on the umask of whoever runs the test.
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) {}
+
 #[test]
 fn a_discovered_file_with_a_wrong_type_is_refused_too() {
     let dir = Scratch::new("config-strict", "discovered");
+    set_mode(&dir, 0o755);
     std::fs::write(
         dir.join("fireemu.toml"),
         "schemaVersion = 1\n[projects]\nrequireDemoPrefix = \"yes\"\n",
     )
     .unwrap();
+    set_mode(&dir.join("fireemu.toml"), 0o644);
     let output = fireemu(&dir, &["config", "show"]);
     assert!(!output.status.success());
     assert!(

@@ -1049,7 +1049,8 @@ mod tests {
 
     #[test]
     fn every_key_the_loader_reads_is_a_property_in_the_schema() {
-        let source = include_str!("config.rs");
+        // A Windows checkout may have CRLF line endings; the marker is matched on LF.
+        let source = include_str!("config.rs").replace("\r\n", "\n");
         let loader = &source[..source.find("#[cfg(test)]\nmod tests {").unwrap()];
         let missing = loader_schema_disagreements(loader, schema());
         assert!(

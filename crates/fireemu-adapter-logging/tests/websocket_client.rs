@@ -5,9 +5,10 @@
 
 #![allow(clippy::cast_possible_truncation)]
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use fireemu_adapter_logging::wire::{sec_websocket_accept, HandshakeError};
+use fireemu_adapter_logging::wire::{bundle_text, sec_websocket_accept, HandshakeError};
 use fireemu_adapter_logging::{
     serve_logging, serve_logging_with_limits, HandshakeLimits, LogBus, LogInput,
 };
@@ -132,17 +133,123 @@ async fn history_is_replayed_before_live_frames() {
     bus.publish(&LogInput::plain("info", "second", 2).for_emulator("functions"));
 
     let mut stream = handshake(addr, "localhost").await;
+    // Publish at the history/live boundary, before the client reads either replayed frame.
+    bus.publish(&LogInput::plain("warn", "third", 3).for_emulator("functions"));
     let a = read_text_frame(&mut stream).await;
     let b = read_text_frame(&mut stream).await;
-    assert!(a.contains("first"));
-    assert!(b.contains("second"));
-
-    // Then a live line arrives in order.
-    bus.publish(&LogInput::plain("warn", "third", 3).for_emulator("functions"));
     let c = read_text_frame(&mut stream).await;
-    assert!(c.contains("third"));
-    let value: serde_json::Value = serde_json::from_str(&c).unwrap();
-    assert_eq!(value["level"], "warn");
+    for (actual, level, message, timestamp) in [
+        (a, "info", "first", 1),
+        (b, "info", "second", 2),
+        (c, "warn", "third", 3),
+    ] {
+        assert_eq!(
+            actual,
+            bundle_text(&LogInput::plain(level, message, timestamp).for_emulator("functions"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn replayed_frames_are_released_while_a_lagged_client_stays_connected() {
+    let (bus, addr) = start().await;
+    for timestamp in 0..16 {
+        bus.publish(&LogInput::plain("info", "x".repeat(64 * 1024), timestamp));
+    }
+    let snapshot = bus.subscribe();
+    let frames: Vec<_> = snapshot.history.iter().map(Arc::downgrade).collect();
+    let payload_bytes: usize = snapshot.history.iter().map(|frame| frame.len()).sum();
+    let expected: Vec<_> = snapshot.history.iter().map(ToString::to_string).collect();
+    drop(snapshot);
+
+    let mut stream = handshake(addr, "localhost").await;
+    for frame in expected {
+        assert_eq!(read_text_frame(&mut stream).await, frame);
+    }
+
+    // No await here: overflow the 4096-frame live buffer before the server can receive.
+    for timestamp in 0..4097 {
+        bus.publish(&LogInput::plain("warn", "live", timestamp));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for timestamp in 1..4097 {
+            assert_eq!(
+                read_text_frame(&mut stream).await,
+                bundle_text(&LogInput::plain("warn", "live", timestamp))
+            );
+        }
+    })
+    .await
+    .expect("the lagged client stopped receiving live frames");
+
+    let retained = frames
+        .iter()
+        .filter(|frame| frame.strong_count() > 0)
+        .count();
+    assert_eq!(
+        retained, 0,
+        "replay still pins {payload_bytes} payload bytes"
+    );
+    send_client_frame(&mut stream, 0x8, b"").await;
+    let mut close = [0; 4];
+    stream.read_exact(&mut close).await.unwrap();
+    assert_eq!(close, [0x88, 2, 0x03, 0xe8]);
+}
+
+#[tokio::test]
+async fn partial_replay_survives_eviction_and_releases_frames_on_completion_or_disconnect() {
+    for disconnect in [false, true] {
+        let (bus, addr) = start().await;
+        bus.publish(&LogInput::plain("info", "first", 1));
+        // Exceed socket buffering so replay remains in progress while the peer stops reading.
+        let large = LogInput::plain("info", "x".repeat(16 * 1024 * 1024), 2);
+        bus.publish(&large);
+        bus.publish(&LogInput::plain("info", "last", 3));
+        let snapshot = bus.subscribe();
+        let frames: Vec<_> = snapshot.history.iter().map(Arc::downgrade).collect();
+        drop(snapshot);
+
+        let mut stream = handshake(addr, "localhost").await;
+        assert_eq!(
+            read_text_frame(&mut stream).await,
+            bundle_text(&LogInput::plain("info", "first", 1))
+        );
+        for timestamp in 0..16 {
+            bus.publish(&LogInput::plain("warn", "live", timestamp));
+        }
+        assert!(frames[1].upgrade().is_some(), "lost the in-flight frame");
+        assert!(
+            frames[2].upgrade().is_some(),
+            "lost the unread replay frame"
+        );
+
+        if !disconnect {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                assert_eq!(read_text_frame(&mut stream).await, bundle_text(&large));
+                assert_eq!(
+                    read_text_frame(&mut stream).await,
+                    bundle_text(&LogInput::plain("info", "last", 3))
+                );
+                for timestamp in 0..16 {
+                    assert_eq!(
+                        read_text_frame(&mut stream).await,
+                        bundle_text(&LogInput::plain("warn", "live", timestamp))
+                    );
+                }
+            })
+            .await
+            .expect("partial replay did not finish before the live stream");
+            assert!(frames.iter().all(|frame| frame.strong_count() == 0));
+        }
+        drop(stream);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while frames.iter().any(|frame| frame.strong_count() > 0) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("disconnected client still pins replay frames");
+    }
 }
 
 #[tokio::test]

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Logging WebSocket connections release their replay snapshots after sending history, allowing evicted log payloads to be freed while clients remain connected without changing frame contents, ordering, or lag handling.
+
 ## [0.22.0] - 2026-10-15
 
 ### Fixed

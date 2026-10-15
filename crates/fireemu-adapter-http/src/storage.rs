@@ -3214,7 +3214,8 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
 /// which production authenticates with a service account over OAuth and App Check does not
 /// apply to. The emulator has no OAuth, so it recognises the shape: a JSON API route (the
 /// XML-style object read and the form-data upload are what a page navigates to or posts a form
-/// to, and the Firebase dialect is the client SDK's), a loopback peer, and no browser evidence
+/// to, and the Firebase dialect is the client SDK's), a loopback peer, no `Firebase` client
+/// credential, and no browser evidence
 /// ([`fireemu_core_session::loopback::carries_browser_metadata`], the rule the capability
 /// follows; `Sec-Fetch-Mode` alone is Node's built-in `fetch`).
 ///
@@ -3233,6 +3234,17 @@ fn is_server_side_json_api(route: &Route, req: &StorageRequest) -> bool {
             | Route::GcsUpload { .. }
     ) && !req.remote_peer
         && !fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name))
+        && !carries_client_sdk_credential(req)
+}
+
+/// Whether the request presents the Firebase client SDK's credential scheme
+/// (`Authorization: Firebase <ID token>`). The Admin SDK and `gcloud` send an OAuth `Bearer`
+/// token or nothing, so this is an end-user request that happens to name a JSON API path and
+/// stays an ordinary request for App Check (coordinator ruling, 2026-10-15).
+fn carries_client_sdk_credential(req: &StorageRequest) -> bool {
+    req.header("authorization")
+        .and_then(|value| value.split_whitespace().next())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("firebase"))
 }
 
 /// Whether [`is_server_side_json_api`] counts as the server-side bypass of this policy.

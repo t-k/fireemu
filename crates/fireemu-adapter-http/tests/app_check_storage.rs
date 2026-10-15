@@ -1628,6 +1628,61 @@ fn an_unenforced_remote_json_api_request_is_observed_as_missing() {
         .all(|o| o.category == Missing && o.admitted));
 }
 
+/// `Authorization: Firebase <token>` is the client SDK's credential, not the Admin SDK's: on a
+/// JSON API path it is still an ordinary request (coordinator ruling, 2026-10-15). An OAuth
+/// `Bearer` token, which the Admin SDK sends, is not affected.
+#[test]
+fn a_firebase_client_credential_on_a_json_api_path_is_not_server_side() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("fb/guarded.txt");
+    let path = format!("/storage/v1/b/{BUCKET}/o/fb%2Fguarded.txt");
+    for value in [
+        "Firebase not-a-real-token",
+        "firebase not-a-real-token",
+        "FIREBASE x",
+        "  Firebase   x",
+        "Firebase",
+    ] {
+        let denied = h.call("GET", &path, &[("authorization", value)], &[], b"");
+        assert_eq!(
+            denied.status,
+            403,
+            "{value:?}: {}",
+            String::from_utf8_lossy(&denied.body)
+        );
+        assert_eq!(
+            body_of(&denied)["error"]["reason"],
+            "APP_CHECK_REQUIRED",
+            "{value:?}"
+        );
+    }
+    for value in [
+        "Bearer ya29.x",
+        "Basic Zm9vOmJhcg==",
+        "Firebaseish x",
+        "Bearer Firebase",
+    ] {
+        let admitted = h.call("GET", &path, &[("authorization", value)], &[], b"");
+        assert_eq!(admitted.status, 200, "{value:?}");
+    }
+    // A valid App Check token still passes the same request: only the server-side shortcut is
+    // withdrawn, not the ordinary path.
+    let token = h.token();
+    let with_token = h.call(
+        "GET",
+        &path,
+        &[("authorization", "Firebase not-a-real-token")],
+        &[&token],
+        b"",
+    );
+    assert_eq!(
+        with_token.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&with_token.body)
+    );
+}
+
 /// The configuration spellings round-trip, and nothing else parses (the loader refuses it).
 #[test]
 fn storage_server_requests_spellings_round_trip() {
@@ -1732,6 +1787,7 @@ mod server_side_properties {
             remote in proptest::bool::weighted(0.2),
             evidence in proptest::collection::vec(proptest::bool::weighted(0.1), 5),
             sec_fetch_mode in any::<bool>(),
+            client_credential in proptest::bool::weighted(0.15),
             loopback in proptest::bool::weighted(0.8),
         ) {
             let mode = if loopback {
@@ -1750,11 +1806,15 @@ mod server_side_properties {
             if sec_fetch_mode {
                 headers.push(("sec-fetch-mode", "cors"));
             }
+            if client_credential {
+                headers.push(("authorization", "Firebase not-a-real-token"));
+            }
             let browser = evidence.iter().any(|on| *on);
             let response = h.call_from(remote, method, &path, &headers, &[], b"");
             let refused_by_app_check = response.status == 403
                 && body_of(&response)["error"]["reason"] == "APP_CHECK_REQUIRED";
-            let expected_admitted = loopback && json_api && !remote && !browser;
+            let expected_admitted =
+                loopback && json_api && !remote && !browser && !client_credential;
             prop_assert_eq!(
                 !refused_by_app_check,
                 expected_admitted,

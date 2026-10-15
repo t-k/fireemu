@@ -367,9 +367,9 @@
       "id": "config.firestoreIndexes",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:229",
-          "crates/fireemu/src/control.rs:61",
-          "crates/fireemu/src/control.rs:259"
+          "crates/fireemu/src/control.rs:261",
+          "crates/fireemu/src/control.rs:93",
+          "crates/fireemu/src/control.rs:291"
         ],
         "status": "implemented"
       },
@@ -381,8 +381,8 @@
       "id": "config.singleFieldExemption",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:259",
-          "crates/fireemu/src/control.rs:350",
+          "crates/fireemu/src/control.rs:291",
+          "crates/fireemu/src/control.rs:382",
           "crates/fireemu-core-firestore/src/index.rs:214",
           "crates/fireemu-core-firestore/src/index.rs:233"
         ],
@@ -971,7 +971,7 @@
     {
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
-        "crates/fireemu/src/control.rs:259",
+        "crates/fireemu/src/control.rs:291",
         "crates/fireemu-core-firestore/src/index.rs:315"
       ],
       "class": "data-plane-contract",

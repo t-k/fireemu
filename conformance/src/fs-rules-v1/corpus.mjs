@@ -1,4 +1,6 @@
-// FS-3: Security Rules without `rules_version = '2'` (v1) and collection-group queries.
+// Two corpora share this recorder. FS-3 (PROGRAMS): Security Rules without `rules_version = '2'`
+// (v1) and collection-group queries. FS-8 (BAD_PATH_PROGRAMS): Rules `get()`/`exists()` on a path
+// that is not a document of this database, at the end of the file. The text below is FS-3's.
 //
 // Under v1, `match /{document=**}` is the only recursive wildcard that can match a collection-group
 // query, and Firebase documents that group queries need version 2. Nothing in the FS-RULES corpus
@@ -34,7 +36,7 @@ export const RULESETS = {
 export const RULESET_IDS = Object.keys(RULESETS);
 
 function compose(rulesetId, label) {
-  const ruleset = RULESETS[rulesetId];
+  const ruleset = RULESETS[rulesetId] ?? BAD_PATH_RULESETS[rulesetId];
   if (!ruleset) throw new Error(`unknown ruleset ${rulesetId}`);
   return [
     ...(ruleset.version === 2 ? ["rules_version = '2';"] : []),
@@ -145,7 +147,9 @@ export const PROGRAMS = [
 /** A program's digest covers its JSON and every ruleset the corpus could publish. */
 export const programDigest = (program) =>
   createHash("sha256")
-    .update(`${JSON.stringify(program)}\n${RULESET_TEXT}`)
+    .update(
+      `${JSON.stringify(program)}\n${Object.hasOwn(RULESETS, program.ruleset) ? RULESET_TEXT : rulesetSource(program.ruleset)}`,
+    )
     .digest("hex");
 
 export const corpusDigest = (programs = PROGRAMS) =>
@@ -171,7 +175,8 @@ export function validateCorpus(programs, principals = PRINCIPALS) {
     if (!/^fs-rules-v1\/[a-z-]+\/[a-z0-9-]+$/.test(p.id)) throw new Error(`bad program id ${p.id}`);
     if (ids.has(p.id)) throw new Error(`duplicate program ${p.id}`);
     ids.add(p.id);
-    if (!RULESET_IDS.includes(p.ruleset)) throw new Error(`${p.id}: unknown ruleset ${p.ruleset}`);
+    if (!RULESET_IDS.includes(p.ruleset) && !BAD_PATH_RULESET_IDS.includes(p.ruleset))
+      throw new Error(`${p.id}: unknown ruleset ${p.ruleset}`);
     const stepIds = new Set();
     p.steps.forEach((step, index) => {
       if (!/^[a-z0-9-]+$/.test(step.id)) throw new Error(`${p.id}: bad step id ${step.id}`);
@@ -203,3 +208,82 @@ export function validateCorpus(programs, principals = PRINCIPALS) {
     throw new Error(`corpus exceeds the request cap (${requests} > ${REQUEST_CAP})`);
   return requests;
 }
+
+// ---- FS-8: Rules get()/exists() on a path that is not a document of this database -----------
+//
+// A Rules `get()`/`exists()` argument is a path under `/databases/$(database)/documents`. A
+// collection (odd-segment) path, another database and a path without `/documents` are not
+// documents of this database. Each case is one `allow get` rule on its own collection, so one
+// plain REST get answers it: the request is allowed (the requested document is simply not there,
+// 404) or refused (403). Controls (a real document, a missing one, a negated real one, a good
+// path built from the request) separate "the rule raised" from "the rule was false".
+//
+// The cases whose syntax is uncertain (another database, the `(default)` literal, no
+// `/documents`) each get their own ruleset: production refuses to compile a ruleset or not as a
+// whole, and a refusal is recorded as such without taking the other cases with it.
+
+const DOCS = "/databases/$(database)/documents";
+const OTHER = "/databases/other/documents/fsr8-ctl/real";
+const NO_DOCS = "/databases/$(database)/fsr8-ctl/real";
+
+/** Case id, the ruleset that publishes it, the rule condition, and the id of the requested document. */
+export const BAD_PATH_CASES = [
+  // Controls.
+  { id: "ctl-exists-real", ruleset: "core", expr: `exists(${DOCS}/fsr8-ctl/real)` },
+  { id: "ctl-missing-not-exists", ruleset: "core", expr: `!exists(${DOCS}/fsr8-ctl/absent)` },
+  { id: "ctl-real-not-exists", ruleset: "core", expr: `!exists(${DOCS}/fsr8-ctl/real)` },
+  { id: "ctl-missing-get-null", ruleset: "core", expr: `get(${DOCS}/fsr8-ctl/absent) == null` },
+  { id: "dyn-doc-exists", ruleset: "core", expr: `exists(${DOCS}/fsr8-ctl/$(id))`, docId: "real" },
+  // A collection path, plain, negated, through get(), nested, and built from the request.
+  { id: "coll-exists", ruleset: "core", expr: `exists(${DOCS}/fsr8-ctl)` },
+  { id: "coll-not-exists", ruleset: "core", expr: `!exists(${DOCS}/fsr8-ctl)` },
+  { id: "coll-get-null", ruleset: "core", expr: `get(${DOCS}/fsr8-ctl) == null` },
+  { id: "nested-coll-not-exists", ruleset: "core", expr: `!exists(${DOCS}/fsr8-ctl/real/sub)` },
+  { id: "dyn-coll-not-exists", ruleset: "core", expr: `!exists(${DOCS}/$(id))` },
+  // Another database.
+  { id: "other-exists", ruleset: "other-database", expr: `exists(${OTHER})` },
+  { id: "other-not-exists", ruleset: "other-database", expr: `!exists(${OTHER})` },
+  { id: "other-get-null", ruleset: "other-database", expr: `get(${OTHER}) == null` },
+  // The literal `(default)` is this database: a positive control and a negated missing one.
+  {
+    id: "default-literal-exists",
+    ruleset: "default-literal",
+    expr: "exists(/databases/(default)/documents/fsr8-ctl/real)",
+  },
+  {
+    id: "default-literal-missing-not-exists",
+    ruleset: "default-literal",
+    expr: "!exists(/databases/(default)/documents/fsr8-ctl/absent)",
+  },
+  // A path with no `/documents` segment.
+  { id: "nodocs-exists", ruleset: "no-documents", expr: `exists(${NO_DOCS})` },
+  { id: "nodocs-not-exists", ruleset: "no-documents", expr: `!exists(${NO_DOCS})` },
+  { id: "nodocs-get-null", ruleset: "no-documents", expr: `get(${NO_DOCS}) == null` },
+];
+
+const badPathRulesetId = (name) => `bad-path-${name}`;
+
+/** Ruleset id to its version and rule body (always version 2: the control the rows run under). */
+export const BAD_PATH_RULESETS = {};
+for (const { id, ruleset, expr } of BAD_PATH_CASES) {
+  const entry = (BAD_PATH_RULESETS[badPathRulesetId(ruleset)] ??= { version: 2, body: [] });
+  entry.body.push(`    match /fsr8-${id}/{id} {`, `      allow get: if ${expr};`, "    }");
+}
+export const BAD_PATH_RULESET_IDS = Object.keys(BAD_PATH_RULESETS);
+
+const BAD_PATH_SEED = [{ doc: "fsr8-ctl/real", fields: { n: { integerValue: "1" } } }];
+
+export const BAD_PATH_PROGRAMS = BAD_PATH_RULESET_IDS.map((ruleset) => ({
+  id: `fs-rules-v1/bad-path/${ruleset.slice("bad-path-".length)}`,
+  ruleset,
+  seed: BAD_PATH_SEED,
+  steps: [
+    { id: "publishes", publish: true },
+    ...BAD_PATH_CASES.filter((c) => badPathRulesetId(c.ruleset) === ruleset).map((c) => ({
+      id: c.id,
+      as: "none",
+      rpc: "get",
+      doc: `fsr8-${c.id}/${c.docId ?? "x"}`,
+    })),
+  ],
+}));

@@ -10,6 +10,9 @@
 //                                                   Firestore emulator (firebase-tools 15.28.2)
 //   node src/fs-rules-v1/run.mjs export-comparison <out.json>
 //
+// FS3_CORPUS picks the corpus: `v1` (FS-3, the default) or `bad-path` (FS-8, Rules get()/exists()
+// on a path that is not a document of this database). One run never mixes the two.
+//
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
 // the repository), owner ADC, FIREEMU_SANDBOX_LEDGER, FIREEMU_FS3_PRIVATE_DIR and
 // FS3_NO_AUTH_RECORDING (the ISO time at which the operator confirmed that no AUTH lane is
@@ -28,7 +31,7 @@ import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { createContext, SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
-import { PRINCIPALS, PROGRAMS, validateCorpus } from "./corpus.mjs";
+import { BAD_PATH_PROGRAMS, PRINCIPALS, PROGRAMS, validateCorpus } from "./corpus.mjs";
 import { createGrpcAdapter } from "./grpc.mjs";
 import {
   brief,
@@ -42,6 +45,7 @@ import {
   PASSING,
   selectPrograms,
   sha256,
+  taskIdFor,
 } from "./judge.mjs";
 import { preflight } from "./preflight.mjs";
 import { recordProduction } from "./record.mjs";
@@ -123,7 +127,7 @@ async function assertIgnored(path) {
 const realGrpc = (ctx) => ({ grpc: createGrpcAdapter(ctx) });
 
 /** The real effects of a production recording. */
-function productionDeps() {
+export function productionDeps() {
   return {
     now: () => Date.now(),
     readLedger: async (path) => (existsSync(path) ? readFile(path, "utf8") : ""),
@@ -138,7 +142,7 @@ function productionDeps() {
     clockOffset: assertClockSynchronized,
     sandboxWebConfig,
     productionTarget,
-    preflight: (target, ledgerText) => preflight(target, ledgerText),
+    preflight: (target, ledgerText, taskId) => preflight(target, ledgerText, { taskId }),
     async recordOnce(programs, web, { shouldStop }) {
       const target = await productionTarget(web);
       const ctx = createContext({ run: String(Date.now()), target });
@@ -318,7 +322,7 @@ async function check() {
   const profile = process.env.FS3_PROFILE ?? "strict";
   const local = await runLocal(programs, { profile });
   const rows = compareRows({ fixture, programs, local });
-  const known = new Set(PROGRAMS.map((p) => p.id));
+  const known = new Set([...PROGRAMS, ...BAD_PATH_PROGRAMS].map((p) => p.id));
   const orphans = Object.keys(fixture.programs ?? {}).filter((id) => !known.has(id));
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
@@ -361,8 +365,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (mode === "preflight") {
     const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
     const ledgerText = ledger && existsSync(ledger) ? await readFile(ledger, "utf8") : "";
+    const taskId = taskIdFor(selectPrograms());
     const target = await productionTarget(await sandboxWebConfig());
-    console.log(JSON.stringify(await preflight(target, ledgerText), null, 2));
+    console.log(JSON.stringify(await preflight(target, ledgerText, { taskId }), null, 2));
   } else if (mode === "record-production") {
     const result = await recordProduction(process.env, productionDeps());
     if (result.error) console.error(result.error);

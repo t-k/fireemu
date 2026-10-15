@@ -8,6 +8,10 @@
 //   v1Group      "allow" | "deny"  a collection-group read under the v1 recursive rule
 //   pathV1       "compiles" | "refused"
 //   unreadable   a function (method, url, n) returning an answer to use instead
+//   badPath      "error" | "missing"  FS-8: Rules get()/exists() on a path that is not a document
+//                of this database raises an evaluation error (deny) or reads as a missing document
+//   getMissing   "error" | "null"  FS-8: get() of a missing document raises or yields null
+//   refuseSource a function (content) returning true for a ruleset production refuses to compile
 // The facts are the test's choice, not claims about production.
 
 import { SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
@@ -32,7 +36,13 @@ export function createWorld(scenario = {}) {
     commits: [],
     /** Every marker write: its label and whether the ruleset in force allowed it. */
     markerAnswers: [],
-    scenario: { v1Group: "allow", pathV1: "refused", ...scenario },
+    scenario: {
+      v1Group: "allow",
+      pathV1: "refused",
+      badPath: "error",
+      getMissing: "error",
+      ...scenario,
+    },
     /** Set by a test to run code before an answer is built. */
     onCall: undefined,
   };
@@ -65,6 +75,40 @@ export function createWorld(scenario = {}) {
     }
     if (path) return v2 && shape.group;
     return false;
+  }
+
+  /**
+   * FS-8: the decision of the `allow get` rule of a `fsr8-` collection, for the conditions the
+   * corpus writes (`exists(P)`, `!exists(P)`, `get(P) == null`). A path that is not a document of
+   * `(default)` is "bad": it raises or reads as missing, as the scenario says. An error denies.
+   */
+  function badPathAllowed(rel) {
+    const source = active();
+    const [collection, id] = rel.split("/");
+    const rule = new RegExp(`match /${collection}/\\{id\\} \\{\\n\\s+allow get: if (.*);\\n`).exec(
+      source ?? "",
+    );
+    if (!rule) return false;
+    const condition = /^(!)?(exists|get)\((.*?)\)( == null)?$/.exec(rule[1]);
+    if (!condition) return false;
+    const [, negated, fn, argument] = condition;
+    const path = argument.replaceAll("$(database)", "(default)").replaceAll("$(id)", id);
+    const parts = /^\/databases\/([^/]+)\/documents\/(.+)$/.exec(path);
+    const segments = parts?.[2].split("/") ?? [];
+    const bad = !parts || parts[1] !== "(default)" || segments.length % 2 === 1;
+    const raise = Symbol("evaluation error");
+    let value;
+    if (bad) {
+      if (fn === "exists") value = world.scenario.badPath === "error" ? raise : false;
+      else value = world.scenario.badPath === "error" ? raise : getNull(false);
+    } else if (fn === "exists") value = world.documents.has(parts[2]);
+    else value = getNull(world.documents.has(parts[2]));
+    function getNull(present) {
+      if (present) return false;
+      return world.scenario.getMissing === "null" ? true : raise;
+    }
+    if (value === raise) return false;
+    return negated ? !value : value;
   }
 
   const shapeOfQuery = (query) => {
@@ -123,7 +167,9 @@ export function createWorld(scenario = {}) {
       return { code: 0, status: 200, body: { name: names(rel) } };
     }
     if (op === "get") {
-      if (!owner && !readAllowed({})) return { code: 7, status: 403 };
+      if (!owner && rel.startsWith("fsr8-")) {
+        if (!badPathAllowed(rel)) return { code: 7, status: 403 };
+      } else if (!owner && !readAllowed({})) return { code: 7, status: 403 };
       return world.documents.has(rel)
         ? { code: 0, status: 200, body: { name: names(rel) } }
         : { code: 5, status: 404 };
@@ -221,6 +267,10 @@ export function createWorld(scenario = {}) {
         if (file?.name !== "firestore.rules" || typeof file?.content !== "string")
           return json(400, { error: { status: "INVALID_ARGUMENT", message: "missing source" } });
         const { path: isPath, v2 } = kind(file.content);
+        if (world.scenario.refuseSource?.(file.content))
+          return json(400, {
+            error: { status: "INVALID_ARGUMENT", message: `Compilation error in ${PROJECT}` },
+          });
         if (isPath && !v2 && world.scenario.pathV1 === "refused")
           return json(400, {
             error: {

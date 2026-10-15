@@ -4,7 +4,7 @@
 // production (release and ruleset names, database names, `recordsCount`, the Admin v2 config).
 
 import { PRODUCTION, SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
-import { openRuns, otherLanesRecently, preflightProblems } from "./judge.mjs";
+import { openRuns, otherLanesRecently, preflightProblems, TASK_ID } from "./judge.mjs";
 
 /** Owner calls of the preflight; nothing here writes. */
 async function ownerFetch(fetchImpl, target, method, url, body) {
@@ -26,7 +26,7 @@ async function ownerFetch(fetchImpl, target, method, url, body) {
 export async function preflight(
   target,
   ledgerText = "",
-  { now = Date.now(), fetchImpl = fetch } = {},
+  { now = Date.now(), fetchImpl = fetch, taskId = TASK_ID } = {},
 ) {
   const rules = `${PRODUCTION.rules}/v1/projects/${SANDBOX_PROJECT}`;
   const itk = PRODUCTION.itk;
@@ -51,8 +51,8 @@ export async function preflight(
     projectAccounts: Number(reads.accounts.json?.recordsCount ?? -1),
     anonymousEnabled: reads.config.json?.signIn?.anonymous?.enabled === true,
     rulesets: (reads.rulesets.json?.rulesets ?? []).length,
-    otherLanesRecently: otherLanesRecently(ledgerText, now),
-    openRuns: openRuns(ledgerText, now),
+    otherLanesRecently: otherLanesRecently(ledgerText, now, taskId),
+    openRuns: openRuns(ledgerText, now, taskId),
     releases: (reads.releases.json?.releases ?? []).map(({ name }) => name.split("/releases/")[1]),
     databases: (reads.databases.json?.databases ?? []).map(({ name }) => name.split("/").at(-1)),
     defaultHasDocuments:

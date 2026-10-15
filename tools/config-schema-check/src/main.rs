@@ -195,7 +195,7 @@ fn eventarc_authentication_problems(cfg: &Value) -> Vec<String> {
 
 /// Declared tenants need the project's multi-tenancy switch. Production creates tenants only in a
 /// project that allows them; the strict profile's development default switches that on, so the
-/// rule applies when the document declares the switch off, or under `productionExact`, which
+/// rule applies only under strict when the document declares the switch off, or under `productionExact`, which
 /// restores production's "off until enabled". The Rust loader enforces the same rule.
 fn auth_tenant_problems(cfg: &Value) -> Vec<String> {
     let declared = cfg
@@ -206,7 +206,8 @@ fn auth_tenant_problems(cfg: &Value) -> Vec<String> {
         .pointer("/auth/multiTenant/allowTenants")
         .and_then(Value::as_bool);
     let production_exact = cfg.get("productionExact").and_then(Value::as_bool) == Some(true);
-    if declared && (switch == Some(false) || (production_exact && switch != Some(true))) {
+    let strict = str_at(cfg, &["profile"]) != Some("emulator");
+    if strict && declared && (switch == Some(false) || (production_exact && switch != Some(true))) {
         return vec![
             "auth.tenants needs auth.multiTenant.allowTenants: true (declared off, or productionExact)"
                 .to_owned(),
@@ -575,6 +576,26 @@ fn main() -> ExitCode {
                 eprintln!("error: {p}");
             }
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn emulator_tenants_ignore_the_off_switch() {
+        for exact in [false, true] {
+            let mut cfg = json!({"profile": "emulator", "productionExact": exact,
+                "auth": {"multiTenant": {"allowTenants": false},
+                    "tenants": [{"tenantId": "acme", "displayName": "Acme"}]}});
+            assert!(auth_tenant_problems(&cfg).is_empty());
+            cfg["profile"] = json!("strict");
+            assert_eq!(auth_tenant_problems(&cfg).len(), 1);
+            cfg["auth"]["multiTenant"]["allowTenants"] = json!(true);
+            assert!(auth_tenant_problems(&cfg).is_empty());
         }
     }
 }

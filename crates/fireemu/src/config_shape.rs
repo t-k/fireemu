@@ -34,8 +34,17 @@ pub(crate) fn check(document: &Value) -> Result<(), ConfigError> {
 
 /// How a path reads in a diagnostic: the root has none.
 fn join(path: &str, key: &str) -> String {
-    if path.is_empty() {
+    let key = if !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
         key.to_owned()
+    } else {
+        serde_json::to_string(key).expect("a key is a JSON string")
+    };
+    if path.is_empty() {
+        key
     } else {
         format!("{path}.{key}")
     }
@@ -126,6 +135,15 @@ fn check_constraints(node: &Value, value: &Value, path: &str) -> Result<(), Stri
         };
         if !kinds.is_empty() && !kinds.iter().any(|kind| is_kind(value, kind)) {
             let wanted: Vec<&str> = kinds.iter().map(|kind| expected(kind)).collect();
+            if kinds.contains(&"integer") && value.is_f64() {
+                if let Some(number) = value.as_f64().filter(|number| number.fract() == 0.0) {
+                    return Err(format!(
+                        "{} must be {}, found {value} (write {number:.0})",
+                        at(path),
+                        wanted.join(" or ")
+                    ));
+                }
+            }
             return Err(format!(
                 "{} must be {}, found {}",
                 at(path),
@@ -191,6 +209,7 @@ fn check_node(root: &Value, node: &Value, value: &Value, path: &str) -> Result<(
     for keyword in ["oneOf", "anyOf"] {
         if let Some(alternatives) = node.get(keyword).and_then(Value::as_array) {
             let mut first = None;
+            let mut matching_type_error = None;
             let mut matched = false;
             for alternative in alternatives {
                 match check_node(root, alternative, value, path) {
@@ -199,11 +218,25 @@ fn check_node(root: &Value, node: &Value, value: &Value, path: &str) -> Result<(
                         break;
                     }
                     Err(error) => {
+                        let type_matches = match resolve(root, alternative).get("type") {
+                            Some(Value::String(kind)) => is_kind(value, kind),
+                            Some(Value::Array(kinds)) => kinds
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .any(|kind| is_kind(value, kind)),
+                            _ => true,
+                        };
+                        if type_matches {
+                            matching_type_error.get_or_insert(error.clone());
+                        }
                         first.get_or_insert(error);
                     }
                 }
             }
             if !matched {
+                if let Some(error) = matching_type_error {
+                    return Err(error);
+                }
                 // `null or a string` reads better than the first alternative's complaint.
                 let kinds: Option<Vec<&str>> = alternatives
                     .iter()
@@ -266,11 +299,7 @@ fn check_object(
         } else {
             match additional {
                 Some(Value::Bool(false)) => {
-                    return Err(if path.is_empty() {
-                        format!("unknown config key {key:?}")
-                    } else {
-                        format!("unknown config key {child}")
-                    });
+                    return Err(format!("unknown config key {child}"));
                 }
                 Some(schema @ Value::Object(_)) => check_node(root, schema, member, &child)?,
                 _ => {}
@@ -517,6 +546,22 @@ mod tests {
     }
 
     #[test]
+    fn a_matching_alternative_reports_its_own_nested_error() {
+        let error = refusal(json!({"firestore": {"textSearch": {
+            "visibilityLag": {"maxLogicalDelayMillis": "5"}
+        }}}));
+        assert_eq!(error, "firestore.textSearch.visibilityLag.maxLogicalDelayMillis must be an integer, found a string");
+    }
+
+    #[test]
+    fn integer_valued_floats_explain_how_to_write_an_integer() {
+        assert_eq!(
+            refusal(json!({"daemon": {"firestorePort": 8080.0}})),
+            "daemon.firestorePort must be an integer, found 8080.0 (write 8080)"
+        );
+    }
+
+    #[test]
     fn every_kind_of_value_is_named_and_recognised() {
         let values = [
             (json!(null), "null", "null"),
@@ -685,7 +730,7 @@ mod tests {
         assert!(load(json!({"daemon": {"firestorePort": -1}})).is_err());
     }
 
-    /// The JSON files in a `spec/config` directory, by file name.
+    /// The JSON and TOML files in a `spec/config` directory, by file name.
     fn corpus(directory: &str) -> Vec<(String, Value)> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../spec/config")
@@ -693,12 +738,16 @@ mod tests {
         let mut files = Vec::new();
         for entry in std::fs::read_dir(&root).expect("the corpus directory is readable") {
             let path = entry.unwrap().path();
-            if path.extension().is_none_or(|extension| extension != "json") {
+            let Some(extension) = path.extension() else {
+                continue;
+            };
+            if extension != "json" && extension != "toml" {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            let document = serde_json::from_str(&text)
-                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let (document, canonical) = crate::parse_config_text(&path, &text, extension == "toml")
+                .unwrap_or_else(|error| panic!("{}", error.message));
+            assert!(canonical, "{} is canonical", path.display());
             files.push((
                 path.file_name().unwrap().to_string_lossy().into_owned(),
                 document,
@@ -730,53 +779,279 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
-    /// Every property name a schema file declares, at any depth.
-    fn property_names(schema: &Value) -> std::collections::BTreeSet<String> {
-        let mut names = std::collections::BTreeSet::new();
-        let mut pending = vec![schema];
-        while let Some(node) = pending.pop() {
-            match node {
-                Value::Object(members) => {
-                    if let Some(Value::Object(properties)) = members.get("properties") {
-                        names.extend(properties.keys().cloned());
-                    }
-                    pending.extend(members.values());
-                }
-                Value::Array(items) => pending.extend(items),
-                _ => {}
+    /// Schema nodes at their document paths, including references, alternatives and collection entries.
+    fn schema_nodes<'a>(
+        root: &'a Value,
+        node: &'a Value,
+        path: &str,
+        nodes: &mut Vec<(String, &'a Value)>,
+    ) {
+        let node = resolve(root, node);
+        nodes.push((path.to_owned(), node));
+        if let Some(properties) = node.get("properties").and_then(Value::as_object) {
+            for (key, child) in properties {
+                schema_nodes(root, child, &format!("{path}/{key}"), nodes);
             }
         }
-        names
+        for keyword in ["items", "additionalProperties"] {
+            if let Some(child @ Value::Object(_)) = node.get(keyword) {
+                schema_nodes(root, child, &format!("{path}/*"), nodes);
+            }
+        }
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            if let Some(children) = node.get(keyword).and_then(Value::as_array) {
+                for child in children {
+                    schema_nodes(root, child, path, nodes);
+                }
+            }
+        }
+    }
+
+    /// Each reader's parameter or local object is checked only against its own schema location.
+    #[allow(clippy::too_many_lines)]
+    fn loader_schema_disagreements(
+        loader: &str,
+        root: &Value,
+    ) -> std::collections::BTreeSet<String> {
+        let firebase: Value = serde_json::from_str(include_str!(
+            "../../../spec/config/firebase-json.schema.json"
+        ))
+        .unwrap();
+        let mut canonical_nodes = Vec::new();
+        let mut firebase_nodes = Vec::new();
+        schema_nodes(root, root, "", &mut canonical_nodes);
+        schema_nodes(&firebase, &firebase, "", &mut firebase_nodes);
+        let mut function = "";
+        let mut missing = std::collections::BTreeSet::new();
+        let mut preceding = String::new();
+        for line in loader.lines() {
+            if !line.trim_start().starts_with("//") && line.contains("fn ") {
+                function = line.split_once("fn ").unwrap().1.split('(').next().unwrap();
+            }
+            // Schema projection/output rows and .firebaserc are not configuration readers.
+            if matches!(
+                function,
+                "config_schema"
+                    | "config_show"
+                    | "resolve_project_alias"
+                    | "resolve_storage_rules_targets"
+            ) {
+                continue;
+            }
+            for pattern in [".get(\"", ".contains_key(\"", "[\""] {
+                for (offset, _) in line.match_indices(pattern) {
+                    let Some((key, _)) = line[offset + pattern.len()..].split_once('"') else {
+                        continue;
+                    };
+                    let before = format!("{preceding}{}", &line[..offset]);
+                    let receiver = before
+                        .trim_end()
+                        .rsplit(|ch: char| !(ch.is_ascii_alphanumeric() || "_[]\".".contains(ch)))
+                        .next()
+                        .unwrap();
+                    if receiver.is_empty() {
+                        continue;
+                    } // A literal array, not an indexed object.
+                    let (base, indices) = receiver.split_once('[').unwrap_or((receiver, ""));
+                    let path = match (function, base) {
+                        ("from_json" | "apply_firebase_json", "obj")
+                        | ("firebase_json_reference", "json")
+                        | ("record_development_defaults", "input") => "",
+                        ("from_json", "fs") => "/firestore",
+                        ("from_json", "p") => "/projects",
+                        ("from_json", "storage") => "/storage",
+                        ("from_json" | "parse_auth_tenants" | "parse_idp_assertions", "auth") => {
+                            "/auth"
+                        }
+                        ("from_json", "client") => "/auth/client",
+                        ("parse_auth_config_override_value", "client") => {
+                            "/auth/configOverrides/*/config/client"
+                        }
+                        ("from_json", "sign_in") => "/auth/signIn",
+                        ("from_json", "item") => "/auth/passwordPolicyOverrides/*",
+                        ("from_json", receiver) if receiver.starts_with("refusal.body") => continue,
+                        ("parse_password_policy", "object") => "/auth/passwordPolicy",
+                        ("parse_password_constraints", "object") => {
+                            "/auth/passwordPolicy/constraints"
+                        }
+                        ("parse_auth_config_override_value", "object") => {
+                            "/auth/configOverrides/*/config"
+                        }
+                        ("parse_auth_config_overrides", "object") => "/auth/configOverrides/*",
+                        ("parse_blocking_trigger", "object") => {
+                            "/auth/blockingFunctions/triggers/beforeCreate"
+                        }
+                        ("parse_blocking_functions", "object") => "/auth/blockingFunctions",
+                        ("parse_blocking_functions", "trigger_object") => {
+                            "/auth/blockingFunctions/triggers"
+                        }
+                        ("parse_auth_quota", "object") => "/auth/quota",
+                        ("parse_auth_quota", "quota") => "/auth/quota/signUpQuotaConfig",
+                        ("parse_auth_quota_simulation", "object") => "/auth/quotaSimulation",
+                        ("parse_limit_thresholds", "threshold") => "/limits/warningThresholds/*",
+                        ("parse_firestore_plan", "plan") => "/limits/firestorePlan",
+                        ("parse_firestore_history", "history") => "/firestore/history",
+                        ("parse_daemon", "d") => "/daemon",
+                        ("parse_rules", "rules") => "/rules",
+                        ("parse_events", "e") => "/events",
+                        ("parse_eventarc", "section") => "/eventarc",
+                        ("parse_eventarc", "entry") => "/eventarc/oauthCredentials/*",
+                        ("parse_pubsub", "p") => "/pubsub",
+                        ("parse_pubsub", "authentication") => "/pubsub/authentication",
+                        ("parse_scheduler", "s") => "/scheduler",
+                        ("parse_functions", "f") => "/functions",
+                        ("parse_app_check", "section") => "/appCheck",
+                        ("parse_app_check", "app") => "/appCheck/apps/*",
+                        ("parse_sign_in_providers", "phone") => "/auth/signIn/phoneNumber",
+                        ("apply_firestore", "entry") => "/firestore/*",
+                        ("apply_storage", "entry") => "/storage/*",
+                        ("apply_functions", "entry") => "/functions/*",
+                        ("emulator_addr", "obj") => "/emulators/firestore",
+                        ("apply_firebase_json", "entry") => {
+                            let branch = before
+                                .rsplit_once("\" => {")
+                                .and_then(|(head, _)| head.rsplit('"').next());
+                            match branch {
+                                Some("eventarc") => "/emulators/eventarc",
+                                Some("tasks") => "/emulators/tasks",
+                                Some("ui") => "/emulators/ui",
+                                _ => {
+                                    missing.insert(format!("unmapped emulator branch: {branch:?}"));
+                                    continue;
+                                }
+                            }
+                        }
+                        (_, "limits") => "/limits",
+                        _ => {
+                            missing.insert(format!("unmapped reader {function}: {receiver}.{key}"));
+                            continue;
+                        }
+                    };
+                    // Shared readers must agree at every call site's path, not merely one use of a $ref.
+                    let other_paths: &[&str] = match (function, base) {
+                        ("parse_password_policy", "object") => {
+                            &["/auth/passwordPolicyOverrides/*/passwordPolicy"]
+                        }
+                        ("parse_password_constraints", "object") => {
+                            &["/auth/passwordPolicyOverrides/*/passwordPolicy/constraints"]
+                        }
+                        ("parse_blocking_trigger", "object") => {
+                            &["/auth/blockingFunctions/triggers/beforeSignIn"]
+                        }
+                        ("parse_limit_thresholds", "threshold") => {
+                            &["/limits/perLimitWarningThresholds/*/*"]
+                        }
+                        ("apply_firestore", "entry") => &["/firestore"],
+                        ("apply_storage", "entry") if key != "target" => &["/storage"],
+                        ("apply_functions", "entry") => &["/functions"],
+                        ("emulator_addr", "obj") => &[
+                            "/emulators/auth",
+                            "/emulators/storage",
+                            "/emulators/functions",
+                            "/emulators/eventarc",
+                            "/emulators/tasks",
+                            "/emulators/pubsub",
+                            "/emulators/hub",
+                            "/emulators/ui",
+                            "/emulators/logging",
+                        ],
+                        _ => &[],
+                    };
+                    for prefix in std::iter::once(path).chain(other_paths.iter().copied()) {
+                        let mut path = prefix.to_owned();
+                        for (index, segment) in indices.split('"').enumerate() {
+                            if index % 2 == 1 {
+                                path.push('/');
+                                path.push_str(segment);
+                            }
+                        }
+                        path.push('/');
+                        path.push_str(key);
+                        // This obsolete key is deliberately read only to refuse it.
+                        if function == "from_json" && path == "/firestore/indexValidationPolicy" {
+                            continue;
+                        }
+                        let nodes = if function.starts_with("apply_") || function == "emulator_addr"
+                        {
+                            &firebase_nodes
+                        } else {
+                            &canonical_nodes
+                        };
+                        if !nodes.iter().any(|(declared, _)| declared == &path) {
+                            missing.insert(format!("{function}: {path}"));
+                        }
+                    }
+                }
+            }
+            preceding.push_str(line);
+            preceding.push('\n');
+        }
+        missing
+    }
+
+    #[test]
+    fn agreement_checks_the_actual_path_and_all_literal_read_forms() {
+        for read in [
+            r#"fs.get("seed")"#,
+            r#"fs["seed"]"#,
+            r#"fs.contains_key("seed")"#,
+        ] {
+            let source = format!("fn from_json() {{ {read}; }}");
+            assert!(
+                !loader_schema_disagreements(&source, schema()).is_empty(),
+                "{read}"
+            );
+        }
+    }
+
+    #[test]
+    fn agreement_accepts_literal_reads_only_at_their_declared_path() {
+        for read in [
+            r#"fs.get("edition")"#,
+            r#"fs["edition"]"#,
+            r#"fs.contains_key("edition")"#,
+        ] {
+            let source = format!("fn from_json() {{ {read}; }}");
+            assert!(
+                loader_schema_disagreements(&source, schema()).is_empty(),
+                "{read}"
+            );
+            let mut changed = schema().clone();
+            changed["properties"]["firestore"]["properties"]
+                .as_object_mut()
+                .unwrap()
+                .remove("edition");
+            changed["properties"]["storage"]["properties"]["edition"] = json!({"type": "string"});
+            assert!(
+                !loader_schema_disagreements(&source, &changed).is_empty(),
+                "{read}"
+            );
+        }
+    }
+
+    #[test]
+    fn emulator_tenants_load_with_the_switch_declared_off() {
+        load(json!({"profile": "emulator", "auth": {
+            "multiTenant": {"allowTenants": false},
+            "tenants": [{"tenantId": "acme", "displayName": "Acme"}]
+        }}))
+        .unwrap();
+    }
+
+    #[test]
+    fn corpus_includes_toml_examples() {
+        assert!(corpus("examples")
+            .iter()
+            .any(|(name, _)| std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))));
     }
 
     #[test]
     fn every_key_the_loader_reads_is_a_property_in_the_schema() {
         let source = include_str!("config.rs");
-        let loader = &source[..source
-            .find("#[cfg(test)]\nmod tests {")
-            .expect("the loader precedes its tests")];
-        let mut named = property_names(schema());
-        // The keys of a firebase.json are read by the same file.
-        let firebase_json: Value = serde_json::from_str(include_str!(
-            "../../../spec/config/firebase-json.schema.json"
-        ))
-        .unwrap();
-        named.extend(property_names(&firebase_json));
-        // Not keys of a configuration file: the schema walk's own, `.firebaserc`'s, and the
-        // key that is only read to be refused.
-        named.extend(
-            ["default", "properties", "targets", "indexValidationPolicy"]
-                .into_iter()
-                .map(str::to_owned),
-        );
-        let mut missing = std::collections::BTreeSet::new();
-        for part in loader.split(".get(\"").skip(1) {
-            if let Some((key, rest)) = part.split_once("\")") {
-                if !key.contains('"') && !named.contains(key) && !rest.is_empty() {
-                    missing.insert(key.to_owned());
-                }
-            }
-        }
+        let loader = &source[..source.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let missing = loader_schema_disagreements(loader, schema());
         assert!(
             missing.is_empty(),
             "the loader reads keys the schema does not declare: {missing:?}"
@@ -981,6 +1256,27 @@ mod tests {
 
     proptest::proptest! {
         #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn every_schema_minimum_refuses_the_predecessor_and_accepts_the_boundary(gap in 1_i64..10_000) {
+            let root = schema();
+            let mut pending = vec![(String::new(), root)];
+            let mut tested = 0;
+            while let Some((path, node)) = pending.pop() {
+                if let Some(minimum) = node.get("minimum").and_then(Value::as_i64) {
+                    proptest::prop_assert!(check_node(root, node, &json!(minimum - 1), &path).is_err(), "{} accepted min-1", path);
+                    proptest::prop_assert!(check_node(root, node, &json!(minimum - gap), &path).is_err(), "{} accepted min-gap", path);
+                    proptest::prop_assert!(check_node(root, node, &json!(minimum), &path).is_ok(), "{} refused min", path);
+                    tested += 1;
+                }
+                match node {
+                    Value::Object(members) => pending.extend(members.iter().map(|(key, child)| (format!("{path}/{key}"), child))),
+                    Value::Array(items) => pending.extend(items.iter().enumerate().map(|(index, child)| (format!("{path}/{index}"), child))),
+                    _ => {}
+                }
+            }
+            proptest::prop_assert!(tested > 30, "only {} minima exercised", tested);
+        }
 
         #[test]
         fn the_shape_check_accepts_exactly_the_ports_in_range(port in -70_000_i64..140_000) {

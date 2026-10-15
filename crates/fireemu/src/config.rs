@@ -3187,7 +3187,7 @@ impl RuntimeConfig {
                 )));
             }
             seen.push(database.clone());
-            let files = FirestoreDatabaseFiles {
+            let mut files = FirestoreDatabaseFiles {
                 rules: entry
                     .get("rules")
                     .map(|value| file(value, &format!("{path}.rules")))
@@ -3203,9 +3203,13 @@ impl RuntimeConfig {
             if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if files.rules.is_some() {
                     self.rules_file.clone_from(&files.rules);
+                } else {
+                    files.rules.clone_from(&self.rules_file);
                 }
                 if files.indexes.is_some() {
                     self.index_file.clone_from(&files.indexes);
+                } else {
+                    files.indexes.clone_from(&self.index_file);
                 }
             }
             self.firestore_databases.insert(database, files);

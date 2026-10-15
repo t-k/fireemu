@@ -69,7 +69,7 @@ Two common setups run into this rule:
 
 ## Validate your configuration
 
-`fireemu.toml` is validated at startup, and a value Fireemu does not accept stops it with an error. A key the schema does not list and a value of the wrong type are refused in both formats by `up`, `exec` and `config show`, naming the file, the key and the type it should have had, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
+`fireemu.toml` is validated at startup, and a value Fireemu does not accept stops it with an error. A key the schema does not list and a value of the wrong type are refused in both formats by `up`, `exec` and `config show`, naming the file, the key and the type it should have had, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. Integer settings refuse floats even when their value is integral: write `8080` rather than `8080.0`, as the error message suggests. The [configuration schema](../../reference/configuration/) is a JSON Schema you can also use in your editor.
 
 `fireemu capabilities` prints the capability manifest for the profile your configuration resolves to.
 

@@ -29,7 +29,7 @@ fn stdout(output: &Output) -> String {
 }
 
 /// The same refused document in both formats, with the path and the type its diagnostic names.
-const REFUSED: [(&str, &str, &str); 4] = [
+const REFUSED: [(&str, &str, &str); 12] = [
     (
         "fireemu.json",
         r#"{"schemaVersion": 1, "firestore": {"prot": 8080}}"#,
@@ -49,6 +49,46 @@ const REFUSED: [(&str, &str, &str); 4] = [
         "fireemu.toml",
         "schemaVersion = 1\n[daemon]\nfirestorePort = \"8080\"\n",
         "daemon.firestorePort must be an integer, found a string",
+    ),
+    (
+        "fireemu.json",
+        r#"{"schemaVersion": 1, "firestore": {"history.maxBytes": 1}}"#,
+        r#"unknown config key firestore."history.maxBytes""#,
+    ),
+    (
+        "fireemu.toml",
+        "schemaVersion = 1\n[firestore]\n\"history.maxBytes\" = 1\n",
+        r#"unknown config key firestore."history.maxBytes""#,
+    ),
+    (
+        "fireemu.json",
+        r#"{"schemaVersion": 1, "firestore": {"history maxBytes": 1}}"#,
+        r#"unknown config key firestore."history maxBytes""#,
+    ),
+    (
+        "fireemu.toml",
+        "schemaVersion = 1\n[firestore]\n\"history maxBytes\" = 1\n",
+        r#"unknown config key firestore."history maxBytes""#,
+    ),
+    (
+        "fireemu.json",
+        r#"{"schemaVersion":1,"daemon":{"firestorePort":8080.0}}"#,
+        "daemon.firestorePort must be an integer, found 8080.0 (write 8080)",
+    ),
+    (
+        "fireemu.toml",
+        "schemaVersion = 1\n[daemon]\nfirestorePort = 8080.0\n",
+        "daemon.firestorePort must be an integer, found 8080.0 (write 8080)",
+    ),
+    (
+        "fireemu.json",
+        r#"{"schemaVersion":1,"root.key":1}"#,
+        r#"unknown config key "root.key""#,
+    ),
+    (
+        "fireemu.toml",
+        "schemaVersion = 1\n\"root.key\" = 1\n",
+        r#"unknown config key "root.key""#,
     ),
 ];
 

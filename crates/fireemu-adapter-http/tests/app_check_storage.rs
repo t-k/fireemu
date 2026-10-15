@@ -1626,6 +1626,33 @@ fn an_unenforced_remote_json_api_request_is_observed_as_missing() {
         .all(|o| o.category == Missing && o.admitted));
 }
 
+/// The configuration spellings round-trip, and nothing else parses (the loader refuses it).
+#[test]
+fn storage_server_requests_spellings_round_trip() {
+    assert_eq!(
+        StorageServerRequests::default(),
+        StorageServerRequests::Loopback
+    );
+    for (text, mode) in [
+        ("loopback", StorageServerRequests::Loopback),
+        ("capability", StorageServerRequests::Capability),
+    ] {
+        assert_eq!(StorageServerRequests::parse_config(text), Some(mode));
+        assert_eq!(mode.as_config_str(), text);
+    }
+    for bad in [
+        "",
+        "Loopback",
+        "LOOPBACK",
+        "capability ",
+        "all",
+        "off",
+        "true",
+    ] {
+        assert_eq!(StorageServerRequests::parse_config(bad), None, "{bad:?}");
+    }
+}
+
 mod server_side_properties {
     use super::*;
     use proptest::prelude::*;

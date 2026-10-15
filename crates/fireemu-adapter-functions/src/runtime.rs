@@ -709,6 +709,8 @@ struct Inner {
     /// `http-<n>`) with the function name; a timed-out handler keeps its slot until it
     /// really finishes.
     running: BTreeMap<String, String>,
+    #[cfg(test)]
+    dispatch_candidate_visits: usize,
     next_event: u64,
     epoch: Epoch,
     jobs: Vec<ScheduledJob>,
@@ -767,6 +769,8 @@ struct DeliveryDraft {
     subject: String,
     time: LogicalInstant,
     payload: Arc<Value>,
+    raw_data: Option<Arc<str>>,
+    retained_bytes: usize,
     parent: Option<String>,
 }
 
@@ -830,7 +834,7 @@ impl EventBatchReservation {
             );
             inner
                 .outbox
-                .enqueue(delivery.event)
+                .enqueue_in_queue(delivery.event, &delivery.payload.function)
                 .unwrap_or_else(|_| unreachable!("a reserved event id is unique"));
             inner.active_event_bytes = inner
                 .active_event_bytes
@@ -1451,6 +1455,8 @@ impl FunctionsRuntime {
                 active_eventarc_records: 0,
                 active_eventarc_bytes: 0,
                 running: BTreeMap::new(),
+                #[cfg(test)]
+                dispatch_candidate_visits: 0,
                 next_event: 0,
                 epoch: Epoch::initial(),
                 jobs,
@@ -2087,6 +2093,14 @@ impl FunctionsRuntime {
                     subject: format!("jobs/{function}"),
                     time: at,
                     payload: payload.clone(),
+                    raw_data: None,
+                    retained_bytes: Self::retained_event_bytes(
+                        function,
+                        EVENT_TYPE,
+                        &format!("jobs/{function}"),
+                        &payload,
+                    )
+                    .expect("schedule payload serializes"),
                     parent: None,
                 })
                 .collect(),
@@ -2171,7 +2185,7 @@ impl FunctionsRuntime {
             phases: Vec::new(),
             phases_dropped: 0,
         };
-        if inner.outbox.enqueue(event).is_ok() {
+        if inner.outbox.enqueue_in_queue(event, function).is_ok() {
             inner.causality.register(causal, time);
             inner.payloads.insert(
                 id,
@@ -2261,15 +2275,8 @@ impl FunctionsRuntime {
         for draft in &drafts {
             EventType::try_new(&draft.event_type)
                 .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
-            let bytes = Self::retained_event_bytes(
-                &draft.function,
-                &draft.event_type,
-                &draft.subject,
-                &draft.payload,
-            )
-            .ok_or(SourceEventAdmissionError::Capacity)?;
             retained_bytes = retained_bytes
-                .checked_add(bytes)
+                .checked_add(draft.retained_bytes)
                 .ok_or(SourceEventAdmissionError::Capacity)?;
         }
         if !Self::can_admit_events(inner, source, drafts.len(), retained_bytes) {
@@ -2300,13 +2307,6 @@ impl FunctionsRuntime {
             let id = EventId::new(u128::from(next_event));
             let event_type = EventType::try_new(&draft.event_type)
                 .map_err(|_| SourceEventAdmissionError::InvalidEvent)?;
-            let retained_bytes = Self::retained_event_bytes(
-                &draft.function,
-                &draft.event_type,
-                &draft.subject,
-                &draft.payload,
-            )
-            .ok_or(SourceEventAdmissionError::Capacity)?;
             deliveries.push(PlannedDelivery {
                 event: LogicalEvent {
                     event_id: id,
@@ -2323,8 +2323,8 @@ impl FunctionsRuntime {
                 payload: QueuedPayload {
                     function: draft.function,
                     payload: draft.payload,
-                    raw_data: None,
-                    retained_bytes,
+                    raw_data: draft.raw_data,
+                    retained_bytes: draft.retained_bytes,
                     source,
                     admitted_at: draft.time,
                 },
@@ -2409,6 +2409,7 @@ impl FunctionsRuntime {
                 continue;
             };
             let relative = change.path.relative();
+            let mut common_data: Option<Arc<str>> = None;
             for m in self
                 .manifest
                 .firestore_matches(&commit.database, &relative, kind)
@@ -2448,8 +2449,14 @@ impl FunctionsRuntime {
                     &self.config.location,
                     &relative,
                     reported,
-                    change.before.as_deref(),
-                    change.after.as_deref(),
+                    common_data
+                        .is_none()
+                        .then_some(change.before.as_deref())
+                        .flatten(),
+                    common_data
+                        .is_none()
+                        .then_some(change.after.as_deref())
+                        .flatten(),
                     time,
                     with_auth.then(|| {
                         self.auth_context_of(
@@ -2458,6 +2465,15 @@ impl FunctionsRuntime {
                         )
                     }),
                 );
+                let raw_data = common_data
+                    .get_or_insert_with(|| {
+                        Arc::from(
+                            serde_json::to_string(&payload["data"])
+                                .expect("Firestore data serializes"),
+                        )
+                    })
+                    .clone();
+                payload["data"] = Value::Null;
                 payload["params"] = json!(m.params);
                 let event_type = payload
                     .get("type")
@@ -2468,6 +2484,7 @@ impl FunctionsRuntime {
                 let subject = format!("documents/{relative}");
                 let one_delivery =
                     Self::retained_event_bytes(&m.function.name, &event_type, &subject, &payload)
+                        .and_then(|bytes| bytes.checked_sub(4)?.checked_add(raw_data.len()))
                         .ok_or(SourceEventAdmissionError::Capacity)?;
                 draft_bytes = draft_bytes
                     .checked_add(
@@ -2492,6 +2509,8 @@ impl FunctionsRuntime {
                         subject: subject.clone(),
                         time,
                         payload: Arc::clone(&payload),
+                        raw_data: Some(Arc::clone(&raw_data)),
+                        retained_bytes: one_delivery,
                         parent: Some(format!(
                             "firestore-commit:{}@{}",
                             commit.database, commit.version
@@ -2581,6 +2600,8 @@ impl FunctionsRuntime {
                     subject: subject.clone(),
                     time,
                     payload: Arc::clone(&payload),
+                    raw_data: None,
+                    retained_bytes: one_delivery,
                     parent: Some(format!("storage-generation:{}", object.generation)),
                 });
             }
@@ -2667,6 +2688,14 @@ impl FunctionsRuntime {
                         subject: format!("topics/{topic}"),
                         time,
                         payload: Arc::clone(&payload),
+                        raw_data: None,
+                        retained_bytes: Self::retained_event_bytes(
+                            &function.name,
+                            "google.cloud.pubsub.topic.v1.messagePublished",
+                            &format!("topics/{topic}"),
+                            &payload,
+                        )
+                        .ok_or(SourceEventAdmissionError::Capacity)?,
                         parent: None,
                     });
                 }
@@ -3573,7 +3602,7 @@ impl FunctionsRuntime {
                     );
                     inner
                         .outbox
-                        .enqueue(delivery.event)
+                        .enqueue_in_queue(delivery.event, &function)
                         .unwrap_or_else(|_| unreachable!("a reserved event id is unique"));
                     let _ = inner.outbox.update(id, |record| {
                         let _ = record.lease();
@@ -5361,16 +5390,29 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        let ready: Vec<EventId> = inner.outbox.dispatchable().map(|e| e.event_id).collect();
-        for id in ready {
+        if inner.running.len() >= self.config.max_running {
+            return;
+        }
+        let mut running_counts = BTreeMap::<String, usize>::new();
+        for function in inner.running.values() {
+            *running_counts.entry(function.clone()).or_default() += 1;
+        }
+        let mut ready = inner
+            .outbox
+            .dispatchable_queue_heads()
+            .map(|(function, key)| (key, function.to_owned()))
+            .collect::<BTreeSet<_>>();
+        #[cfg(test)]
+        {
+            inner.dispatch_candidate_visits += ready.len();
+        }
+        while let Some(((time, id), function_name)) = ready.pop_first() {
             if inner.running.len() >= self.config.max_running {
                 break;
             }
-            let Some(queued) = inner.payloads.get(&id) else {
+            if !inner.payloads.contains_key(&id) {
                 continue;
-            };
-            let function_name = &queued.function;
-            let function_name = function_name.clone();
+            }
             let Some(spec) = self.manifest.get(&function_name) else {
                 continue;
             };
@@ -5380,11 +5422,7 @@ impl FunctionsRuntime {
                 self.schedule_dead_runner_recovery(index);
                 continue;
             };
-            let running_here = inner
-                .running
-                .values()
-                .filter(|f| **f == function_name)
-                .count();
+            let running_here = running_counts.get(&function_name).copied().unwrap_or(0);
             let limit = if self.config.overlap == OverlapPolicy::Queue
                 && matches!(spec.trigger, Trigger::Schedule { .. })
             {
@@ -5394,6 +5432,17 @@ impl FunctionsRuntime {
             };
             if running_here >= limit {
                 continue;
+            }
+            // A held head must not hide later events of the same function in this pass.
+            if let Some(next) = inner
+                .outbox
+                .next_dispatchable_in_queue(&function_name, (time, id))
+            {
+                ready.insert((next, function_name.clone()));
+                #[cfg(test)]
+                {
+                    inner.dispatch_candidate_visits += 1;
+                }
             }
             // A `delay` fault holds the event until the virtual clock reaches the instant;
             // the plan is consulted once per dispatch attempt, not on every pass over a
@@ -5439,6 +5488,7 @@ impl FunctionsRuntime {
             );
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
+            *running_counts.entry(function_name.clone()).or_default() += 1;
             let runtime = self.clone();
             let runner = runner.clone();
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
@@ -6320,6 +6370,269 @@ mod task_completion_tests {
                     version: CommitVersion::from_value(1),
                 })),
             }]),
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn firestore_fanout_preserves_frames_and_exact_logical_admission_bytes() {
+        use crate::events::{firestore_event, FIRESTORE_DOCUMENT_ENCODINGS};
+        use fireemu_core_firestore::value::Value as FsValue;
+        use fireemu_core_functions::manifest::DocumentEvent;
+
+        for triggers in [1, 4, 16] {
+            let base = runtime().await;
+            base.runner().kill_now();
+            let mut manifest = base.manifest.clone();
+            let template = manifest.get("ok").unwrap().clone();
+            manifest.functions = (0..triggers)
+                .map(|index| {
+                    let mut spec = template.clone();
+                    spec.name = format!("fanout{index}");
+                    if let Trigger::Firestore {
+                        event,
+                        with_auth_context,
+                        ..
+                    } = &mut spec.trigger
+                    {
+                        *event = if index % 2 == 0 {
+                            DocumentEvent::Updated
+                        } else {
+                            DocumentEvent::Written
+                        };
+                        *with_auth_context = index % 2 == 0;
+                    }
+                    spec
+                })
+                .collect();
+            let runtime = FunctionsRuntime::new(
+                manifest,
+                base.config.clone(),
+                base.clock.clone(),
+                base.runner(),
+                None,
+            );
+            let faults = Arc::new(Mutex::new(FaultState::default()));
+            faults.lock().unwrap().install(FaultPlan {
+                seed: 1,
+                rules: vec![FaultRule {
+                    matches: FaultMatch {
+                        operation: "functions.deliver".to_owned(),
+                        nth: None,
+                        function: None,
+                        event_type: None,
+                    },
+                    action: FaultAction::Duplicate { count: 1 },
+                }],
+            });
+            runtime.set_faults(faults);
+            let mut commit = created_commit();
+            let mut change = commit.changes[0].clone();
+            let after = Arc::make_mut(change.after.as_mut().unwrap());
+            after
+                .fields
+                .insert("blob".to_owned(), FsValue::String("x".repeat(256 * 1024)));
+            after
+                .fields
+                .insert("escaped".to_owned(), FsValue::String("é\n\"".to_owned()));
+            let mut before = after.clone();
+            before.fields.remove("blob");
+            before
+                .fields
+                .insert("removed".to_owned(), FsValue::Boolean(true));
+            change.before = Some(Arc::new(before));
+            commit.changes = Arc::from([change]);
+            FIRESTORE_DOCUMENT_ENCODINGS.set(0);
+            let reservation = runtime.reserve_commit_events(&commit).unwrap();
+            let encodings = FIRESTORE_DOCUMENT_ENCODINGS.get();
+            let deliveries = reservation.deliveries.as_ref().unwrap();
+            assert_eq!(deliveries.len(), triggers * 2);
+            let mut expected_bytes = 0;
+            for (index, delivery) in deliveries.iter().enumerate() {
+                let spec = runtime.manifest.get(&delivery.payload.function).unwrap();
+                let Trigger::Firestore {
+                    event,
+                    with_auth_context,
+                    ..
+                } = spec.trigger
+                else {
+                    unreachable!()
+                };
+                let seed = format!("{}-{}", runtime.config.session.value(), index / 2 * 2 + 1);
+                let mut expected = firestore_event(
+                    &seed,
+                    &commit.project,
+                    &commit.database,
+                    &runtime.config.location,
+                    "items/reserved",
+                    event,
+                    commit.changes[0].before.as_deref(),
+                    commit.changes[0].after.as_deref(),
+                    commit.commit_time.unwrap(),
+                    with_auth_context.then(|| runtime.auth_context_of("system", None)),
+                );
+                expected["params"] = json!({"id": "reserved"});
+                let expected_len = FunctionsRuntime::retained_event_bytes(
+                    &spec.name,
+                    expected["type"].as_str().unwrap(),
+                    "documents/items/reserved",
+                    &expected,
+                )
+                .unwrap();
+                assert_eq!(delivery.payload.retained_bytes, expected_len);
+                expected_bytes += expected_len;
+                let actual = runtime
+                    .invoke_request(
+                        delivery.event.event_id,
+                        spec,
+                        1,
+                        delivery.event.epoch,
+                        &delivery.payload.payload,
+                        delivery.payload.admitted_at,
+                        delivery.payload.raw_data.as_deref(),
+                    )
+                    .unwrap();
+                let mut actual: serde_json::Value = serde_json::from_str(actual.get()).unwrap();
+                actual["event"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("traceparent");
+                assert_eq!(actual["event"], expected);
+                assert_eq!(actual["invocationId"], format!("{}-1", index + 1));
+                assert_eq!(actual["function"], spec.name);
+            }
+            let shared_data = deliveries[0].payload.raw_data.as_ref().unwrap();
+            assert!(deliveries.iter().all(|delivery| Arc::ptr_eq(
+                shared_data,
+                delivery.payload.raw_data.as_ref().unwrap()
+            )));
+            assert!(deliveries
+                .chunks_exact(2)
+                .all(|pair| Arc::ptr_eq(&pair[0].payload.payload, &pair[1].payload.payload)));
+            assert_eq!(reservation.retained_bytes, expected_bytes);
+            eprintln!("fanout triggers={triggers} document_encodings={encodings}");
+            drop(reservation);
+            let before_id = runtime.inner.lock().unwrap().next_event;
+            runtime.inner.lock().unwrap().active_event_bytes =
+                MAX_ACTIVE_EVENT_BYTES - expected_bytes + 1;
+            assert!(matches!(
+                runtime.reserve_commit_events(&commit),
+                Err(SourceEventAdmissionError::Capacity)
+            ));
+            assert_eq!(runtime.inner.lock().unwrap().next_event, before_id);
+            runtime.inner.lock().unwrap().active_event_bytes =
+                MAX_ACTIVE_EVENT_BYTES - expected_bytes;
+            let exact = runtime.reserve_commit_events(&commit).unwrap();
+            assert_eq!(exact.retained_bytes, expected_bytes);
+            drop(exact);
+            runtime.shutdown().await;
+            base.shutdown().await;
+            assert_eq!(
+                encodings, 2,
+                "encode each before/after document once across all triggers"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn serial_backlog_keeps_canonical_order_and_healthy_function_progress() {
+        for count in [256, 1024, 4096] {
+            let base = runtime().await;
+            let mut config = base.config.clone();
+            config.max_running = 2;
+            let manifest = base.manifest.clone();
+            let runtime =
+                FunctionsRuntime::new(manifest, config, base.clock.clone(), base.runner(), None);
+            {
+                let mut inner = runtime.inner.lock().unwrap();
+                for index in 0..count {
+                    assert!(FunctionsRuntime::enqueue(
+                        &mut inner,
+                        runtime.config.session,
+                        super::EventSource::Firestore,
+                        if index == count - 1 { "onJob" } else { "ok" },
+                        "example.event",
+                        "documents/backlog",
+                        LogicalInstant::from_unix_seconds(i64::from(index % 2 == 0)),
+                        &json!({"data": {}}),
+                        None
+                    ));
+                }
+            }
+            let expected = runtime
+                .inner
+                .lock()
+                .unwrap()
+                .outbox
+                .dispatchable()
+                .map(|event| event.event_id.value())
+                .collect::<Vec<_>>();
+            let mut dispatched = Vec::new();
+            while dispatched.len() < count {
+                runtime.dispatch_ready();
+                let running = runtime
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .running
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if dispatched.is_empty() {
+                    assert_eq!(
+                        running.len(),
+                        2,
+                        "a saturated function does not block a healthy one"
+                    );
+                }
+                let mut batch = running
+                    .iter()
+                    .map(|key| key.split_once('-').unwrap().0.parse::<u128>().unwrap())
+                    .collect::<Vec<_>>();
+                batch.sort_by_key(|id| {
+                    expected
+                        .iter()
+                        .position(|candidate| candidate == id)
+                        .unwrap()
+                });
+                dispatched.extend(batch);
+                tokio::time::timeout(Duration::from_secs(30), async {
+                    loop {
+                        let notified = runtime.idle.notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
+                        if runtime.inner.lock().unwrap().running.is_empty() {
+                            break;
+                        }
+                        notified.await;
+                    }
+                })
+                .await
+                .expect("fake runner completes the selected deliveries");
+            }
+            let healthy = count as u128;
+            let expected_serial = expected
+                .into_iter()
+                .filter(|id| *id != healthy)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                dispatched
+                    .iter()
+                    .copied()
+                    .filter(|id| *id != healthy)
+                    .collect::<Vec<_>>(),
+                expected_serial
+            );
+            assert_eq!(dispatched.iter().filter(|id| **id == healthy).count(), 1);
+            assert_eq!(dispatched[1], healthy);
+            let visits = runtime.inner.lock().unwrap().dispatch_candidate_visits;
+            eprintln!("backlog events={count} candidate_visits={visits}");
+            runtime.shutdown().await;
+            base.shutdown().await;
+            assert!(
+                visits <= 2 * count,
+                "visit at most two candidates per delivery, got {visits}"
+            );
         }
     }
 

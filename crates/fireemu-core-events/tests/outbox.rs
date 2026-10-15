@@ -291,3 +291,74 @@ fn retry_sweep_visits_only_the_due_prefix() {
     assert_eq!(outbox.retries_due(now), vec![EventId::new(1)]);
     assert_eq!(outbox.retry_sweep_visits(now), 1);
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config { cases: 128, failure_persistence: None, ..Default::default() })]
+    #[test]
+    fn queue_heads_match_linear_dispatch_after_state_transitions(
+        steps in proptest::collection::vec((1u128..32, 0u8..10, -5i64..15, 0u8..4), 1..150),
+        capacities in proptest::collection::vec(0usize..4, 4),
+        held in proptest::collection::btree_set(1u128..32, 0..12),
+    ) {
+        use fireemu_core_events::retry::RetryPolicy;
+        use fireemu_core_types::time::LogicalDuration;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let mut indexed = Outbox::with_terminal_retention(4);
+        let mut linear = Outbox::with_terminal_retention(4);
+        let mut queues = BTreeMap::new();
+        let policy = RetryPolicy::try_new(3, LogicalDuration::from_seconds(1), LogicalDuration::from_seconds(4)).unwrap();
+        let mut epoch = Epoch::initial();
+        for (id, action, time, queue) in steps {
+            let id = EventId::new(id);
+            let now = LogicalInstant::from_unix_seconds(time);
+            if action == 0 {
+                let mut event = event(id.value(), time);
+                event.epoch = epoch;
+                let result = linear.enqueue(event.clone());
+                proptest::prop_assert_eq!(indexed.enqueue_in_queue(event, &queue.to_string()), result);
+                if result.is_ok() { queues.insert(id, queue.to_string()); }
+            } else if action == 8 {
+                epoch = epoch.next().unwrap();
+                proptest::prop_assert_eq!(indexed.discard_stale(epoch), linear.discard_stale(epoch));
+            } else {
+                for outbox in [&mut indexed, &mut linear] {
+                    let _ = outbox.update(id, |record| match action {
+                        1 => record.lease(),
+                        2 => record.start(),
+                        3 => record.succeed(),
+                        4 => record.fail(&policy, now).map(|_| ()),
+                        5 => record.interrupt(),
+                        6 => record.retry_due(now),
+                        _ => record.cancel(),
+                    });
+                }
+            }
+            proptest::prop_assert_eq!(indexed.len(), linear.len());
+            proptest::prop_assert_eq!(indexed.retries_due(now), linear.retries_due(now));
+            let mut room = capacities.clone();
+            let expected = linear.dispatchable().filter_map(|event| {
+                let queue: usize = queues[&event.event_id].parse().unwrap();
+                if room[queue] == 0 || held.contains(&event.event_id.value()) { return None; }
+                room[queue] -= 1;
+                Some(event.event_id)
+            }).collect::<Vec<_>>();
+            let mut heads = indexed.dispatchable_queue_heads().map(|(queue, key)| (key, queue.to_owned())).collect::<BTreeSet<_>>();
+            let mut actual = Vec::new();
+            let mut room = capacities.clone();
+            while let Some((key, queue)) = heads.pop_first() {
+                let index: usize = queue.parse().unwrap();
+                if room[index] == 0 { continue; }
+                if !held.contains(&key.1.value()) {
+                    actual.push(key.1);
+                    room[index] -= 1;
+                }
+                if let Some(next) = indexed.next_dispatchable_in_queue(&queue, key) {
+                    heads.insert((next, queue));
+                }
+            }
+            proptest::prop_assert_eq!(actual, expected);
+            proptest::prop_assert_eq!(indexed.dispatchable().collect::<Vec<_>>(), linear.dispatchable().collect::<Vec<_>>());
+        }
+    }
+}

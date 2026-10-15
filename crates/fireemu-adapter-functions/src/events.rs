@@ -20,6 +20,11 @@ use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
 
+#[cfg(test)]
+std::thread_local! {
+    pub(crate) static FIRESTORE_DOCUMENT_ENCODINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn rfc3339(t: LogicalInstant) -> String {
     t.to_rfc3339()
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
@@ -256,6 +261,10 @@ pub fn firestore_event(
         with_auth_context(&mut attrs, auth_type, auth_id);
     }
     let mut data = Map::new();
+    #[cfg(test)]
+    FIRESTORE_DOCUMENT_ENCODINGS.with(|count| {
+        count.set(count.get() + usize::from(before.is_some()) + usize::from(after.is_some()));
+    });
     if let Some(a) = after {
         data.insert("value".into(), document_to_json(&encode_document(a)));
     }

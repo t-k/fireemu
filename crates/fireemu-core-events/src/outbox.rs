@@ -47,6 +47,10 @@ pub struct Outbox {
     records: BTreeMap<EventId, EventRecord>,
     /// Pending records in canonical dispatch order: logical time, then event ID.
     pending: BTreeSet<(LogicalInstant, EventId)>,
+    /// The same pending keys grouped by dispatch queue, without scanning other queues.
+    pending_by_queue: BTreeMap<String, BTreeSet<(LogicalInstant, EventId)>>,
+    /// Queue ownership stays with active records across leases, interruptions and retries.
+    queue_by_id: BTreeMap<EventId, String>,
     /// Retry-waiting records ordered by the instant their timer elapses.
     retrying: BTreeSet<(LogicalInstant, EventId)>,
     /// Reverse lookup used to remove a record from `retrying` after its state changes.
@@ -78,6 +82,8 @@ impl Outbox {
         Self {
             records: BTreeMap::new(),
             pending: BTreeSet::new(),
+            pending_by_queue: BTreeMap::new(),
+            queue_by_id: BTreeMap::new(),
             retrying: BTreeSet::new(),
             retry_at_by_id: BTreeMap::new(),
             active: BTreeSet::new(),
@@ -120,11 +126,21 @@ impl Outbox {
 
     /// Appends a pending event.
     pub fn enqueue(&mut self, event: LogicalEvent) -> Result<(), OutboxError> {
+        self.enqueue_in_queue(event, "")
+    }
+
+    /// Appends a pending event to a dispatch queue, preserving the global dispatch order.
+    pub fn enqueue_in_queue(
+        &mut self,
+        event: LogicalEvent,
+        queue: &str,
+    ) -> Result<(), OutboxError> {
         let id = event.event_id;
         if self.records.contains_key(&id) {
             return Err(OutboxError::DuplicateEventId(id));
         }
         self.records.insert(id, EventRecord::new(event));
+        self.queue_by_id.insert(id, queue.to_owned());
         self.reindex(id);
         Ok(())
     }
@@ -162,12 +178,25 @@ impl Outbox {
         let key = (record.event().logical_time, id);
         let state = record.state().clone();
         self.pending.remove(&key);
+        let queue = self.queue_by_id.get(&id).cloned();
+        if let Some(queue) = &queue {
+            if let Some(pending) = self.pending_by_queue.get_mut(queue) {
+                pending.remove(&key);
+                if pending.is_empty() {
+                    self.pending_by_queue.remove(queue);
+                }
+            }
+        }
         if let Some(retry_at) = self.retry_at_by_id.remove(&id) {
             self.retrying.remove(&(retry_at, id));
         }
         match state {
             EventState::Pending => {
                 self.pending.insert(key);
+                self.pending_by_queue
+                    .entry(queue.expect("active records have a dispatch queue"))
+                    .or_default()
+                    .insert(key);
                 self.active.insert(id);
             }
             EventState::Leased | EventState::Running => {
@@ -182,6 +211,7 @@ impl Outbox {
             | EventState::DeadLettered { .. }
             | EventState::Cancelled
             | EventState::DiscardedStaleEpoch => {
+                self.queue_by_id.remove(&id);
                 // Every record starts pending, so `active` holds it exactly until the one
                 // transition that retires it: the eviction queue never sees a duplicate.
                 if self.active.remove(&id) {
@@ -207,6 +237,30 @@ impl Outbox {
         self.pending
             .iter()
             .filter_map(|(_, id)| self.records.get(id).map(EventRecord::event))
+    }
+
+    /// The first pending key of each nonempty dispatch queue. Merging these heads by key preserves logical-time/event-ID order while allowing saturated queues to be skipped.
+    pub fn dispatchable_queue_heads(
+        &self,
+    ) -> impl Iterator<Item = (&str, (LogicalInstant, EventId))> {
+        self.pending_by_queue.iter().filter_map(|(queue, pending)| {
+            pending.first().copied().map(|key| (queue.as_str(), key))
+        })
+    }
+
+    /// The next pending key in one queue after a candidate visited in this dispatch pass.
+    #[must_use]
+    pub fn next_dispatchable_in_queue(
+        &self,
+        queue: &str,
+        after: (LogicalInstant, EventId),
+    ) -> Option<(LogicalInstant, EventId)> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        self.pending_by_queue
+            .get(queue)?
+            .range((Excluded(after), Unbounded))
+            .next()
+            .copied()
     }
 
     /// Retry-waiting events whose timer has elapsed at `now`, in canonical order.

@@ -2439,6 +2439,25 @@ async fn a_non_ascii_browser_header_still_keeps_the_request_ordinary() {
             "{header}: {response}"
         );
     }
+    // A non-ASCII `Authorization` is a credential that is present: it cannot be shown not to be
+    // the client SDK's, so the request stays ordinary.
+    let mut request =
+        format!("GET {list} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Firebase ").into_bytes();
+    request.extend_from_slice(&[0xff, b'x']);
+    request.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+    let response = raw_bytes(addr, &request).await;
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    // Any other header with a non-ASCII value is still dropped, as before: here the content type
+    // of an upload falls back to the default instead of carrying replacement characters.
+    let mut upload = format!(
+        "POST /upload/storage/v1/b/{BUCKET}/o?name=ct.txt&uploadType=media HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1\r\nConnection: close\r\nContent-Type: text/"
+    )
+    .into_bytes();
+    upload.extend_from_slice(&[0xff]);
+    upload.extend_from_slice(b"\r\n\r\nx");
+    let stored = raw_bytes(addr, &upload).await;
+    assert!(stored.starts_with("HTTP/1.1 200"), "{stored}");
+    assert!(!stored.contains('\u{fffd}'), "{stored}");
     // The same request without the header is a process and passes.
     let plain = raw(
         addr,

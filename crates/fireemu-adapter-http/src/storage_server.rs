@@ -435,10 +435,15 @@ async fn respond(
         let mut values = values.iter();
         let first = values.next();
         // Browser evidence is decided by the header being present, not by its bytes being
-        // text: a value `to_str` refuses (non-ASCII) is kept, lossily, so it still counts.
+        // text: a value `to_str` refuses (non-ASCII) is kept, lossily, so it still counts. The
+        // same holds for `Authorization`, whose scheme decides whether a request is the client
+        // SDK's. Every other header with such a value stays absent, as before.
         let value = first.and_then(|v| match v.to_str() {
             Ok(text) => Some(text.to_owned()),
-            Err(_) if fireemu_core_session::loopback::BROWSER_METADATA_HEADERS.contains(name) => {
+            Err(_)
+                if *name == "authorization"
+                    || fireemu_core_session::loopback::BROWSER_METADATA_HEADERS.contains(name) =>
+            {
                 Some(String::from_utf8_lossy(v.as_bytes()).into_owned())
             }
             Err(_) => None,

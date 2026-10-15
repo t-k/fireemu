@@ -1903,6 +1903,8 @@ pub fn ignored_warnings(
 /// cannot reach a product this run is not serving.
 #[derive(Debug, Clone)]
 pub struct EmulatorHosts {
+    /// App Check on the control listener, independent of whether Auth is selected.
+    pub app_check: Option<String>,
     /// Firestore gRPC / REST.
     pub firestore: Option<String>,
     /// Auth REST.
@@ -3029,10 +3031,27 @@ async fn start_codebase(
         Vec::new()
     };
     env.extend(user_env.applied());
+    // These routes belong to this daemon, including when App Check is unavailable.
+    let is_app_check_route = |name: &str| {
+        matches!(
+            name,
+            "FIREEMU_APP_CHECK_EMULATOR_HOST" | "FIREEMU_APP_CHECK_JWKS_URL"
+        )
+    };
+    env.retain(|(name, _)| !is_app_check_route(name));
+    if let Some(host) = &hosts.app_check {
+        env.push(("FIREEMU_APP_CHECK_EMULATOR_HOST".to_owned(), host.clone()));
+        env.push((
+            "FIREEMU_APP_CHECK_JWKS_URL".to_owned(),
+            format!("http://{host}/v1/jwks"),
+        ));
+    }
     if !user_env.secrets.is_empty() {
         let secrets: serde_json::Map<String, serde_json::Value> = user_env
             .secrets
             .iter()
+            // Secret scoping must neither hide nor overwrite daemon-owned routing.
+            .filter(|(name, _)| !is_app_check_route(name))
             .map(|(name, value)| (name.clone(), serde_json::Value::String(value.clone())))
             .collect();
         env.push((
@@ -6710,6 +6729,7 @@ mod tests {
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            app_check: None,
             firestore: None,
             auth: None,
             storage: None,
@@ -6816,6 +6836,7 @@ mod tests {
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            app_check: None,
             firestore: None,
             auth: None,
             storage: None,
@@ -6907,6 +6928,7 @@ mod tests {
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            app_check: None,
             firestore: None,
             auth: None,
             storage: None,
@@ -7010,6 +7032,7 @@ mod tests {
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fireemu-adapter-functions/tests/fake_runner.py");
         let hosts = super::EmulatorHosts {
+            app_check: None,
             firestore: None,
             auth: None,
             storage: None,
@@ -7138,6 +7161,7 @@ exports.add = onCall({{}}, observe("add"));
         let runner = root.join("tools/runner-node/index.mjs");
         let node = std::env::var("FIREEMU_NODE").unwrap_or_else(|_| "node".to_owned());
         let hosts = super::EmulatorHosts {
+            app_check: None,
             firestore: None,
             auth: None,
             storage: None,
@@ -8795,6 +8819,7 @@ exports.add = onCall({{}}, observe("add"));
             ignore: Vec::new(),
         };
         let hosts = super::EmulatorHosts {
+            app_check: None,
             firestore: None,
             auth: None,
             storage: None,
@@ -8903,6 +8928,7 @@ exports.add = onCall({{}}, observe("add"));
             ignore: Vec::new(),
         };
         let hosts = super::EmulatorHosts {
+            app_check: None,
             firestore: None,
             auth: None,
             storage: None,

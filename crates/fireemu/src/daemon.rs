@@ -2201,6 +2201,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     &clock,
                     &backend,
                     &functions::EmulatorHosts {
+                        app_check: want_app_check.then(|| addrs.control.to_string()),
                         firestore: grpc_addr.map(|a| a.to_string()),
                         auth: addrs.auth.map(|a| a.to_string()),
                         storage: storage_addr.map(|a| a.to_string()),

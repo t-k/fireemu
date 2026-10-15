@@ -1631,3 +1631,155 @@ fn eventarc_catalog_config_cli(path: &Path, flag: &str) -> Output {
         .output()
         .unwrap()
 }
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+#[allow(clippy::too_many_lines)]
+fn selected_app_check_routes_reach_functions_without_requiring_auth() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = params_codebase(
+        "appcheck-routes",
+        r"
+const { onRequest } = require('firebase-functions/v2/https');
+const routes = async (req, res) => {
+  const host = process.env.FIREEMU_APP_CHECK_EMULATOR_HOST ?? null;
+  const jwks = process.env.FIREEMU_APP_CHECK_JWKS_URL ?? null;
+  const auth = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? null;
+  let keys = null;
+  if (req.query.probe === '1') {
+    if (!jwks || !/^http:\/\/127\.0\.0\.1:\d+\/v1\/jwks$/.test(jwks)) {
+      res.status(500).json({ error: 'invalid local JWKS URL' }); return;
+    }
+    const response = await fetch(jwks);
+    if (!response.ok) { res.status(500).json({ error: 'JWKS unavailable' }); return; }
+    keys = (await response.json()).keys.length;
+  }
+  res.json({host, jwks, auth, keys});
+};
+exports.routes = onRequest(routes);
+exports.routesWithSecret = onRequest({secrets: ['FIREEMU_APP_CHECK_EMULATOR_HOST', 'FIREEMU_APP_CHECK_JWKS_URL']}, routes);
+",
+    );
+    write(
+        &dir,
+        ".env",
+        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:1\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:1/v1/jwks\n",
+    );
+    let script = r"
+const assert = require('node:assert/strict');
+(async () => {
+  for (const name of ['routes', 'routesWithSecret']) {
+  const url = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-appcheck-routes/us-central1/${name}`;
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  const available = process.env.EXPECT_APP_CHECK === 'true';
+  assert.equal(body.host, available ? process.env.FIREEMU_APP_CHECK_EMULATOR_HOST : null);
+  assert.equal(body.jwks, available ? process.env.FIREEMU_APP_CHECK_JWKS_URL : null);
+  assert.equal(body.auth, process.env.FIREBASE_AUTH_EMULATOR_HOST ?? null);
+  if (body.host) {
+    assert.equal(body.jwks, `http://${body.host}/v1/jwks`);
+    const probe = await fetch(url + '?probe=1');
+    assert.equal(probe.status, 200);
+    assert.ok((await probe.json()).keys > 0);
+  }
+  console.log('RESULT ' + JSON.stringify(body));
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+";
+    for (config, only, available, auth_selected, local_secrets) in [
+        (
+            r#"{"schemaVersion":1,"profile":"strict"}"#,
+            "auth,functions",
+            true,
+            true,
+            true,
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"strict"}"#,
+            "functions,appcheck",
+            true,
+            false,
+            true,
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"strict"}"#,
+            "functions",
+            true,
+            false,
+            true,
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+            "functions",
+            false,
+            false,
+            true,
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"strict","appCheck":{"enabled":false}}"#,
+            "auth,functions",
+            false,
+            true,
+            true,
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"emulator"}"#,
+            "functions",
+            false,
+            false,
+            true,
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+            "functions",
+            false,
+            false,
+            false,
+        ),
+    ] {
+        if local_secrets {
+            write(
+        &dir,
+        ".secret.local",
+        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:3\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:3/v1/jwks\n",
+    );
+        } else {
+            std::fs::remove_file(dir.join(".secret.local")).unwrap();
+        }
+
+        write(&dir, "fireemu.test.json", config);
+        let out = fireemu_exec(&dir, "demo-appcheck-routes")
+            .args([
+                "--config",
+                dir.join("fireemu.test.json").to_str().unwrap(),
+                "--only",
+                only,
+                "--",
+                "node",
+                "-e",
+                script,
+            ])
+            .env("EXPECT_APP_CHECK", available.to_string())
+            .env("FIREEMU_APP_CHECK_EMULATOR_HOST", "127.0.0.1:2")
+            .env("FIREEMU_APP_CHECK_JWKS_URL", "http://127.0.0.1:2/v1/jwks")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{config}, {only}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let result = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("RESULT "))
+            .expect("handler result");
+        let value: serde_json::Value = serde_json::from_str(result).unwrap();
+        assert_eq!(value["host"].is_string(), available, "{config}, {only}");
+        assert_eq!(value["jwks"].is_string(), available, "{config}, {only}");
+        assert_eq!(value["auth"].is_string(), auth_selected, "{config}, {only}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

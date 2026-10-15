@@ -171,10 +171,10 @@ The Node Admin SDK's `getAppCheck().verifyToken()` uses Google's JWKS, including
 | Process | Available routing |
 | --- | --- |
 | `fireemu exec` child or `world.environment` | `FIREEMU_APP_CHECK_EMULATOR_HOST` and `FIREEMU_APP_CHECK_JWKS_URL` when App Check is available. The JWKS URL is `http://host:port/v1/jwks`. |
-| Bundled Functions runner | `FUNCTIONS_EMULATOR=true` and, when Auth is selected, `FIREBASE_AUTH_EMULATOR_HOST`. The App Check variables above are currently not injected into this process. |
+| Bundled Functions runner | `FUNCTIONS_EMULATOR=true` and the same App Check host/JWKS variables when App Check is available, even when Auth is not selected. Inherited, dotenv or local secret values cannot replace these two routes; they are removed when App Check is unavailable. |
 | Parent test process | World variables are not installed into `process.env`; use `world.environment` explicitly. |
 
-For a loopback test world that selects Auth, the runner can derive `/v1/jwks` from `FIREBASE_AUTH_EMULATOR_HOST`: Auth and App Check share this listener. Select both Auth and App Check availability for this recipe. Do not derive the key URL from a request header or an unverified token. This example deliberately supports loopback only.
+Use `FIREEMU_APP_CHECK_JWKS_URL` inside the runner. Do not derive the key URL from a request header or an unverified token. This example deliberately supports loopback only. In v0.23.0 the runner does not receive the App Check variables: selecting Auth and deriving `/v1/jwks` from `FIREBASE_AUTH_EMULATOR_HOST` is a version-specific workaround, not a requirement of App Check itself.
 
 ### Local signature and claim verification example
 
@@ -194,14 +194,13 @@ export async function verifyHttpAppCheck(token) {
     return getAppCheck().verifyToken(token);
   }
   if (!localKeys) {
-    const host = process.env.FIREBASE_AUTH_EMULATOR_HOST;
-    if (!host) throw new Error('Select Auth to locate the local App Check JWKS');
-    const url = new URL(`http://${host}`);
-    if (!['127.0.0.1', '[::1]'].includes(url.hostname) || !url.port ||
-        url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-      throw new Error('Expected a loopback Auth host:port');
+    const address = process.env.FIREEMU_APP_CHECK_JWKS_URL;
+    if (!address) throw new Error('Local App Check is unavailable');
+    const url = new URL(address);
+    if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname) || !url.port ||
+        url.username || url.password || url.pathname !== '/v1/jwks' || url.search || url.hash) {
+      throw new Error('Expected the loopback App Check JWKS URL');
     }
-    url.pathname = '/v1/jwks';
     localKeys = createRemoteJWKSet(url);
   }
   const now = new Date();

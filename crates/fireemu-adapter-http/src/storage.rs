@@ -3168,6 +3168,26 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
     fireemu_adapter_support::secret::constant_time_eq(presented.as_bytes(), expected.as_bytes())
 }
 
+/// Whether a credential-less JSON API request is labelled the server-side bypass in the App
+/// Check observations, which is all this decides.
+///
+/// Without Storage enforcement `exec` gives the Admin SDK the plain endpoint and no capability,
+/// so its traffic would be counted as a missing token. Under `enforced` nothing changes: only
+/// the capability or the owner credential bypasses, so this is `false` there and can never turn
+/// a refusal into an admission. Under `off` there is no policy and nothing is classified. An
+/// `unenforced` policy admits every request whatever the label, and it binds no upload session
+/// (`app_check_admission`), so the label has no effect on what is admitted. Browser evidence
+/// ([`fireemu_core_session::loopback::carries_browser_metadata`]) keeps a request an ordinary
+/// one, as it does for the capability.
+fn observed_as_server_side(state: &StorageState, dialect: Dialect, req: &StorageRequest) -> bool {
+    dialect == Dialect::Gcs
+        && state
+            .app_check_policy
+            .as_ref()
+            .is_some_and(|policy| policy.mode() != BaselineMode::Enforced)
+        && !fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name))
+}
+
 /// A name no object can have: it holds a line feed, or is longer than an object name may be.
 /// Reads of such a name are 404s, not 400s.
 fn is_unreadable_name(name: &str) -> bool {
@@ -3449,7 +3469,13 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     let admitted = if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it
         // runs only when a policy exists: an `off` service does no work at all (spec 12.1).
-        let bypass = storage_bypass(state, &route, &req.method, &params, json_api_authenticated);
+        let bypass = storage_bypass(
+            state,
+            &route,
+            &req.method,
+            &params,
+            json_api_authenticated || observed_as_server_side(state, dialect, &req),
+        );
         match app_check_admission(
             state,
             &req.app_check,

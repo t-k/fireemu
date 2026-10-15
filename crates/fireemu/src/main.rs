@@ -66,7 +66,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_core_auth::store::AuthStore;
-use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+use fireemu_core_rules::runtime::{LoadedRules, RulesCompilationCache, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::LogicalInstant;
 #[cfg(windows)]
@@ -2233,12 +2233,16 @@ fn reportable_exit_code(code: i32) -> u8 {
     u8::try_from(code).unwrap_or(1)
 }
 
-fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
+fn load_rules(
+    cfg: &RuntimeConfig,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedRules, String> {
     match &cfg.rules_file {
         Some(path) => {
             let source =
                 std::fs::read_to_string(path).map_err(|e| format!("rules source {path}: {e}"))?;
-            LoadedRules::from_source(&source)
+            compilations
+                .load(&source)
                 .map_err(|e| format!("rules source {path} does not parse: {e}"))
         }
         None => Ok(LoadedRules::default()),
@@ -2250,15 +2254,22 @@ struct LoadedStorageRules {
     watched: Vec<(String, Arc<RulesetSlot>)>,
 }
 
-fn read_storage_rules(path: &str) -> Result<LoadedRules, String> {
+fn read_storage_rules(
+    path: &str,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedRules, String> {
     let source =
         std::fs::read_to_string(path).map_err(|e| format!("storage rules source {path}: {e}"))?;
-    LoadedRules::from_source(&source)
+    compilations
+        .load(&source)
         .map_err(|e| format!("storage rules source {path} does not parse: {e}"))
 }
 
-fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
-    let loaded = load_storage_rules_registry(cfg)?;
+fn load_storage_rules(
+    cfg: &RuntimeConfig,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedStorageRules, String> {
+    let loaded = load_storage_rules_registry(cfg, compilations)?;
     loaded
         .registry
         .set_configured_buckets(cfg.storage_buckets.iter().cloned());
@@ -2271,10 +2282,13 @@ fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String>
     Ok(loaded)
 }
 
-fn load_storage_rules_registry(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
+fn load_storage_rules_registry(
+    cfg: &RuntimeConfig,
+    compilations: &mut RulesCompilationCache,
+) -> Result<LoadedStorageRules, String> {
     if cfg.storage_rules_by_target.is_empty() {
         let loaded = match &cfg.storage_rules_file {
-            Some(path) => read_storage_rules(path)?,
+            Some(path) => read_storage_rules(path, compilations)?,
             None => LoadedRules::default(),
         };
         let slot = Arc::new(RulesetSlot::new(loaded));
@@ -2296,7 +2310,7 @@ fn load_storage_rules_registry(cfg: &RuntimeConfig) -> Result<LoadedStorageRules
     let mut by_bucket = std::collections::BTreeMap::new();
     let mut watched = Vec::new();
     for (target, path) in &cfg.storage_rules_by_target {
-        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path)?));
+        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path, compilations)?));
         let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
             format!("Storage rules target {target:?} has no resolved bucket mapping")
         })?;
@@ -3548,6 +3562,60 @@ mod config_reload_tests {
     const STORAGE_WRITE: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
     const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
     const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
+
+    #[test]
+    fn storage_startup_keeps_identical_targets_independent_and_reports_the_failing_path() {
+        let dir = scratch("identical-storage-startup");
+        let first_path = dir.join("first.rules").display().to_string();
+        let second_path = dir.join("second.rules").display().to_string();
+        std::fs::write(&first_path, STORAGE_DENY).unwrap();
+        std::fs::write(&second_path, STORAGE_DENY).unwrap();
+        let cfg = RuntimeConfig {
+            storage_rules_by_target: std::collections::BTreeMap::from([
+                ("first".to_owned(), first_path.clone()),
+                ("second".to_owned(), second_path.clone()),
+            ]),
+            storage_buckets_by_target: std::collections::BTreeMap::from([
+                ("first".to_owned(), vec!["first.test".to_owned()]),
+                ("second".to_owned(), vec!["second.test".to_owned()]),
+            ]),
+            ..RuntimeConfig::default()
+        };
+        let loaded =
+            load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default()).unwrap();
+        let first = &loaded.watched[0].1;
+        let second = &loaded.watched[1].1;
+        assert!(!Arc::ptr_eq(first, second));
+        assert!(Arc::ptr_eq(
+            first.snapshot().unwrap().ruleset.as_ref().unwrap(),
+            second.snapshot().unwrap().ruleset.as_ref().unwrap(),
+        ));
+        assert_eq!(first.replace_source(STORAGE_ALLOW).unwrap(), 1);
+        assert_eq!(
+            second.snapshot().unwrap().source.as_deref(),
+            Some(STORAGE_DENY)
+        );
+        assert_eq!(second.snapshot().unwrap().generation(), 0);
+
+        std::fs::write(&second_path, "invalid rules").unwrap();
+        let Err(error) = load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
+        else {
+            panic!("invalid second target must fail startup");
+        };
+        assert_eq!(
+            error,
+            format!(
+                "storage rules source {second_path} does not parse: {}",
+                LoadedRules::from_source("invalid rules").unwrap_err()
+            )
+        );
+        std::fs::remove_file(&second_path).unwrap();
+        let Err(error) = load_storage_rules_registry(&cfg, &mut RulesCompilationCache::default())
+        else {
+            panic!("missing second target must fail startup");
+        };
+        assert!(error.starts_with(&format!("storage rules source {second_path}: ")));
+    }
 
     /// A scratch directory removed when the test ends, also when an assertion fails first.
     struct Scratch(std::path::PathBuf);

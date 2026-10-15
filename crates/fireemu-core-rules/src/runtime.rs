@@ -1,5 +1,6 @@
 //! Loaded ruleset shared between adapters (hot-reloadable through the control API).
 
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -19,8 +20,8 @@ use crate::parse::{parse_ruleset, ParseError};
 pub struct LoadedRules {
     /// Source text as loaded.
     pub source: Option<String>,
-    /// Parsed ruleset.
-    pub ruleset: Option<Ruleset>,
+    /// Shared immutable parsed ruleset.
+    pub ruleset: Option<Arc<Ruleset>>,
     /// Coverage and request traces recorded against this ruleset (`RULES-PARITY-04`).
     pub diagnostics: Arc<Mutex<RulesDiagnostics>>,
 }
@@ -95,7 +96,7 @@ impl LoadedRules {
         }
         Ok(Self {
             source: Some(source.to_owned()),
-            ruleset: Some(ruleset),
+            ruleset: Some(Arc::new(ruleset)),
             diagnostics: Arc::new(Mutex::new(RulesDiagnostics::default())),
         })
     }
@@ -104,6 +105,30 @@ impl LoadedRules {
     #[must_use]
     pub const fn is_loaded(&self) -> bool {
         self.ruleset.is_some()
+    }
+}
+
+/// Startup-scoped compilation reuse by exact source, with fresh diagnostics for every load.
+#[derive(Default)]
+pub struct RulesCompilationCache {
+    compiled: HashMap<String, LoadedRules>,
+    #[cfg(test)]
+    compilations: usize,
+}
+
+impl RulesCompilationCache {
+    /// Compiles a source once while this cache lives, sharing only its immutable parsed tree.
+    pub fn load(&mut self, source: &str) -> Result<LoadedRules, ParseError> {
+        if let Some(loaded) = self.compiled.get(source) {
+            return Ok(loaded.clone());
+        }
+        #[cfg(test)]
+        {
+            self.compilations += 1;
+        }
+        let loaded = LoadedRules::from_source(source)?;
+        self.compiled.insert(source.to_owned(), loaded.clone());
+        Ok(loaded)
     }
 }
 
@@ -278,6 +303,94 @@ mod tests {
 
     const V1: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
     const V2: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
+
+    #[test]
+    fn cloned_rules_keep_diagnostics_and_publications_independent() {
+        let loaded = LoadedRules::from_source(V1).unwrap();
+        let mut coverage = crate::coverage::Coverage::default();
+        coverage.record(
+            crate::ast::Span::default(),
+            1,
+            crate::coverage::ExprValue::Bool(false),
+        );
+        {
+            let mut diagnostics = loaded.diagnostics.lock().unwrap();
+            diagnostics.merge_coverage(&coverage);
+            diagnostics.enable_request_traces();
+        }
+        let cloned = loaded.clone();
+        assert_eq!(loaded, cloned);
+        assert!(!Arc::ptr_eq(&loaded.diagnostics, &cloned.diagnostics));
+        {
+            let diagnostics = cloned.diagnostics.lock().unwrap();
+            assert_eq!(
+                diagnostics.coverage(),
+                &crate::coverage::Coverage::default()
+            );
+            assert!(!diagnostics.request_traces_enabled());
+        }
+        let first = RulesetSlot::new(loaded);
+        let second = RulesetSlot::new(cloned);
+        assert_eq!(first.replace_source(V2).unwrap(), 1);
+        let unchanged = second.snapshot().unwrap();
+        assert_eq!(unchanged.source.as_deref(), Some(V1));
+        assert_eq!(unchanged.generation(), 0);
+    }
+
+    #[test]
+    fn cloned_rules_share_the_parsed_tree() {
+        let loaded = LoadedRules::from_source(V1).unwrap();
+        let cloned = loaded.clone();
+        assert!(Arc::ptr_eq(
+            loaded.ruleset.as_ref().unwrap(),
+            cloned.ruleset.as_ref().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn startup_cache_retains_one_compilation_for_identical_sources() {
+        for count in [1, 4, 16] {
+            let mut cache = super::RulesCompilationCache::default();
+            let loaded: Vec<_> = (0..count).map(|_| cache.load(V1).unwrap()).collect();
+            assert_eq!(cache.compiled.len(), 1);
+            assert_eq!(cache.compilations, 1);
+            for copy in &loaded {
+                assert!(Arc::ptr_eq(
+                    loaded[0].ruleset.as_ref().unwrap(),
+                    copy.ruleset.as_ref().unwrap(),
+                ));
+            }
+            if count > 1 {
+                assert!(!Arc::ptr_eq(&loaded[0].diagnostics, &loaded[1].diagnostics));
+            }
+            let other = cache.load(V2).unwrap();
+            assert_eq!(cache.compiled.len(), 2);
+            assert_ne!(loaded[0], other);
+            let whitespace = cache.load(&format!("{V1}\n")).unwrap();
+            assert_eq!(cache.compiled.len(), 3);
+            assert_eq!(cache.compilations, 3);
+            assert_ne!(loaded[0], whitespace);
+            drop(cache);
+            assert_eq!(loaded[0].source.as_deref(), Some(V1));
+        }
+    }
+
+    #[test]
+    fn startup_cache_preserves_parse_validation_and_lint_errors() {
+        let mut cache = super::RulesCompilationCache::default();
+        cache.load(V1).unwrap();
+        for source in [
+            "invalid rules".to_owned(),
+            format!("rules_version = '3'; {V1}"),
+            "service cloud.firestore { function f() { return f(); } }".to_owned(),
+        ] {
+            assert_eq!(
+                cache.load(&source).unwrap_err().to_string(),
+                LoadedRules::from_source(&source).unwrap_err().to_string(),
+            );
+            assert_eq!(cache.compiled.len(), 1);
+        }
+    }
 
     #[test]
     fn generation_exhaustion_preserves_the_active_arc() {

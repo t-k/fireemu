@@ -1044,9 +1044,31 @@ pub struct StorageRequest {
     pub remote_peer: bool,
 }
 
+/// The `headers` key under which the transport lists, comma separated and lowercase, the
+/// forwarded headers that appeared more than once (their own entry is folded to an empty
+/// value). It is not a forwarded header name, so a client cannot supply it.
+pub(crate) const DUPLICATED_HEADERS_KEY: &str = "x-fireemu-duplicated-headers";
+
 impl StorageRequest {
     fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).map(String::as_str)
+    }
+
+    /// Whether the header appeared more than once.
+    fn was_duplicated(&self, name: &str) -> bool {
+        self.header(DUPLICATED_HEADERS_KEY)
+            .is_some_and(|listed| listed.split(',').any(|duplicated| duplicated == name))
+    }
+
+    /// Whether the request carries browser evidence
+    /// ([`fireemu_core_session::loopback::carries_browser_metadata`]). A browser header that
+    /// appeared more than once is present, not absent: the transport folds it to an empty
+    /// value, which must not erase the evidence.
+    fn carries_browser_evidence(&self) -> bool {
+        fireemu_core_session::loopback::carries_browser_metadata(|name| self.header(name))
+            || fireemu_core_session::loopback::BROWSER_METADATA_HEADERS
+                .iter()
+                .any(|name| self.was_duplicated(name))
     }
 }
 
@@ -1344,7 +1366,7 @@ fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option
         .is_some_and(|expected| crate::control::token_matches(presented, expected));
     let forbidden = |message: &str| Some(StorageResponse::json(403, &json!({"message": message})));
     match fireemu_core_session::loopback::privileged_route_admission(
-        fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)),
+        req.carries_browser_evidence(),
         req.header("origin"),
         token_ok,
     ) {
@@ -3200,7 +3222,7 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
     // evidence (Node's built-in `fetch` always sends it), so it must not fall out of this
     // capability's reach the way it did before this guard shared
     // [`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`] with the privileged route.
-    if fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)) {
+    if req.carries_browser_evidence() {
         return false;
     }
     let expected = format!(
@@ -3231,7 +3253,7 @@ fn is_server_side_json_api(json_api_route: bool, req: &StorageRequest) -> bool {
             .host
             .as_deref()
             .is_some_and(fireemu_core_session::loopback::authority_is_loopback)
-        && !fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name))
+        && !req.carries_browser_evidence()
         && !carries_client_sdk_credential(req)
 }
 
@@ -3258,9 +3280,12 @@ fn is_json_api_route(route: &Route) -> bool {
 /// token or nothing, so this is an end-user request that happens to name a JSON API path and
 /// stays an ordinary request for App Check (coordinator ruling, 2026-10-15).
 fn carries_client_sdk_credential(req: &StorageRequest) -> bool {
-    req.header("authorization")
-        .and_then(|value| value.split_whitespace().next())
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("firebase"))
+    // More than one `Authorization` is never the Admin SDK's: fail closed.
+    req.was_duplicated("authorization")
+        || req
+            .header("authorization")
+            .and_then(|value| value.split_whitespace().next())
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("firebase"))
 }
 
 /// Whether [`is_server_side_json_api`] counts as the server-side bypass of this policy.

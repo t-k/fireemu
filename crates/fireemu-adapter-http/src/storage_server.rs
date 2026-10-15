@@ -425,6 +425,7 @@ async fn respond(
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     let mut headers = std::collections::BTreeMap::new();
+    let mut duplicated: Vec<&str> = Vec::new();
     for name in FORWARDED_HEADERS {
         // The App Check field is the one multi-valued member: a collapsed single value would
         // hide a duplicate, which must classify as malformed (spec 7.3).
@@ -450,9 +451,16 @@ async fn respond(
         });
         if values.next().is_some() {
             headers.insert((*name).to_owned(), String::new());
+            duplicated.push(*name);
         } else if let Some(value) = value {
             headers.insert((*name).to_owned(), value);
         }
+    }
+    if !duplicated.is_empty() {
+        headers.insert(
+            crate::storage::DUPLICATED_HEADERS_KEY.to_owned(),
+            duplicated.join(","),
+        );
     }
     let app_check: Vec<String> = req
         .headers()

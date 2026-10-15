@@ -2468,6 +2468,58 @@ async fn a_non_ascii_browser_header_still_keeps_the_request_ordinary() {
     server.abort();
 }
 
+/// A browser-evidence or `Authorization` header that appears more than once is present, never
+/// absent: the transport folds a duplicate to an empty value, which must not erase the evidence
+/// (or the client SDK's credential) the request carries.
+#[tokio::test]
+async fn a_duplicated_browser_or_authorization_header_still_keeps_the_request_ordinary() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("dup/o.txt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("a local address");
+    let server = tokio::spawn(fireemu_adapter_http::storage_server::serve_storage(
+        listener,
+        Arc::new(h.storage),
+    ));
+    let list = format!("/storage/v1/b/{BUCKET}/o?prefix=dup/");
+    let request = |extra: &str| {
+        format!("GET {list} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n")
+    };
+    for extra in [
+        "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Site: same-origin\r\n",
+        "Sec-Fetch-Dest: empty\r\nSec-Fetch-Dest: empty\r\n",
+        "Cookie: a=1\r\nCookie: b=2\r\n",
+        "Referer: http://127.0.0.1:5173/\r\nReferer: http://127.0.0.1:5173/\r\n",
+        "Origin: http://127.0.0.1:5173\r\nOrigin: http://127.0.0.1:5173\r\n",
+        "Authorization: Firebase a\r\nAuthorization: Firebase b\r\n",
+        "Authorization: Bearer a\r\nAuthorization: Firebase b\r\n",
+    ] {
+        let response = raw(addr, &request(extra)).await;
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "{extra:?}: {response}"
+        );
+        assert!(
+            response.contains("APP_CHECK_REQUIRED"),
+            "{extra:?}: {response}"
+        );
+    }
+    // A header that is not evidence may repeat, and the single header is still a process.
+    for extra in [
+        "Accept: */*\r\nAccept: text/plain\r\n",
+        "Sec-Fetch-Mode: cors\r\n",
+    ] {
+        let response = raw(addr, &request(extra)).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "{extra:?}: {response}"
+        );
+    }
+    server.abort();
+}
+
 /// The Storage preflight advertises the App Check request header so a browser SDK may send it.
 #[tokio::test]
 async fn the_storage_preflight_allows_the_app_check_request_header() {

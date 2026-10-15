@@ -154,18 +154,39 @@ pub struct MissingIndexReport {
 /// Distinct missing indexes kept for [`missing_index_reports`]; later ones are only logged.
 const MAX_MISSING_INDEX_REPORTS: usize = 1000;
 
-static MISSING_INDEX_REPORTS: std::sync::Mutex<Vec<MissingIndexReport>> =
-    std::sync::Mutex::new(Vec::new());
+/// The reports kept, the queries whose index did not fit, and whether the "list is full" line has
+/// been written, under one lock so a clear and a report cannot interleave between them.
+struct MissingIndexLedger {
+    reports: Vec<MissingIndexReport>,
+    /// Queries served whose index was not listed because the list was full, by project.
+    dropped: std::collections::BTreeMap<String, usize>,
+    /// Whether the "list is full" line has been written since the list last had room.
+    full_notice_written: bool,
+}
 
-/// Whether the "list is full" line has been written since the list last had room.
-static OVER_BOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static MISSING_INDEXES: std::sync::Mutex<MissingIndexLedger> =
+    std::sync::Mutex::new(MissingIndexLedger {
+        reports: Vec::new(),
+        dropped: std::collections::BTreeMap::new(),
+        full_notice_written: false,
+    });
+
+/// The project of `projects/<p>/databases/<d>`.
+fn project_of(database: &str) -> &str {
+    database
+        .strip_prefix("projects/")
+        .and_then(|rest| rest.split_once('/'))
+        .map_or("", |(project, _)| project)
+}
 
 /// Whether a report is the first of its (database, index).
 enum Noted {
     New,
     Seen,
-    /// New, but the list is full.
-    OverBound,
+    /// New, but the list is full; says whether this is the first to find it so.
+    OverBound {
+        first: bool,
+    },
 }
 
 /// The stderr line of a report. Field paths reach it only JSON-escaped (the fragment) or with
@@ -197,31 +218,45 @@ fn escape_control_characters(text: &str) -> String {
 /// started, in the order first seen, so a test run can fail on any of them.
 #[must_use]
 pub fn missing_index_reports() -> Vec<MissingIndexReport> {
-    MISSING_INDEX_REPORTS
+    MISSING_INDEXES
         .lock()
-        .map(|reports| reports.clone())
+        .map(|ledger| ledger.reports.clone())
         .unwrap_or_default()
 }
 
-/// Forgets the recorded reports of `project`, or every report when it is `None`, and returns how
-/// many it removed. A forgotten index is recorded and logged again the next time a query needs it,
-/// so a CI job can clear the list between runs.
+/// How many queries `project` (every project when `None`) was served since its list was last
+/// cleared whose missing index is not in [`missing_index_reports`] because the list was full. A
+/// reader of the list that finds this above zero knows the list is incomplete.
+#[must_use]
+pub fn missing_index_dropped(project: Option<&str>) -> usize {
+    MISSING_INDEXES.lock().map_or(0, |ledger| match project {
+        Some(project) => ledger.dropped.get(project).copied().unwrap_or(0),
+        None => ledger.dropped.values().sum(),
+    })
+}
+
+/// Forgets the recorded reports of `project`, or every report when it is `None`, with the count of
+/// what was dropped for it, and returns how many reports it removed. A forgotten index is recorded
+/// and logged again the next time a query needs it, so a CI job can clear the list between runs.
 pub fn clear_missing_index_reports(project: Option<&str>) -> usize {
-    let Ok(mut reports) = MISSING_INDEX_REPORTS.lock() else {
+    let Ok(mut ledger) = MISSING_INDEXES.lock() else {
         return 0;
     };
-    let before = reports.len();
-    match project {
-        Some(project) => {
-            let prefix = format!("projects/{project}/databases/");
-            reports.retain(|report| !report.database.starts_with(&prefix));
-        }
-        None => reports.clear(),
+    let before = ledger.reports.len();
+    if let Some(project) = project {
+        let prefix = format!("projects/{project}/databases/");
+        ledger
+            .reports
+            .retain(|report| !report.database.starts_with(&prefix));
+        ledger.dropped.remove(project);
+    } else {
+        ledger.reports.clear();
+        ledger.dropped.clear();
     }
-    if reports.len() < MAX_MISSING_INDEX_REPORTS {
-        OVER_BOUND.store(false, std::sync::atomic::Ordering::Relaxed);
+    if ledger.reports.len() < MAX_MISSING_INDEX_REPORTS {
+        ledger.full_notice_written = false;
     }
-    before - reports.len()
+    before - ledger.reports.len()
 }
 
 /// Strict gateway configuration.
@@ -295,34 +330,36 @@ impl Gateway {
             fragment: requirement.indexes_json_fragment(),
             message: message(requirement, accepted.query.inequality_fields().len() > 1),
         };
-        let noted = MISSING_INDEX_REPORTS
+        let noted = MISSING_INDEXES
             .lock()
-            .map(|mut reports| {
-                let seen = reports
+            .map(|mut ledger| {
+                let seen = ledger
+                    .reports
                     .iter()
                     .any(|r| r.database == report.database && r.fragment == report.fragment);
                 if seen {
                     Noted::Seen
-                } else if reports.len() < MAX_MISSING_INDEX_REPORTS {
-                    reports.push(report.clone());
+                } else if ledger.reports.len() < MAX_MISSING_INDEX_REPORTS {
+                    ledger.reports.push(report.clone());
                     Noted::New
                 } else {
-                    Noted::OverBound
+                    *ledger
+                        .dropped
+                        .entry(project_of(&report.database).to_owned())
+                        .or_default() += 1;
+                    let first = !ledger.full_notice_written;
+                    ledger.full_notice_written = true;
+                    Noted::OverBound { first }
                 }
             })
             .unwrap_or(Noted::Seen);
         let line = match noted {
-            Noted::Seen => return None,
+            Noted::Seen | Noted::OverBound { first: false } => return None,
             Noted::New => missing_index_log_line(&report),
-            Noted::OverBound => {
-                if OVER_BOUND.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    return None;
-                }
-                format!(
-                    "[firestore] more than {MAX_MISSING_INDEX_REPORTS} distinct missing composite \
-                     indexes; later ones are served without being reported"
-                )
-            }
+            Noted::OverBound { first: true } => format!(
+                "[firestore] more than {MAX_MISSING_INDEX_REPORTS} distinct missing composite \
+                 indexes; later ones are served without being reported"
+            ),
         };
         let _ = writeln!(std::io::stderr(), "{line}");
         Some(line)

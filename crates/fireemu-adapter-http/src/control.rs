@@ -323,7 +323,12 @@ pub trait MissingIndexHook: Send + Sync {
     /// Every report, in the order first seen.
     fn reports(&self) -> Vec<MissingIndexEntry>;
 
-    /// Forgets the reports of `project` (all of them when `None`) and says how many it removed.
+    /// How many queries of `project` (all projects when `None`) were served with a missing index
+    /// that is not in [`Self::reports`] because the list was full.
+    fn dropped(&self, project: Option<&str>) -> usize;
+
+    /// Forgets the reports of `project` (all of them when `None`), with the count of what was
+    /// dropped for it, and says how many reports it removed.
     fn clear(&self, project: Option<&str>) -> usize;
 }
 
@@ -419,10 +424,13 @@ const MISSING_INDEXES_PATH: &str = "/v1/firestore/missingIndexes";
 ///
 /// `GET` lists the composite indexes the strict profile served under `firestore.missingIndexes:
 /// "report"`, each with production's refusal text and the entry to add, and `indexesJson` groups
-/// the entries per database as `firestore.indexes.json` holds them. It is refused (409) where
-/// nothing is reported, since an empty list there would pass a check it cannot support.
-/// `DELETE` forgets the list (200 with how many, also where nothing is reported). A session
-/// reset leaves the list alone.
+/// the entries per database as `firestore.indexes.json` holds them. The list is bounded: when
+/// queries were served whose index did not fit, the answer says `truncated` and how many were
+/// `dropped`, and a project that lost every one of its indexes is refused (409) instead of
+/// answering an empty list. It is refused (409) too where nothing is reported, since an empty
+/// list there would pass a check it cannot support. `DELETE` forgets the list and the dropped
+/// count (200 with how many entries, also where nothing is reported). A session reset leaves the
+/// list alone.
 fn missing_indexes_route(
     state: &ControlState,
     method: &str,
@@ -439,18 +447,30 @@ fn missing_indexes_route(
                     .into_iter()
                     .filter(|e| prefix.as_ref().is_none_or(|p| e.database.starts_with(p)))
                     .collect();
-                ok(missing_indexes_json(&entries))
+                let dropped = hook.dropped(project);
+                if entries.is_empty() && dropped > 0 {
+                    return error(
+                        409,
+                        &format!(
+                            "FAILED_PRECONDITION : {dropped} quer{} of this project were served with a missing composite index that is not listed, because the list is full; the list is incomplete, not empty. DELETE it and run again",
+                            if dropped == 1 { "y" } else { "ies" }
+                        ),
+                    );
+                }
+                let mut answer = missing_indexes_json(&entries);
+                answer["truncated"] = json!(dropped > 0);
+                answer["dropped"] = json!(dropped);
+                ok(answer)
             }
             _ => error(
                 409,
-                "FAILED_PRECONDITION : missing composite indexes are reported only under the strict profile with firestore.missingIndexes set to \"report\"; with \"refuse\" the query fails instead, and the emulator profile assumes every index",
+                "FAILED_PRECONDITION : missing composite indexes are reported only under the strict profile with firestore.missingIndexes set to \"report\" and Firestore selected; with \"refuse\" the query fails instead, the emulator profile assumes every index, and nothing is reported when Firestore is not selected",
             ),
         },
-        _ if project.is_some() => error(
+        _ => error(
             400,
             "INVALID_ARGUMENT : the missing-index reports are read with GET and cleared with DELETE",
         ),
-        _ => error(404, "NOT_FOUND"),
     }
 }
 
@@ -1340,6 +1360,11 @@ fn delete_session(state: &ControlState, session: &str, project: &str) -> JsonRes
             500,
             &format!("INTERNAL : session {session:?} was wiped but not deregistered: {e}"),
         );
+    }
+    // The project is gone: what was reported for it goes too, so one created again under the
+    // same name starts with an empty list.
+    if let Some(hook) = &state.firestore_missing_indexes {
+        hook.clear(Some(project));
     }
     ok(json!({"session": session, "project": project, "deleted": true}))
 }

@@ -20,6 +20,8 @@ use serde_json::{json, Value};
 struct Fake {
     enabled: bool,
     entries: Mutex<Vec<MissingIndexEntry>>,
+    /// Queries whose index did not fit, by project.
+    dropped: Mutex<std::collections::BTreeMap<String, usize>>,
     cleared_with: Mutex<Vec<Option<String>>>,
 }
 
@@ -28,6 +30,7 @@ impl Fake {
         Arc::new(Self {
             enabled,
             entries: Mutex::new(entries),
+            dropped: Mutex::new(std::collections::BTreeMap::new()),
             cleared_with: Mutex::new(Vec::new()),
         })
     }
@@ -42,6 +45,14 @@ impl MissingIndexHook for Fake {
         self.entries.lock().unwrap().clone()
     }
 
+    fn dropped(&self, project: Option<&str>) -> usize {
+        let dropped = self.dropped.lock().unwrap();
+        match project {
+            Some(project) => dropped.get(project).copied().unwrap_or(0),
+            None => dropped.values().sum(),
+        }
+    }
+
     fn clear(&self, project: Option<&str>) -> usize {
         self.cleared_with
             .lock()
@@ -49,12 +60,13 @@ impl MissingIndexHook for Fake {
             .push(project.map(str::to_owned));
         let mut entries = self.entries.lock().unwrap();
         let before = entries.len();
-        match project {
-            Some(project) => {
-                let prefix = format!("projects/{project}/databases/");
-                entries.retain(|e| !e.database.starts_with(&prefix));
-            }
-            None => entries.clear(),
+        if let Some(project) = project {
+            let prefix = format!("projects/{project}/databases/");
+            entries.retain(|e| !e.database.starts_with(&prefix));
+            self.dropped.lock().unwrap().remove(project);
+        } else {
+            entries.clear();
+            self.dropped.lock().unwrap().clear();
         }
         before - entries.len()
     }
@@ -183,7 +195,7 @@ fn an_empty_list_is_a_successful_answer_a_ci_job_can_test_for() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(
         r.body,
-        json!({"count": 0, "missingIndexes": [], "indexesJson": {}})
+        json!({"count": 0, "truncated": false, "dropped": 0, "missingIndexes": [], "indexesJson": {}})
     );
 }
 
@@ -280,15 +292,18 @@ fn delete_clears_everything_or_one_session_and_says_how_many() {
 fn only_get_and_delete_are_routes() {
     let (s, fake) = hooked(sample());
     for method in ["POST", "PUT", "PATCH"] {
-        let r = handle(&s, method, "/v1/firestore/missingIndexes", &json!({}));
-        assert_eq!(r.status, 404, "{method}: {}", r.body);
-        let r = handle(
-            &s,
-            method,
+        for path in [
+            "/v1/firestore/missingIndexes",
             "/v1/sessions/default/firestore/missingIndexes",
-            &json!({}),
-        );
-        assert_eq!(r.status, 400, "{method}: {}", r.body);
+        ] {
+            let r = handle(&s, method, path, &json!({}));
+            assert_eq!(r.status, 400, "{method} {path}: {}", r.body);
+            assert!(
+                r.body.to_string().contains("INVALID_ARGUMENT"),
+                "{}",
+                r.body
+            );
+        }
     }
     assert!(fake.cleared_with.lock().unwrap().is_empty());
     assert_eq!(fake.reports().len(), 4);
@@ -313,7 +328,8 @@ fn reading_is_refused_where_nothing_is_reported() {
             assert!(
                 text.contains("FAILED_PRECONDITION")
                     && text.contains("strict")
-                    && text.contains("missingIndexes"),
+                    && text.contains("missingIndexes")
+                    && text.contains("Firestore is not selected"),
                 "{text}"
             );
             // Clearing an empty list is harmless and needs no precondition.
@@ -321,6 +337,188 @@ fn reading_is_refused_where_nothing_is_reported() {
             assert_eq!(r.body, json!({"cleared": 0}), "{path}");
         }
     }
+}
+
+fn with_dropped(fake: &Fake, project: &str, count: usize) {
+    fake.dropped
+        .lock()
+        .unwrap()
+        .insert(project.to_owned(), count);
+}
+
+/// The list keeps at most 1,000 indexes. A project whose indexes were dropped past that bound must
+/// not read as a plain "none missing": a CI job that tests only the count would pass.
+#[test]
+fn a_project_whose_indexes_were_dropped_never_reads_as_none_missing() {
+    let (s, fake) = hooked(sample());
+    // `demo-other` has one listed index; `demo-late` lost its own to the bound.
+    with_dropped(&fake, "demo-late", 3);
+    s.sessions
+        .lock()
+        .unwrap()
+        .insert("late".to_owned(), "demo-late".to_owned());
+
+    let r = handle(
+        &s,
+        "GET",
+        "/v1/sessions/late/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(r.status, 409, "{}", r.body);
+    let text = r.body.to_string();
+    assert!(
+        text.contains("FAILED_PRECONDITION") && text.contains("list is full") && text.contains('3'),
+        "{text}"
+    );
+
+    // A project that lost nothing still reads normally, and says the list is whole.
+    let r = handle(
+        &s,
+        "GET",
+        "/v1/sessions/default/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        (&r.body["truncated"], &r.body["dropped"]),
+        (&json!(false), &json!(0))
+    );
+
+    // Every project's list says it is incomplete, with how many were dropped.
+    let r = handle(&s, "GET", "/v1/firestore/missingIndexes", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["count"], 4);
+    assert_eq!(
+        (&r.body["truncated"], &r.body["dropped"]),
+        (&json!(true), &json!(3))
+    );
+
+    // A project with listed entries and dropped ones answers both facts.
+    with_dropped(&fake, "demo-app", 2);
+    let r = handle(
+        &s,
+        "GET",
+        "/v1/sessions/default/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["count"], 3);
+    assert_eq!(
+        (&r.body["truncated"], &r.body["dropped"]),
+        (&json!(true), &json!(2))
+    );
+
+    // Clearing the project forgets what was dropped for it, and for no other.
+    let r = handle(
+        &s,
+        "DELETE",
+        "/v1/sessions/late/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(r.body, json!({"cleared": 0}));
+    let r = handle(
+        &s,
+        "GET",
+        "/v1/sessions/late/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(
+        (r.status, &r.body["count"], &r.body["truncated"]),
+        (200, &json!(0), &json!(false))
+    );
+    let r = handle(
+        &s,
+        "GET",
+        "/v1/sessions/default/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(r.body["dropped"], 2);
+}
+
+/// A collection-group index and an array-contains one pass through as the gateway wrote them: the
+/// route reshapes nothing but the grouping.
+#[test]
+fn collection_group_and_array_config_entries_pass_through_unchanged() {
+    let group = json!({
+        "collectionGroup": "notes",
+        "queryScope": "COLLECTION_GROUP",
+        "fields": [
+            {"fieldPath": "owner", "order": "ASCENDING"},
+            {"fieldPath": "created", "order": "DESCENDING"},
+            {"fieldPath": "__name__", "order": "DESCENDING"},
+        ],
+    });
+    let contains = json!({
+        "collectionGroup": "tags",
+        "queryScope": "COLLECTION",
+        "fields": [
+            {"fieldPath": "labels", "arrayConfig": "CONTAINS"},
+            {"fieldPath": "created", "order": "ASCENDING"},
+        ],
+    });
+    let name = "projects/demo-app/databases/(default)";
+    let (s, _) = hooked(vec![entry(name, &group), entry(name, &contains)]);
+    let r = handle(&s, "GET", "/v1/firestore/missingIndexes", &json!({}));
+    assert_eq!(r.body["missingIndexes"][0]["index"], group);
+    assert_eq!(r.body["missingIndexes"][1]["index"], contains);
+    assert_eq!(
+        r.body["indexesJson"][name],
+        json!({"indexes": [group, contains]})
+    );
+}
+
+/// Deleting a session removes its project, so what was reported for it goes too: a project created
+/// again under the same name starts with an empty list.
+#[test]
+fn deleting_a_session_clears_what_was_reported_for_its_project() {
+    let (s, fake) = hooked(sample());
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions",
+        &json!({"name": "temp", "project": "demo-temp"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    fake.entries.lock().unwrap().push(entry(
+        "projects/demo-temp/databases/(default)",
+        &index("notes", "owner"),
+    ));
+    with_dropped(&fake, "demo-temp", 5);
+    let r = handle(
+        &s,
+        "GET",
+        "/v1/sessions/temp/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(r.body["count"], 1);
+
+    let r = handle(&s, "DELETE", "/v1/sessions/temp", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        *fake.cleared_with.lock().unwrap(),
+        vec![Some("demo-temp".to_owned())]
+    );
+    // Other projects keep theirs.
+    assert_eq!(fake.reports().len(), 4);
+
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions",
+        &json!({"name": "temp", "project": "demo-temp"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = handle(
+        &s,
+        "GET",
+        "/v1/sessions/temp/firestore/missingIndexes",
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        (&r.body["count"], &r.body["dropped"]),
+        (&json!(0), &json!(0))
+    );
 }
 
 /// A page on another origin must not read query shapes or clear the list without the token, and
@@ -499,5 +697,44 @@ proptest! {
         }
         let r = handle(&s, "DELETE", "/v1/sessions/s/firestore/missingIndexes", &json!({}));
         prop_assert_eq!(&r.body["cleared"], &json!(mine.len()));
+    }
+}
+
+proptest! {
+    /// A project is refused exactly when it has no listed entry and something was dropped for it;
+    /// otherwise the answer says whether it is incomplete.
+    #[test]
+    fn an_incomplete_list_is_never_an_empty_answer(
+        listed in 0usize..4,
+        dropped in 0usize..4,
+        others in 0usize..4,
+    ) {
+        let mut entries = Vec::new();
+        for n in 0..listed {
+            entries.push(entry(&format!("projects/demo-app/databases/d{n}"), &index("a", "x")));
+        }
+        for n in 0..others {
+            entries.push(entry(&format!("projects/demo-other/databases/d{n}"), &index("b", "y")));
+        }
+        let fake = Fake::new(true, entries);
+        with_dropped(&fake, "demo-app", dropped);
+        let s = state(Some(fake));
+        let r = handle(&s, "GET", "/v1/sessions/default/firestore/missingIndexes", &json!({}));
+        if listed == 0 && dropped > 0 {
+            prop_assert_eq!(r.status, 409);
+        } else {
+            prop_assert_eq!(r.status, 200);
+            prop_assert_eq!(&r.body["count"], &json!(listed));
+            prop_assert_eq!(&r.body["truncated"], &json!(dropped > 0));
+            prop_assert_eq!(&r.body["dropped"], &json!(dropped));
+        }
+        // The all-projects list follows the same rule over everything it holds.
+        let r = handle(&s, "GET", "/v1/firestore/missingIndexes", &json!({}));
+        if listed + others == 0 && dropped > 0 {
+            prop_assert_eq!(r.status, 409);
+        } else {
+            prop_assert_eq!(r.status, 200);
+            prop_assert_eq!(&r.body["truncated"], &json!(dropped > 0));
+        }
     }
 }

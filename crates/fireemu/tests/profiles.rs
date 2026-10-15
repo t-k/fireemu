@@ -372,6 +372,93 @@ fn the_control_api_lists_and_clears_the_missing_indexes_a_report_run_served() {
     );
 }
 
+/// What the route lists is what `firestore.indexes.json` needs: written to the file as
+/// `indexesJson` gives it, a strict daemon that refuses by default accepts the queries that were
+/// reported, including a collection-group query and an array-contains one.
+#[test]
+fn the_indexes_the_route_lists_are_accepted_when_written_to_firestore_indexes_json() {
+    let owner_query = |daemon: &Daemon, structured: &str| {
+        http_as_owner(
+            daemon.firestore_port(),
+            "POST",
+            "/v1/projects/demo-profile/databases/(default)/documents:runQuery",
+            Some(&format!(r#"{{"structuredQuery": {structured}}}"#)),
+        )
+    };
+    let queries = [
+        r#"{"from": [{"collectionId": "notes"}], "where": {"fieldFilter": {"field": {"fieldPath": "owner"}, "op": "EQUAL", "value": {"stringValue": "a"}}}, "orderBy": [{"field": {"fieldPath": "created"}, "direction": "ASCENDING"}]}"#,
+        r#"{"from": [{"collectionId": "notes", "allDescendants": true}], "where": {"fieldFilter": {"field": {"fieldPath": "owner"}, "op": "EQUAL", "value": {"stringValue": "a"}}}, "orderBy": [{"field": {"fieldPath": "created"}, "direction": "DESCENDING"}]}"#,
+        r#"{"from": [{"collectionId": "tags"}], "where": {"fieldFilter": {"field": {"fieldPath": "labels"}, "op": "ARRAY_CONTAINS", "value": {"stringValue": "x"}}}, "orderBy": [{"field": {"fieldPath": "created"}, "direction": "ASCENDING"}]}"#,
+    ];
+
+    let reporting = Daemon::start_with(
+        "roundtrip-report",
+        "strict",
+        r#""missingIndexes": "report", "#,
+    );
+    for query in queries {
+        let (status, body) = owner_query(&reporting, query);
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, body) = http(
+        reporting.control_port(),
+        "GET",
+        "/v1/sessions/default/firestore/missingIndexes",
+        None,
+    );
+    assert_eq!(status, 200, "{body}");
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    // The session of this daemon is not the queried project; read the all-projects list.
+    assert_eq!(list["count"], 0, "{body}");
+    let (_, body) = http(
+        reporting.control_port(),
+        "GET",
+        "/v1/firestore/missingIndexes",
+        None,
+    );
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list["count"], 3, "{body}");
+    let scopes: Vec<&str> = list["missingIndexes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["index"]["queryScope"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        scopes,
+        ["COLLECTION", "COLLECTION_GROUP", "COLLECTION"],
+        "{body}"
+    );
+    assert!(body.contains(r#""arrayConfig":"CONTAINS""#), "{body}");
+    let file = list["indexesJson"]["projects/demo-profile/databases/(default)"].clone();
+    assert_eq!(file["indexes"].as_array().unwrap().len(), 3, "{body}");
+    reporting.stop();
+
+    let dir = scratch("roundtrip-file");
+    let indexes = dir.join("firestore.indexes.json");
+    std::fs::write(&indexes, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+    let strict = Daemon::start_with(
+        "roundtrip-refuse",
+        "strict",
+        &format!(
+            r#""indexFile": {}, "#,
+            serde_json::json!(indexes.to_str().unwrap())
+        ),
+    );
+    for query in queries {
+        let (status, body) = owner_query(&strict, query);
+        assert_eq!(status, 200, "the listed index serves the query: {body}");
+    }
+    strict.stop();
+    // Without the file the same daemon refuses them, so the file is what made the difference.
+    let bare = Daemon::start_with("roundtrip-bare", "strict", "");
+    for query in queries {
+        let (status, body) = owner_query(&bare, query);
+        assert_eq!(status, 400, "{body}");
+    }
+    bare.stop();
+}
+
 #[test]
 fn the_control_api_refuses_to_list_missing_indexes_where_none_are_reported() {
     // The strict default refuses the query, and the emulator profile assumes every index: an

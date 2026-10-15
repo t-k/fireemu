@@ -44,6 +44,7 @@
 
 mod config;
 mod config_discovery;
+mod config_shape;
 mod control;
 mod daemon;
 mod doctor;
@@ -1530,7 +1531,13 @@ fn load_project_config(
             let (json, canonical) = config_document(raw, path)?;
             if canonical {
                 sources.canonical = Some(path.clone());
-                let config = RuntimeConfig::from_json(&json)?;
+                let config = RuntimeConfig::from_json(&json).map_err(|error| {
+                    CliError::refused(format!(
+                        "{}: {}",
+                        diagnostic_path(path),
+                        diagnostic_text(&error.0)
+                    ))
+                })?;
                 if raw.verbosity > Verbosity::Quiet {
                     for note in config::no_effect_notes(&json) {
                         eprintln!("note: {}: {note}", diagnostic_path(path));
@@ -4034,6 +4041,109 @@ mod config_reload_tests {
         .expect("the file present before supervisor start should reconcile");
         drop(rules);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn canonical_rules_reload_when_firebase_declares_only_indexes() {
+        let dir = scratch("canonical_rules_reload_when_firebase_declares_only_indexes");
+        let path = dir.join("firestore.rules");
+        std::fs::write(&path, RULES_ONE).unwrap();
+        let mut cfg = RuntimeConfig::from_json(&serde_json::json!({
+            "schemaVersion": 1, "rules": {"source": path}
+        }))
+        .unwrap();
+        cfg.apply_firebase_json(
+            &serde_json::json!({"firestore": {"indexes": "unused.indexes.json"}}),
+            &dir,
+            &Selection::default(),
+        )
+        .unwrap();
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let backend = index_backend(INDEXES_ONE);
+        let barrier = backend.barrier();
+        let storage = LoadedStorageRules {
+            registry: Arc::new(
+                fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(
+                    std::collections::BTreeMap::new(),
+                ),
+            ),
+            watched: Vec::new(),
+        };
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &rules,
+            &std::collections::BTreeMap::new(),
+            &storage,
+            &barrier,
+        );
+        std::fs::write(&path, RULES_TWO).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the retained canonical file should reload after an edit");
+    }
+
+    #[tokio::test]
+    async fn canonical_indexes_reload_when_firebase_declares_only_rules() {
+        let dir = scratch("canonical_indexes_reload_when_firebase_declares_only_rules");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let mut cfg = RuntimeConfig::from_json(&serde_json::json!({
+            "schemaVersion": 1, "firestore": {"indexFile": path}
+        }))
+        .unwrap();
+        cfg.apply_firebase_json(
+            &serde_json::json!({"firestore": {"rules": "unused.rules"}}),
+            &dir,
+            &Selection::default(),
+        )
+        .unwrap();
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let backend = index_backend(INDEXES_ONE);
+        let barrier = backend.barrier();
+        let storage = LoadedStorageRules {
+            registry: Arc::new(
+                fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(
+                    std::collections::BTreeMap::new(),
+                ),
+            ),
+            watched: Vec::new(),
+        };
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &rules,
+            &std::collections::BTreeMap::new(),
+            &storage,
+            &barrier,
+        );
+        std::fs::write(&path, INDEXES_TWO).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if backend
+                    .indexes_for_database("(default)")
+                    .composites()
+                    .first()
+                    .is_some_and(|index| index.collection_group.as_str() == "other")
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the retained canonical file should reload after an edit");
     }
 
     #[tokio::test]

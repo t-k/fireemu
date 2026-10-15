@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "rules": { "sources": "firestore.rules" }
+}

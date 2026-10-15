@@ -1721,12 +1721,13 @@ pub const NO_EFFECT_SOURCE: &str = "accepted, no effect";
 /// and the start-up notes share this list; a schema leaf is either mapped to a runtime value in
 /// [`RuntimeConfig::config_show`] or listed here (a test enforces it, and that a listed key has
 /// no runtime value). Remove a key from the list when the daemon starts reading it.
-pub const NO_EFFECT_KEYS: [&str; 33] = [
+pub const NO_EFFECT_KEYS: [&str; 34] = [
     "bind",
     "limits.catalog",
     "limits.queryCatalog",
     "limits.rulesCatalog",
     "limits.enforcement",
+    "firestore.rules",
     "firestore.explain",
     "firestore.pipeline.enabled",
     "firestore.pipeline.executionMode",
@@ -1763,8 +1764,9 @@ pub const NO_EFFECT_KEYS: [&str; 33] = [
 pub fn no_effect_notes(input: &Value) -> Vec<String> {
     explicit_no_effect_keys(input)
         .into_iter()
-        .map(|key| {
-            format!("{key} is accepted for forward compatibility and currently has no effect")
+        .map(|key| match key {
+            "firestore.rules" => "firestore.rules is accepted but never read; set the Firestore rules file with rules.source (or firestore.rules in firebase.json)".to_owned(),
+            _ => format!("{key} is accepted for forward compatibility and currently has no effect"),
         })
         .collect()
 }
@@ -1910,7 +1912,7 @@ impl RuntimeConfig {
             "daemon.seed" => Some(json!(self.seed)),
             "daemon.authProject" => Some(json!(self.auth_project)),
             "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
-            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.loggingPort" => {
+            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
                 let addr = match key {
                     "daemon.firestorePort" => &self.firestore_addr,
                     "daemon.httpPort" => &self.http_addr,
@@ -1919,6 +1921,8 @@ impl RuntimeConfig {
                     "daemon.eventarcPort" => &self.eventarc_addr,
                     "daemon.tasksPort" => &self.tasks_addr,
                     "daemon.pubsubPort" => &self.pubsub_addr,
+                    "daemon.hubPort" => &self.hub_addr,
+                    "daemon.uiPort" => &self.ui_addr,
                     _ => &self.logging_addr,
                 };
                 Some(json!(addr.rsplit_once(':').and_then(|(_, port)| port.parse::<u16>().ok())))
@@ -1932,6 +1936,8 @@ impl RuntimeConfig {
             "functions.clock.timers" => Some(json!(if self.functions_clock.timers_virtual { "virtual" } else { "real" })),
             "functions.clock.tasks" => Some(json!(if self.functions_clock.tasks_virtual { "virtual" } else { "real" })),
             "events.maxAttempts" => Some(json!(self.events_max_attempts)),
+            "pubsub.projectNumbers" => Some(json!(self.pubsub_project_numbers)),
+            "pubsub.authentication.localBearerToken" => Some(json!(self.pubsub_local_bearer_token)),
             "pubsub.pushMinimumRedeliveryIntervalMillis" => Some(json!(self.pubsub_push_minimum_redelivery_interval_millis)),
             "scheduler.defaultTimeZone" => Some(json!(self.scheduler_default_time_zone)),
             "scheduler.catchUp" => Some(json!(self.scheduler_catch_up)),
@@ -1983,6 +1989,54 @@ impl RuntimeConfig {
         }
     }
 }
+
+/// The keys of the `daemon` section (spec/config/fireemu.schema.json).
+pub(crate) const DAEMON_KEYS: [&str; 14] = [
+    "firestorePort",
+    "storagePort",
+    "httpPort",
+    "functionsPort",
+    "eventarcPort",
+    "tasksPort",
+    "pubsubPort",
+    "hubPort",
+    "uiPort",
+    "loggingPort",
+    "clockStart",
+    "seed",
+    "authProject",
+    "authProjectNumbers",
+];
+
+/// The keys of the `events` section.
+pub(crate) const EVENTS_KEYS: [&str; 2] = ["delivery", "maxAttempts"];
+
+/// The keys of the `pubsub` section.
+pub(crate) const PUBSUB_KEYS: [&str; 4] = [
+    "pushMinimumRedeliveryIntervalMillis",
+    "projectNumbers",
+    "authentication",
+    "deadLetterAuthorization",
+];
+
+/// The keys of the `scheduler` section.
+pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
+    "clock",
+    "defaultTimeZone",
+    "catchUp",
+    "maxCatchUpRuns",
+    "overlap",
+];
+
+/// The keys of the `functions` section.
+pub(crate) const FUNCTIONS_KEYS: [&str; 6] = [
+    "manifest",
+    "source",
+    "runner",
+    "maxGlobalConcurrency",
+    "unservedTriggers",
+    "clock",
+];
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
 pub(crate) const AUTH_KEYS: [&str; 28] = [
@@ -3133,7 +3187,7 @@ impl RuntimeConfig {
                 )));
             }
             seen.push(database.clone());
-            let files = FirestoreDatabaseFiles {
+            let mut files = FirestoreDatabaseFiles {
                 rules: entry
                     .get("rules")
                     .map(|value| file(value, &format!("{path}.rules")))
@@ -3144,9 +3198,19 @@ impl RuntimeConfig {
                     .map(|value| file(value, &format!("{path}.indexes")))
                     .transpose()?,
             };
+            // The default database's file overrides the canonical value only where the
+            // entry names one: an entry with indexes alone leaves `rules.source` standing.
             if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
-                self.rules_file.clone_from(&files.rules);
-                self.index_file.clone_from(&files.indexes);
+                if files.rules.is_some() {
+                    self.rules_file.clone_from(&files.rules);
+                } else {
+                    files.rules.clone_from(&self.rules_file);
+                }
+                if files.indexes.is_some() {
+                    self.index_file.clone_from(&files.indexes);
+                } else {
+                    files.indexes.clone_from(&self.index_file);
+                }
             }
             self.firestore_databases.insert(database, files);
         }
@@ -3190,6 +3254,10 @@ impl RuntimeConfig {
                 ))
             }
         };
+        // No `storage` section declares nothing: the canonical `storage.rules` stands.
+        if section.is_none() {
+            return Ok(());
+        }
         self.storage_rules_file = None;
         self.storage_rules_by_target.clear();
         self.storage_rules_by_bucket.clear();
@@ -3347,6 +3415,10 @@ impl RuntimeConfig {
                 ))
             }
         };
+        // No `functions` section declares nothing: the canonical `functions.source` stands.
+        if section.is_none() {
+            return Ok(());
+        }
         let mut codebases: Vec<FunctionsCodebase> = Vec::with_capacity(entries.len());
         for (entry, path) in entries {
             for key in entry.keys() {
@@ -3580,7 +3652,7 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-const KNOWN_TOP_LEVEL: &[&str] = &[
+pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "$schema",
     "schemaVersion",
     "firebaseJson",
@@ -3955,24 +4027,7 @@ impl RuntimeConfig {
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
         for key in d.keys() {
-            if ![
-                "firestorePort",
-                "storagePort",
-                "httpPort",
-                "functionsPort",
-                "eventarcPort",
-                "tasksPort",
-                "pubsubPort",
-                "hubPort",
-                "uiPort",
-                "loggingPort",
-                "clockStart",
-                "seed",
-                "authProject",
-                "authProjectNumbers",
-            ]
-            .contains(&key.as_str())
-            {
+            if !DAEMON_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key daemon.{key}")));
             }
         }
@@ -4101,7 +4156,7 @@ impl RuntimeConfig {
 
     fn parse_events(e: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
         for key in e.keys() {
-            if !["delivery", "maxAttempts"].contains(&key.as_str()) {
+            if !EVENTS_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key events.{key}")));
             }
         }
@@ -4212,14 +4267,7 @@ impl RuntimeConfig {
 
     fn parse_pubsub(p: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
         for key in p.keys() {
-            if ![
-                "pushMinimumRedeliveryIntervalMillis",
-                "projectNumbers",
-                "authentication",
-                "deadLetterAuthorization",
-            ]
-            .contains(&key.as_str())
-            {
+            if !PUBSUB_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key pubsub.{key}")));
             }
         }
@@ -4309,15 +4357,7 @@ impl RuntimeConfig {
         cfg: &mut Self,
     ) -> Result<(), ConfigError> {
         for key in s.keys() {
-            if ![
-                "clock",
-                "defaultTimeZone",
-                "catchUp",
-                "maxCatchUpRuns",
-                "overlap",
-            ]
-            .contains(&key.as_str())
-            {
+            if !SCHEDULER_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key scheduler.{key}")));
             }
         }
@@ -4381,16 +4421,7 @@ impl RuntimeConfig {
         cfg: &mut Self,
     ) -> Result<(), ConfigError> {
         for key in f.keys() {
-            if ![
-                "manifest",
-                "source",
-                "runner",
-                "maxGlobalConcurrency",
-                "unservedTriggers",
-                "clock",
-            ]
-            .contains(&key.as_str())
-            {
+            if !FUNCTIONS_KEYS.contains(&key.as_str()) {
                 return Err(ConfigError(format!("unknown config key functions.{key}")));
             }
         }
@@ -5299,6 +5330,9 @@ impl RuntimeConfig {
             .validate(cfg.clock_start)
             .map_err(ConfigError)?;
         cfg.record_development_defaults(json);
+        // The hand-written readers above skip a key of the wrong type and a key they do not
+        // know; the schema's shape is checked last so that their own messages come first.
+        crate::config_shape::check(json)?;
         Ok(cfg)
     }
 }
@@ -5375,6 +5409,13 @@ mod tests {
                 json!(["media-bucket", "other.example.com"]),
             ),
             ("daemon.clockStart", json!("2031-02-03T04:05:06Z")),
+            ("daemon.hubPort", json!(4411)),
+            ("daemon.uiPort", json!(4012)),
+            ("pubsub.projectNumbers", json!({"demo-app": "1234567890"})),
+            (
+                "pubsub.authentication.localBearerToken",
+                json!("fixture-token"),
+            ),
             (
                 "daemon.authProjectNumbers",
                 json!({"demo-app": 1_234_567_890}),
@@ -5800,6 +5841,17 @@ mod tests {
                 &json!({"trace": {"canonical": null}, "bind": "127.0.0.1", "auth": {"enabled": false}})
             ),
             ["bind", "auth.enabled", "trace.canonical"]
+        );
+    }
+
+    #[test]
+    fn the_deprecated_firestore_rules_key_points_at_rules_source() {
+        let notes = no_effect_notes(&json!({"firestore": {"rules": "firestore.rules"}}));
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].starts_with("firestore.rules is accepted but never read")
+                && notes[0].contains("rules.source"),
+            "{notes:?}"
         );
     }
 
@@ -7157,7 +7209,7 @@ mod tests {
                 }
             },
             "firestore": {
-                "edition": "standard",
+                "edition": "enterprise",
                 "apiMode": "native",
                 "enforceLimits": false
             }
@@ -8140,6 +8192,79 @@ mod tests {
             .join(relative)
             .to_string_lossy()
             .into_owned()
+    }
+
+    /// A canonical configuration that names every file a `firebase.json` can also name.
+    fn canonical_with_files() -> RuntimeConfig {
+        RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "rules": {"source": "canonical.rules"},
+            "storage": {"rules": "canonical-storage.rules"},
+            "firestore": {"indexFile": "canonical.indexes.json"},
+            "functions": {"source": "canonical-functions"}
+        }))
+        .unwrap()
+    }
+
+    fn layered(firebase_json: &Value) -> RuntimeConfig {
+        let mut cfg = canonical_with_files();
+        cfg.apply_firebase_json(
+            firebase_json,
+            std::path::Path::new("/proj"),
+            &Selection {
+                functions: true,
+                ..Selection::default()
+            },
+        )
+        .unwrap();
+        cfg
+    }
+
+    #[test]
+    fn a_firebase_json_without_a_section_leaves_the_canonical_value_of_that_section() {
+        // Neither the file's `emulators` alone nor an empty file may switch a ruleset off.
+        for firebase_json in [json!({}), json!({"emulators": {"ui": {"enabled": false}}})] {
+            let cfg = layered(&firebase_json);
+            assert_eq!(cfg.rules_file.as_deref(), Some("canonical.rules"));
+            assert_eq!(
+                cfg.storage_rules_file.as_deref(),
+                Some("canonical-storage.rules")
+            );
+            assert_eq!(cfg.index_file.as_deref(), Some("canonical.indexes.json"));
+            assert_eq!(cfg.functions_source.as_deref(), Some("canonical-functions"));
+        }
+    }
+
+    #[test]
+    fn a_firebase_json_firestore_entry_overrides_only_the_files_it_names() {
+        let cfg = layered(&json!({"firestore": {"indexes": "fb.indexes.json"}}));
+        assert_eq!(cfg.rules_file.as_deref(), Some("canonical.rules"));
+        assert_eq!(
+            cfg.index_file.as_deref(),
+            Some(under_proj("fb.indexes.json").as_str())
+        );
+        let cfg = layered(&json!({"firestore": {"rules": "fb.rules"}}));
+        assert_eq!(
+            cfg.rules_file.as_deref(),
+            Some(under_proj("fb.rules").as_str())
+        );
+        assert_eq!(cfg.index_file.as_deref(), Some("canonical.indexes.json"));
+    }
+
+    #[test]
+    fn a_section_the_firebase_json_does_declare_replaces_the_canonical_value() {
+        let cfg = layered(&json!({
+            "storage": {"rules": "fb-storage.rules"},
+            "functions": {"source": "fb-functions"}
+        }));
+        assert_eq!(
+            cfg.storage_rules_file.as_deref(),
+            Some(under_proj("fb-storage.rules").as_str())
+        );
+        assert_eq!(
+            cfg.functions_source.as_deref(),
+            Some(under_proj("fb-functions").as_str())
+        );
     }
 
     #[test]

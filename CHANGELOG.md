@@ -8,6 +8,15 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- A canonical configuration (`fireemu.toml` or `fireemu.json`) is now checked against the configuration schema when it loads. A key the schema does not list and a value of the wrong type used to be skipped without a word (`"port": "8080"` fell back to the default, a misspelt key did nothing); both are now refused by `up`, `exec` and `config show` with the file, the key's path and the expected type, for example `fireemu.toml: daemon.firestorePort must be an integer, found a string`. A port above 65535 is refused too. Values outside the schema's ranges or choices are now refused, including `events.maxAttempts: 0` and `functions.maxGlobalConcurrency: 0` (previously raised silently to 1), negative ports, `daemon.seed: -1` (previously ignored while `config show` reported "explicit"), values outside the enums of `storage.persistence`, `storage.mode`, `rules.diagnostics.format` and `auth.secretMaterialization`, and integers written as floats (`8080.0`). A configuration that only worked because a typo was ignored stops with an error naming the key.
+- The configuration schema now lists `daemon.hubPort`, `daemon.uiPort`, `pubsub.projectNumbers` and `pubsub.authentication.localBearerToken`, which the daemon already read, and no longer requires `profile` or `firestore`, which have defaults (`strict`, Standard Native). `firestore.rules` is listed as deprecated: it was never read, loads as before and now prints a start-up note pointing at `rules.source`. A `limits.catalog` of the other Firestore edition, `firestore.pipeline.executionMode: "proxy"`, `firestore.textSearch.fidelity: "upstream-proxy"`, `visibilityPolicy: "virtual-lag"` without a lag, and `strict-validation-only` with an exact score precision are refused, as the schema examples say.
+
+### Fixed
+
+- A `firebase.json` without a `storage`, `functions` or `firestore` section no longer drops the canonical configuration's `storage.rules`, `functions.source`, `rules.source` or `firestore.indexFile`: a section the `firebase.json` declares overrides, and a file it leaves out is kept. Before, a canonical `storage.rules` was silently lost whenever the referenced `firebase.json` had no `storage` entry, and Storage then ran with no Security Rules.
+
 ## [0.22.0] - 2026-10-15
 
 ### Fixed

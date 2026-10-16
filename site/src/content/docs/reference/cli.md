@@ -3,7 +3,7 @@ title: CLI
 description: Commands and options of the fireemu command.
 ---
 
-This reference is the built-in help of Fireemu 0.24.0. Run `npx fireemu --help`, or `npx fireemu help <command>`, for the help of the version you have installed.
+This reference lists common fireemu commands and options. Run `npx fireemu --help`, or `npx fireemu help <command>`, for the help of the version you have installed.
 
 | Command | What it does |
 |---|---|

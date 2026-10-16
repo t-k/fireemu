@@ -88,8 +88,61 @@ pub const ABSTRACT_SEGMENT: &str = "fireemu-placeholder";
 /// proofs); only a recursive wildcard can consume it.
 pub const ABSTRACT_PREFIX: &str = "fireemu-any-prefix";
 
-fn is_abstract_segment(s: &str) -> bool {
-    s == ABSTRACT_SEGMENT || s == ABSTRACT_PREFIX
+/// Typed matcher input keeps concrete names distinct from query proof markers.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchSegment {
+    Literal(String),
+    AnySegment,
+    AnyPrefix,
+}
+
+impl MatchSegment {
+    fn matches_literal(&self, literal: &str) -> bool {
+        matches!(self, Self::Literal(value) if value == literal)
+    }
+
+    fn capture(&self) -> RulesValue {
+        match self {
+            Self::Literal(value) => RulesValue::String(value.clone()),
+            Self::AnySegment | Self::AnyPrefix => RulesValue::Unknown,
+        }
+    }
+
+    fn capture_path(segments: &[Self]) -> RulesValue {
+        let concrete = segments
+            .iter()
+            .map(|segment| match segment {
+                Self::Literal(value) => Some(value.clone()),
+                Self::AnySegment | Self::AnyPrefix => None,
+            })
+            .collect::<Option<Vec<_>>>();
+        concrete.map_or(RulesValue::Unknown, RulesValue::Path)
+    }
+}
+
+fn match_segments(ctx: &RequestContext) -> Vec<MatchSegment> {
+    let segments: Vec<_> = ctx
+        .path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    segments
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            // Storage list proofs append exactly one synthetic tail. All prefix components
+            // are known, including names that happen to spell a marker. Firestore retains
+            // its existing document and collection-group marker positions.
+            let abstract_segment = ctx.abstract_path
+                && (ctx.service != RulesService::Storage || index + 1 == segments.len());
+            match (*value, abstract_segment) {
+                (ABSTRACT_SEGMENT, true) => MatchSegment::AnySegment,
+                (ABSTRACT_PREFIX, true) => MatchSegment::AnyPrefix,
+                _ => MatchSegment::Literal((*value).to_owned()),
+            }
+        })
+        .collect()
 }
 
 /// Which `service` block of the ruleset applies.
@@ -131,7 +184,8 @@ pub struct RequestContext {
     /// `request.time` in Unix nanoseconds.
     pub time_unix_nanos: i128,
     /// Query proof mode: path captures and `request.path` are undetermined (the request
-    /// stands for every potential result).
+    /// stands for every potential result). Storage proofs append a single marker tail;
+    /// preceding path components remain concrete even when their names equal markers.
     pub abstract_path: bool,
     /// `request.query` (`limit`, `offset`, `orderBy`) of a list request; `None` elsewhere.
     pub request_query: Option<RulesValue>,
@@ -446,7 +500,7 @@ struct Evaluator<'a> {
     /// the candidate conservative and lets the bounded matcher make the final decision.
     match_prefilter_work: Arc<AtomicU64>,
     /// Reachability results shared by structurally equivalent match paths in one request.
-    pattern_reachability_cache: BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
+    pattern_reachability_cache: BTreeMap<(String, Vec<MatchSegment>, bool), Vec<bool>>,
     /// Query-provenance results are static for one ruleset evaluation and can be reused across
     /// repeated references to the same declaration.
     query_derived_function_cache: core::cell::RefCell<BTreeMap<usize, bool>>,
@@ -591,13 +645,7 @@ fn evaluate_prepared(
         max_depth_seen: 0,
         depth_max: limit_max("RULES-FUNCTION-CALL-DEPTH"),
     };
-    let segments: Vec<String> = ctx
-        .path
-        .trim_start_matches('/')
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let segments = match_segments(ctx);
     let mut matched_any = false;
     let mut unsupported: Option<String> = None;
     let mut absent_resource_used = false;
@@ -789,7 +837,7 @@ fn build_request_with_resource(
 /// remembered by the caller; soft errors only make that allow false.
 fn walk_items<'a>(
     items: &'a [Item],
-    remaining: &[String],
+    remaining: &[MatchSegment],
     ctx: &RequestContext,
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
@@ -846,10 +894,10 @@ fn collect_function_scopes<'a>(
 /// instead of treating every prefix-capable parent as a candidate.
 fn pattern_reachable_offsets(
     pattern: &[PathSegment],
-    segments: &[String],
+    segments: &[MatchSegment],
     zero_or_more: bool,
     work: &AtomicU64,
-    cache: &mut BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
+    cache: &mut BTreeMap<(String, Vec<MatchSegment>, bool), Vec<bool>>,
 ) -> Option<Vec<bool>> {
     let shape = pattern
         .iter()
@@ -880,7 +928,7 @@ fn pattern_reachable_offsets(
 
 fn pattern_reachable_offsets_uncached(
     pattern: &[PathSegment],
-    segments: &[String],
+    segments: &[MatchSegment],
     zero_or_more: bool,
     work: &AtomicU64,
 ) -> Option<Vec<bool>> {
@@ -901,8 +949,7 @@ fn pattern_reachable_offsets_uncached(
                 PathSegment::Literal(literal) => {
                     if segments
                         .get(offset)
-                        .is_some_and(|candidate| candidate == literal)
-                        && !is_abstract_segment(literal)
+                        .is_some_and(|candidate| candidate.matches_literal(literal))
                     {
                         next[offset + 1] = true;
                     }
@@ -910,7 +957,7 @@ fn pattern_reachable_offsets_uncached(
                 PathSegment::Capture { .. } => {
                     if segments
                         .get(offset)
-                        .is_some_and(|candidate| candidate != ABSTRACT_PREFIX)
+                        .is_some_and(|candidate| *candidate != MatchSegment::AnyPrefix)
                     {
                         next[offset + 1] = true;
                     }
@@ -928,7 +975,7 @@ fn pattern_reachable_offsets_uncached(
                         }
                         if segments
                             .get(target)
-                            .is_none_or(|candidate| candidate != ABSTRACT_PREFIX)
+                            .is_none_or(|candidate| *candidate != MatchSegment::AnyPrefix)
                         {
                             *next = true;
                         }
@@ -964,10 +1011,10 @@ struct BlockReachability {
 /// applicable allow, while preserving partial matching for valid parent/child rules.
 fn block_reachability(
     block: &MatchBlock,
-    segments: &[String],
+    segments: &[MatchSegment],
     zero_or_more: bool,
     work: &AtomicU64,
-    cache: &mut BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
+    cache: &mut BTreeMap<(String, Vec<MatchSegment>, bool), Vec<bool>>,
 ) -> Option<BlockReachability> {
     let reachable =
         pattern_reachable_offsets(block.path.as_slice(), segments, zero_or_more, work, cache)?;
@@ -1005,7 +1052,7 @@ fn block_reachability(
 #[allow(clippy::too_many_lines)]
 fn walk_match<'a>(
     block: &'a MatchBlock,
-    remaining: &[String],
+    remaining: &[MatchSegment],
     ctx: &RequestContext,
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
@@ -1039,24 +1086,7 @@ fn walk_match<'a>(
     let zero_or_more = ev.wildcard_zero_or_more;
     let match_work = Arc::clone(&ev.match_path_work);
     let prefilter_work = Arc::clone(&ev.match_prefilter_work);
-    let mut visit = |rest: Vec<String>, captures: Vec<(String, RulesValue)>| {
-        // In a query proof only the segments standing for potential results are
-        // undetermined; the database and any concrete ancestor segments stay known.
-        let captures: Vec<(String, RulesValue)> = if ctx.abstract_path {
-            captures
-                .into_iter()
-                .map(|(n, v)| {
-                    let placeholder = match &v {
-                        RulesValue::String(s) => is_abstract_segment(s),
-                        RulesValue::Path(p) => p.iter().any(|s| is_abstract_segment(s)),
-                        _ => false,
-                    };
-                    (n, if placeholder { RulesValue::Unknown } else { v })
-                })
-                .collect()
-        } else {
-            captures
-        };
+    let mut visit = |rest: Vec<MatchSegment>, captures: Vec<(String, RulesValue)>| {
         let functions_before = ev.scope.functions.len();
         let bindings_before = ev.scope.bindings.len();
         for item in &block.items {
@@ -1146,7 +1176,7 @@ fn walk_match<'a>(
 /// recursive wildcards use suffix aggregation instead of enumerating every split.
 fn endpoint_reachability(
     pattern: &[PathSegment],
-    segments: &[String],
+    segments: &[MatchSegment],
     zero_or_more: bool,
     endpoints: &[bool],
     work: &AtomicU64,
@@ -1173,7 +1203,7 @@ fn endpoint_reachability(
                         return None;
                     }
                     eligible[offset] = next_row[offset]
-                        && (offset == segment_count || segments[offset] != ABSTRACT_PREFIX);
+                        && (offset == segment_count || segments[offset] != MatchSegment::AnyPrefix);
                 }
                 let mut suffix_any = vec![false; segment_count + 2];
                 for offset in (0..=segment_count).rev() {
@@ -1192,8 +1222,7 @@ fn endpoint_reachability(
                         return None;
                     }
                     table[index][offset] = offset < segment_count
-                        && segments[offset] == *literal
-                        && !is_abstract_segment(literal)
+                        && segments[offset].matches_literal(literal)
                         && next_row[offset + 1];
                 }
             }
@@ -1205,7 +1234,7 @@ fn endpoint_reachability(
                     }
                     table[index][offset] = segments
                         .get(offset)
-                        .is_some_and(|candidate| candidate != ABSTRACT_PREFIX)
+                        .is_some_and(|candidate| *candidate != MatchSegment::AnyPrefix)
                         && offset < segment_count
                         && next_row[offset + 1];
                 }
@@ -1230,24 +1259,24 @@ fn endpoint_reachability(
 #[allow(clippy::too_many_lines)]
 fn match_path(
     pattern: &[PathSegment],
-    segments: &[String],
+    segments: &[MatchSegment],
     zero_or_more: bool,
     work: &AtomicU64,
     endpoints: Option<&[bool]>,
     prefilter_work: &AtomicU64,
-    visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
+    visit: &mut impl FnMut(Vec<MatchSegment>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
 ) -> Result<bool, EvalError> {
     #[allow(clippy::too_many_arguments)]
     fn go(
         pattern: &[PathSegment],
-        segments: &[String],
+        segments: &[MatchSegment],
         zero_or_more: bool,
         captures: &mut Vec<(String, RulesValue)>,
         pattern_index: usize,
         consumed: usize,
         endpoint_table: Option<&[Vec<bool>]>,
         work: &AtomicU64,
-        visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
+        visit: &mut impl FnMut(Vec<MatchSegment>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
     ) -> Result<bool, EvalError> {
         if endpoint_table.is_some_and(|table| !table[pattern_index][consumed]) {
             return Ok(false);
@@ -1266,7 +1295,10 @@ fn match_path(
         match seg {
             PathSegment::Literal(l) => {
                 // An undetermined segment is never equal to a literal.
-                if segments.first() == Some(l) && !is_abstract_segment(l) {
+                if segments
+                    .first()
+                    .is_some_and(|segment| segment.matches_literal(l))
+                {
                     return go(
                         tail,
                         &segments[1..],
@@ -1282,8 +1314,8 @@ fn match_path(
             }
             PathSegment::Capture { name, .. } => {
                 // The "any prefix" marker stands for zero or more segments: only `**` fits.
-                if let Some(v) = segments.first().filter(|v| v.as_str() != ABSTRACT_PREFIX) {
-                    captures.push((name.clone(), RulesValue::String(v.clone())));
+                if let Some(v) = segments.first().filter(|v| **v != MatchSegment::AnyPrefix) {
+                    captures.push((name.clone(), v.capture()));
                     let result = go(
                         tail,
                         &segments[1..],
@@ -1305,7 +1337,7 @@ fn match_path(
                     // A prefix marker must be consumed whole by the wildcard.
                     if segments[take..]
                         .first()
-                        .is_some_and(|s| s == ABSTRACT_PREFIX)
+                        .is_some_and(|s| *s == MatchSegment::AnyPrefix)
                     {
                         continue;
                     }
@@ -1314,7 +1346,7 @@ fn match_path(
                     {
                         continue;
                     }
-                    captures.push((name.clone(), RulesValue::Path(segments[..take].to_vec())));
+                    captures.push((name.clone(), MatchSegment::capture_path(&segments[..take])));
                     let stop = go(
                         tail,
                         &segments[take..],
@@ -6278,7 +6310,7 @@ mod tests {
             let pattern = [PathSegment::Literal(format!("segment-{index}"))];
             let reachable = pattern_reachable_offsets(
                 &pattern,
-                &["target".to_owned()],
+                &[super::MatchSegment::Literal("target".to_owned())],
                 true,
                 &work,
                 &mut cache,

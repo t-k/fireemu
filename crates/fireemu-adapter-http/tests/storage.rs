@@ -9369,9 +9369,10 @@ fn a_storage_rules_denial_reaches_the_denial_log() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn storage_rules_parent_list_workaround_preserves_leaf_permissions() {
-    for parent_list in [false, true] {
-        let rules = r"
+fn storage_rules_list_prefixes_match_production() {
+    for variant in ["single", "parent", "recursive"] {
+        for strict in [true, false] {
+            let rules = r"
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
@@ -9388,127 +9389,323 @@ service firebase.storage {
 "
         .replace(
             "PARENT_LIST",
-            if parent_list {
-                "match /teams/{team}/requests/{id} { allow list: if member(team); }"
-            } else {
-                ""
+            match variant {
+                "parent" => "match /teams/{team}/requests/{id} { allow list: if member(team); }",
+                "recursive" => "match /teams/{team}/requests/{id}/{attachment=**} { allow list: if member(team); }",
+                _ => "",
             },
         );
-        let s = state(Some(&rules));
-        let (uid, authorization) = user_token(&s);
-        let outsider_authorization = {
-            let store = s.auth.default_store();
-            let mut store = store.lock().unwrap();
-            let outsider = store
-                .create_user(NewUser::email("outsider@example.com"), START)
-                .unwrap();
-            let claims = store.id_token_claims(&outsider, None, START).unwrap();
-            format!(
-                "Firebase {}",
-                fireemu_core_auth::jwt::encode_unsigned(&claims)
-            )
-        };
-        // UID equality stands in for membership to isolate path matching from Firestore lookups.
-        let folder = format!("teams/{uid}/requests/request-a");
-        let allowed = format!("{folder}/allowed.txt");
-        assert_eq!(upload_as(&s, &allowed, &authorization), 200);
-        let blocked = format!("{folder}/blocked.txt");
-        assert_eq!(upload_as(&s, &blocked, &authorization), 403);
-        assert_eq!(upload_as(&s, &blocked, "Bearer owner"), 200);
-        for (object, expected) in [(&allowed, 200), (&blocked, 403)] {
-            let url = format!("/v0/b/{BUCKET}/o/{}", object.replace('/', "%2F"));
-            assert_eq!(
-                handle(
-                    &s,
-                    req(
-                        "GET",
-                        &format!("{url}?alt=media"),
-                        &[("authorization", &authorization)],
-                        b""
+            let s = state_with(
+                Some(&rules),
+                if strict {
+                    TokenAcceptance::Verified
+                } else {
+                    TokenAcceptance::EmulatorMock
+                },
+            );
+            let (uid, authorization) = user_token(&s);
+            let outsider_authorization = {
+                let store = s.auth.default_store();
+                let mut store = store.lock().unwrap();
+                let outsider = store
+                    .create_user(NewUser::email("outsider@example.com"), START)
+                    .unwrap();
+                let claims = store.id_token_claims(&outsider, None, START).unwrap();
+                format!(
+                    "Firebase {}",
+                    fireemu_core_auth::jwt::encode_unsigned(&claims)
+                )
+            };
+            // UID equality stands in for membership to isolate path matching from Firestore lookups.
+            let folder = format!("teams/{uid}/requests/request-a");
+            let allowed = format!("{folder}/allowed.txt");
+            assert_eq!(upload_as(&s, &allowed, &authorization), 200);
+            let blocked = format!("{folder}/blocked.txt");
+            assert_eq!(upload_as(&s, &blocked, &authorization), 403);
+            assert_eq!(upload_as(&s, &blocked, "Bearer owner"), 200);
+            for (object, expected) in [(&allowed, 200), (&blocked, 403)] {
+                let url = format!("/v0/b/{BUCKET}/o/{}", object.replace('/', "%2F"));
+                assert_eq!(
+                    handle(
+                        &s,
+                        req(
+                            "GET",
+                            &format!("{url}?alt=media"),
+                            &[("authorization", &authorization)],
+                            b""
+                        )
                     )
-                )
-                .status,
-                expected,
-            );
-            assert_eq!(
-                handle(
-                    &s,
-                    req("DELETE", &url, &[("authorization", &authorization)], b"")
-                )
-                .status,
-                403,
-            );
-        }
-        // These assertions characterize current local behavior, not desired production parity.
-        // Production observations on 2026-10-16 allow the single-capture request with delimiter=/,
-        // and adding the parent rule also allows the ancestor listing rejected below.
-        // See site/src/content/docs/products/storage.mdx before changing authorization expectations.
-        let own_status = if parent_list { 200 } else { 403 };
-        for (prefix, credential, expected) in [
-            (
-                format!("{folder}/"),
-                Some(authorization.as_str()),
-                own_status,
-            ),
-            (
-                format!("teams/{uid}/requests/empty-request/"),
-                Some(authorization.as_str()),
-                own_status,
-            ),
-            (
-                format!("{folder}/"),
-                Some(outsider_authorization.as_str()),
-                403,
-            ),
-            (format!("{folder}/"), None, 403),
-            (
-                "teams/another-team/requests/request-a/".to_owned(),
-                Some(authorization.as_str()),
-                403,
-            ),
-            (
-                format!("teams/{uid}/requests/"),
-                Some(authorization.as_str()),
-                403,
-            ),
-            (String::new(), Some(authorization.as_str()), 403),
-        ] {
-            let headers: Vec<_> = credential
-                .map(|value| ("authorization", value))
-                .into_iter()
-                .collect();
-            let response = handle(
-                &s,
-                req(
-                    "GET",
-                    &format!(
-                        "/v0/b/{BUCKET}/o?prefix={}&delimiter=%2F",
-                        prefix.replace('/', "%2F")
+                    .status,
+                    expected,
+                );
+                assert_eq!(
+                    handle(
+                        &s,
+                        req("DELETE", &url, &[("authorization", &authorization)], b"")
+                    )
+                    .status,
+                    403,
+                );
+            }
+            // The strict outcomes are observed production results; emulator preserves its old target.
+            for delimiter in ["/", ""] {
+                let own_status = if (strict && delimiter == "/")
+                    || variant != "single" && (!strict || variant == "recursive")
+                {
+                    200
+                } else {
+                    403
+                };
+                let ancestor_status = if strict && delimiter == "/" && variant != "single" {
+                    200
+                } else {
+                    403
+                };
+                for (prefix, credential, expected) in [
+                    (
+                        format!("{folder}/"),
+                        Some(authorization.as_str()),
+                        own_status,
                     ),
-                    &headers,
-                    b"",
-                ),
-            );
-            assert_eq!(
+                    (
+                        format!("teams/{uid}/requests/empty-request/"),
+                        Some(authorization.as_str()),
+                        own_status,
+                    ),
+                    (
+                        format!("{folder}/"),
+                        Some(outsider_authorization.as_str()),
+                        403,
+                    ),
+                    (format!("{folder}/"), None, 403),
+                    (
+                        "teams/another-team/requests/request-a/".to_owned(),
+                        Some(authorization.as_str()),
+                        403,
+                    ),
+                    (
+                        format!("teams/{uid}/requests/"),
+                        Some(authorization.as_str()),
+                        ancestor_status,
+                    ),
+                    (String::new(), Some(authorization.as_str()), 403),
+                ] {
+                    let headers: Vec<_> = credential
+                        .map(|value| ("authorization", value))
+                        .into_iter()
+                        .collect();
+                    let response = handle(
+                        &s,
+                        req(
+                            "GET",
+                            &format!(
+                                "/v0/b/{BUCKET}/o?prefix={}{}",
+                                prefix.replace('/', "%2F"),
+                                if delimiter.is_empty() {
+                                    ""
+                                } else {
+                                    "&delimiter=%2F"
+                                }
+                            ),
+                            &headers,
+                            b"",
+                        ),
+                    );
+                    assert_eq!(
                 response.status,
                 expected,
-                "parent_list={parent_list}, prefix={prefix:?}, authenticated={}",
+                "variant={variant}, strict={strict}, delimiter={delimiter:?}, prefix={prefix:?}, authenticated={}",
                 credential.is_some()
             );
-            if expected == 403 {
-                assert!(json_body(&response).get("items").is_none());
-                assert!(json_body(&response).get("prefixes").is_none());
-            } else if prefix == format!("{folder}/") {
-                let body = json_body(&response);
-                let names: Vec<_> = body["items"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|item| item["name"].as_str().unwrap())
-                    .collect();
-                assert!(names.contains(&allowed.as_str()));
-                assert!(names.contains(&blocked.as_str()));
+                    if expected == 403 {
+                        assert!(json_body(&response).get("items").is_none());
+                        assert!(json_body(&response).get("prefixes").is_none());
+                    } else if prefix == format!("{folder}/") {
+                        let body = json_body(&response);
+                        let names: Vec<_> = body["items"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|item| item["name"].as_str().unwrap())
+                            .collect();
+                        assert!(names.contains(&allowed.as_str()));
+                        assert!(names.contains(&blocked.as_str()));
+                    }
+                }
             }
         }
+    }
+}
+
+fn list_prefix_as(
+    s: &StorageState,
+    prefix: &str,
+    delimiter: Option<&str>,
+    authorization: Option<&str>,
+) -> fireemu_adapter_http::storage::StorageResponse {
+    let headers: Vec<_> = authorization
+        .map(|value| ("authorization", value))
+        .into_iter()
+        .collect();
+    let suffix = delimiter.map_or_else(String::new, |value| {
+        format!("&delimiter={}", value.replace('/', "%2F"))
+    });
+    handle(
+        s,
+        req(
+            "GET",
+            &format!(
+                "/v0/b/{BUCKET}/o?prefix={}{suffix}",
+                prefix.replace('/', "%2F")
+            ),
+            &headers,
+            b"",
+        ),
+    )
+}
+
+#[test]
+fn storage_list_preserves_concrete_marker_names() {
+    for owner in ["fireemu-placeholder", "fireemu-any-prefix"] {
+        let recursive = state(Some(&format!("rules_version = '2'; service firebase.storage {{ match /b/{{bucket}}/o/{{known=**}}/boundary/{{rest}} {{ allow list: if known == /files/{owner}; }} }}")));
+        for delimiter in [Some("/"), None] {
+            assert_eq!(
+                list_prefix_as(
+                    &recursive,
+                    &format!("files/{owner}/boundary/"),
+                    delimiter,
+                    None
+                )
+                .status,
+                if delimiter == Some("/") { 200 } else { 403 }
+            );
+            assert_eq!(
+                list_prefix_as(&recursive, "files/outsider/boundary/", delimiter, None).status,
+                403
+            );
+        }
+        for pattern in [
+            format!("/files/{{owner}}/{{rest=**}} {{ allow list: if owner == '{owner}'; }}"),
+            format!("/files/{owner}/{{rest=**}} {{ allow list: if true; }}"),
+            format!("/files/{{owner}} {{ match /{{rest=**}} {{ allow list: if owner == '{owner}'; }} }}"),
+        ] {
+            let rules = format!("rules_version = '2'; service firebase.storage {{ match /b/{{bucket}}/o {{ match {pattern} }} }}");
+            let s = state(Some(&rules));
+            for delimiter in [Some("/"), None] {
+                assert_eq!(list_prefix_as(&s, &format!("files/{owner}/"), delimiter, None).status, 200, "{pattern}, {delimiter:?}");
+                assert_eq!(list_prefix_as(&s, "files/outsider/", delimiter, None).status, 403);
+            }
+        }
+    }
+}
+
+#[test]
+fn storage_list_unknown_attachment_cannot_prove_access() {
+    for (condition, expected) in [
+        ("attachment == 'allowed.txt'", 403),
+        ("attachment != 'secret.txt'", 403),
+        ("attachment == 'fireemu-placeholder'", 403),
+        ("attachment.matches('.*')", 403),
+        ("attachment == 'allowed.txt' || true", 200),
+    ] {
+        let rules = format!("rules_version = '2'; service firebase.storage {{ match /b/{{bucket}}/o/files/{{attachment}} {{ allow list: if {condition}; }} }}");
+        let s = state(Some(&rules));
+        for populated in [false, true] {
+            if populated {
+                assert_eq!(upload_as(&s, "files/allowed.txt", "Bearer owner"), 200);
+            }
+            assert_eq!(
+                list_prefix_as(&s, "files/", Some("/"), None).status,
+                expected,
+                "{condition}, populated={populated}"
+            );
+            for delimiter in [None, Some(""), Some(".")] {
+                assert_eq!(list_prefix_as(&s, "files/", delimiter, None).status, 403);
+            }
+        }
+    }
+    let literal = state(Some("rules_version = '2'; service firebase.storage { match /b/{bucket}/o/files/allowed.txt { allow list: if true; } }"));
+    assert_eq!(
+        upload_as(&literal, "files/allowed.txt", "Bearer owner"),
+        200
+    );
+    assert_eq!(
+        list_prefix_as(&literal, "files/", Some("/"), None).status,
+        403
+    );
+}
+
+#[test]
+fn storage_list_uses_one_firestore_budget_and_one_denial() {
+    use fireemu_adapter_http::storage::StorageDenialLog;
+    use fireemu_core_rules::denial::RulesDenial;
+    for traced in [false, true] {
+        for (names, expected, reads) in [(vec!["a", "a"], 200, 1), (vec!["a", "b", "c"], 403, 2)] {
+            let condition = names
+                .iter()
+                .map(|name| {
+                    format!("firestore.exists(/databases/(default)/documents/flags/{name})")
+                })
+                .collect::<Vec<_>>()
+                .join(" && ");
+            let rules = format!("rules_version = '2'; service firebase.storage {{ match /b/{{bucket}}/o/gated/{{attachment}} {{ allow list: if {condition}; }} }}");
+            let mut s = state(Some(&rules));
+            let counted = Arc::new(AtomicUsize::new(0));
+            s.firestore = Some(Arc::new(CountingFlags {
+                present: ["a", "b", "c"]
+                    .iter()
+                    .map(|name| format!("databases/(default)/documents/flags/{name}"))
+                    .collect(),
+                reads: counted.clone(),
+            }));
+            let seen: Arc<Mutex<Vec<RulesDenial>>> = Arc::default();
+            if traced {
+                let sink = seen.clone();
+                s.rules
+                    .set_denial_log(StorageDenialLog(Arc::new(move |denial| {
+                        sink.lock().unwrap().push(denial.clone());
+                    })));
+            }
+            assert_eq!(
+                list_prefix_as(&s, "gated/", Some("/"), None).status,
+                expected
+            );
+            assert_eq!(counted.load(Ordering::SeqCst), reads);
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), usize::from(traced && expected == 403));
+            if let Some(denial) = seen.first() {
+                assert_eq!(denial.path, "gated");
+                assert_eq!(denial.method, "list");
+            }
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+    #[test]
+    fn storage_list_proof_is_independent_of_names_and_population(
+        parent in "[a-z][a-z0-9]{0,8}",
+        request_id in "[a-z][a-z0-9]{0,8}",
+        populated in proptest::bool::ANY,
+        recursive in proptest::bool::ANY,
+    ) {
+        let capture = if recursive { "{attachment=**}" } else { "{attachment}" };
+        let rules = format!("rules_version = '2'; service firebase.storage {{ match /b/{{bucket}}/o/{parent}/{{team}}/requests/{{id}}/{capture} {{ allow list: if request.auth != null && request.auth.uid == team; }} }}");
+        let s = state(Some(&rules));
+        let (uid, authorization) = user_token(&s);
+        let prefix = format!("{parent}/{uid}/requests/{request_id}/");
+        if populated {
+            proptest::prop_assert_eq!(upload_as(&s, &format!("{prefix}allowed.txt"), "Bearer owner"), 200);
+            proptest::prop_assert_eq!(upload_as(&s, &format!("{prefix}nested/secret.txt"), "Bearer owner"), 200);
+        }
+        proptest::prop_assert_eq!(list_prefix_as(&s, &prefix, Some("/"), Some(&authorization)).status, 200);
+        proptest::prop_assert_eq!(list_prefix_as(&s, &prefix, None, Some(&authorization)).status, if recursive { 200 } else { 403 });
+        for team in ["other", "fireemu-placeholder", "fireemu-any-prefix"] {
+            let wrong_team = format!("{parent}/{team}/requests/{request_id}/");
+            proptest::prop_assert_eq!(list_prefix_as(&s, &wrong_team, Some("/"), Some(&authorization)).status, 403);
+        }
+        proptest::prop_assert_eq!(list_prefix_as(&s, &prefix, Some("/"), None).status, 403);
+        proptest::prop_assert_eq!(list_prefix_as(&s, &prefix, None, Some("Bearer owner")).status, 200);
     }
 }

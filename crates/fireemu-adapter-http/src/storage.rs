@@ -33,6 +33,7 @@ use fireemu_core_app_check::verify::BaselineMode;
 use fireemu_core_auth::jwt::{verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
+    ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RulesValue};
@@ -2169,6 +2170,32 @@ pub enum Principal {
     Anonymous,
 }
 
+/// A concrete object or the possible entries of a list request. Keep the original prefix
+/// separate from the abstract proof target so denial logs describe the actual request.
+#[derive(Clone, Copy)]
+enum RulesPath<'a> {
+    Object(&'a str),
+    List { prefix: &'a str, delimiter: &'a str },
+}
+
+impl<'a> RulesPath<'a> {
+    fn proof(self, strict: bool) -> (&'a str, Option<&'static str>) {
+        match self {
+            Self::Object(path) => (path, None),
+            Self::List { prefix, delimiter } => (
+                prefix,
+                strict.then_some(if delimiter == "/" {
+                    ABSTRACT_SEGMENT
+                } else {
+                    // Only slash bounds entry depth. Other delimiters can leave slashes
+                    // inside an entry, so they cannot justify a single-segment proof.
+                    ABSTRACT_PREFIX
+                }),
+            ),
+        }
+    }
+}
+
 /// The rules `resource` of a stored object. `crc32c` is the decimal spelling the official
 /// rules runtime receives; `cacheControl` and `contentLanguage` are production resource
 /// fields the official runtime omits — fireemu keeps them, as published in the contract.
@@ -2514,7 +2541,7 @@ impl StorageState {
         principal: &Principal,
         method: Method,
         bucket: &BucketName,
-        object_path: &str,
+        target: RulesPath<'_>,
         resource: Option<RulesValue>,
         request_resource: RulesValue,
     ) -> Result<(), StorageResponse> {
@@ -2553,11 +2580,16 @@ impl StorageState {
                 fb_json_error(400, MESSAGE)
             });
         }
-        let path = if object_path.is_empty() {
+        let (object_path, abstract_tail) = target.proof(self.is_strict());
+        let mut path = if object_path.is_empty() {
             format!("/b/{}/o", bucket.as_str())
         } else {
             format!("/b/{}/o/{object_path}", bucket.as_str())
         };
+        if let Some(tail) = abstract_tail {
+            path.push('/');
+            path.push_str(tail);
+        }
         let ctx = RequestContext {
             service: RulesService::Storage,
             method,
@@ -2569,7 +2601,7 @@ impl StorageState {
             resource: Some(resource.unwrap_or(RulesValue::Null)),
             request_resource: Some(request_resource),
             time_unix_nanos: self.now().as_nanos(),
-            abstract_path: false,
+            abstract_path: abstract_tail.is_some(),
             request_query: None,
         };
         let access = self.firestore.as_deref().map(|a| a as &dyn DocumentAccess);
@@ -4009,7 +4041,10 @@ fn fb_list(
         principal,
         Method::List,
         &b,
-        prefix.trim_end_matches('/'),
+        RulesPath::List {
+            prefix: prefix.trim_end_matches('/'),
+            delimiter: &delimiter,
+        },
         None,
         RulesValue::Null,
     )?;
@@ -4101,7 +4136,7 @@ fn fb_get(
             principal,
             Method::Get,
             &b,
-            n.as_str(),
+            RulesPath::Object(n.as_str()),
             meta.as_ref().map(storage_rules_value),
             RulesValue::Null,
         )?;
@@ -4485,7 +4520,7 @@ fn fb_patch(
         principal,
         Method::Update,
         &b,
-        n.as_str(),
+        RulesPath::Object(n.as_str()),
         existing.as_ref().map(storage_rules_value),
         request_resource,
     )?;
@@ -4507,7 +4542,7 @@ fn fb_delete(state: &StorageState, principal: &Principal, bucket: &str, name: &s
         principal,
         Method::Delete,
         &b,
-        n.as_str(),
+        RulesPath::Object(n.as_str()),
         existing.as_ref().map(storage_rules_value),
         RulesValue::Null,
     )?;
@@ -4766,7 +4801,7 @@ fn fb_commit(
                 principal,
                 method,
                 b,
-                n.as_str(),
+                RulesPath::Object(n.as_str()),
                 existing.as_ref().map(storage_rules_value),
                 incoming_rules_value(
                     b,
@@ -5000,7 +5035,7 @@ fn finalize_resumable(
         &principal,
         method,
         &b,
-        n.as_str(),
+        RulesPath::Object(n.as_str()),
         existing.as_ref().map(storage_rules_value),
         incoming_rules_value(
             &b,

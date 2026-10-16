@@ -3470,3 +3470,29 @@ fn an_error_on_one_binding_of_a_block_decides_only_if_it_stops_the_request() {
         })
     ));
 }
+
+#[test]
+fn concrete_marker_names_remain_concrete_in_both_services() {
+    for (service, name) in [
+        (RulesService::Firestore, "cloud.firestore"),
+        (RulesService::Storage, "firebase.storage"),
+    ] {
+        for marker in ["fireemu-placeholder", "fireemu-any-prefix"] {
+            for pattern in [
+                format!("/files/{marker} {{ allow get: if true; }}"),
+                format!("/files/{{id}} {{ allow get: if id == '{marker}'; }}"),
+                format!("/{{path=**}} {{ allow get: if path == /files/{marker}; }}"),
+            ] {
+                let rules = parse_ruleset(&format!(
+                    "rules_version = '2'; service {name} {{ match {pattern} }}"
+                ))
+                .unwrap();
+                let mut request = ctx(Method::Get, &format!("/files/{marker}"), None);
+                request.service = service;
+                assert_eq!(evaluate_request(&rules, &request).decision, Decision::Allow);
+                request.path = "/files/outsider".to_owned();
+                assert_ne!(evaluate_request(&rules, &request).decision, Decision::Allow);
+            }
+        }
+    }
+}

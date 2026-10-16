@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Strict Storage list authorization now evaluates the possible entries under the requested prefix. A slash-delimited listing can match a single attachment capture; a delimiter-free listing needs permission covering arbitrary depth. This fixes both false denials and the over-allow caused by treating a parent-path permission as permission for its descendants, matching the bounded production comparison recorded on 2026-10-16. Concrete path names that spell internal query markers remain concrete during Rules evaluation.
+
 ## [0.23.0] - 2026-10-15
 
 ### Changed

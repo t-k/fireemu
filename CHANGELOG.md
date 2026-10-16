@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-16
+
 ### Added
 
 - Test worlds can enable their own debug UI with `createTestWorld({ ui: true })` and expose its current browser URL as `world.uiUrl`. Parallel worlds use OS-assigned UI ports; reset and disposal retire the UI with its owning daemon. The CLI accepts `--ui-port auto`, while `--ui-port 0` and the helper default remain disabled.
@@ -787,7 +789,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/t-k/fireemu/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/t-k/fireemu/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/t-k/fireemu/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/t-k/fireemu/compare/v0.20.0...v0.21.0

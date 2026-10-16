@@ -367,3 +367,29 @@ test('invalid TOML startup names the format and path and removes private directo
   const { readdir } = await import('node:fs/promises');
   assert.deepEqual(await readdir(root), ['broken.toml']);
 });
+
+test('shared control routes retain legacy URLs and follow world reset', native, async t => {
+  const world = await createTestWorld({...options,services:['auth']});
+  t.after(()=>world.dispose());
+  const control = world.control;
+  for (let generation=0; generation<2; generation++) {
+    const before = await world.clock.get();
+    await assert.rejects(control('GET','/v1/not-a-route'),/test world control 404/);
+    assert.deepEqual(await control('GET','sessions/default'),before);
+    assert.deepEqual(await control('GET','/v1/sessions/default'),before);
+    assert.equal(world.endpoints.control.url,world.endpoints.control.origin);
+    assert.equal(world.environment.FIREEMU_CONTROL_URL,world.endpoints.control.apiBaseUrl);
+    assert.equal(world.endpoints.control.apiBaseUrl,`${world.endpoints.control.url}/v1/`);
+    const {createControlClient} = await import('../fireemu/control.mjs');
+    const client = createControlClient({env:world.environment});
+    assert.deepEqual(await client.request('GET','sessions/default'),before);
+    const module = new URL('../fireemu/control.mjs',import.meta.url).href;
+    const script = `import {createControlClient} from ${JSON.stringify(module)}; console.log(JSON.stringify(await createControlClient().request('GET','sessions/default')));`;
+    const result = await world.run(process.execPath,['--input-type=module','-e',script]);
+    assert.deepEqual(JSON.parse(result.stdout),before);
+    await world.clock.advance({seconds:1});
+    if(generation===0)await world.reset();
+  }
+  await world.dispose();
+  await assert.rejects(control('GET','sessions/default'),/disposed/);
+});

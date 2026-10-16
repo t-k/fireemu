@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `fireemu/control` exports `createControlClient()` for authenticated JSON control requests from `fireemu exec` or explicit configuration. It shares URL resolution with `world.control()`, accepts API-relative and existing root-relative paths, and exposes explicit `origin` and `apiBaseUrl` fields. Test-world control endpoints gain the same fields; existing environment variables, descriptor fields and endpoint `url` values retain their formats.
+
 ### Fixed
 
 - Strict Storage list authorization now evaluates the possible entries under the requested prefix. A slash-delimited listing can match a single attachment capture; a delimiter-free listing needs permission covering arbitrary depth. This fixes both false denials and the over-allow caused by treating a parent-path permission as permission for its descendants, matching the bounded production comparison recorded on 2026-10-16. Concrete path names that spell internal query markers remain concrete during Rules evaluation.

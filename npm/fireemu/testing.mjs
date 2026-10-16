@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveBinary, ensureExecutable } from './binary.mjs';
 import { snapshotInputs, prepareGeneration } from './testing-snapshot.mjs';
+import { createControlClient } from './control.mjs';
 
 const endpointVariables = {firestore:'FIRESTORE_EMULATOR_HOST',auth:'FIREBASE_AUTH_EMULATOR_HOST',storage:'FIREBASE_STORAGE_EMULATOR_HOST',functions:'FIREEMU_FUNCTIONS_HOST',eventarc:'CLOUD_EVENTARC_EMULATOR_HOST',tasks:'CLOUD_TASKS_EMULATOR_HOST',pubsub:'PUBSUB_EMULATOR_HOST',hub:'FIREBASE_EMULATOR_HUB',logging:'FIREBASE_LOGGING_EMULATOR_HOST'};
 const emulatorVariables = new Set([...Object.values(endpointVariables),'FIREBASE_CONFIG','NODE_PATH','FIREBASE_FIRESTORE_EMULATOR_ADDRESS','STORAGE_EMULATOR_HOST','FIREEMU_CONTROL_TOKEN','FIREEMU_CONTROL_URL','FIREEMU_APP_CHECK_EMULATOR_HOST','FIREEMU_APP_CHECK_JWKS_URL','FIREEMU_APP_CHECK_DEBUG_TOKEN_URL','FIREBASE_DATABASE_EMULATOR_HOST']);
@@ -43,10 +44,10 @@ async function stop(process,timeout=5000){
     if(!closed)throw Error('test world process tree did not close after forced retirement');
   }
 }
-function endpoints(descriptor){
+function endpoints(descriptor,control){
   const result={};
   const decode=value=>{const url=new URL(value.includes('://')?value:`http://${value}`);return Object.freeze({host:url.hostname,port:Number(url.port),url:`${url.protocol}//${url.host}`});};
-  result.control=decode(descriptor.controlUrl);
+  result.control=Object.freeze({...decode(descriptor.controlUrl),origin:control.origin,apiBaseUrl:control.apiBaseUrl});
   for(const [service,name] of Object.entries(endpointVariables))if(descriptor.environment[name])result[service]=decode(descriptor.environment[name]);
   return Object.freeze(result);
 }
@@ -79,10 +80,11 @@ export async function createTestWorld(options={}){
     if(failures.length)throw new AggregateError(failures,'test world retirement failed; cleanup can be retried');
   };
   const requestFor=async(active,method,path,body,signal)=>{
-    const response=await fetch(`${active.descriptor.controlUrl}${path}`,{method,headers:{authorization:`Bearer ${active.descriptor.controlToken}`,...(body===undefined?{}:{'content-type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:signal??AbortSignal.timeout(options.requestTimeoutMs??10_000)});
-    const value=await response.json();
-    if(!response.ok)throw Error(`test world control ${response.status}: ${value.error?.message??JSON.stringify(value)}`);
-    return value;
+    try{return await active.control.request(method,path,body,{signal});}
+    catch(error){
+      if(error.code==='FIREEMU_CONTROL_HTTP')error.message=`test world ${error.message}`;
+      throw error;
+    }
   };
   const start=async()=>{
     options.signal?.throwIfAborted();
@@ -107,9 +109,10 @@ export async function createTestWorld(options={}){
           const descriptor=JSON.parse(await readFile(readyFile,'utf8'));
           if(descriptor.schemaVersion!==1||descriptor.pid!==daemon.child.pid||descriptor.projectId!==snapshot.config.daemon.authProject)throw Error('invalid test-world readiness descriptor');
           active.descriptor=descriptor;
+          active.control=createControlClient({origin:descriptor.controlUrl,token:descriptor.controlToken,requestTimeoutMs:options.requestTimeoutMs});
           await requestFor(active,'GET','/health/ready',undefined,AbortSignal.timeout(Math.min(1000,timeout)));
           if(daemon.result())throw Error('daemon exited during test-world readiness');
-          active.endpoints=endpoints(descriptor);
+          active.endpoints=endpoints(descriptor,active.control);
           active.environment=Object.freeze({...descriptor.environment,NODE_PATH:prepared.nodePath,TMPDIR:temporary,TEMP:temporary,TMP:temporary,FIREEMU_TEST_WORLD_ID:id,FIREEMU_TEST_WORLD_GENERATION:String(next)});
           generation=next;
           return;

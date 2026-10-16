@@ -95,26 +95,50 @@ A retirement error still attempts to stop every owned daemon and retains unresol
 
 The authenticated `--ready-file <path>` daemon option publishes endpoint discovery atomically in a private file without overwriting an existing descriptor. It contains a control capability and is withdrawn on graceful shutdown. The helper keeps it inside the private generation directory and removes the directory after forced retirement.
 
-## Resolve control URLs
+## Use the shared control client
 
-`FIREEMU_CONTROL_URL` (also in `world.environment`) is a base URL ending in `/v1/`, for example `http://127.0.0.1:9099/v1/`. The readiness descriptor's `controlUrl` and `world.endpoints.control.url` are origins without that path. Do not concatenate a documented `/v1/...` path onto the environment variable.
+`fireemu/control` and `world.control()` share URL resolution, bearer authentication and JSON requests. Use API-relative paths such as `sessions/default:awaitIdle` or existing root-relative paths such as `/v1/sessions/default:awaitIdle`; both address the same route. Root-relative health paths such as `/health/ready` also remain supported.
+
+In a command launched by `fireemu exec`:
 
 ```js
-const base = world.environment.FIREEMU_CONTROL_URL;
-const absolute = new URL('/v1/sessions/default:awaitIdle', base);
-const relative = new URL('sessions/default:awaitIdle', base);
-// Both resolve to http://host:port/v1/sessions/default:awaitIdle.
-const response = await fetch(absolute, {
-  method: 'POST',
-  headers: { authorization: `Bearer ${world.environment.FIREEMU_CONTROL_TOKEN}` },
-});
-if (!response.ok) throw new Error(`awaitIdle failed: ${response.status}`);
+import { createControlClient } from 'fireemu/control';
 
-// The helper accepts a full API path directly.
+// Reads FIREEMU_CONTROL_URL and FIREEMU_CONTROL_TOKEN once at construction.
+const control = createControlClient();
+await control.request('POST', 'sessions/default:awaitIdle');
+```
+
+In a test world:
+
+```js
+// Uses the current generation, including after world.reset().
+await world.control('POST', 'sessions/default:awaitIdle');
+// Existing calls remain supported.
 await world.control('POST', '/v1/sessions/default:awaitIdle');
 ```
 
-With `fireemu exec`, use `process.env.FIREEMU_CONTROL_URL` and `process.env.FIREEMU_CONTROL_TOKEN` in the child instead. A leading `/` resolves from the origin; a path without it resolves relative to `/v1/`. Use the leading `/v1/` form when working from `world.endpoints.control.url`.
+For explicit configuration, call `createControlClient({ origin, token })` or `createControlClient({ apiBaseUrl, token })`. Specify only one endpoint field; explicit endpoints require an explicit token. `createControlClient({ env: world.environment })` instead snapshots that environment. A standalone client captures its endpoint and credential at construction: recreate it after a world reset, or use `world.control()` to follow generations automatically. Neither client construction nor requests modify `process.env`.
+
+The client exposes immutable `origin` and `apiBaseUrl` strings. Test-world endpoints expose the same names while retaining the legacy `url` field:
+
+| Value | Meaning | Example |
+| --- | --- | --- |
+| `control.origin`, `world.endpoints.control.origin` | Origin | `http://127.0.0.1:9099` |
+| `control.apiBaseUrl`, `world.endpoints.control.apiBaseUrl` | Versioned API base | `http://127.0.0.1:9099/v1/` |
+| `world.endpoints.control.url`, descriptor `controlUrl` | Legacy origin, unchanged | `http://127.0.0.1:9099` |
+| `FIREEMU_CONTROL_URL` | Legacy API base, unchanged | `http://127.0.0.1:9099/v1/` |
+
+`request(method, path, body?, { signal }?)` JSON-encodes a supplied body and returns the parsed JSON response, or `undefined` for an empty response. HTTP failures reject with an error carrying `status` and the daemon's error message. Malformed JSON success responses also reject. The default request timeout is 10 seconds; set `requestTimeoutMs` when constructing the client. A per-request `signal` replaces the default timeout signal, so callers supplying one own its deadline. Full request URLs, network-path references and redirects are refused; requests stay on the configured origin. URL-encode dynamic path segments and query values.
+
+Existing raw URL consumers remain compatible. When using `fetch` directly, resolve paths rather than concatenate strings:
+
+```js
+const base = process.env.FIREEMU_CONTROL_URL;
+const absolute = new URL('/v1/sessions/default:awaitIdle', base);
+const relative = new URL('sessions/default:awaitIdle', base);
+// Both resolve to http://host:port/v1/sessions/default:awaitIdle.
+```
 
 ## TOTP enrollment consumes a code
 

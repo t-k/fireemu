@@ -22,6 +22,7 @@
   "files": [
     "bin/fireemu.mjs",
     "binary.mjs",
+    "control.mjs",
     "testing.mjs",
     "testing-snapshot.mjs",
     "testing-process.mjs",
@@ -42,6 +43,7 @@
   },
   "exports": {
     "./testing": "./testing.mjs",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./control": "./control.mjs"
   }
 }

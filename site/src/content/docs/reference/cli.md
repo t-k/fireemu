@@ -3,7 +3,7 @@ title: CLI
 description: Commands and options of the fireemu command.
 ---
 
-This reference is the built-in help of Fireemu 0.18.0. Run `npx fireemu --help`, or `npx fireemu help <command>`, for the help of the version you have installed.
+This reference is the built-in help of Fireemu 0.24.0. Run `npx fireemu --help`, or `npx fireemu help <command>`, for the help of the version you have installed.
 
 | Command | What it does |
 |---|---|
@@ -77,8 +77,8 @@ options:
         Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.
   --functions <dir>
         Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
-  --ui-port <n>
-        UI port; 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
+  --ui-port <n|auto>
+        UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
   --hub-port <n>
         Emulator Hub port. Default: 4400.
   --logging-port <n>
@@ -143,8 +143,8 @@ options:
         Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
   --ui
         Start the UI while the command runs (exec does not start it otherwise, as in `firebase emulators:exec`). --ui-port overrides.
-  --ui-port <n>
-        UI port; 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
+  --ui-port <n|auto>
+        UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
   --hub-port <n>
         Emulator Hub port. Default: 4400.
   --logging-port <n>
@@ -238,8 +238,8 @@ options:
         Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.
   --functions <dir>
         Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
-  --ui-port <n>
-        UI port; 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
+  --ui-port <n|auto>
+        UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
   --hub-port <n>
         Emulator Hub port. Default: 4400.
   --logging-port <n>

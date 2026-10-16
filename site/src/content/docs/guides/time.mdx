@@ -124,3 +124,5 @@ await withTestWorld(
 ```
 
 `world.run` launches a command with the world's project and emulator hosts. `world.reset()` starts the world again from its creation snapshot, and `world.dispose()` stops it and removes its files; `withTestWorld` disposes it for you, also when the callback throws.
+
+To inspect the same world in the debug UI, pass `ui: true` to `createTestWorld()` and open `world.uiUrl`. The UI is disabled by default. Each enabled world receives its own loopback port and shares its live Firestore, Auth, Storage and Functions state. Keep the world alive while inspecting it; `dispose()` also stops its UI. After `reset()`, read `world.uiUrl` again and reopen the page. See [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#inspect-a-world-in-the-ui) for an interactive example.

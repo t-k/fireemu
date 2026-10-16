@@ -814,6 +814,13 @@ fn optional_value(args: &[String], i: usize) -> Option<&String> {
     args.get(i).filter(|v| !v.starts_with('-'))
 }
 
+/// An automatic UI listener or the legacy numeric port selection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UiPort {
+    Auto,
+    Fixed(u16),
+}
+
 /// The parsed command line, before it is applied to a configuration.
 #[derive(Default)]
 struct RawOptions {
@@ -838,8 +845,7 @@ struct RawOptions {
     tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
     hub_port: Option<u16>,
-    ui_port: Option<u16>,
-    ui_port_auto: bool,
+    ui_port: Option<UiPort>,
     /// The official `emulators:exec --ui` opt-in.
     ui: bool,
     logging_port: Option<u16>,
@@ -968,11 +974,10 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                 i += 2;
             }
             "--ui-port" => {
-                raw.ui_port_auto = args.get(i + 1).is_some_and(|value| value == "auto");
-                raw.ui_port = Some(if raw.ui_port_auto {
-                    0
+                raw.ui_port = Some(if args.get(i + 1).is_some_and(|value| value == "auto") {
+                    UiPort::Auto
                 } else {
-                    port_arg(args, i, "--ui-port")?
+                    UiPort::Fixed(port_arg(args, i, "--ui-port")?)
                 });
                 i += 2;
             }
@@ -1323,9 +1328,13 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
         cfg.hub_addr = with_port(&cfg.hub_addr, p);
         cfg.hub_addr_explicit = true;
     }
-    if let Some(p) = raw.ui_port {
-        cfg.ui_addr = with_port(&cfg.ui_addr, p);
-        cfg.ui_enabled = p != 0 || raw.ui_port_auto;
+    if let Some(selection) = raw.ui_port {
+        let (port, enabled) = match selection {
+            UiPort::Auto => (0, true),
+            UiPort::Fixed(port) => (port, port != 0),
+        };
+        cfg.ui_addr = with_port(&cfg.ui_addr, port);
+        cfg.ui_enabled = enabled;
         cfg.ui_addr_explicit = true;
     }
     if let Some(p) = raw.logging_port {
@@ -1682,7 +1691,7 @@ fn parse_options(
     // The UI listener is configured through its own module when a port was asked for or when
     // exec must apply its official opt-in default. Start otherwise keeps the best-effort
     // default, where a busy 4000 disables the UI instead of failing the run.
-    if raw.ui_port_auto {
+    if raw.ui_port == Some(UiPort::Auto) {
         ui::set_auto_port();
     } else if cfg.ui_addr_explicit || context == OptionContext::Exec {
         ui::set_port(if cfg.ui_enabled {

@@ -75,7 +75,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
@@ -839,6 +839,7 @@ struct RawOptions {
     pubsub_port: Option<u16>,
     hub_port: Option<u16>,
     ui_port: Option<u16>,
+    ui_port_auto: bool,
     /// The official `emulators:exec --ui` opt-in.
     ui: bool,
     logging_port: Option<u16>,
@@ -967,7 +968,12 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                 i += 2;
             }
             "--ui-port" => {
-                raw.ui_port = Some(port_arg(args, i, "--ui-port")?);
+                raw.ui_port_auto = args.get(i + 1).is_some_and(|value| value == "auto");
+                raw.ui_port = Some(if raw.ui_port_auto {
+                    0
+                } else {
+                    port_arg(args, i, "--ui-port")?
+                });
                 i += 2;
             }
             "--ui" if context == OptionContext::Exec => {
@@ -1319,7 +1325,7 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.ui_port {
         cfg.ui_addr = with_port(&cfg.ui_addr, p);
-        cfg.ui_enabled = p != 0;
+        cfg.ui_enabled = p != 0 || raw.ui_port_auto;
         cfg.ui_addr_explicit = true;
     }
     if let Some(p) = raw.logging_port {
@@ -1676,7 +1682,9 @@ fn parse_options(
     // The UI listener is configured through its own module when a port was asked for or when
     // exec must apply its official opt-in default. Start otherwise keeps the best-effort
     // default, where a busy 4000 disables the UI instead of failing the run.
-    if cfg.ui_addr_explicit || context == OptionContext::Exec {
+    if raw.ui_port_auto {
+        ui::set_auto_port();
+    } else if cfg.ui_addr_explicit || context == OptionContext::Exec {
         ui::set_port(if cfg.ui_enabled {
             cfg.ui_addr
                 .rsplit_once(':')
@@ -3973,6 +3981,28 @@ mod config_reload_tests {
         assert!(runtime_thread_counts(8, Some("0"), None).is_err());
         assert!(runtime_thread_counts(8, None, Some("513")).is_err());
         assert!(runtime_thread_counts(8, Some("many"), None).is_err());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn ui_port_selection_preserves_numeric_ports_and_last_flag_wins(port in proptest::prelude::any::<u16>()) {
+            for context in [OptionContext::Start, OptionContext::Exec] {
+                for (values, expected_port, enabled) in [
+                    (vec!["auto".to_owned()], 0, true),
+                    (vec!["auto".to_owned(), port.to_string()], port, port != 0),
+                    (vec![port.to_string(), "auto".to_owned()], 0, true),
+                    (vec!["auto".to_owned(), "0".to_owned()], 0, false),
+                ] {
+                    let args: Vec<String> = values.into_iter().flat_map(|value| ["--ui-port".to_owned(), value]).collect();
+                    let raw = parse_raw_options(&args, context).unwrap_or_else(|error| panic!("{}", error.message));
+                    let mut cfg = RuntimeConfig::default();
+                    apply_port_overrides(&mut cfg, &raw);
+                    proptest::prop_assert_eq!(cfg.ui_enabled, enabled);
+                    proptest::prop_assert!(cfg.ui_addr_explicit);
+                    proptest::prop_assert_eq!(cfg.ui_addr.rsplit_once(':').unwrap().1, expected_port.to_string());
+                }
+            }
+        }
     }
 
     #[test]

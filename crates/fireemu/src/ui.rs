@@ -12,15 +12,20 @@ use fireemu_adapter_ui::{AppCheckInfo, RuntimeInfo, UiState};
 
 use crate::config::{AppCheckService, RuntimeConfig, Selection};
 
-/// Port of the UI listener as given on the command line; `0` disables the UI.
-static UI_PORT: OnceLock<u16> = OnceLock::new();
+/// Explicit listener selection: `None` disables the UI, `Some(0)` requests an OS-assigned port.
+static UI_PORT: OnceLock<Option<u16>> = OnceLock::new();
 
 /// The default port (the Firebase Emulator UI's).
 pub const DEFAULT_PORT: u16 = 4000;
 
 /// Records `--ui-port` (the first value wins).
 pub fn set_port(port: u16) {
-    let _ = UI_PORT.set(port);
+    let _ = UI_PORT.set((port != 0).then_some(port));
+}
+
+/// Requests an OS-assigned port without disabling the UI.
+pub fn set_auto_port() {
+    let _ = UI_PORT.set(Some(0));
 }
 
 /// The outcome of binding the UI listener.
@@ -36,10 +41,12 @@ pub enum Ui {
 /// Binds the UI listener. Without `--ui-port` the default port is tried and a busy port
 /// only disables the UI; an explicit port that cannot be bound is an error.
 pub async fn bind() -> Result<Ui, String> {
-    let (port, explicit) = UI_PORT.get().map_or((DEFAULT_PORT, false), |p| (*p, true));
-    if port == 0 {
+    let (port, explicit) = UI_PORT
+        .get()
+        .map_or((Some(DEFAULT_PORT), false), |p| (*p, true));
+    let Some(port) = port else {
         return Ok(Ui::Disabled);
-    }
+    };
     let addr = format!("127.0.0.1:{port}");
     match tokio::net::TcpListener::bind(&addr).await {
         Ok(listener) => Ok(Ui::Bound(listener)),

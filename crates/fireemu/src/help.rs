@@ -114,8 +114,8 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     },
     opt(
         &["--ui-port"],
-        Value::Required("<n>"),
-        "UI port; 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.",
+        Value::Required("<n|auto>"),
+        "UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.",
     ),
     opt(
         &["--hub-port"],

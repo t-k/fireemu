@@ -1638,6 +1638,7 @@ async fn serve_suite(
         &storage_admin_capability,
     );
     let descriptor = serde_json::json!({"schemaVersion":1,"pid":std::process::id(),"projectId":cfg.auth_project,
+        "uiUrl":addrs.ui.map(|addr| format!("http://{addr}/ui/")),
         "controlUrl":format!("http://{}",addrs.control),"controlToken":control_token,
         "environment":environment.iter().cloned().collect::<std::collections::BTreeMap<_,_>>()});
     let publication = ready_file

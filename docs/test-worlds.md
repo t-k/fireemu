@@ -77,7 +77,7 @@ await withTestWorld(settings, async world => {
 });
 ```
 
-Each world owns one daemon, OS-assigned service ports, a control token, private temporary directories and a creation snapshot of configuration, Rules, indexes, Functions sources, dependency links and optional import data. Even the same project ID is independent across worlds. Hub, UI and logging listeners are disabled in this helper. Defaults are a pinned `2026-01-01T00:00:00Z`, seed 1, virtual Date/Tasks and native JavaScript timers.
+Each world owns one daemon, OS-assigned service ports, a control token, private temporary directories and a creation snapshot of configuration, Rules, indexes, Functions sources, dependency links and optional import data. Even the same project ID is independent across worlds. Hub and logging listeners are disabled in this helper. The UI is disabled by default and can be enabled explicitly with `ui: true`. Defaults are a pinned `2026-01-01T00:00:00Z`, seed 1, virtual Date/Tasks and native JavaScript timers.
 
 `config` accepts a configuration object or a path to `fireemu.toml`, `fireemu.json` or `firebase.json`. TOML is parsed by the same native loader as the CLI (including case-insensitive `.toml` extensions); keep the npm helper and native binary at the same version. Canonical resource paths remain relative to `cwd`, while `firebaseJson` is relative to the configuration file and its resource paths are relative to that Firebase file. You can reuse `fireemu init` output directly: `createTestWorld({ cwd: process.cwd(), config: 'fireemu.toml' })`. In v0.23.0 the helper accepts only JSON files or objects; when staying on that release, keep JSON as the single configuration source and pass its path explicitly rather than maintaining a TOML copy.
 
@@ -87,13 +87,37 @@ Configured Functions also snapshot and relocate `NODE_PATH` search directories. 
 
 `world.environment` is the immutable environment for SDK children. `world.run(command, argv, options)` launches a tracked child with the world's project and emulator hosts, without changing `process.env` in the test runner. It returns `{code, signal, stdout, stderr}` and rejects on failure, cancellation or retirement of its generation. SDK instances in the parent process must use named apps and explicitly connect to `world.endpoints`; they remain caller-owned. The helper cannot redirect a parent's cached default Admin SDK app.
 
-`world.reset()` stops the old daemon and tracked command trees, discards all generation state and starts from the creation snapshot. It returns after readiness, with new `generation`, `endpoints` and `environment`. Clients using old endpoints must reconnect. Do not cache these getters across reset. A plain session reset has the existing narrower behavior and does not recreate a world.
+`world.reset()` stops the old daemon and tracked command trees, discards all generation state and starts from the creation snapshot. It returns after readiness, with new `generation`, `endpoints`, `uiUrl` and `environment`. Clients using old endpoints must reconnect. Do not cache these getters across reset. A plain session reset has the existing narrower behavior and does not recreate a world.
 
 `world.dispose()` joins process retirement and removes its private files; repeat calls are safe. `withTestWorld` also disposes when the callback throws. Functions process groups on Unix have an independent lifetime guardian, so forced daemon retirement can clean up a runner blocked in synchronous user code. Windows commands and Functions are owned through native Job Objects. Cleanup deadlines remain native. An explicit error reports a process tree that cannot close after escalation.
 
 A retirement error still attempts to stop every owned daemon and retains unresolved cleanup handles for another `dispose()` attempt. User-created detached subprocesses that leave an owned Unix process group require caller supervision; the helper reports a held output pipe instead of silently declaring disposal complete.
 
 The authenticated `--ready-file <path>` daemon option publishes endpoint discovery atomically in a private file without overwriting an existing descriptor. It contains a control capability and is withdrawn on graceful shutdown. The helper keeps it inside the private generation directory and removes the directory after forced retirement.
+
+## Inspect a world in the UI
+
+Pass `ui: true` to expose the same world's Firestore, Auth, Storage and Functions through its bundled UI. `world.uiUrl` is the browser entry URL, or `undefined` when UI is disabled. Each enabled world binds its own OS-assigned loopback port, even when project IDs are identical. Configuration-file UI ports do not override this helper option.
+
+```js
+import { createInterface } from 'node:readline/promises';
+import { createTestWorld } from 'fireemu/testing';
+
+const world = await createTestWorld({ config: 'fireemu.toml', ui: true });
+const terminal = createInterface({ input: process.stdin, output: process.stdout });
+try {
+  console.log(`Inspect this world: ${world.uiUrl}`);
+  // Seed data or reproduce the failing request before pausing here.
+  await terminal.question('Press Enter after inspecting the world. ');
+} finally {
+  terminal.close();
+  await world.dispose();
+}
+```
+
+Keep the world alive while inspecting it: `withTestWorld()` disposes immediately when its callback returns or throws. A separate `fireemu up` instance has independent state and cannot inspect this world. UI mutations affect the owning world's live state. `reset()` stops the old UI with its daemon and starts a fresh generation; read `world.uiUrl` again and reopen the page afterward. `dispose()` closes the UI listener along with the owned services and Functions runner.
+
+The CLI equivalent for an automatically assigned UI port is `--ui-port auto`; `--ui-port 0` continues to disable the UI. The readiness descriptor includes `uiUrl` (a browser entry URL, or `null` when disabled). Keep the helper and native binary at the same version.
 
 ## Use the shared control client
 

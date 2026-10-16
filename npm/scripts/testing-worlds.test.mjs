@@ -9,6 +9,75 @@ const binary = process.env.FIREEMU_TEST_BINARY;
 const native = { skip: !binary, timeout: 30_000 };
 const options = { binaryPath: binary, env:{...process.env,NODE_PATH:''}, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard'} } };
 
+async function uiConfig(world) {
+  const response = await fetch(world.uiUrl);
+  assert.equal(response.status, 200);
+  const match = (await response.text()).match(/window\.__FIREEMU__ = (.*?);<\/script>/s);
+  assert.ok(match, 'UI embeds its owning daemon configuration');
+  return JSON.parse(match[1]);
+}
+
+async function uiRequest(world, config, path, init = {}) {
+  return fetch(new URL(path, world.uiUrl), { ...init, headers: { authorization: `Bearer ${config.controlToken}`, ...init.headers } });
+}
+
+test('UI options reject non-booleans before starting a world', async () => {
+  for (const ui of [null, 0, 1, 'true', {}, []]) {
+    await assert.rejects(createTestWorld({ ...options, binaryPath: process.execPath, ui }), /ui must be a boolean/);
+  }
+});
+
+test('test worlds keep UI disabled by default even with a configured UI port', native, async () => {
+  await withTestWorld({ ...options, config: { ...options.config, daemon: { uiPort: 4000 } } }, async world => {
+    assert.equal(world.uiUrl, undefined);
+    const descriptor = JSON.parse(await readFile(join(world.directory, 'generation-1', 'ready.json'), 'utf8'));
+    assert.equal(descriptor.uiUrl, null);
+  });
+});
+
+test('opt-in UI shares only its owning world data and retires with the generation', native, async t => {
+  const worlds = [];
+  t.after(async () => { await Promise.all(worlds.map(world => world.dispose())); });
+  for (let index = 0; index < 2; index++) worlds.push(await createTestWorld({ ...options, services: ['auth', 'firestore', 'storage'], ui: true }));
+  const configs = await Promise.all(worlds.map(uiConfig));
+  assert.notEqual(worlds[0].uiUrl, worlds[1].uiUrl);
+  for (const [index, world] of worlds.entries()) {
+    const config = configs[index];
+    assert.equal(config.project, world.projectId);
+    assert.equal(new URL(world.uiUrl).host, config.uiAddr);
+    assert.equal(config.firestoreAddr, world.environment.FIRESTORE_EMULATOR_HOST);
+    const docPath = `/v1/projects/${world.projectId}/databases/(default)/documents/isolated/item`;
+    const write = await fetch(world.endpoints.firestore.url + docPath, { method: 'PATCH', headers: { authorization: 'Bearer owner', 'content-type': 'application/json' }, body: JSON.stringify({ fields: { marker: { stringValue: String(index) } } }) });
+    assert.equal(write.status, 200);
+    const read = await uiRequest(world, config, '/ui/api/firestore' + docPath);
+    assert.equal((await read.json()).fields.marker.stringValue, String(index));
+    const authPath = `/identitytoolkit.googleapis.com/v1/projects/${world.projectId}/accounts`;
+    const account = await fetch(world.endpoints.auth.url + authPath, { method: 'POST', headers: { authorization: 'Bearer owner', 'content-type': 'application/json' }, body: JSON.stringify({ email: `world${index}@example.com`, password: 'test-password' }) });
+    assert.equal(account.status, 200, await account.clone().text());
+    const users = await (await uiRequest(world, config, `/ui/api/auth${authPath}:batchGet?maxResults=10`)).json();
+    assert.deepEqual(users.users.map(user => user.email), [`world${index}@example.com`]);
+    const bucket = `${world.projectId}.appspot.com`;
+    const upload = await fetch(`${world.endpoints.storage.url}/upload/storage/v1/b/${bucket}/o?uploadType=media&name=isolated%2Fitem.txt`, { method: 'POST', headers: { authorization: 'Bearer owner', 'content-type': 'text/plain' }, body: String(index) });
+    assert.equal(upload.status, 200, await upload.clone().text());
+    const bytes = await uiRequest(world, config, `/ui/api/storage/download/storage/v1/b/${bucket}/o/isolated%2Fitem.txt?alt=media`);
+    assert.equal(bytes.status, 200);
+    assert.equal(await bytes.text(), String(index));
+    assert.equal((await uiRequest(world, configs[1 - index], '/ui/api/config')).status, 403);
+    assert.equal((await fetch(new URL('/ui/api/config', world.uiUrl))).status, 403);
+  }
+  const retiredUrl = worlds[0].uiUrl;
+  await worlds[0].reset();
+  const fresh = await uiConfig(worlds[0]);
+  const docPath = `/ui/api/firestore/v1/projects/${worlds[0].projectId}/databases/(default)/documents/isolated/item`;
+  assert.equal((await uiRequest(worlds[0], fresh, docPath)).status, 404);
+  assert.equal((await uiRequest(worlds[1], configs[1], docPath)).status, 200);
+  if (retiredUrl !== worlds[0].uiUrl) await assert.rejects(fetch(retiredUrl, { headers: { connection: 'close' }, signal: AbortSignal.timeout(2000) }));
+  const disposedUrl = worlds[0].uiUrl;
+  await worlds[0].dispose();
+  await assert.rejects(fetch(disposedUrl, { headers: { connection: 'close' }, signal: AbortSignal.timeout(2000) }));
+  assert.equal((await uiRequest(worlds[1], configs[1], '/ui/api/config')).status, 200);
+});
+
 test('startup failure removes private directories and leaves parent environment unchanged', async () => {
   const parent = {...process.env};
   const root = await mkdtemp(join(tmpdir(),'fireemu-world-failure-'));
@@ -277,7 +346,7 @@ test('real Functions imports, trial boundaries, Rules and module globals belong 
   t.after(async()=>{await Promise.all(worlds.map(w=>w.dispose()));});
   for(const marker of ['A','B','C']){
     await writeFile(join(source,'index.cjs'),code(marker));
-    const world=await createTestWorld({...options,clockStart:'2026-01-31T23:59:59.999Z',functionsSource:source,services:['auth','firestore','functions'],clock:{timers:'virtual'},shutdownTimeoutMs:20,env:{...options.env,FIREEMU_RUNNER_NODE:new URL('../../tools/runner-node/index.mjs',import.meta.url).pathname}});
+    const world=await createTestWorld({...options,ui:true,clockStart:'2026-01-31T23:59:59.999Z',functionsSource:source,services:['auth','firestore','functions'],clock:{timers:'virtual'},shutdownTimeoutMs:20,env:{...options.env,FIREEMU_RUNNER_NODE:new URL('../../tools/runner-node/index.mjs',import.meta.url).pathname}});
     worlds.push(world);
   }
   const [a,b,c]=worlds;
@@ -325,6 +394,17 @@ test('real Functions imports, trial boundaries, Rules and module globals belong 
   await new Promise(resolve=>setTimeout(resolve,50));
   await c.reset();await retired;
   assert.equal((await query(c)).hits,1);
+  const uiValues = await Promise.all(worlds.map(async world => {
+    const config = await uiConfig(world);
+    const response = await uiRequest(world, config, '/ui/api/functions/api:invoke', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'GET' }) });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.status, 200);
+    assert.equal(result.bodyEncoding, 'utf8');
+    return JSON.parse(result.body);
+  }));
+  assert.deepEqual(uiValues.map(value => value.marker), ['A', 'B', 'C']);
+  assert.equal(uiValues[2].hits, 2);
   // Force daemon retirement while the runner cannot process shutdown or stdin closure.
   const runnerPid=(await query(a)).runnerPid;
   const blocked=fetch(`${a.endpoints.functions.url}/${a.projectId}/us-central1/blocked`);

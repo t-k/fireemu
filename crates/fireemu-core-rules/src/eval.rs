@@ -16,7 +16,7 @@
 //!   `duration`, `latlng`, `math` and `hashing` namespaces, `map.diff()`, and the
 //!   `firestore.get()` / `firestore.exists()` namespace of Storage rules.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -5625,7 +5625,7 @@ fn method_call(
             if query_derived && items.iter().any(contains_nested_numeric) {
                 return Err(EvalError::Unknown);
             }
-            make_set(items.iter().cloned())
+            list_to_set(items)
         }
         // A `set` is its own type: it compares unordered, `is` never recognises it, and its
         // operations take another set rather than a list.
@@ -5980,6 +5980,42 @@ fn is_type(v: &RulesValue, type_name: &str) -> bool {
     }
 }
 
+/// Converts a concrete list without changing Rules equality or first-seen order.
+fn list_to_set(items: &[RulesValue]) -> RulesValue {
+    const INDEX_THRESHOLD: usize = 32;
+    // Avoid index setup for small lists, even when every member is distinct.
+    if items.len() <= 64 || !items.iter().all(|item| matches!(item, RulesValue::Int(_))) {
+        return make_set(items.iter().cloned());
+    }
+    let mut out = Vec::new();
+    let mut seen: Option<HashSet<i64>> = None;
+    for item in items {
+        let RulesValue::Int(value) = item else {
+            unreachable!("the entire list was classified as integers");
+        };
+        if let Some(index) = &mut seen {
+            if index.insert(*value) {
+                out.push(item.clone());
+            }
+        } else if !out.iter().any(|previous| values_equal(previous, item)) {
+            out.push(item.clone());
+            // Delay allocation for short or duplicate-heavy lists. Mixed numeric values
+            // stay on the original equality path, including integer/float comparisons.
+            if out.len() == INDEX_THRESHOLD {
+                seen = Some(
+                    out.iter()
+                        .filter_map(|member| match member {
+                            RulesValue::Int(value) => Some(*value),
+                            _ => None,
+                        })
+                        .collect(),
+                );
+            }
+        }
+    }
+    RulesValue::Set(out)
+}
+
 /// A set with each member kept once, in first-seen order.
 fn make_set(items: impl IntoIterator<Item = RulesValue>) -> RulesValue {
     let mut out: Vec<RulesValue> = Vec::new();
@@ -6212,6 +6248,7 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use proptest::strategy::Strategy as _;
     use super::{
         bind_function_captures, collect_function_scopes, contains_nested_numeric, evaluate_request,
         function_key, partial_value_definitely_differs, pattern_reachable_offsets,
@@ -6465,5 +6502,81 @@ service cloud.firestore {
             &context(map_with_payload(RulesValue::Float(1.0)), false),
         );
         assert!(matches!(concrete_report.decision, Decision::Deny(_)));
+    }
+    #[test]
+    fn list_to_set_preserves_integer_order_and_boundaries() {
+        for count in [0, 1, 8, 31, 32, 33, 64, 129, 1024] {
+            let mut items: Vec<_> = (0..count).rev().map(RulesValue::Int).collect();
+            items.extend((-64..64).map(RulesValue::Int));
+            items.extend([RulesValue::Int(i64::MIN), RulesValue::Int(i64::MAX)]);
+            items.extend(items.clone());
+            assert_eq!(
+                super::list_to_set(&items),
+                super::make_set(items.iter().cloned())
+            );
+        }
+        assert_eq!(super::list_to_set(&[]), RulesValue::Set(vec![]));
+    }
+
+    #[test]
+    fn list_to_set_preserves_mixed_and_nested_equality() {
+        let mut items: Vec<_> = (0..64).map(RulesValue::Int).collect();
+        items.extend([
+            RulesValue::Float(1.0),
+            RulesValue::Int(9_007_199_254_740_993),
+            RulesValue::Float(9_007_199_254_740_992.0),
+            RulesValue::Int(i64::MAX),
+            RulesValue::Float(f64::INFINITY),
+            RulesValue::Float(-0.0),
+            RulesValue::List(vec![RulesValue::Int(1)]),
+            RulesValue::List(vec![RulesValue::Float(1.0)]),
+            RulesValue::String("1".into()),
+            RulesValue::Null,
+        ]);
+        items.extend(items.clone());
+        assert_eq!(
+            super::list_to_set(&items),
+            super::make_set(items.iter().cloned())
+        );
+        items.extend([RulesValue::Float(f64::NAN), RulesValue::Float(f64::NAN)]);
+        let RulesValue::Set(actual) = super::list_to_set(&items) else {
+            panic!("expected set")
+        };
+        let RulesValue::Set(expected) = super::make_set(items) else {
+            panic!("expected set")
+        };
+        assert_eq!(actual.len(), expected.len());
+        for (left, right) in actual.iter().zip(&expected) {
+            match (left, right) {
+                (RulesValue::Float(a), RulesValue::Float(b)) => {
+                    assert_eq!(a.to_bits(), b.to_bits());
+                }
+                _ => assert_eq!(left, right),
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn list_to_set_matches_linear_reference(values in proptest::collection::vec(proptest::prelude::any::<i64>(), 0..1024)) {
+            let items: Vec<_> = values.into_iter().map(RulesValue::Int).collect();
+            proptest::prop_assert_eq!(super::list_to_set(&items), super::make_set(items.iter().cloned()));
+        }
+
+        #[test]
+        fn list_to_set_matches_mixed_scalar_reference(values in proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::prelude::any::<i64>().prop_map(RulesValue::Int),
+                (-1000.0f64..1000.0).prop_map(RulesValue::Float),
+                "[a-z]{0,4}".prop_map(RulesValue::String),
+            ], 0..256)) {
+            proptest::prop_assert_eq!(super::list_to_set(&values), super::make_set(values.iter().cloned()));
+        }
+
+        #[test]
+        fn list_to_set_matches_duplicate_heavy_reference(values in proptest::collection::vec(-8i64..8, 0..2048)) {
+            let items: Vec<_> = values.into_iter().map(RulesValue::Int).collect();
+            proptest::prop_assert_eq!(super::list_to_set(&items), super::make_set(items.iter().cloned()));
+        }
     }
 }

@@ -81,7 +81,7 @@ test('NODE_PATH exclusions match exact scoped and unscoped package names, not pr
   }
 });
 
-for (const invalid of [null, '', 'tool', {}, [null], [1], [''], ['.'], ['..'], ['../tool'], ['/tool'], ['tool/nested'], ['@scope'], ['@scope/..'], ['@scope/tool/nested'], ['tool\\nested'], ['tool\0bad']]) {
+for (const invalid of [null, '', 'tool', {}, ['*'], ['@scope/*'], ['tool?'], ['tool[ab]'], ['tool{a,b}'], [' tool'], ['tool name'], ['@scope/ tool'], ['tool:stream'], [null], [1], [''], ['.'], ['..'], ['../tool'], ['/tool'], ['tool/nested'], ['@scope'], ['@scope/..'], ['@scope/tool/nested'], ['tool\\nested'], ['tool\0bad']]) {
   test(`invalid nodePathExcludes is rejected: ${JSON.stringify(invalid)}`, async t => {
     const f = await fixture(t);
     await assert.rejects(snapshotInputs({ ...f.options, nodePathExcludes: invalid }, f.world), error => {
@@ -149,4 +149,26 @@ test('createTestWorld snapshots caller exclusions and cleans failed snapshot dir
   exclusions.push('unused-tool');
   await assert.rejects(pending, /NODE_PATH/);
   assert.deepEqual(await readdir(temporary), []);
+});
+
+
+test('scoped exclusions follow an external scope directory link before visiting excluded packages', async t => {
+  const f = await fixture(t), scope = join(f.root, 'external-scope');
+  await mkdir(scope);
+  await symlink(scope, join(f.modules, '@scope'), directoryLink);
+  await symlink(join(f.root, 'missing'), join(scope, 'unused'), directoryLink);
+  await packageAt(scope, 'needed', 'creation');
+  const snapshot = await snapshotInputs({ ...f.options, nodePathExcludes: ['@scope/unused'] }, f.world);
+  const generation = await prepareGeneration(snapshot, join(f.world, 'generation'));
+  assert.deepEqual(await readdir(join(generation.nodePath, '@scope')), ['needed']);
+  await writeFile(join(scope, 'needed', 'index.js'), "module.exports='caller mutation'");
+  const result = await exec(process.execPath, ['-e', "console.log(require('@scope/needed'))"], { env: { ...process.env, NODE_PATH: generation.nodePath } });
+  assert.equal(result.stdout.trim(), 'creation');
+});
+
+test('scoped exclusions reject a linked scope already captured through another directory', async t => {
+  const f = await fixture(t), scope = join(f.modules, 'shared-scope');
+  await packageAt(scope, 'unused', 'also reachable');
+  await symlink(scope, join(f.modules, '@scope'), directoryLink);
+  await assert.rejects(snapshotInputs({ ...f.options, nodePathExcludes: ['@scope/unused'] }, f.world), /nodePathExcludes.*already captured|already captured.*nodePathExcludes/);
 });

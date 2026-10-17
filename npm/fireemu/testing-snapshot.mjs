@@ -33,7 +33,7 @@ export async function snapshotInputs(options, root) {
     if(typeof value!=='string'||value.includes('\\')||value.includes('\0'))return false;
     const parts=value.split('/');
     return (value.startsWith('@')?parts.length===2&&parts[0].length>1:parts.length===1)
-      &&parts.every(part=>part!==''&&part!=='.'&&part!=='..');
+      &&parts.every((part,index)=>part!=='.'&&part!=='..'&&/^[a-zA-Z0-9._~-]+$/.test(index===0&&value.startsWith('@')?part.slice(1):part));
   };
   if(!Array.isArray(nodePathExcludes)||!nodePathExcludes.every(packageName))throw TypeError('nodePathExcludes must be an array of unscoped or scoped package names');
   const privateRoot=await realpath(root);
@@ -65,9 +65,11 @@ export async function snapshotInputs(options, root) {
         try{
           linkValue=await readlink(sourceLink);
           const target=await realpath(sourceLink);
+          const linkedExcludes=excludes.filter(path=>inside(sourceLink,path)).map(path=>join(target,relative(sourceLink,path)));
           if([...omitted].some(path=>inside(path,target)))throw Error(`Retained link ${JSON.stringify(sourceLink)} requires excluded NODE_PATH package content ${JSON.stringify(target)}; remove that package from nodePathExcludes`);
           let copied;
           const owners=[...graph].filter(([original])=>inside(original,target)).sort((a,b)=>b[0].length-a[0].length);
+          if(owners.length&&linkedExcludes.length)throw Error(`Cannot apply nodePathExcludes through linked scope ${JSON.stringify(sourceLink)}: target ${JSON.stringify(target)} was already captured; narrow env.NODE_PATH instead`);
           if(owners.length){const [original,snapshot]=owners[0];copied=join(snapshot,relative(original,target));}
           else{
             if(graph.size>=4096)throw Error('Functions dependency graph exceeds the snapshot budget');
@@ -77,7 +79,7 @@ export async function snapshotInputs(options, root) {
             while(basename(context)!=='node_modules'&&dirname(context)!==context)context=dirname(context);
             if(basename(context)!=='node_modules')context=target;
             const destination=join(baseline,`linked-${sequence++}`,...(basename(context)==='node_modules'?['node_modules']:[]));
-            await captureTree(context,destination);
+            await captureTree(context,destination,linkedExcludes);
             copied=join(destination,relative(context,target));
           }
           await unlink(targetLink);

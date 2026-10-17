@@ -8,6 +8,21 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-17
+
+### Added
+
+- Test worlds accept `nodePathExcludes` to omit explicitly named unused global packages before following their links, including packages under linked scope directories. Existing dependency snapshot behavior remains the default; this option does not automatically identify unused dependencies or filter Functions sources and their ancestor dependencies.
+
+### Fixed
+
+- Functions dependency snapshot errors identify the original `NODE_PATH` entry, copy root, traversed links, and underlying filesystem cause. Retained links into explicitly omitted package directories fail with a conflict message instead of producing broken private snapshots. The testing guide explains global dependency traversal, exclusion limits, and when clearing `NODE_PATH` is appropriate.
+
+### Changed
+
+- Reduced allocation and conversion overhead in Firestore Euclidean distance calculations, Base64 encoding used by Pub/Sub, Rules CRC32 hashing, and large homogeneous integer list membership checks while preserving existing results.
+- TOTP guidance now records the production-confirmed rejection of immediate reuse of an enrollment code for sign-in.
+
 ## [0.24.0] - 2026-10-16
 
 ### Added
@@ -789,7 +804,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/t-k/fireemu/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/t-k/fireemu/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/t-k/fireemu/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/t-k/fireemu/compare/v0.21.0...v0.22.0

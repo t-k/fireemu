@@ -650,6 +650,17 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
 mod tests {
 
     #[test]
+    fn references_show_the_repository_schema_location() {
+        for is_toml in [false, true] {
+            let reference = super::reference_document(is_toml);
+            let (_, section) = reference.split_once("$schema:\n").unwrap();
+            let assignment = section.lines().nth(1).unwrap();
+            assert!(assignment.contains(crate::config::CANONICAL_SCHEMA_URL));
+            assert!(!assignment.contains("fireemu.dev"));
+        }
+    }
+
+    #[test]
     fn toml_reference_distinguishes_missing_defaults_from_null() {
         let reference = super::reference_document(true);
         for (key, schema) in crate::config::config_schema() {

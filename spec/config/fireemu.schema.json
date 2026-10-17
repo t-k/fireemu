@@ -9,7 +9,8 @@
   "properties": {
     "$schema": {
       "type": "string",
-      "enum": ["https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json", "https://fireemu.dev/spec/config/fireemu.schema.json"]
+      "enum": ["https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json", "https://fireemu.dev/spec/config/fireemu.schema.json"],
+      "examples": ["https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json"]
     },
     "eventarc": {
       "type": "object",

@@ -12,6 +12,10 @@ def load_workflow(name)
   YAML.safe_load(File.read(File.join(ROOT, ".github", "workflows", name)), aliases: true)
 end
 
+%w[ci.yml conformance.yml quint.yml].each do |name|
+  assert(load_workflow(name)["permissions"] == { "contents" => "read" }, "#{name} must default to contents: read only")
+end
+
 workflow = load_workflow("ci.yml")
 jobs = workflow.fetch("jobs")
 trigger = workflow["on"] || workflow[true]

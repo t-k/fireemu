@@ -7,6 +7,10 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 Fireemu serves Firebase Authentication with the Identity Platform features: multi-factor authentication including TOTP, multi-tenancy, OIDC and SAML providers, and blocking functions. Connect to it at `http://127.0.0.1:9099` (see [Connect your app](../../getting-started/connect/)).
 
+## Local verification messages
+
+Fireemu prints local email action links and SMS verification codes to the console and the Emulator UI logs so you can complete sign-in and account-management flows without sending real messages. These logs contain credentials for the local emulator accounts; treat captured logs accordingly when sharing test output.
+
 ## Configure your project
 
 The `auth` section of `fireemu.toml` declares the project configuration your application relies on, so a test does not have to set it through the Admin API every time.

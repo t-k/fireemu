@@ -59,6 +59,10 @@ A schedule runs on Fireemu's virtual clock, not on real time. Set a start time w
 
 `enforceAppCheck` on callable functions works with no configuration: get a token from the debug-token exchange with any UUIDv4 and send it in `X-Firebase-AppCheck`. A call without a token, or with a malformed one, is refused with 401. `consumeAppCheckToken` is honored when App Check is enabled. See [App Check](../app-check/).
 
+## Runner output
+
+Function logs and runner standard error are forwarded to the local logs. If the runner exits before its startup handshake, diagnostics also include its exit status, captured standard error and a bounded tail of standard output. Application-written output is not automatically scrubbed of arbitrary secrets; avoid printing credentials or dumping the environment in function code.
+
 ## Debugging
 
 Run the Functions runner under the Node inspector with `--inspect-functions`:

@@ -266,6 +266,13 @@ export async function runLocal(
   return { binary, ...JSON.parse(await readFile(paths.out, "utf8")) };
 }
 
+/** The official CLI interprets its session command through a POSIX shell. */
+export function officialSessionCommand(nodePath = process.execPath, scriptPath = SESSION_SCRIPT) {
+  return [nodePath, scriptPath, "session-official"]
+    .map((argument) => `'${argument.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+}
+
 export async function runOfficial(programs) {
   const paths = await prepareRunDir(programs);
   await writeFile(
@@ -274,7 +281,7 @@ export async function runOfficial(programs) {
       emulators: { firestore: { host: "127.0.0.1", port: 32082 }, ui: { enabled: false } },
     }),
   );
-  const inner = `'${process.execPath}' '${SESSION_SCRIPT}' session-official`;
+  const inner = officialSessionCommand();
   const { exitCode, timedOut } = await runSupervised({
     command: join(CONFORMANCE_DIR, "node_modules/.bin/firebase"),
     args: [

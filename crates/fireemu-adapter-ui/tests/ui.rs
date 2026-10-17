@@ -353,7 +353,19 @@ async fn browser_requests_need_a_loopback_origin_host_and_the_control_token() {
         .and_then(|rest| rest.split('\'').next())
         .unwrap_or_default()
         .to_owned();
-    assert!(!nonce.is_empty(), "{csp}");
+    assert_eq!(nonce.len(), 32, "the nonce carries 128 random bits as hex");
+    assert!(nonce.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let another = handle(&s, &browser(request("GET", "/ui/", &Value::Null), None)).await;
+    let another_csp = &another
+        .headers
+        .iter()
+        .find(|(key, _)| key == "content-security-policy")
+        .unwrap()
+        .1;
+    assert!(
+        !another_csp.contains(&format!("'nonce-{nonce}'")),
+        "each response needs fresh entropy"
+    );
     assert!(text(&page.body).contains(&format!("<script nonce=\"{nonce}\">")));
     // A wrong token, a foreign origin, a foreign host: refused.
     let (status, _) = call(

@@ -264,20 +264,6 @@ pub fn guard(state: &UiState, req: &UiRequest) -> Option<UiResponse> {
     None
 }
 
-/// The nonce of the configuration script the page carries (stable for the daemon's
-/// lifetime, unguessable without the token it derives from).
-fn script_nonce(state: &UiState) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in state
-        .control_token
-        .bytes()
-        .chain(b"fireemu-ui-nonce".iter().copied())
-    {
-        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{h:016x}")
-}
-
 /// The configuration the page receives (`window.__FIREEMU__`) and `GET /ui/api/config` returns.
 #[must_use]
 pub fn config_json(state: &UiState) -> Value {
@@ -337,7 +323,12 @@ pub async fn handle(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
             return UiResponse::error(405, "METHOD_NOT_ALLOWED");
         }
         let rel = path.strip_prefix("/ui").unwrap_or("");
-        let nonce = script_nonce(state);
+        // A nonce authorizes scripts in this response only; never derive it from a
+        // long-lived credential or reuse it across page loads.
+        let nonce = match fireemu_adapter_support::entropy::hex_128() {
+            Ok(nonce) => nonce,
+            Err(_) => return UiResponse::error(500, "INTERNAL : UI script nonce unavailable"),
+        };
         return match assets::resolve(rel, &config_json(state), &nonce) {
             Some(asset) => UiResponse {
                 status: 200,

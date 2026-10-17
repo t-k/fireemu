@@ -51,7 +51,7 @@
     "verification/quint/tests/await_idle_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
+    ".github/workflows/quint.yml": "f54de894192a6725d7e2f0ddeaadf294413430b308e540ee7fb610a5ccc5895e",
     "crates/fireemu-adapter-functions/src/runtime.rs": "66614a5125a2df0bd04199e02ad7d9a074e949a984e58be3ee1cdf94b924106f",
     "crates/fireemu-adapter-http/src/control.rs": "f4f7a8db1846fd7952f9e7033332b34d260b73f3c11b5550941cd75d6d138077",
     "crates/fireemu-core-session/src/idle.rs": "53bd98a30a3d61cf0be88222f4d3700e84cdc46636e885c5f4fb1945532104b8",
@@ -61,7 +61,7 @@
     "verification/quint/bin/process-group": "842349d6136e1fbb9f2c6015cbdcae5b9a972e4e795a27cca473251a15968798",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/AwaitIdle.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "514ed4bc664e1b2732d765ce740b27dba52abf41778cf0aca5a1f3819887463e",
+    "verification/quint/evidence/cargo-authority.json": "c64a6a1f97b925aa37b26d09efceca9708a7a88767b0b770804625f43ec7058b",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
     "verification/quint/mutations/AwaitIdle.json": "9c5fa669d93577a105081976e594d1adb86714677285bf72ba3124d3187c19c7",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",

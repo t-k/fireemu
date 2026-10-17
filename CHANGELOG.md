@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-17
+
 ### Added
 
 - Test worlds can opt into an isolated export Hub with `hub: true`, export Auth/Firestore/Storage state, and restore it into fresh worlds.
@@ -16,6 +18,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- The UI generates a fresh cryptographically random CSP nonce for each response. CI workflows explicitly restrict their repository token to read access, and the official Rules comparison runner safely quotes executable and script paths.
 - Auth export/import preserves native password credentials after account creation, password changes, and resets.
 - Capability inspection accepts an unpinned virtual clock with a warning while startup retains its clock requirement and all commands retain static configuration validation.
 - OR queries report all distinct missing branch indexes in supplementary diagnostics while preserving the SDK error format.
@@ -817,7 +820,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/t-k/fireemu/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/t-k/fireemu/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/t-k/fireemu/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/t-k/fireemu/compare/v0.22.0...v0.23.0

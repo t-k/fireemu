@@ -168,6 +168,8 @@ const relative = new URL('sessions/default:awaitIdle', base);
 
 Successful TOTP enrollment consumes the accepted time step. Reusing that code to sign in in the same step returns `auth/invalid-verification-code`; this can be replay prevention rather than clock skew or an incorrect secret. A step at or below the factor's last accepted step remains unusable even if it is inside the allowed clock-skew window. Advancing time backwards does not make it reusable.
 
+This immediate sequence was compared with production Firebase Authentication with Identity Platform on 2026-10-17: two recordings enrolled a TOTP factor, reused the enrollment code in the same time step (HTTP 400 `INVALID_CODE`), waited 30 seconds and signed in with the new current code (HTTP 200), then reused that sign-in code in the same step (HTTP 400 `INVALID_CODE`). All ten setup and observation steps matched fireemu 0.24.0 in strict mode. The comparison checked actual send/response times with a two-second boundary margin; it used project-level TOTP with `adjacentIntervals: 5`. This confirms the immediate-reuse behavior under that configuration, rather than asserting coverage of every MFA configuration.
+
 For an enrollment-then-login test, pin the world clock, generate the enrollment code at that instant, advance by the enrolled secret's period (usually 30 seconds), then generate a new code at the new instant. Advancing the daemon alone does not advance the parent test process's `Date.now()`.
 
 ```js

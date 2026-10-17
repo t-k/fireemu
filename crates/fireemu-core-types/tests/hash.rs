@@ -93,3 +93,71 @@ fn thirty_megabytes_of_storage_checksums_finish_within_the_upload_budget() {
         "30 MiB of MD5 and CRC32C took {elapsed:?}"
     );
 }
+
+// A bit-stream oracle deliberately avoids the encoder's three-byte grouping.
+fn reference_base64(bytes: &[u8], alphabet: &[u8; 64]) -> String {
+    let mut output = String::new();
+    let mut value = 0usize;
+    let mut bits = 0;
+    for byte in bytes {
+        for shift in (0..8).rev() {
+            value = (value << 1) | usize::from((byte >> shift) & 1);
+            bits += 1;
+            if bits == 6 {
+                output.push(char::from(alphabet[value]));
+                value = 0;
+                bits = 0;
+            }
+        }
+    }
+    if bits != 0 {
+        output.push(char::from(alphabet[value << (6 - bits)]));
+    }
+    while output.len() % 4 != 0 {
+        output.push('=');
+    }
+    output
+}
+
+fn assert_base64_matches_reference(bytes: &[u8]) {
+    assert_eq!(
+        base64_standard(bytes),
+        reference_base64(
+            bytes,
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        )
+    );
+    assert_eq!(
+        base64_url_safe(bytes),
+        reference_base64(
+            bytes,
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        )
+    );
+}
+
+#[test]
+fn base64_exhaustive_zero_one_and_two_byte_inputs() {
+    assert_base64_matches_reference(&[]);
+    for first in 0..=u8::MAX {
+        assert_base64_matches_reference(&[first]);
+        for second in 0..=u8::MAX {
+            assert_base64_matches_reference(&[first, second]);
+        }
+    }
+}
+
+#[test]
+fn base64_group_and_buffer_boundaries_match_reference() {
+    for len in (0..=128).chain([1023, 1024, 1025, 65535, 65536, 65537]) {
+        assert_base64_matches_reference(&patterned_bytes(len));
+        assert_base64_matches_reference(&vec![255; len]);
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn base64_random_bytes_match_independent_bit_stream(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..8192)) {
+        assert_base64_matches_reference(&bytes);
+    }
+}

@@ -473,26 +473,60 @@ fn sha256_compress(state: &mut [u32; 8], block: &[u8], constants: &[u32; 64]) {
     }
 }
 
-fn base64_with_alphabet(data: &[u8], alphabet: &[u8; 64]) -> String {
-    let mut output = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let mut bytes = [0u8; 3];
-        bytes[..chunk.len()].copy_from_slice(chunk);
-        let bits = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
-        output.push(alphabet[((bits >> 18) & 0x3f) as usize] as char);
-        output.push(alphabet[((bits >> 12) & 0x3f) as usize] as char);
+fn base64_small(bytes: &[u8], alphabet: &[u8; 64]) -> String {
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(alphabet[usize::from(first >> 2)] as char);
+        output.push(alphabet[usize::from(((first & 0x03) << 4) | (second >> 4))] as char);
         output.push(if chunk.len() > 1 {
-            alphabet[((bits >> 6) & 0x3f) as usize] as char
+            alphabet[usize::from(((second & 0x0f) << 2) | (third >> 6))] as char
         } else {
             '='
         });
         output.push(if chunk.len() > 2 {
-            alphabet[(bits & 0x3f) as usize] as char
+            alphabet[usize::from(third & 0x3f)] as char
         } else {
             '='
         });
     }
     output
+}
+
+fn base64_with_alphabet(data: &[u8], alphabet: &[u8; 64]) -> String {
+    // Short values avoid a separate UTF-8 validation pass.
+    if data.len() < 24 {
+        return base64_small(data, alphabet);
+    }
+    let mut output = Vec::with_capacity(data.len().div_ceil(3) * 4);
+    let mut chunks = data.chunks_exact(3);
+    for chunk in &mut chunks {
+        let encoded = [
+            alphabet[usize::from(chunk[0] >> 2)],
+            alphabet[usize::from(((chunk[0] & 3) << 4) | (chunk[1] >> 4))],
+            alphabet[usize::from(((chunk[1] & 15) << 2) | (chunk[2] >> 6))],
+            alphabet[usize::from(chunk[2] & 63)],
+        ];
+        output.extend_from_slice(&encoded);
+    }
+    let chunk = chunks.remainder();
+    if !chunk.is_empty() {
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let encoded = [
+            alphabet[usize::from(chunk[0] >> 2)],
+            alphabet[usize::from(((chunk[0] & 3) << 4) | (second >> 4))],
+            if chunk.len() == 2 {
+                alphabet[usize::from((second & 15) << 2)]
+            } else {
+                b'='
+            },
+            b'=',
+        ];
+        output.extend_from_slice(&encoded);
+    }
+    String::from_utf8(output).expect("ASCII alphabet")
 }
 
 /// Standard base64 with padding.

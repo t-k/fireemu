@@ -271,26 +271,7 @@ fn json_escape_into(output: &mut String, value: &str) {
 }
 
 fn base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let first = chunk[0];
-        let second = chunk.get(1).copied().unwrap_or(0);
-        let third = chunk.get(2).copied().unwrap_or(0);
-        output.push(TABLE[usize::from(first >> 2)] as char);
-        output.push(TABLE[usize::from(((first & 0x03) << 4) | (second >> 4))] as char);
-        output.push(if chunk.len() > 1 {
-            TABLE[usize::from(((second & 0x0f) << 2) | (third >> 6))] as char
-        } else {
-            '='
-        });
-        output.push(if chunk.len() > 2 {
-            TABLE[usize::from(third & 0x3f)] as char
-        } else {
-            '='
-        });
-    }
-    output
+    fireemu_core_types::hash::base64_standard(bytes)
 }
 
 #[cfg(test)]
@@ -425,5 +406,28 @@ mod tests {
         let body = push_body(&subscription, &received, true);
         assert!(body.contains("\"deliveryAttempt\":4"), "{body}");
         assert!(body.ends_with('}'), "{body}");
+    }
+}
+
+#[cfg(test)]
+mod base64_compatibility_tests {
+    use base64::Engine as _;
+
+    proptest::proptest! {
+        #[test]
+        fn push_base64_matches_standard_engine(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..8192)) {
+            proptest::prop_assert_eq!(super::base64(&bytes), base64::engine::general_purpose::STANDARD.encode(&bytes));
+        }
+    }
+
+    #[test]
+    fn push_base64_keeps_padding_and_standard_alphabet() {
+        for len in 0..=128 {
+            let bytes = vec![255; len];
+            assert_eq!(
+                super::base64(&bytes),
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            );
+        }
     }
 }

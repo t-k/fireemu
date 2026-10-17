@@ -83,7 +83,20 @@ Each world owns one daemon, OS-assigned service ports, a control token, private 
 
 `firebaseJson`, `functionsSource`, `cwd`, `import`, `projectId`, `clockStart`, `seed`, `services` and `clock` select the initial inputs. `binaryPath` can select a development binary. Input files and linked Functions dependencies are copied before readiness; later caller changes do not affect reset. This has an upfront disk/time cost for large dependency graphs. Do not put a world's temporary directory inside its Functions source.
 
-Configured Functions also snapshot and relocate `NODE_PATH` search directories. If global dependency roots are unused by the codebase, select `env: { ...process.env, NODE_PATH: '' }` to exclude them from the snapshot. Worlds without configured Functions clear this extra search path. The helper supplies its own `FIREBASE_CONFIG` and emulator routes, including to SDK default-app initialization; inherited configuration and child environment overrides cannot redirect them to another world.
+Configured Functions also snapshot and relocate every existing `NODE_PATH` search directory inherited from the parent environment (or supplied in `env`). This copies the directory contents, not just modules imported by the Functions code. Symbolic links are followed into external repositories and relocated into the private snapshot; pnpm dependencies can also bring in their enclosing `node_modules` siblings. Except for `.git` and `.worktree`, files in those trees are copied recursively. Consequently, an unused globally linked development package can make startup expensive or fail before the daemon starts if its tree contains broken links or files disappear during copying.
+
+If all global dependency roots are unused by the codebase, select `env: { ...process.env, NODE_PATH: '' }` to exclude them from the snapshot, or launch the test command with `env -u NODE_PATH`. If some roots are needed, provide only those directories in `env.NODE_PATH`, preserving their search order. To omit specific unused packages while keeping other packages in the same root, use `nodePathExcludes`:
+
+```js
+const world = await createTestWorld({
+  functionsSource: './functions',
+  nodePathExcludes: ['unused-global-tool', '@example/local-dev-tool'],
+});
+```
+
+`nodePathExcludes` defaults to `[]` and accepts exact unscoped or scoped package names, not paths or glob patterns. Each name is omitted at the top level of every newly copied `NODE_PATH` root before following its links; excluding `tool` does not exclude `tool-extra`. This does not prune Functions sources, ancestor `node_modules`, or roots already captured through those inputs. It does not infer which dependencies are unused or prohibit the same files from being reached through other retained dependencies, so it is not a filesystem access boundary. A retained link into an omitted directory produces an explicit conflict error instead of a broken private link. Excluding a required global package can make module loading fail: only list packages the application does not need.
+
+Snapshot failures identify the original `NODE_PATH` entry, resolved copy root, traversed dependency links, and underlying filesystem error, retained through `error.cause`. Repair the reported input, narrow `env.NODE_PATH`, or explicitly exclude an unused global package; nested copy failures are not silently ignored. Nonexistent `NODE_PATH` roots continue to be ignored. Worlds without configured Functions do not copy these roots and clear this extra search path. The helper supplies its own `FIREBASE_CONFIG` and emulator routes, including to SDK default-app initialization; inherited configuration and child environment overrides cannot redirect them to another world.
 
 `world.environment` is the immutable environment for SDK children. `world.run(command, argv, options)` launches a tracked child with the world's project and emulator hosts, without changing `process.env` in the test runner. It returns `{code, signal, stdout, stderr}` and rejects on failure, cancellation or retirement of its generation. SDK instances in the parent process must use named apps and explicitly connect to `world.endpoints`; they remain caller-owned. The helper cannot redirect a parent's cached default Admin SDK app.
 

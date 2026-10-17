@@ -28,6 +28,14 @@ async function readConfiguration(path, options) {
 
 export async function snapshotInputs(options, root) {
   const cwd=resolve(options.cwd??process.cwd());
+  const nodePathExcludes=options.nodePathExcludes===undefined?[]:options.nodePathExcludes;
+  const packageName=value=>{
+    if(typeof value!=='string'||value.includes('\\')||value.includes('\0'))return false;
+    const parts=value.split('/');
+    return (value.startsWith('@')?parts.length===2&&parts[0].length>1:parts.length===1)
+      &&parts.every(part=>part!==''&&part!=='.'&&part!=='..');
+  };
+  if(!Array.isArray(nodePathExcludes)||!nodePathExcludes.every(packageName))throw TypeError('nodePathExcludes must be an array of unscoped or scoped package names');
   const privateRoot=await realpath(root);
   const baseline=join(root,'baseline');
   await mkdir(baseline,{mode:0o700});
@@ -40,34 +48,47 @@ export async function snapshotInputs(options, root) {
   };
   const graph=new Map();
   const inside=(parent,path)=>{const suffix=relative(parent,path);return suffix===''||(!suffix.startsWith(`..${sep}`)&&suffix!=='..'&&!isAbsolute(suffix));};
-  const captureTree=async(source,destination)=>{
-    const canonical=await realpath(source);
-    graph.set(canonical,destination);
-    const links=[];
-    await cp(canonical,destination,{recursive:true,mode:constants.COPYFILE_FICLONE,dereference:false,verbatimSymlinks:true,filter:async(path,target)=>{
-      if(['.git','.worktree'].includes(basename(path)))return false;
-      if((await lstat(path)).isSymbolicLink())links.push([path,target]);
-      return true;
-    }});
-    for(const [sourceLink,targetLink] of links){
-      const target=await realpath(sourceLink);
-      let copied;
-      const owners=[...graph].filter(([original])=>inside(original,target)).sort((a,b)=>b[0].length-a[0].length);
-      if(owners.length){const [original,snapshot]=owners[0];copied=join(snapshot,relative(original,target));}
-      else{
-        if(graph.size>=4096)throw Error('Functions dependency graph exceeds the snapshot budget');
-        // pnpm packages resolve dependencies from their enclosing node_modules,
-        // including siblings that are not explicit links inside the package.
-        let context=dirname(target);
-        while(basename(context)!=='node_modules'&&dirname(context)!==context)context=dirname(context);
-        if(basename(context)!=='node_modules')context=target;
-        const destination=join(baseline,`linked-${sequence++}`,...(basename(context)==='node_modules'?['node_modules']:[]));
-        await captureTree(context,destination);
-        copied=join(destination,relative(context,target));
+  const omitted=new Set();
+  const captureTree=async(source,destination,excludes=[])=>{
+    try{
+      const canonical=await realpath(source);
+      graph.set(canonical,destination);
+      const links=[];
+      await cp(canonical,destination,{recursive:true,mode:constants.COPYFILE_FICLONE,dereference:false,verbatimSymlinks:true,filter:async(path,target)=>{
+        if(excludes.includes(path)){omitted.add(path);return false;}
+        if(['.git','.worktree'].includes(basename(path)))return false;
+        if((await lstat(path)).isSymbolicLink())links.push([path,target]);
+        return true;
+      }});
+      for(const [sourceLink,targetLink] of links){
+        let linkValue;
+        try{
+          linkValue=await readlink(sourceLink);
+          const target=await realpath(sourceLink);
+          if([...omitted].some(path=>inside(path,target)))throw Error(`Retained link ${JSON.stringify(sourceLink)} requires excluded NODE_PATH package content ${JSON.stringify(target)}; remove that package from nodePathExcludes`);
+          let copied;
+          const owners=[...graph].filter(([original])=>inside(original,target)).sort((a,b)=>b[0].length-a[0].length);
+          if(owners.length){const [original,snapshot]=owners[0];copied=join(snapshot,relative(original,target));}
+          else{
+            if(graph.size>=4096)throw Error('Functions dependency graph exceeds the snapshot budget');
+            // pnpm packages resolve dependencies from their enclosing node_modules,
+            // including siblings that are not explicit links inside the package.
+            let context=dirname(target);
+            while(basename(context)!=='node_modules'&&dirname(context)!==context)context=dirname(context);
+            if(basename(context)!=='node_modules')context=target;
+            const destination=join(baseline,`linked-${sequence++}`,...(basename(context)==='node_modules'?['node_modules']:[]));
+            await captureTree(context,destination);
+            copied=join(destination,relative(context,target));
+          }
+          await unlink(targetLink);
+          const kind=(await lstat(target)).isDirectory()?'dir':'file';
+          await symlink(process.platform==='win32'?copied:relative(dirname(targetLink),copied),targetLink,process.platform==='win32'&&kind==='dir'?'junction':kind);
+        }catch(cause){
+          throw Error(`Cannot snapshot dependency link ${JSON.stringify(sourceLink)} -> ${JSON.stringify(linkValue)}: ${cause.message}`,{cause});
+        }
       }
-      await unlink(targetLink);
-      const kind=(await lstat(target)).isDirectory()?'dir':'file';
-      await symlink(process.platform==='win32'?copied:relative(dirname(targetLink),copied),targetLink,process.platform==='win32'&&kind==='dir'?'junction':kind);
+    }catch(cause){
+      throw Error(`Cannot snapshot dependency tree ${JSON.stringify(source)}: ${cause.message}`,{cause});
     }
   };
   const copySource=async(value,base)=>{
@@ -125,11 +146,18 @@ export async function snapshotInputs(options, root) {
   const functionsConfigured=Boolean(graph.size||config.functions?.manifest||config.functions?.runner);
   const nodePaths=[];
   for(const entry of (functionsConfigured?options.env?.NODE_PATH??'':'').split(delimiter).filter(Boolean)){
-    let original;
-    try{original=await realpath(resolve(cwd,entry));}catch(error){if(error.code==='ENOENT')continue;throw error;}
-    let destination=graph.get(original);
-    if(!destination){destination=join(baseline,`node-path-${sequence++}`,'node_modules');await captureTree(original,destination);}
-    nodePaths.push(destination);
+    let original=resolve(cwd,entry);
+    try{
+      try{original=await realpath(original);}catch(error){if(error.code==='ENOENT')continue;throw error;}
+      let destination=graph.get(original);
+      if(!destination){
+        destination=join(baseline,`node-path-${sequence++}`,'node_modules');
+        await captureTree(original,destination,nodePathExcludes.map(name=>join(original,name)));
+      }
+      nodePaths.push(destination);
+    }catch(cause){
+      throw Error(`Cannot snapshot NODE_PATH entry ${JSON.stringify(entry)} (copy root ${JSON.stringify(original)}): ${cause.message}. If this global package is unused, exclude its name with nodePathExcludes; if all global roots are unused, set env.NODE_PATH to an empty string`,{cause});
+    }
   }
   config.daemon={...config.daemon,clockStart:options.clockStart??config.daemon?.clockStart??'2026-01-01T00:00:00Z',seed:options.seed??config.daemon?.seed??1,authProject:options.projectId??config.daemon?.authProject??'demo-test-world'};
   for(const service of ['firestore','http','storage','functions','eventarc','tasks','pubsub','hub','ui','logging'])config.daemon[`${service}Port`]=0;

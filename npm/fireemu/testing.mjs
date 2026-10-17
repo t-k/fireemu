@@ -54,7 +54,7 @@ function endpoints(descriptor,control){
 
 /** Create an independent emulator world; no method changes the parent's environment. */
 export async function createTestWorld(options={}){
-  options={...options,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??process.env)},clock:options.clock?{...options.clock}:undefined};
+  options={...options,nodePathExcludes:Array.isArray(options.nodePathExcludes)?[...options.nodePathExcludes]:options.nodePathExcludes,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??process.env)},clock:options.clock?{...options.clock}:undefined};
   if(options.ui!==undefined&&typeof options.ui!=='boolean')throw TypeError('ui must be a boolean');
   const binary=resolveBinary(options.binaryPath?resolve(options.binaryPath):undefined);
   if(!binary)throw Error('fireemu could not start a test world: install the platform package or supply binaryPath');

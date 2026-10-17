@@ -8,6 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Test worlds no longer inherit the parent process's global `NODE_PATH` by default. To retain global dependencies, pass `env: { ...process.env }` or select the required directories in `env.NODE_PATH`; explicitly selected roots still support `nodePathExcludes`, private snapshots and reset isolation. Other parent environment variables remain inherited.
+
+### Fixed
+
+- Completed the public site's guidance for export preflight, isolated test-world exports, runnable idle, OR index diagnostics and TOTP enrollment-code reuse.
+
 ## [0.26.0] - 2026-10-17
 
 ### Added

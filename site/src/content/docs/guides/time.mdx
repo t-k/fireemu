@@ -126,3 +126,23 @@ await withTestWorld(
 `world.run` launches a command with the world's project and emulator hosts. `world.reset()` starts the world again from its creation snapshot, and `world.dispose()` stops it and removes its files; `withTestWorld` disposes it for you, also when the callback throws.
 
 To inspect the same world in the debug UI, pass `ui: true` to `createTestWorld()` and open `world.uiUrl`. The UI is disabled by default. Each enabled world receives its own loopback port and shares its live Firestore, Auth, Storage and Functions state. Keep the world alive while inspecting it; `dispose()` also stops its UI. After `reset()`, read `world.uiUrl` again and reopen the page. See [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#inspect-a-world-in-the-ui) for an interactive example.
+
+## Dependency snapshots and global NODE_PATH
+
+Functions worlds snapshot local sources and dependencies so caller edits do not affect reset. In published v0.25.0 and v0.26.0 they also copy inherited `NODE_PATH` directories, including linked global development repositories. An unused linked repository can therefore slow startup or fail copying before tests begin.
+
+For local-only dependencies on those versions, pass `env: { ...process.env, NODE_PATH: '' }`. If globals are required, select only their directories in `env.NODE_PATH`; `nodePathExcludes` omits exact unused package names, including scoped names, before following their links. Required dependency failures are still errors.
+
+**Upcoming change (Unreleased, after v0.26.0):** ambient `NODE_PATH` is cleared by default. Ordinary parent environment variables remain inherited. Pass `env: { ...process.env }` to explicitly retain globals, or supply a narrowed `env.NODE_PATH`. An environment object containing `NODE_PATH` is an opt-in even when constructed with a spread. Local sources and ancestor `node_modules` are still snapshotted. See [dependency snapshot limits](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#create-parallel-worlds).
+
+Enable `hub: true` to [export a test world and import its data into a fresh one](../data/#export-independent-test-worlds).
+
+## Wait for runnable work
+
+Since v0.26.0, `POST /v1/sessions/default:awaitIdle` accepts `{ "scope": "runnable" }`. In a world:
+
+```js
+await world.control('POST', 'sessions/default:awaitIdle', { scope: 'runnable' });
+```
+
+This excludes future task schedules and future retry backoff from the wait. The default scope still waits for all work. Due tasks blocked by rate or concurrency limits and active HTTP requests remain pending. Advance the applicable clock or wait for the active work; diagnostics identify the waiting phase and deadline. This does not wait for arbitrary user-created JavaScript timers. See [idle scopes and task clocks](https://github.com/t-k/fireemu/blob/main/docs/tasks-idle.md).

@@ -139,6 +139,8 @@ When a Functions codebase is loaded, the Functions page shows registered functio
 
 For clock-sensitive and parallel integration tests, [test clocks and independent worlds](docs/test-worlds.md) describes explicit Node Date/timer/Cloud Tasks policies and the `fireemu/testing` helper. Separate worlds isolate their clocks, Rules, Functions and service state, including when they use the same project ID. The `fireemu/control` client also works in `fireemu exec` commands and shares URL resolution and authentication with `world.control()`, so callers do not need to concatenate control URLs.
 
+Functions test worlds in v0.25.0 and v0.26.0 copy inherited `NODE_PATH` trees, including global development links. For local-only dependencies, use `env: { ...process.env, NODE_PATH: '' }`; otherwise select required roots or use `nodePathExcludes`. The next release after v0.26.0 clears ambient `NODE_PATH` by default and requires `env.NODE_PATH` to opt in. See [dependency snapshots and migration](docs/test-worlds.md#create-parallel-worlds).
+
 ### Export data
 
 To save data from a running emulator, run the following command in another terminal.

@@ -174,6 +174,8 @@ adjacentIntervals = 1
 
 The configuration applies at startup and to every project created afterward, and is validated as the Admin API validates an update; a value production would refuse stops the daemon at startup. A session reset returns the project to it. The accepted TOTP window stays `auth.totp.windowSteps` unless the configuration sets `adjacentIntervals`. A tenant follows its own `mfaConfig`.
 
+A TOTP code accepted to complete enrollment must not be immediately reused for sign-in. In a test with virtual time, complete enrollment, advance the world clock by the secret's actual period, and generate the sign-in code for that new instant. Use matching algorithm and digit settings. See the [TOTP test recipe](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#totp-enrollment-consumes-a-code).
+
 ## Multi-tenancy
 
 Multi-tenancy is on by default, so the Admin API creates tenants and `auth.tenants` loads without enabling anything first. With `productionExact` a new project starts as production does, with tenants refused until `multiTenant.allowTenants` is enabled through the Admin API or in the file, and `auth.multiTenant.allowTenants: false` turns it off in either case. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`:

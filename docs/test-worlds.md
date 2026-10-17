@@ -83,13 +83,18 @@ Each world owns one daemon, OS-assigned service ports, a control token, private 
 
 `firebaseJson`, `functionsSource`, `cwd`, `import`, `projectId`, `clockStart`, `seed`, `services` and `clock` select the initial inputs. `binaryPath` can select a development binary. Input files and linked Functions dependencies are copied before readiness; later caller changes do not affect reset. This has an upfront disk/time cost for large dependency graphs. Do not put a world's temporary directory inside its Functions source.
 
-Configured Functions also snapshot and relocate every existing `NODE_PATH` search directory inherited from the parent environment (or supplied in `env`). This copies the directory contents, not just modules imported by the Functions code. Symbolic links are followed into external repositories and relocated into the private snapshot; pnpm dependencies can also bring in their enclosing `node_modules` siblings. Except for `.git` and `.worktree`, files in those trees are copied recursively. Consequently, an unused globally linked development package can make startup expensive or fail before the daemon starts if its tree contains broken links or files disappear during copying.
+In the next release after v0.26.0 (currently Unreleased), worlds inherit ordinary parent environment variables but clear ambient `NODE_PATH` by default. To opt into global dependencies, pass `env: { ...process.env }`, or supply only the required directories in `env.NODE_PATH`. Passing an `env` object that includes `NODE_PATH` is an explicit opt-in, even when it was built by spreading `process.env`. An omitted or empty `env.NODE_PATH` excludes global roots. This policy does not remove local Functions dependencies or their ancestor `node_modules`.
+
+Published v0.25.0 and v0.26.0 still inherit ambient `NODE_PATH`. On those versions, use `env: { ...process.env, NODE_PATH: '' }` for local-only dependencies, or `env -u NODE_PATH` when launching tests.
+
+When `env.NODE_PATH` is selected, configured Functions snapshot and relocate every existing search directory it names. This copies the directory contents, not just modules imported by the Functions code. Symbolic links are followed into external repositories and relocated into the private snapshot; pnpm dependencies can also bring in their enclosing `node_modules` siblings. Except for `.git` and `.worktree`, files in those trees are copied recursively. Consequently, an unused globally linked development package can make startup expensive or fail before the daemon starts if its tree contains broken links or files disappear during copying.
 
 If all global dependency roots are unused by the codebase, select `env: { ...process.env, NODE_PATH: '' }` to exclude them from the snapshot, or launch the test command with `env -u NODE_PATH`. If some roots are needed, provide only those directories in `env.NODE_PATH`, preserving their search order. To omit specific unused packages while keeping other packages in the same root, use `nodePathExcludes`:
 
 ```js
 const world = await createTestWorld({
   functionsSource: './functions',
+  env: { ...process.env }, // Explicitly include the required global search roots.
   nodePathExcludes: ['unused-global-tool', '@example/local-dev-tool'],
 });
 ```

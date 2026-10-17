@@ -49,7 +49,9 @@ Production refuses a query whose composite index is not defined. The official em
 | `refuse` (default) | The query is refused with `FAILED_PRECONDITION` and the console link, as production refuses it. |
 | `report` | The query runs. Each missing index is reported once per database on standard error, with production's refusal text and the `firestore.indexes.json` entry to add. |
 
-The `emulator` profile always runs the query, as the official emulator does.
+The `emulator` profile always runs the query, as the official emulator does, while reporting missing-index suggestions on standard error.
+
+An OR query can require a separate composite index for each branch. Since v0.26.0, supplementary diagnostics list all distinct missing branch indexes in one attempt. Under `strict` with `refuse`, the SDK still receives its existing `FAILED_PRECONDITION` response and first creation link; the additional branch definitions are on standard error. Under `report`, the control API report also collects the distinct missing definitions.
 
 ### Fail a CI job on a missing index
 

@@ -190,11 +190,13 @@ options:
 fireemu doctor - check the installation: binary, UI, Functions runner, Node.js
 
 usage:
-  fireemu doctor [--connect <control url>]
+  fireemu doctor [--connect <control url>] [--export-dir <dir>]
 
 Reports the Fireemu binary, UI, Functions runner and Node.js that this installation finds, and suggests a remedy for each problem.
 
 options:
+  --export-dir <dir>
+        Inspect export destination ownership and permissions without creating directories or changing permissions.
   --connect http://127.0.0.1:<port>
         Also report what a running suite says, through its control URL (the control port is printed at startup). Default: only the offline report.
   -h, --help
@@ -209,7 +211,7 @@ fireemu capabilities - print the capability manifest of the resolved profile as 
 usage:
   fireemu capabilities [options]
 
-Prints the capability manifest for the profile the options resolve to. It accepts the same options as `up` and validates them the same way, but only --config (the profile it names) changes the result.
+Prints the capability manifest for the profile the options resolve to. It accepts the same configuration options as `up` and retains static validation. A virtual clock without a pinned daemon.clockStart produces a warning for this offline inspection; startup still refuses that configuration. The resolved profile selects the manifest.
 
 options:
   --config <file>

@@ -10,6 +10,33 @@ import { createTestWorld } from '../fireemu/testing.mjs';
 
 const exec = promisify(execFile);
 const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
+
+for (const mode of ['implicit', 'explicit-without-node-path', 'explicit-empty', 'explicit-global']) {
+  test(`test world NODE_PATH requires explicit environment selection: ${mode}`, async t => {
+    const f = await fixture(t);
+    await linkedRepository(f);
+    const temporary = join(f.root, 'temporary');
+    await mkdir(temporary);
+    const settings = { cwd: f.root, functionsSource: f.source, services: ['auth'], binaryPath: process.execPath, tempRoot: temporary };
+    const script = `
+      import assert from 'node:assert/strict';
+      import { readdir } from 'node:fs/promises';
+      import { createTestWorld } from ${JSON.stringify(new URL('../fireemu/testing.mjs', import.meta.url).href)};
+      const settings = ${JSON.stringify(settings)};
+      const mode = ${JSON.stringify(mode)};
+      if (mode !== 'implicit') {
+        settings.env = { ...process.env };
+        if (mode === 'explicit-empty') settings.env.NODE_PATH = '';
+        if (mode === 'explicit-without-node-path') delete settings.env.NODE_PATH;
+      }
+      // Node cannot act as the daemon: reaching its startup error proves snapshot completion.
+      await assert.rejects(createTestWorld(settings), mode === 'explicit-global' ? /Cannot snapshot NODE_PATH/ : /fireemu could not start test world/);
+      assert.deepEqual(await readdir(${JSON.stringify(temporary)}), []);
+    `;
+    await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, NODE_PATH: f.modules }, timeout: 10000 });
+  });
+}
+
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'fireemu-node-path-')));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -29,6 +56,37 @@ async function packageAt(modules, name, value) {
   await mkdir(path, { recursive: true });
   await writeFile(join(path, 'index.js'), `module.exports=${JSON.stringify(value)};`);
   return path;
+}
+
+for (const explicit of [false, true]) {
+  test(`native world preserves ordinary environment and isolates opted-in globals: ${explicit}`, { skip: !process.env.FIREEMU_TEST_BINARY }, async t => {
+    const f = await fixture(t);
+    if (explicit) await packageAt(f.modules, 'needed', 'creation');
+    else await linkedRepository(f);
+    const settings = { cwd: f.root, functionsSource: f.source, services: ['auth'], binaryPath: process.env.FIREEMU_TEST_BINARY };
+    const script = `
+      import assert from 'node:assert/strict';
+      import { writeFile } from 'node:fs/promises';
+      import { createTestWorld } from ${JSON.stringify(new URL('../fireemu/testing.mjs', import.meta.url).href)};
+      const settings = ${JSON.stringify(settings)};
+      if (${explicit}) settings.env = { ...process.env };
+      const world = await createTestWorld(settings);
+      try {
+        if (${explicit}) await writeFile(${JSON.stringify(join(f.modules, 'needed', 'index.js'))}, "module.exports='caller mutation'");
+        for (let generation = 0; generation < 2; generation++) {
+          if (generation) await world.reset();
+          const child = await world.run(process.execPath, ['-e', "console.log(process.env.FIREEMU_TEST_PARENT_MARKER)"]);
+          assert.equal(child.stdout.trim(), 'inherited');
+          if (${explicit}) {
+            assert.ok(world.environment.NODE_PATH.includes('generation-' + (generation + 1)));
+            const result = await world.run(process.execPath, ['-e', "console.log(require('needed'))"]);
+            assert.equal(result.stdout.trim(), 'creation');
+          } else assert.equal(world.environment.NODE_PATH, '');
+        }
+      } finally { await world.dispose(); }
+    `;
+    await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, NODE_PATH: f.modules, FIREEMU_TEST_PARENT_MARKER: 'inherited' }, timeout: 30000 });
+  });
 }
 
 test('NODE_PATH errors identify the original entry, copy root and complete external link chain', async t => {

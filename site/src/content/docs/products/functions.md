@@ -47,6 +47,8 @@ A function whose `invoker` is `"private"` or a list of service accounts, and eve
 
 A task enqueued with a `scheduleTime` (or `scheduleDelaySeconds`) waits until then under `strict`, as it does in Cloud Tasks, and a `scheduleTime` that is not RFC 3339, or more than 30 days ahead, is refused with 400. The `emulator` profile dispatches at once, as the official emulator does. To test a delayed task without waiting, set `functions.clock.tasks` to `"virtual"` and move the clock (see [Time and scheduled functions](../../guides/time/)), or release the waiting tasks: the Functions page of the Emulator UI lists them with their due time and a **Run now** button, and the control API takes `POST /v1/sessions/default/functions/{queue}:run` (all waiting tasks) or the same with `{"task": "<task id>"}` (one task). Rate limits and concurrency still apply to a released task.
 
+For a test that only needs current work to settle, send `POST /v1/sessions/default:awaitIdle` with `{ "scope": "runnable" }` (v0.26.0+). Future schedules and retry backoff do not block this scope; due tasks waiting on rate/concurrency and active HTTP requests still do. Omitting the scope waits for all work. See [waiting for runnable work](../../guides/time/#wait-for-runnable-work).
+
 ## Exports that never run
 
 An export Fireemu cannot serve (a function whose options fail to resolve, or an event type it does not recognise) is skipped, and each one is a `warning:` on standard error at start, followed by a summary line. A function that production would deploy and run never runs here, so a test that asserts "no side effect" passes for the wrong reason; read the warnings. `functions.unservedTriggers` still refuses the products Fireemu does not serve.

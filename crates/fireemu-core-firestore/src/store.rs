@@ -6425,7 +6425,7 @@ fn project_document_for_query(document: &Document, query: &Query) -> Option<Docu
     }
 }
 
-fn scaled_norm(values: &[f64]) -> Option<f64> {
+fn scaled_norm(values: impl IntoIterator<Item = f64>) -> Option<f64> {
     let mut scale = 0.0;
     let mut sum = 0.0;
     for value in values {
@@ -6507,15 +6507,13 @@ fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> O
     }
     match measure {
         DistanceMeasure::Euclidean => {
-            let differences: Option<Vec<f64>> = vector
-                .iter()
-                .zip(query)
-                .map(|(left, right)| {
-                    let difference = left - right;
-                    difference.is_finite().then_some(difference)
-                })
-                .collect();
-            scaled_norm(&differences?)
+            // Preserve the full finite-difference preflight before starting the norm reduction.
+            for (left, right) in vector.iter().zip(query) {
+                if !(left - right).is_finite() {
+                    return None;
+                }
+            }
+            scaled_norm(vector.iter().zip(query).map(|(left, right)| left - right))
         }
         DistanceMeasure::Cosine => {
             let left = normalized_components(vector)?;
@@ -7410,4 +7408,9 @@ mod scope_index_tests {
         assert!(delta >= field_path_retained_bytes(&FieldPath::parse("embedding").unwrap()));
         assert!(delta >= field_path_retained_bytes(&FieldPath::parse("meta.distance").unwrap()));
     }
+}
+
+#[cfg(test)]
+mod vector_distance_tests {
+    include!("../tests/support/vector_distance.rs");
 }

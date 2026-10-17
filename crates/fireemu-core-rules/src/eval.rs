@@ -6248,7 +6248,6 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use proptest::strategy::Strategy as _;
     use super::{
         bind_function_captures, collect_function_scopes, contains_nested_numeric, evaluate_request,
         function_key, partial_value_definitely_differs, pattern_reachable_offsets,
@@ -6259,6 +6258,7 @@ mod tests {
     use crate::eval::{Method, RequestContext, RulesService};
     use crate::parse::parse_ruleset;
     use crate::value::{RangeBound, RulesValue, ValueRange};
+    use proptest::strategy::Strategy as _;
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};

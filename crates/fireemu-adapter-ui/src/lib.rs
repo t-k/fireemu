@@ -325,9 +325,8 @@ pub async fn handle(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
         let rel = path.strip_prefix("/ui").unwrap_or("");
         // A nonce authorizes scripts in this response only; never derive it from a
         // long-lived credential or reuse it across page loads.
-        let nonce = match fireemu_adapter_support::entropy::hex_128() {
-            Ok(nonce) => nonce,
-            Err(_) => return UiResponse::error(500, "INTERNAL : UI script nonce unavailable"),
+        let Ok(nonce) = fireemu_adapter_support::entropy::hex_128() else {
+            return UiResponse::error(500, "INTERNAL : UI script nonce unavailable");
         };
         return match assets::resolve(rel, &config_json(state), &nonce) {
             Some(asset) => UiResponse {

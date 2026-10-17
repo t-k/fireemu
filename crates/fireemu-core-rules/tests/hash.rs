@@ -70,3 +70,62 @@ fn civil_dates_round_trip() {
     assert!(!is_valid_date(2023, 2, 29));
     assert!(!is_valid_date(2023, 13, 1));
 }
+
+// Use the non-reflected polynomial and reverse each input byte so the oracle does not share the production implementation's table or reflected recurrence.
+fn crc32_reference(data: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &byte in data {
+        crc ^= u32::from(byte.reverse_bits()) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 == 0 {
+                crc << 1
+            } else {
+                (crc << 1) ^ 0x04c1_1db7
+            };
+        }
+    }
+    (!crc).reverse_bits()
+}
+
+#[test]
+fn crc32_matches_reference_for_every_short_input() {
+    assert_eq!(crc32(&[]), 0);
+    for first in 0..=u8::MAX {
+        assert_eq!(crc32(&[first]), crc32_reference(&[first]));
+        for second in 0..=u8::MAX {
+            let data = [first, second];
+            assert_eq!(crc32(&data), crc32_reference(&data), "{data:?}");
+        }
+    }
+}
+
+#[test]
+fn crc32_matches_reference_at_length_and_alignment_boundaries() {
+    let data: Vec<u8> = (0..8193)
+        .map(|index| u8::try_from(index % 256).expect("remainder fits in u8"))
+        .collect();
+    for offset in 0..8 {
+        for len in [
+            0, 1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255, 256, 257, 4095, 4096,
+            4097,
+        ] {
+            let bytes = &data[offset..offset + len];
+            assert_eq!(
+                crc32(bytes),
+                crc32_reference(bytes),
+                "offset={offset}, len={len}"
+            );
+        }
+    }
+    for byte in [0, 0xff, 0x80, 0x55] {
+        let bytes = vec![byte; 8193];
+        assert_eq!(crc32(&bytes), crc32_reference(&bytes));
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn crc32_matches_reference_for_arbitrary_bytes(data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..4097)) {
+        proptest::prop_assert_eq!(crc32(&data), crc32_reference(&data));
+    }
+}

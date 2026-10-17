@@ -940,3 +940,110 @@ fn a_single_attempt_is_not_retried() {
     assert_eq!(result.unwrap_err(), vec!["busy".to_owned()]);
     assert_eq!(waits, 0);
 }
+
+#[test]
+fn preflight_is_read_only_for_missing_and_existing_destinations() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = TestRoot::new("preflight-read-only");
+    let missing = root.0.join("missing/parents/export");
+    fireemu_export_publication::preflight(&missing).unwrap();
+    assert!(!root.0.join("missing").exists());
+    let target = root.target();
+    create_private_dir(&target);
+    write(&target, "marker", "unchanged");
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+    fireemu_export_publication::preflight(&target).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(target.join("marker")).unwrap(),
+        "unchanged"
+    );
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode(),
+        mode
+    );
+    assert_eq!(std::fs::read_dir(root.0.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn preflight_refuses_unsafe_ancestors_without_creating_missing_parents() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = TestRoot::new("preflight-unsafe");
+    for mode in [0o775, 0o1777] {
+        std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        let result = fireemu_export_publication::preflight(&root.0.join("missing/export"));
+        std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.unwrap_err().contains("namespace ancestor"));
+        assert!(!root.0.join("missing").exists());
+    }
+}
+
+#[test]
+fn preflight_refuses_symlink_target_and_parent_and_non_directory() {
+    use std::os::unix::fs::symlink;
+    let root = TestRoot::new("preflight-types");
+    let real = root.0.join("real");
+    create_private_dir(&real);
+    let link = root.0.join("link");
+    symlink(&real, &link).unwrap();
+    assert!(fireemu_export_publication::preflight(&link)
+        .unwrap_err()
+        .contains("symlink"));
+    assert!(fireemu_export_publication::preflight(&link.join("export"))
+        .unwrap_err()
+        .contains("symlink"));
+    let file = root.0.join("file");
+    std::fs::write(&file, "unchanged").unwrap();
+    assert!(fireemu_export_publication::preflight(&file)
+        .unwrap_err()
+        .contains("directory"));
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "unchanged");
+}
+
+#[test]
+fn preflight_does_not_replace_publication_time_validation() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = TestRoot::new("preflight-revalidate");
+    fireemu_export_publication::preflight(&root.target()).unwrap();
+    std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(0o775)).unwrap();
+    let result = PublicationStage::create(&root.target(), |_| Ok(()));
+    std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.unwrap_err().contains("namespace ancestor"));
+    assert!(!root.target().exists());
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+    #[test]
+    fn preflight_matches_ancestor_write_policy_without_side_effects(
+        shared_bits in 0u32..=0o77,
+        depth in 1usize..5,
+    ) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = TestRoot::new("preflight-property");
+        let mut target = root.0.path().to_path_buf();
+        for _ in 0..depth { target.push("missing"); }
+        target.push("export");
+        std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(0o700 | shared_bits)).unwrap();
+        let result = fireemu_export_publication::preflight(&target);
+        std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        proptest::prop_assert_eq!(result.is_ok(), shared_bits & 0o22 == 0);
+        proptest::prop_assert_eq!(std::fs::read_dir(root.0.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn preflight_refuses_a_parent_that_cannot_create_the_export() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if rustix::process::geteuid().as_raw() == 0 {
+        return;
+    }
+    let root = TestRoot::new("preflight-readonly");
+    std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let result = fireemu_export_publication::preflight(&root.0.join("missing/export"));
+    std::fs::set_permissions(root.0.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        result.is_err(),
+        "a known unwritable parent must fail preflight"
+    );
+    assert!(!root.0.join("missing").exists());
+}

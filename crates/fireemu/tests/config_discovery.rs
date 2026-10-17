@@ -768,3 +768,82 @@ fn test_world_config_uses_the_cli_toml_parser_without_starting_services() {
     let output = run(&["__test-world-config"]);
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[test]
+fn capabilities_inspects_unpinned_virtual_clock_but_startup_refuses() {
+    let dir = scratch("capabilities-virtual-clock");
+    let path = dir.join("fireemu.json");
+    let mut config = serde_json::json!({"schemaVersion":1,"profile":"emulator","functions":{"clock":{"date":"virtual","tasks":"virtual"}}});
+    write(&path, &config.to_string());
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .current_dir(&dir)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let unpinned = run(&["capabilities"]);
+    assert!(unpinned.status.success(), "{}", stderr(&unpinned));
+    assert!(stderr(&unpinned).contains("warning:"));
+    assert!(stderr(&unpinned).contains("clockStart"));
+    let manifest: serde_json::Value = serde_json::from_slice(&unpinned.stdout).unwrap();
+    assert_eq!(manifest["profile"], "emulator");
+    let explicit = run(&["capabilities", "--config", "fireemu.json"]);
+    assert!(explicit.status.success(), "{}", stderr(&explicit));
+    assert_eq!(explicit.stdout, unpinned.stdout);
+    for args in [
+        &["up"][..],
+        &["exec", "--", "this-child-must-never-run"][..],
+    ] {
+        let output = run(args);
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output).contains("clockStart"),
+            "{}",
+            stderr(&output)
+        );
+    }
+    config["daemon"] = serde_json::json!({"clockStart":"2026-01-01T00:00:00Z"});
+    write(&path, &config.to_string());
+    let pinned = run(&["capabilities"]);
+    assert!(pinned.status.success(), "{}", stderr(&pinned));
+    assert_eq!(pinned.stdout, unpinned.stdout);
+    assert!(!stderr(&pinned).contains("warning:"));
+    for bad in [
+        serde_json::json!({"clockStart":"bad"}),
+        serde_json::json!({"clockStart":42}),
+        serde_json::json!({"unknown":true}),
+    ] {
+        config["daemon"] = bad;
+        write(&path, &config.to_string());
+        assert!(!run(&["capabilities"]).status.success());
+    }
+    config.as_object_mut().unwrap().remove("daemon");
+    for bad in [
+        serde_json::json!({"date":false}),
+        serde_json::json!({"date":"warp"}),
+        serde_json::json!({"unknown":"real"}),
+        serde_json::Value::Null,
+    ] {
+        let mut invalid = config.clone();
+        invalid["functions"]["clock"] = bad;
+        write(&path, &invalid.to_string());
+        assert!(!run(&["capabilities"]).status.success());
+    }
+    for malformed in [
+        serde_json::json!({"schemaVersion":1,"rules":{"source":true}}),
+        serde_json::json!({"schemaVersion":1,"projects":{"requireDemoPrefix":"yes"}}),
+    ] {
+        write(&path, &malformed.to_string());
+        let output = run(&["capabilities"]);
+        assert!(
+            !output.status.success(),
+            "schema-only type errors must be refused"
+        );
+    }
+    config["functions"]["clock"]["timers"] = serde_json::json!("virtual");
+    config["functions"]["clock"]["date"] = serde_json::json!("real");
+    write(&path, &config.to_string());
+    assert!(!run(&["capabilities"]).status.success());
+}

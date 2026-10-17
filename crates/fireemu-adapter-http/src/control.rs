@@ -58,6 +58,26 @@ pub enum RunScheduleError {
     Capacity(String),
 }
 
+/// Work included by the local await-idle control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleScope {
+    /// Every outstanding task, including future work.
+    All,
+    /// Exclude future task schedules and retry backoff only.
+    Runnable,
+}
+
+impl IdleScope {
+    /// Stable wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Runnable => "runnable",
+        }
+    }
+}
+
 /// The functions runtime as the control API sees it (spec 10.5 `await-idle`, 11.2 clock
 /// operations, manual schedule runs).
 pub trait FunctionsHook: Send + Sync {
@@ -95,6 +115,14 @@ pub trait FunctionsHook: Send + Sync {
     }
     /// Whether no event is pending, leased, running or retry-waiting.
     fn is_idle(&self) -> bool;
+    /// Scoped quiescence; adapters without task scheduling retain their usual predicate.
+    fn is_idle_with_scope(&self, _scope: IdleScope) -> bool {
+        self.is_idle()
+    }
+    /// Bounded task projection; `excluded` counts future work eligible for runnable-scope exclusion.
+    fn idle_diagnostics(&self, _scope: IdleScope) -> Value {
+        json!({})
+    }
     /// Notified whenever work completes.
     fn idle_notify(&self) -> Arc<tokio::sync::Notify>;
     /// Status JSON (queue depths, functions).
@@ -2744,30 +2772,67 @@ pub fn browser_guard(
     }
 }
 
+/// The scheduler marks future work as eligible for exclusion. Apply the requested scope
+/// without making all-work waits claim that they exclude those tasks.
+fn task_idle_diagnostics(functions: &dyn FunctionsHook, scope: IdleScope) -> Value {
+    let mut tasks = functions.idle_diagnostics(scope);
+    if let Some(object) = tasks.as_object_mut() {
+        let future = object.get("excluded").cloned().unwrap_or(json!(0));
+        object.insert("future".into(), future);
+        if scope == IdleScope::All {
+            object.insert("excluded".into(), json!(0));
+            if let Some(Value::Array(rows)) = object.get_mut("waiting") {
+                for row in rows {
+                    if let Some(row) = row.as_object_mut() {
+                        row.insert("excluded".into(), json!(false));
+                    }
+                }
+            }
+        }
+    }
+    tasks
+}
+
 /// `POST /v1/sessions/{s}:awaitIdle`: waits until the functions runtime has no outstanding
 /// work (or `timeoutSeconds`, default 30, elapses).
 pub async fn await_idle(state: &ControlState, body: &Value) -> JsonResponse {
+    let scope = match body.get("scope") {
+        None => IdleScope::All,
+        Some(Value::String(value)) if value == "all" => IdleScope::All,
+        Some(Value::String(value)) if value == "runnable" => IdleScope::Runnable,
+        _ => return error(400, "INVALID_ARGUMENT : scope must be all or runnable"),
+    };
     let timeout = body
         .get("timeoutSeconds")
         .and_then(Value::as_f64)
         .unwrap_or(30.0)
         .clamp(0.0, 600.0);
     let Some(functions) = &state.functions else {
-        return ok(json!({"idle": true, "note": "no functions runtime is configured"}));
+        return ok(
+            json!({"idle": true, "scope": scope.as_str(), "note": "no functions runtime is configured"}),
+        );
     };
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs_f64(timeout);
     loop {
-        if functions.is_idle() {
-            return ok(json!({"idle": true, "status": functions.status()}));
+        if functions.is_idle_with_scope(scope) {
+            return ok(
+                json!({"idle": true, "scope": scope.as_str(), "tasks": task_idle_diagnostics(functions.as_ref(), scope), "status": functions.status()}),
+            );
         }
         let notify = functions.idle_notify();
         let notified = notify.notified();
-        if functions.is_idle() {
-            return ok(json!({"idle": true, "status": functions.status()}));
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if functions.is_idle_with_scope(scope) {
+            return ok(
+                json!({"idle": true, "scope": scope.as_str(), "tasks": task_idle_diagnostics(functions.as_ref(), scope), "status": functions.status()}),
+            );
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
-            let status = functions.status();
+            let mut status = functions.status();
+            status["scope"] = json!(scope.as_str());
+            status["tasks"] = task_idle_diagnostics(functions.as_ref(), scope);
             return JsonResponse {
                 status: 504,
                 body: fireemu_adapter_support::api_error::control_deadline(

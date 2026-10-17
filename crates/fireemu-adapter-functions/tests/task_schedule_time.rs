@@ -323,3 +323,47 @@ async fn strict_refuses_a_schedule_time_more_than_thirty_days_ahead() {
     e.stop().await;
     f.stop().await;
 }
+
+#[tokio::test]
+async fn runnable_idle_retains_future_tasks_without_dispatch_or_schedule_mutation() {
+    let f = start("runnable-idle", true).await;
+    let far = rfc3339_in(3600);
+    f.runtime
+        .enqueue_task(
+            "demo-app",
+            "us-central1",
+            "taskA",
+            &body("future", Some(&far)),
+        )
+        .unwrap();
+    assert!(!f.runtime.is_idle());
+    assert!(f.runtime.is_idle_with_scope(true));
+    assert_eq!(
+        f.runtime.publish("jobs", &[json!({"data": "e30="})]).len(),
+        1
+    );
+    assert!(
+        !f.runtime.is_idle_with_scope(true),
+        "unrelated background work still blocks scoped idle"
+    );
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !f.runtime.is_idle_with_scope(true) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(f.runtime.task_idle_diagnostics()["excluded"], 1);
+    assert!(f
+        .runtime
+        .await_idle(Duration::from_millis(20))
+        .await
+        .is_err());
+    assert_eq!(dispatched(&f.probe), 0);
+    assert_eq!(f.runtime.pending_tasks().len(), 1);
+    assert_eq!(
+        f.runtime.pending_tasks()[0].schedule_time.as_deref(),
+        Some(far.as_str())
+    );
+    f.stop().await;
+}

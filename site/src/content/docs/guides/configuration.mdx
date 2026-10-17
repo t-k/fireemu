@@ -18,7 +18,7 @@ Keep Fireemu-specific settings in `fireemu.toml` rather than in `firebase.json`.
 <TabItem label="TOML">
 
 ```toml
-#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json
 schemaVersion = 1
 profile = "strict"
 firebaseJson = "firebase.json"
@@ -75,7 +75,7 @@ Two common setups run into this rule:
 
 ## TOML values and JSON null
 
-TOML files use the same JSON Schema, validation and defaults as JSON files. Start a file with `#:schema https://fireemu.dev/spec/config/fireemu.schema.json` to select the schema in Taplo or Even Better TOML. Quote timestamp values: TOML datetimes are refused with the key name because the schema has no datetime type.
+TOML files use the same JSON Schema, validation and defaults as JSON files. Start a file with `#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json` to select the schema in Taplo or Even Better TOML. Quote timestamp values: TOML datetimes are refused with the key name because the schema has no datetime type.
 
 TOML has no `null`. For every nullable setting below, omit the key in its containing table; for nullable array items, omit the item. Keep the containing table or array when its presence is intentional. Empty arrays and empty tables retain their existing meaning.
 

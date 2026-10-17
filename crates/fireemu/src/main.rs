@@ -75,7 +75,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
@@ -342,6 +342,10 @@ fn main() -> ExitCode {
         },
         Some("doctor") => match args.get(1).map(String::as_str) {
             None => doctor::run(),
+            Some("--export-dir") => match args.get(2) {
+                Some(path) if args.len() == 3 => doctor::run_export_dir(Path::new(path)),
+                _ => fail(&doctor_usage()),
+            },
             Some("--connect") => match args.get(2) {
                 Some(url) if args.len() == 3 => doctor::run_connect(url),
                 _ => fail(&doctor_usage()),
@@ -350,8 +354,11 @@ fn main() -> ExitCode {
         },
         // The manifest describes the behaviour of one profile, so the command takes the same
         // options the daemon does and reports the profile they resolve to.
-        Some("capabilities") => match parse_options(&args[1..], OptionContext::Start) {
+        Some("capabilities") => match parse_options(&args[1..], OptionContext::Inspect) {
             Ok((options, None)) => {
+                if let Err(warning) = options.cfg.validate_startup() {
+                    eprintln!("warning: {warning}");
+                }
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&control::capabilities_manifest(
@@ -556,7 +563,7 @@ fn fail_for(command: &str, e: &CliError) -> ExitCode {
 
 fn doctor_usage() -> CliError {
     CliError::usage(format!(
-        "usage: fireemu doctor [--connect http://127.0.0.1:<control port>] ({})",
+        "usage: fireemu doctor [--connect http://127.0.0.1:<control port> | --export-dir <path>] ({})",
         options_hint("doctor")
     ))
 }
@@ -814,9 +821,9 @@ fn optional_value(args: &[String], i: usize) -> Option<&String> {
     args.get(i).filter(|v| !v.starts_with('-'))
 }
 
-/// An automatic UI listener or the legacy numeric port selection.
+/// An automatic auxiliary listener or the legacy numeric port selection.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum UiPort {
+enum AuxiliaryPort {
     Auto,
     Fixed(u16),
 }
@@ -844,8 +851,9 @@ struct RawOptions {
     eventarc_port: Option<u16>,
     tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
-    hub_port: Option<u16>,
-    ui_port: Option<UiPort>,
+    hub_port: Option<AuxiliaryPort>,
+    context: OptionContext,
+    ui_port: Option<AuxiliaryPort>,
     /// The official `emulators:exec --ui` opt-in.
     ui: bool,
     logging_port: Option<u16>,
@@ -884,15 +892,20 @@ fn inspect_port_arg(raw: &str) -> Result<u16, CliError> {
     Ok(port)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum OptionContext {
+    Inspect,
+    #[default]
     Start,
     Exec,
 }
 
 #[allow(clippy::too_many_lines)]
 fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptions, CliError> {
-    let mut raw = RawOptions::default();
+    let mut raw = RawOptions {
+        context,
+        ..RawOptions::default()
+    };
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -975,9 +988,9 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--ui-port" => {
                 raw.ui_port = Some(if args.get(i + 1).is_some_and(|value| value == "auto") {
-                    UiPort::Auto
+                    AuxiliaryPort::Auto
                 } else {
-                    UiPort::Fixed(port_arg(args, i, "--ui-port")?)
+                    AuxiliaryPort::Fixed(port_arg(args, i, "--ui-port")?)
                 });
                 i += 2;
             }
@@ -986,7 +999,11 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                 i += 1;
             }
             "--hub-port" => {
-                raw.hub_port = Some(port_arg(args, i, "--hub-port")?);
+                raw.hub_port = Some(if args.get(i + 1).is_some_and(|value| value == "auto") {
+                    AuxiliaryPort::Auto
+                } else {
+                    AuxiliaryPort::Fixed(port_arg(args, i, "--hub-port")?)
+                });
                 i += 2;
             }
             "--logging-port" => {
@@ -1324,14 +1341,19 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
         cfg.pubsub_addr = with_port(&cfg.pubsub_addr, p);
         cfg.pubsub_enabled = true;
     }
-    if let Some(p) = raw.hub_port {
-        cfg.hub_addr = with_port(&cfg.hub_addr, p);
+    if let Some(selection) = raw.hub_port {
+        let port = match selection {
+            AuxiliaryPort::Auto => 0,
+            AuxiliaryPort::Fixed(port) => port,
+        };
+        cfg.hub_auto_port = selection == AuxiliaryPort::Auto;
+        cfg.hub_addr = with_port(&cfg.hub_addr, port);
         cfg.hub_addr_explicit = true;
     }
     if let Some(selection) = raw.ui_port {
         let (port, enabled) = match selection {
-            UiPort::Auto => (0, true),
-            UiPort::Fixed(port) => (port, port != 0),
+            AuxiliaryPort::Auto => (0, true),
+            AuxiliaryPort::Fixed(port) => (port, port != 0),
         };
         cfg.ui_addr = with_port(&cfg.ui_addr, port);
         cfg.ui_enabled = enabled;
@@ -1566,7 +1588,12 @@ fn load_project_config(
             let (json, canonical) = config_document(raw, path)?;
             if canonical {
                 sources.canonical = Some(path.clone());
-                let config = RuntimeConfig::from_json(&json).map_err(|error| {
+                let config = if raw.context == OptionContext::Inspect {
+                    RuntimeConfig::inspect_json(&json)
+                } else {
+                    RuntimeConfig::from_json(&json)
+                }
+                .map_err(|error| {
                     CliError::refused(format!(
                         "{}: {}",
                         diagnostic_path(path),
@@ -1691,7 +1718,7 @@ fn parse_options(
     // The UI listener is configured through its own module when a port was asked for or when
     // exec must apply its official opt-in default. Start otherwise keeps the best-effort
     // default, where a busy 4000 disables the UI instead of failing the run.
-    if raw.ui_port == Some(UiPort::Auto) {
+    if raw.ui_port == Some(AuxiliaryPort::Auto) {
         ui::set_auto_port();
     } else if cfg.ui_addr_explicit || context == OptionContext::Exec {
         ui::set_port(if cfg.ui_enabled {
@@ -1774,6 +1801,7 @@ fn resolve_export_on_exit(
             )));
         }
     }
+    fireemu_export_publication::preflight(&absolute).map_err(CliError::refused)?;
     import_export::may_overwrite(&absolute).map_err(CliError::refused)?;
     Ok(Some(absolute))
 }
@@ -2786,7 +2814,11 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     // An explicit Hub address wins over every port-zero listener. The default remains late
     // and best effort: a selected product configured on 4400 must win and disable discovery.
     let prebound_hub = if cfg.hub_addr_explicit {
-        hub::bind(&cfg.hub_addr, true).await?
+        if cfg.hub_auto_port {
+            Some(bind_listener(&cfg.hub_addr).await?)
+        } else {
+            hub::bind(&cfg.hub_addr, true).await?
+        }
     } else {
         None
     };
@@ -4009,6 +4041,28 @@ mod config_reload_tests {
                     proptest::prop_assert_eq!(cfg.ui_enabled, enabled);
                     proptest::prop_assert!(cfg.ui_addr_explicit);
                     proptest::prop_assert_eq!(cfg.ui_addr.rsplit_once(':').unwrap().1, expected_port.to_string());
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn hub_port_selection_preserves_numeric_zero_and_last_flag_wins(port in proptest::prelude::any::<u16>()) {
+            for context in [OptionContext::Start, OptionContext::Exec, OptionContext::Inspect] {
+                for (values, expected_port, automatic) in [
+                    (vec!["auto".to_owned()], 0, true),
+                    (vec!["auto".to_owned(), port.to_string()], port, false),
+                    (vec![port.to_string(), "auto".to_owned()], 0, true),
+                    (vec!["auto".to_owned(), "0".to_owned()], 0, false),
+                ] {
+                    let args: Vec<String> = values.into_iter().flat_map(|value| ["--hub-port".to_owned(), value]).collect();
+                    let raw = parse_raw_options(&args, context).unwrap_or_else(|error| panic!("{}", error.message));
+                    let mut cfg = RuntimeConfig::default();
+                    apply_port_overrides(&mut cfg, &raw);
+                    proptest::prop_assert_eq!(cfg.hub_auto_port, automatic);
+                    proptest::prop_assert!(cfg.hub_addr_explicit);
+                    proptest::prop_assert_eq!(cfg.hub_addr.rsplit_once(':').unwrap().1, expected_port.to_string());
                 }
             }
         }

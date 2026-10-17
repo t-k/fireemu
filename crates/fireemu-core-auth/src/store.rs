@@ -507,7 +507,7 @@ fn storable_email(email: &str) -> bool {
 /// with `hashAlgorithm`). The core has no cryptography of its own, so it keeps the hash
 /// opaquely: `spec` is the importing adapter's canonical description of the algorithm and its
 /// parameters, and only an [`ImportedHashVerifier`] from that adapter can check a password
-/// against it.
+/// against it. Exported native digests use this representation on restore as well.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ImportedPasswordHash {
     /// The adapter's canonical algorithm-and-parameters description.
@@ -558,9 +558,7 @@ impl ImportedHashVerifier for NoImportedHashes {
 /// it was imported from one. The Local Emulator Suite stores passwords in the clear
 /// (`passwordHash: "fakeHash:salt=<salt>:password=<plaintext>"`), so an export directory
 /// already holds them; keeping them lets fireemu write an export the official suite can sign
-/// in against, rather than one that silently drops every password. A credential created
-/// through fireemu's own API has no such form and is never given one -- exporting it writes
-/// no `passwordHash` at all instead of inventing a reversible one.
+/// in against. Native credentials export their salted digest through the fireemu imported-hash extension without retaining plaintext or inventing a reversible emulator hash.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PasswordDigest {
     salt: [u8; 16],
@@ -578,6 +576,25 @@ pub struct PasswordDigest {
 impl fmt::Debug for PasswordDigest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("PasswordDigest([redacted])")
+    }
+}
+
+/// Complete credential material for an export. Native and foreign hashes share the same algorithm-described representation; only credentials imported from the official emulator retain its reversible form.
+pub enum ExportablePassword<'a> {
+    /// The official emulator's original salt and plaintext.
+    Emulator {
+        /// The original emulator salt.
+        salt: &'a str,
+        /// The plaintext already present in the imported emulator artifact.
+        password: &'a str,
+    },
+    /// A native or imported digest together with the parameters needed to verify it.
+    Hash(ImportedPasswordHash),
+}
+
+impl fmt::Debug for ExportablePassword<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExportablePassword([redacted])")
     }
 }
 
@@ -628,6 +645,24 @@ impl PasswordDigest {
             == 0)
     }
 
+    /// Exports every credential variant without creating a plaintext representation.
+    #[must_use]
+    pub fn export_form(&self) -> ExportablePassword<'_> {
+        if let Some((salt, password)) = self.emulator_form() {
+            return ExportablePassword::Emulator { salt, password };
+        }
+        ExportablePassword::Hash(self.imported.clone().unwrap_or_else(|| {
+            let (hash, salt) = self.stored_material();
+            ImportedPasswordHash {
+                spec:
+                    r#"{"algorithm":"SHA","family":"SHA1","order":"SALT_AND_PASSWORD","rounds":1}"#
+                        .to_owned(),
+                hash,
+                salt,
+            }
+        }))
+    }
+
     /// The stored hash and salt bytes (fireemu's own digest, or the imported foreign hash).
     #[must_use]
     pub fn stored_material(&self) -> (Vec<u8>, Vec<u8>) {
@@ -637,14 +672,13 @@ impl PasswordDigest {
         )
     }
 
-    /// The emulator salt and plaintext an export has to write back, when the credential
     /// The foreign hash an import installed, while no sign-in has replaced it.
     #[must_use]
     pub const fn imported_hash(&self) -> Option<&ImportedPasswordHash> {
         self.imported.as_ref()
     }
 
-    /// came from one.
+    /// The original emulator salt and plaintext, when imported from its reversible format.
     #[must_use]
     pub fn emulator_form(&self) -> Option<(&str, &str)> {
         self.emulator

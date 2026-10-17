@@ -149,7 +149,7 @@ npx fireemu emulators:export ./emulator-data
 
 On Windows, `emulators:export` and `--export-on-exit` are not currently available. Import and other emulator functionality remain available.
 
-On Unix-like systems, the destination and its ancestor directories are subject to ownership and permission restrictions. Use a dedicated, non-shared directory rather than `/tmp` or a shared directory. 
+On Unix-like systems, the destination and its ancestor directories are subject to ownership and permission restrictions. Use a dedicated, non-shared directory rather than `/tmp` or a shared directory. Before starting a persistent run, inspect the destination with `fireemu doctor --export-dir "$HOME/.local/share/fireemu/emulator-data"`. The check creates no directories and changes no permissions. Every existing ancestor must pass, including the home directory; a 0700 child under a shared parent is not sufficient. `--export-on-exit` performs this preflight before starting the daemon or child command, then checks again when exporting because the filesystem may change. Configuration discovery permits group-writable files for private-group setups, but export publication keeps its stricter cleanup safety rules.
 
 On macOS, an ancestor directory with an ACL is refused when the ACL has an `allow` entry for anyone but the owner, root or the user running the export, whatever permissions the entry shows (the kernel grants rights that `ls -le` does not list). `deny` entries are accepted, so a standard home directory (which carries `group:everyone deny delete`) and the folders below it work. When an export is refused for an ACL, the message names the entry; remove it (`chmod -a`) or export to another directory, for example one under `$TMPDIR`. Check an ancestor with `/bin/ls -led <directory>`. A destination on a volume that ignores ownership (exFAT and FAT sticks and cards, or an external APFS volume with "Ignore ownership on this volume" turned on) is refused, because the owner and the mode of its directories do not show who can change them; export to a volume that enforces ownership. A volume without atomic directory rename (exFAT, FAT, some network filesystems) cannot publish an export either: use a directory on an APFS volume.
 
@@ -173,11 +173,13 @@ For startup or installation problems, inspect the environment and bundled files 
 npx fireemu doctor
 ```
 
-The command reports information about the Fireemu binary, UI, Functions runner, and Node.js, and suggests remedies when it finds missing components or problems. 
+The command reports information about the Fireemu binary, UI, Functions runner, and Node.js, and suggests remedies when it finds missing components or problems. `fireemu capabilities` resolves the configured profile and overrides without starting a daemon; a missing virtual-clock start is reported on stderr while stdout remains capability JSON. Startup still requires that clock value.
 
 ## Configuration
 
 ### Initial setup and reusing `firebase.json`
+
+Generated schema annotations refer to the schema hosted in this GitHub repository. Older configurations containing `https://fireemu.dev/spec/config/fireemu.schema.json` still load, but replace that annotation with `https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json` for editor validation. Fireemu validates against its bundled schema and does not fetch the annotation URL.
 
 `fireemu init --reference` also writes `fireemu.reference.toml`, a commented reference generated from the schema. With an existing `fireemu.json`, it writes `fireemu.reference.jsonc` instead, so reference keys match the configuration format. Fireemu never loads this file. The normal `fireemu.toml` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment) stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
 
@@ -289,7 +291,7 @@ Keep `profile = "strict"` (the default of `fireemu init`), and point fireemu at 
 When a test fails under `strict` but passed on the official emulator, it is usually behavior the application would also meet in production. Fix the test or the application, or relax only the specific setting below instead of switching the whole profile.
 
 - **Unsigned emulator ID tokens** (`@firebase/rules-unit-testing` `authenticatedContext()`, the client SDK's `mockUserToken`) work under `strict` by default. Set `auth.allowUnsignedIdTokens` to `false` to disable their fallback on the Security Rules surfaces. For a refusal test, use the SDK helper's default `iat: 0` / `exp: 3600` with a clock after expiry; fireemu-issued tokens that pass normal verification are still accepted. Use `auth.idTokenSigning = "session-rsa"` to refuse all unsigned ID tokens.
-- **Composite indexes** are validated as production does: a query whose index is not defined (or is still building, or was deleted) is refused with `FAILED_PRECONDITION` and the console link to the index. Declare the index a query needs in `firestore.indexes.json`, referenced from `firebase.json`. To run such a query anyway and have each missing index reported once per database on stderr (with production's refusal text and the `firestore.indexes.json` entry), set `firestore.missingIndexes` to `"report"`; `productionExact` does not change this key.
+- **Composite indexes** are validated as production does: a query whose index is not defined (or is still building, or was deleted) is refused with `FAILED_PRECONDITION` and the console link to the index. Declare the index a query needs in `firestore.indexes.json`, referenced from `firebase.json`. To run such a query anyway and have each missing index reported once per database on stderr (with production's refusal text and the `firestore.indexes.json` entry), set `firestore.missingIndexes` to `"report"`; `productionExact` does not change this key. For OR queries, supplementary stderr diagnostics list all distinct missing branch indexes, so you can add their definitions together. Strict mode retains the existing SDK error and first index creation link; emulator mode still serves the query. Repeated suggestions are deduplicated and the diagnostic cache is bounded.
 - **Settings that mirror your production project.** Set them to match it instead of switching the profile:
 
 | Setting | What it does under `strict` |
@@ -303,7 +305,7 @@ When a test fails under `strict` but passed on the official emulator, it is usua
 The initial configuration selects Standard edition Firestore with the Native API.
 
 ```toml
-#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json
 schemaVersion = 1
 profile = "strict"
 
@@ -364,7 +366,7 @@ Each declared array replaces that provider kind; `[]` explicitly starts it empty
 This example enables email/password and phone sign-in while disabling anonymous sign-in. It requires passwords of at least 12 characters containing uppercase letters, lowercase letters, and numbers, and prevents users from deleting their own accounts. Phone sign-in uses a configured test phone number and verification code.
 
 ```toml
-#:schema https://fireemu.dev/spec/config/fireemu.schema.json
+#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json
 schemaVersion = 1
 profile = "strict"
 
@@ -490,6 +492,8 @@ A schedule is driven by the virtual clock alone: real time passing runs nothing.
 A manual run (`POST /v1/sessions/{session}/functions/{name}:run`) enqueues one run of a scheduled function stamped with the current virtual time. It does not consume the next occurrence, which still comes due and is subject to `scheduler.overlap` like any run. It answers `400 INVALID_ARGUMENT` for an unknown function, a function that is not scheduled, an overlap policy refusal, or a runtime that is shutting down, and `429 RESOURCE_EXHAUSTED` when the event queue is full. This is fireemu's own control, not a claim about production's run-now.
 
 On a task-queue function (`onTaskDispatched`), the same `POST /v1/sessions/{session}/functions/{name}:run` releases the Cloud Tasks that wait for their `scheduleTime`: all of them, or the one named by a `{"task": "<task id>"}` body (404 when no waiting task has that id). Under the strict profile a task enqueued with a `scheduleTime` waits for it, so this is how a test runs a task due in an hour without moving the clock; a released task still obeys the queue's rate and concurrency limits. The Functions page of the Emulator UI lists the waiting tasks with their due time and a **Run now** button.
+
+Tests can use `POST /v1/sessions/default:awaitIdle` with `{"scope":"runnable"}` to wait for current work while leaving future schedules and future retry backoff untouched. The default still waits for all work. Due tasks blocked by rate or concurrency limits and active requests remain pending; diagnostics identify the wait and clock involved. See [waiting for runnable work](docs/tasks-idle.md).
 
 See the [configuration schema](spec/config/fireemu.schema.json) for available settings and values. 
 

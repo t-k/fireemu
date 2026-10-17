@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createTestWorld, withTestWorld } from '../fireemu/testing.mjs';
@@ -472,4 +472,104 @@ test('shared control routes retain legacy URLs and follow world reset', native, 
   }
   await world.dispose();
   await assert.rejects(control('GET','sessions/default'),/disposed/);
+});
+
+test('Hub options reject non-booleans before starting a world', async () => {
+  for (const hub of [null, 0, 1, 'true', {}, []]) {
+    await assert.rejects(createTestWorld({ ...options, binaryPath: process.execPath, hub }), /hub must be a boolean/);
+  }
+});
+
+test('test worlds disable Hub by default even with configured Hub port', native, async () => {
+  await withTestWorld({...options, config:{...options.config,daemon:{hubPort:4400}}}, async world => {
+    assert.equal(world.endpoints.hub, undefined);
+    assert.equal(world.environment.FIREBASE_EMULATOR_HUB, undefined);
+  });
+});
+
+test('opt-in Hub isolates exports, retires credentials and restores creation snapshots', {...native,skip:!binary||process.platform==='win32',timeout:90_000}, async t => {
+  const root = await mkdtemp(join(homedir(),'.fireemu-world-export-'));
+  const worlds=[];
+  t.after(async()=>{await Promise.all(worlds.map(world=>world.dispose()));await rm(root,{recursive:true,force:true});});
+  const opts={...options,services:['auth','firestore','storage'],hub:true};
+  const locator=async world=>JSON.parse(await readFile(join(world.environment.TMPDIR,`hub-${world.projectId}.json`),'utf8'));
+  const exportWorld=async(world,path)=>{
+    const result=await world.run(binary,['emulators:export',path,'--project',world.projectId]);
+    assert.equal(result.code,0,result.stderr);
+  };
+  const document=world=>`${world.endpoints.firestore.url}/v1/projects/${world.projectId}/databases/(default)/documents/export/item`;
+  const storage=world=>`${world.endpoints.storage.url}/storage/v1/b/${world.projectId}.appspot.com/o/item.txt?alt=media`;
+  const headers={authorization:'Bearer owner','content-type':'application/json'};
+  for(let index=0;index<2;index++)worlds.push(await createTestWorld(opts));
+  const [a,b]=worlds;
+  assert.ok(a.endpoints.hub);
+  assert.notEqual(a.environment.FIREBASE_EMULATOR_HUB,b.environment.FIREBASE_EMULATOR_HUB);
+  assert.notEqual(a.environment.TMPDIR,b.environment.TMPDIR);
+  const locators=await Promise.all(worlds.map(locator));
+  assert.notEqual(locators[0].fireemuControlToken,locators[1].fireemuControlToken);
+  for(const [index,world] of worlds.entries()){
+    assert.equal((await fetch(document(world),{method:'PATCH',headers,body:JSON.stringify({fields:{marker:{stringValue:String(index)}}})})).status,200);
+    const uploaded=await fetch(`${world.endpoints.storage.url}/upload/storage/v1/b/${world.projectId}.appspot.com/o?uploadType=media&name=item.txt`,{method:'POST',headers:{authorization:'Bearer owner','content-type':'text/plain'},body:`bytes-${index}`});
+    assert.equal(uploaded.status,200,await uploaded.clone().text());
+    const created=await fetch(`${world.endpoints.auth.url}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=test`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:`export${index}@example.com`,password:'password123',returnSecureToken:true})});
+    assert.equal(created.status,200,await created.clone().text());
+    for(const token of [undefined,locators[1-index].fireemuControlToken]){
+      const denied=await fetch(`${world.endpoints.hub.url}/_admin/export`,{method:'POST',headers:{'content-type':'application/json',...(token?{authorization:`Bearer ${token}`}:{})},body:JSON.stringify({path:join(root,'denied')})});
+      assert.equal(denied.status,403);
+    }
+    await exportWorld(world,join(root,`export-${index}`));
+  }
+  const failurePath=join(root,'not-a-directory');await writeFile(failurePath,'occupied');
+  await assert.rejects(a.run(binary,['emulators:export',failurePath,'--project',a.projectId]),/command exited .*not a directory/s);
+  const oldHub=a.endpoints.hub.url,oldTmp=a.environment.TMPDIR,oldToken=locators[0].fireemuControlToken;
+  await a.reset();
+  await assert.rejects(stat(oldTmp),{code:'ENOENT'});
+  assert.notEqual((await locator(a)).fireemuControlToken,oldToken);
+  assert.equal((await fetch(document(a),{headers})).status,404);
+  if(oldHub!==a.endpoints.hub.url)await assert.rejects(fetch(oldHub,{signal:AbortSignal.timeout(2000)}));
+  const oldCredential=await fetch(`${a.endpoints.hub.url}/_admin/export`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${oldToken}`},body:JSON.stringify({path:join(root,'retired')})});
+  assert.equal(oldCredential.status,403);
+  for(let index=0;index<2;index++){
+    const imported=await createTestWorld({...opts,import:join(root,`export-${index}`)});worlds.push(imported);
+    const check=async()=>{
+      assert.equal((await (await fetch(document(imported),{headers})).json()).fields.marker.stringValue,String(index));
+      const object=await fetch(storage(imported),{headers});assert.equal(object.status,200);assert.equal(await object.text(),`bytes-${index}`);
+      const metadata=await (await fetch(storage(imported).replace('?alt=media',''),{headers})).json();assert.equal(metadata.contentType,'text/plain');
+      const accounts=await (await fetch(`${imported.endpoints.auth.url}/identitytoolkit.googleapis.com/v1/projects/${imported.projectId}/accounts:batchGet`,{headers})).json();
+      assert.deepEqual(accounts.users.map(user=>user.email),[`export${index}@example.com`]);
+      const login=await fetch(`${imported.endpoints.auth.url}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=test`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:`export${index}@example.com`,password:'password123',returnSecureToken:true})});
+      assert.equal(login.status,200,await login.clone().text());
+      assert.equal((await login.json()).localId,accounts.users[0].localId);
+    };
+    await check();
+    await rm(join(root,`export-${index}`),{recursive:true});
+    await imported.reset();await check();
+  }
+  const surviving=join(root,'surviving');await exportWorld(b,surviving);
+  const disposedHub=b.endpoints.hub.url,disposedTmp=b.environment.TMPDIR;
+  await b.dispose();await assert.rejects(stat(disposedTmp),{code:'ENOENT'});
+  await assert.rejects(fetch(disposedHub,{signal:AbortSignal.timeout(2000)}));
+  assert.ok((await stat(join(surviving,'firebase-export-metadata.json'))).isFile());
+});
+
+test('Hub export restores password authentication after import and reset', {...native,skip:!binary||process.platform==='win32',timeout:60_000}, async t => {
+  const root=await mkdtemp(join(homedir(),'.fireemu-password-export-'));
+  const worlds=[];
+  t.after(async()=>{await Promise.all(worlds.map(world=>world.dispose()));await rm(root,{recursive:true,force:true});});
+  const opts={...options,services:['auth'],hub:true};
+  const source=await createTestWorld(opts);worlds.push(source);
+  const credentials={email:'restored@example.com',password:'preserved-password',returnSecureToken:true};
+  const auth=async(world,action,body)=>fetch(`${world.endpoints.auth.url}/identitytoolkit.googleapis.com/v1/accounts:${action}?key=test`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const created=await auth(source,'signUp',credentials);assert.equal(created.status,200,await created.clone().text());
+  const uid=(await created.json()).localId;
+  const path=join(root,'export');
+  const exported=await source.run(binary,['emulators:export',path,'--project',source.projectId]);assert.equal(exported.code,0,exported.stderr);
+  await source.dispose();
+  const restored=await createTestWorld({...opts,import:path});worlds.push(restored);
+  await rm(path,{recursive:true});
+  for(let generation=1;generation<=2;generation++){
+    if(generation===2)await restored.reset();
+    const login=await auth(restored,'signInWithPassword',credentials);assert.equal(login.status,200,await login.clone().text());assert.equal((await login.json()).localId,uid);
+    assert.notEqual((await auth(restored,'signInWithPassword',{...credentials,password:'wrong-password'})).status,200);
+  }
 });

@@ -54,19 +54,7 @@ pub(crate) fn prepare_and_validate_parent_with(
     volume_check: VolumeCheck<'_>,
     between_mkdir_and_chmod: &dyn Fn(&Path),
 ) -> Result<PathBuf, String> {
-    match std::fs::symlink_metadata(parent) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err("the export parent is a symlink, which an export never follows".to_owned());
-        }
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            return Err("the export parent is not a directory".to_owned());
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("cannot inspect the export parent: {error}")),
-    }
-    let (existing, missing) = split_existing(parent)?;
-    let existing = trusted_ancestors(&existing, volume_check)?;
+    let (existing, missing) = inspect_parent(parent, volume_check)?;
     if missing.is_empty() {
         return Ok(existing);
     }
@@ -86,6 +74,27 @@ pub(crate) fn prepare_and_validate_parent_with(
         }
     }
     result
+}
+
+/// Inspects the existing namespace without creating missing components.
+pub(crate) fn inspect_parent(
+    parent: &Path,
+    volume_check: VolumeCheck<'_>,
+) -> Result<(PathBuf, Vec<OsString>), String> {
+    match std::fs::symlink_metadata(parent) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("the export parent is a symlink, which an export never follows".to_owned());
+        }
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return Err("the export parent is not a directory".to_owned());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("cannot inspect the export parent: {error}")),
+    }
+    let (existing, missing) = split_existing(parent)?;
+    let existing = trusted_ancestors(&existing, volume_check)?;
+    Ok((existing, missing))
 }
 
 /// The longest existing prefix of `parent` and the components below it that do not exist yet.

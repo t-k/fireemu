@@ -65,6 +65,82 @@ struct TargetIdentity {
     inode: u64,
 }
 
+/// Checks the existing export namespace without creating, deleting or changing any path.
+/// Missing parent components are inspected through their nearest existing ancestor. This is
+/// only an early diagnostic: stage creation and publication must still revalidate the namespace.
+/// The caller must separately check its export overwrite/content policy.
+#[cfg(unix)]
+pub fn preflight(target: &Path) -> Result<(), String> {
+    preflight_with(target, &is_mount_root)
+}
+
+#[cfg(unix)]
+fn preflight_with(
+    target: &Path,
+    mount_root: &dyn Fn(&Path, &Path) -> Result<bool, String>,
+) -> Result<(), String> {
+    let target = std::path::absolute(target)
+        .map_err(|error| format!("cannot resolve the export path: {error}"))?;
+    let parent = target
+        .parent()
+        .ok_or("the export path has no parent directory")?;
+    let (existing, missing) = parent::inspect_parent(parent, &parent::system_volume_check)?;
+    let name = target
+        .file_name()
+        .ok_or("the export path has no directory name")?;
+    if missing.is_empty() {
+        let target = existing.join(name);
+        let identity = target_identity(&target)?;
+        if identity.present {
+            parent::system_volume_check(&target)?;
+            if mount_root(&target, &existing)? {
+                parent::trusted_ancestors(&target, &parent::system_volume_check)?;
+                rustix::fs::accessat(
+                    rustix::fs::CWD,
+                    &target,
+                    rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+                    rustix::fs::AtFlags::EACCESS,
+                )
+                .map_err(|error| {
+                    format!(
+                        "cannot create an export inside {}: {error}",
+                        target.display()
+                    )
+                })?;
+                return Ok(());
+            }
+        }
+    }
+    let access = rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK;
+    let access = if missing.is_empty() {
+        access
+    } else {
+        access | rustix::fs::Access::READ_OK
+    };
+    rustix::fs::accessat(
+        rustix::fs::CWD,
+        &existing,
+        access,
+        rustix::fs::AtFlags::EACCESS,
+    )
+    .map_err(|error| {
+        format!(
+            "cannot create an export below {}: {error}",
+            existing.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Export publication is unsupported on Windows; inspection never changes the destination.
+#[cfg(not(unix))]
+pub fn preflight(_target: &Path) -> Result<(), String> {
+    Err(
+        "safe atomic export publication is unavailable on Windows; no export was written"
+            .to_owned(),
+    )
+}
+
 /// An owner-only sibling directory that is not publishable until marked complete.
 #[derive(Debug)]
 pub struct PublicationStage {
@@ -714,6 +790,25 @@ mod windows_tests {
 
 #[cfg(all(test, unix))]
 mod mount_point_tests {
+    #[test]
+    fn preflight_mount_root_needs_writable_target_not_writable_parent() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+        let root = super::parent::trusted_temp::TrustedTempDir::new("preflight-mount-access");
+        let target = root.join("mounted");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let result = super::preflight_with(&target, &|_, _| Ok(true));
+        let sibling = super::preflight_with(&target, &|_, _| Ok(false));
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert!(sibling.is_err());
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+    }
+
     use super::{is_mount_root, is_publication_entry, move_entries, PublicationStage};
     use std::path::{Path, PathBuf};
 

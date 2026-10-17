@@ -3,8 +3,9 @@
 use core::fmt;
 
 use fireemu_core_firestore::index::{
-    decide, plan_scans, validate_aggregation_query as validate_aggregation_index_query,
-    IndexDecision, IndexDefinition, IndexSet, IndexValidationPolicy, PlannedScan, PlanningContext,
+    decide, missing_requirements, plan_scans,
+    validate_aggregation_query as validate_aggregation_index_query, IndexDecision, IndexDefinition,
+    IndexSet, IndexValidationPolicy, PlannedScan, PlanningContext,
 };
 use fireemu_core_firestore::query::{Query, QueryLimitViolation};
 use fireemu_core_firestore::store::{normalize_aggregation_query, Aggregation};
@@ -123,6 +124,8 @@ pub struct AcceptedQuery {
     pub scans: Option<Vec<PlannedScan>>,
     /// Diagnostics such as `FS_ENT_FULL_COLLECTION_SCAN`.
     pub warnings: Vec<String>,
+    /// All distinct indexes assumed for this query, in DNF planning order.
+    pub missing_indexes: Vec<IndexDefinition>,
 }
 
 /// The Standard query limits the pinned official Firestore emulator refuses as well, as
@@ -316,53 +319,99 @@ impl Gateway {
         &self,
         database: &str,
         accepted: &AcceptedQuery,
-        message: impl FnOnce(&IndexDefinition, bool) -> String,
+        mut message: impl FnMut(&IndexDefinition, bool) -> String,
     ) -> Option<String> {
         use std::io::Write as _;
-        let IndexDecision::AssumedIndex { requirement } = &accepted.decision else {
-            return None;
-        };
         if self.ctx.policy != IndexValidationPolicy::ProductionReport {
             return None;
         }
-        let report = MissingIndexReport {
-            database: database.to_owned(),
-            fragment: requirement.indexes_json_fragment(),
-            message: message(requirement, accepted.query.inequality_fields().len() > 1),
-        };
-        let noted = MISSING_INDEXES
+        // Format before locking: callbacks may inspect Admin state or clear reports.
+        let reports: Vec<_> = accepted
+            .missing_indexes
+            .iter()
+            .map(|requirement| MissingIndexReport {
+                database: database.to_owned(),
+                fragment: requirement.indexes_json_fragment(),
+                message: message(requirement, accepted.query.inequality_fields().len() > 1),
+            })
+            .collect();
+        // A query's entries and overflow count form one batch relative to concurrent clears.
+        let noted: Vec<_> = MISSING_INDEXES
             .lock()
             .map(|mut ledger| {
-                let seen = ledger
-                    .reports
+                let mut dropped = false;
+                reports
                     .iter()
-                    .any(|r| r.database == report.database && r.fragment == report.fragment);
-                if seen {
-                    Noted::Seen
-                } else if ledger.reports.len() < MAX_MISSING_INDEX_REPORTS {
-                    ledger.reports.push(report.clone());
-                    Noted::New
-                } else {
-                    *ledger
-                        .dropped
-                        .entry(project_of(&report.database).to_owned())
-                        .or_default() += 1;
-                    let first = !ledger.full_notice_written;
-                    ledger.full_notice_written = true;
-                    Noted::OverBound { first }
-                }
+                    .map(|report| {
+                        let seen = ledger.reports.iter().any(|r| {
+                            r.database == report.database && r.fragment == report.fragment
+                        });
+                        if seen {
+                            Noted::Seen
+                        } else if ledger.reports.len() < MAX_MISSING_INDEX_REPORTS {
+                            ledger.reports.push(report.clone());
+                            Noted::New
+                        } else {
+                            if !dropped {
+                                *ledger
+                                    .dropped
+                                    .entry(project_of(&report.database).to_owned())
+                                    .or_default() += 1;
+                                dropped = true;
+                            }
+                            let first = !ledger.full_notice_written;
+                            ledger.full_notice_written = true;
+                            Noted::OverBound { first }
+                        }
+                    })
+                    .collect()
             })
-            .unwrap_or(Noted::Seen);
-        let line = match noted {
-            Noted::Seen | Noted::OverBound { first: false } => return None,
-            Noted::New => missing_index_log_line(&report),
-            Noted::OverBound { first: true } => format!(
-                "[firestore] more than {MAX_MISSING_INDEX_REPORTS} distinct missing composite \
-                 indexes; later ones are served without being reported"
-            ),
+            .unwrap_or_default();
+        // Keep formatting and stderr I/O outside the ledger lock.
+        let lines: Vec<_> = reports
+            .iter()
+            .zip(noted)
+            .filter_map(|(report, noted)| match noted {
+                Noted::Seen | Noted::OverBound { first: false } => None,
+                Noted::New => Some(missing_index_log_line(report)),
+                Noted::OverBound { first: true } => Some(format!(
+                    "[firestore] more than {MAX_MISSING_INDEX_REPORTS} distinct missing composite \
+                     indexes; later ones are served without being reported"
+                )),
+            })
+            .collect();
+        if lines.is_empty() {
+            return None;
+        }
+        let lines = lines.join("\n");
+        let _ = writeln!(std::io::stderr(), "{lines}");
+        Some(lines)
+    }
+
+    fn diagnose_indexes(
+        &self,
+        query: &Query,
+        indexes: &IndexSet,
+        aggregations: Option<&[Aggregation]>,
+        decision: &IndexDecision,
+    ) -> Vec<IndexDefinition> {
+        let missing_indexes = if matches!(
+            decision,
+            IndexDecision::MissingRequired { .. } | IndexDecision::AssumedIndex { .. }
+        ) {
+            missing_requirements(query, aggregations.unwrap_or_default(), indexes, &self.ctx)
+        } else {
+            Vec::new()
         };
-        let _ = writeln!(std::io::stderr(), "{line}");
-        Some(line)
+        if self.ctx.policy != IndexValidationPolicy::ProductionReport {
+            for requirement in &missing_indexes {
+                note_missing_index(
+                    &requirement.indexes_json_fragment(),
+                    matches!(decision, IndexDecision::MissingRequired { .. }),
+                );
+            }
+        }
+        missing_indexes
     }
 
     /// Runs every strict check on a decoded query.
@@ -473,6 +522,8 @@ impl Gateway {
                 validate_aggregation_index_query(&execution_query, aggregations, indexes, &self.ctx)
             },
         );
+        let missing_indexes =
+            self.diagnose_indexes(&execution_query, indexes, aggregations, &decision);
         match &decision {
             IndexDecision::UseIndex { .. }
             | IndexDecision::MergeIndexes { .. }
@@ -482,9 +533,8 @@ impl Gateway {
             IndexDecision::AssumedIndex { .. } if self.production_refusals() => {
                 warnings.push(MISSING_INDEX_REPORTED.to_owned());
             }
-            IndexDecision::AssumedIndex { requirement } => {
+            IndexDecision::AssumedIndex { .. } => {
                 warnings.push("FS_EMULATOR_INDEX_ASSUMED".to_owned());
-                note_assumed_index(&requirement.indexes_json_fragment());
             }
             IndexDecision::FullScanAllowed { plan } => {
                 warnings.extend(plan.diagnostics.iter().map(|d| (*d).to_owned()));
@@ -521,30 +571,36 @@ impl Gateway {
             decision,
             scans,
             warnings,
+            missing_indexes,
         })
     }
 }
 
-/// Says once per distinct index which composite index production would need for a query
-/// the emulator policy served without it (every surface: unary, REST, Listen, aggregations).
+/// Says once per distinct index and policy whether a composite index is missing, across
+/// unary, REST, Listen and aggregation queries. The cache has the report ledger's bound.
 /// The fragment names client field paths, so it is cut at the shared echo bound, and a stderr
 /// that cannot take the line (a full non-blocking pipe) never fails the request.
-fn note_assumed_index(fragment: &str) {
+fn note_missing_index(fragment: &str, refused: bool) {
     use std::io::Write as _;
-    static NOTED: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
-        std::sync::OnceLock::new();
+    static NOTED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeSet<(bool, String)>>,
+    > = std::sync::OnceLock::new();
     let fragment = fireemu_core_types::codec::echo(fragment);
     let fragment = fragment.as_ref();
     let noted = NOTED.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()));
     let first = noted
         .lock()
-        .map(|mut set| set.insert(fragment.to_owned()))
+        .map(|mut set| {
+            set.len() < MAX_MISSING_INDEX_REPORTS && set.insert((refused, fragment.to_owned()))
+        })
         .unwrap_or(false);
     if first {
-        let _ = writeln!(
-            std::io::stderr(),
-            "[firestore] served without a configured composite index (emulator profile); production needs: {fragment}"
-        );
+        let context = if refused {
+            "missing composite index (strict profile); production needs"
+        } else {
+            "served without a configured composite index (emulator profile); production needs"
+        };
+        let _ = writeln!(std::io::stderr(), "[firestore] {context}: {fragment}");
     }
 }
 

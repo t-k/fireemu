@@ -889,6 +889,15 @@ async fn shutdown_aborts_an_active_task_and_its_retry_lifecycle() {
         .unwrap();
     let _ = wait_for_task_entries(&probe, 1).await;
 
+    assert!(
+        !runtime.is_idle_with_scope(true),
+        "active HTTP remains runnable"
+    );
+    assert_eq!(
+        runtime.task_idle_diagnostics()["waiting"][0]["reason"],
+        "activeHttp"
+    );
+
     tokio::time::timeout(Duration::from_secs(4), runtime.shutdown())
         .await
         .expect("shutdown aborts the active delivery without waiting for its retry deadline");
@@ -5562,8 +5571,21 @@ async fn virtual_task_exact_retry_expiry_retires_rate_wait_and_long_backoff() {
             .advance(LogicalDuration::from_seconds(10))
             .unwrap();
         let _ = wait_for_task_entries(&probe, 1).await;
-        // The fake response is recorded before its HTTP response reaches the attempt loop.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The probe precedes the HTTP response; wait for its stored retry transition.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while runtime.task_idle_diagnostics()["excluded"] != 1 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("failed attempt enters future retry backoff");
+        assert!(!runtime.is_idle());
+        assert!(
+            runtime.is_idle_with_scope(true),
+            "future backoff should not block scoped idle: {}",
+            runtime.task_idle_diagnostics()
+        );
+        assert_eq!(runtime.task_idle_diagnostics()["excluded"], 1);
         clock
             .lock()
             .unwrap()
@@ -6023,5 +6045,86 @@ exports.archivedV2=v2.onObjectArchived({bucket:'versioned-bucket'},(event)=>seen
     assert_eq!(
         observations[1]["event"]["type"],
         "google.cloud.storage.object.v1.archived"
+    );
+}
+
+#[tokio::test]
+async fn task_clock_rewind_notifies_runnable_idle_waiters_without_dispatch() {
+    let dir = std::env::temp_dir().join(format!("task-idle-rewind-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = start_task_runtime_using_clock(
+        &probe,
+        1,
+        |_| {
+            (
+                TaskRetryConfig::default(),
+                TaskRateLimits {
+                    max_concurrent_dispatches: 1,
+                    max_dispatches_per_second: 1.0,
+                },
+            )
+        },
+        Vec::new(),
+        clock.clone(),
+        fireemu_adapter_functions::application_clock::ApplicationClockPolicy {
+            tasks_virtual: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("due"))
+        .unwrap();
+    let notify = runtime.idle_notify();
+    let notified = notify.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+    assert!(
+        !runtime.is_idle_with_scope(true),
+        "initially due and blocked on empty tokens"
+    );
+    clock
+        .lock()
+        .unwrap()
+        .try_set_allow_backwards(
+            START
+                .checked_add(LogicalDuration::from_seconds(-1))
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        runtime.is_idle_with_scope(true),
+        "rewind makes the task future-only"
+    );
+    let observed = tokio::time::timeout(Duration::from_millis(250), notified).await;
+    assert!(!probe.exists(), "rewind does not dispatch the future task");
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        observed.is_ok(),
+        "clock observer must wake runnable idle waiters"
+    );
+}
+
+#[tokio::test]
+async fn explicit_clock_change_hook_notifies_idle_waiters() {
+    let (runtime, _) = start().await;
+    let notify = runtime.idle_notify();
+    let notified = notify.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+    runtime.on_clock_changed();
+    // Poll synchronously: the constructor's queued watch update must not mask this hook.
+    let observed = std::future::Future::poll(
+        notified.as_mut(),
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    )
+    .is_ready();
+    runtime.shutdown().await;
+    assert!(
+        observed,
+        "explicit clock hook must recheck scoped quiescence"
     );
 }

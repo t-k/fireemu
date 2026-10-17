@@ -1447,7 +1447,7 @@ fn init_force_refuses_a_symlink_destination_without_touching_its_target() {
 }
 
 fn config_schema_url() -> &'static str {
-    "https://fireemu.dev/spec/config/fireemu.schema.json"
+    "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json"
 }
 
 #[test]
@@ -1794,7 +1794,7 @@ fn a_canonical_config_live_loads_its_relative_firebase_json_reference() {
         &dir,
         "fireemu.json",
         r#"{
-  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "$schema": "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json",
   "schemaVersion": 1,
   "profile": "strict",
   "firebaseJson": "firebase.json",

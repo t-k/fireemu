@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fireemu.dev/spec/config/firebase-json.schema.json",
+  "$id": "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/firebase-json.schema.json",
   "title": "The firebase.json subset fireemu honours",
   "description": "Not a replacement for the official firebase-config schema: this describes exactly the shapes `fireemu --firebase-json` (or `--config`) reads, for the products fireemu serves. Keys of products it does not serve are permitted here and reported at startup -- as a notice, or as an error when --only asked for that product -- because refusing them in the schema would refuse most real projects. Cross-field rules that JSON Schema cannot express (duplicate codebases and databases, loopback-only hosts) are enforced by tools/config-schema-check and by the Rust loader.",
   "type": "object",

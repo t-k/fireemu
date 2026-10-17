@@ -109,8 +109,17 @@ struct QueuedTask {
     run_now: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ActivePhase {
+    Dispatch,
+    Concurrency,
+    Retry(TaskTime),
+    Rate(TaskTime),
+}
+
 #[derive(Debug)]
 struct ActiveTask {
+    phase: ActivePhase,
     retained_bytes: usize,
     name: Arc<str>,
 }
@@ -293,6 +302,7 @@ pub(crate) struct TaskScheduler {
     next_id: u64,
     queues: BTreeMap<String, QueueState>,
     outstanding: usize,
+    failed_total: u64,
     retained_bytes: usize,
     completed_names: VecDeque<(String, Arc<str>)>,
     completed_history_bytes: usize,
@@ -318,6 +328,7 @@ impl TaskScheduler {
             next_id: 0,
             queues,
             outstanding: 0,
+            failed_total: 0,
             retained_bytes: 0,
             completed_names: VecDeque::new(),
             completed_history_bytes: 0,
@@ -447,6 +458,7 @@ impl TaskScheduler {
                 queue.active.insert(
                     queued.id,
                     ActiveTask {
+                        phase: ActivePhase::Dispatch,
                         retained_bytes: queued.retained_bytes,
                         name: queued.name,
                     },
@@ -565,6 +577,7 @@ impl TaskScheduler {
         };
         state.completed_times.record(now);
         if failed {
+            self.failed_total = self.failed_total.saturating_add(1);
             state.failed_times.record(now);
         }
         self.outstanding = self.outstanding.saturating_sub(1);
@@ -632,6 +645,93 @@ impl TaskScheduler {
             state.tokens =
                 (state.tokens + 1.0).min(state.limits.max_dispatches_per_second.max(1.1));
         }
+    }
+
+    /// A stale coroutine cannot update a task accepted after reset.
+    pub(crate) fn set_phase(&mut self, dispatch: &Dispatch, phase: ActivePhase) {
+        if dispatch.generation != self.generation {
+            return;
+        }
+        if let Some(active) = self
+            .queues
+            .get_mut(&dispatch.queue)
+            .and_then(|queue| queue.active.get_mut(&dispatch.id))
+        {
+            active.phase = phase;
+        }
+    }
+
+    /// One projection drives both scoped waiting and bounded diagnostics. Due work remains
+    /// included even before the dispatch coroutine observes its wakeup.
+    pub(crate) fn idle_projection(&self, now: TaskTime, epoch: Option<i128>) -> Value {
+        let mut runnable = 0usize;
+        let mut excluded = 0usize;
+        let mut waiting = Vec::new();
+        let mut reasons = BTreeMap::<String, usize>::new();
+        let mut record = |function: &str,
+                          reason: &str,
+                          future: bool,
+                          deadline: Option<TaskTime>,
+                          schedule: Option<&str>| {
+            *reasons.entry(reason.to_owned()).or_default() += 1;
+            if future {
+                excluded += 1;
+            } else {
+                runnable += 1;
+            }
+            if waiting.len() < 32 {
+                waiting.push(json!({
+                    "queue": function, "function": function, "reason": reason,
+                    "excluded": future, "scheduleTime": schedule,
+                    "waitMillis": deadline.map(|value| value.saturating_duration_since(now).as_millis().to_string()),
+                    "elapsedDeadlineNanos": deadline.and_then(|value| match value { TaskTime::Virtual(nanos) => Some(nanos.to_string()), TaskTime::Real(_) => None }),
+                }));
+            }
+        };
+        for (function, queue) in &self.queues {
+            for queued in &queue.pending {
+                let future = !queued.run_now && !schedule_is_due(&queued.task, epoch);
+                let saturated = queue.active.len()
+                    >= usize::try_from(queue.limits.max_concurrent_dispatches)
+                        .unwrap_or(usize::MAX);
+                let (reason, deadline) = if future {
+                    ("scheduleTime", None)
+                } else if saturated {
+                    ("concurrencyLimit", None)
+                } else if queue.tokens < 1.0 {
+                    (
+                        "rateLimit",
+                        Some(queue.last_refill + TOKEN_REFRESH_INTERVAL),
+                    )
+                } else {
+                    ("ready", None)
+                };
+                record(
+                    function,
+                    reason,
+                    future,
+                    deadline,
+                    queued.task.schedule_time.as_deref(),
+                );
+            }
+            for active in queue.active.values() {
+                let (reason, future, deadline) = match active.phase {
+                    ActivePhase::Dispatch => ("activeHttp", false, None),
+                    ActivePhase::Concurrency => ("concurrencyLimit", false, None),
+                    ActivePhase::Retry(deadline) => {
+                        ("retryBackoff", now < deadline, Some(deadline))
+                    }
+                    ActivePhase::Rate(deadline) => ("rateLimit", false, Some(deadline)),
+                };
+                record(function, reason, future, deadline, None);
+            }
+        }
+        json!({
+            "runnable": runnable, "excluded": excluded,
+            "omitted": (runnable + excluded).saturating_sub(waiting.len()),
+            "waiting": waiting, "reasons": reasons, "failedTotal": self.failed_total,
+            "clock": match now { TaskTime::Real(_) => "real", TaskTime::Virtual(_) => "tasks" },
+        })
     }
 
     pub(crate) fn outstanding(&self) -> usize {
@@ -702,6 +802,7 @@ impl TaskScheduler {
         let now = now.into();
         self.generation = self.generation.wrapping_add(1);
         self.outstanding = 0;
+        self.failed_total = 0;
         self.retained_bytes = 0;
         self.completed_names.clear();
         self.completed_history_bytes = 0;
@@ -782,6 +883,150 @@ mod tests {
             schedule_time: None,
             dispatch_deadline_seconds: 60,
         }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn idle_projection_matches_reference_retry_phase(now in 0u64..10000, deadline in 0u64..10000, phase in 0u8..4) {
+            let start = Instant::now();
+            let mut scheduler = scheduler_with("hidden", None, start);
+            let (dispatches, _) = scheduler.dispatch_ready_at(start + Duration::from_secs(1), None, "demo", |_| Some(DEFAULT_REGION.into()), 1);
+            let until = super::TaskTime::Real(start + Duration::from_millis(deadline));
+            let active = match phase {
+                0 => super::ActivePhase::Dispatch,
+                1 => super::ActivePhase::Retry(until),
+                2 => super::ActivePhase::Rate(until),
+                _ => super::ActivePhase::Concurrency,
+            };
+            scheduler.set_phase(&dispatches[0], active);
+            let actual = scheduler.idle_projection((start + Duration::from_millis(now)).into(), None);
+            let excluded = phase == 1 && now < deadline;
+            proptest::prop_assert_eq!(actual["excluded"].as_u64(), Some(u64::from(excluded)));
+            proptest::prop_assert_eq!(actual["runnable"].as_u64(), Some(u64::from(!excluded)));
+        }
+
+    }
+
+    #[test]
+    fn idle_projection_is_bounded_and_run_now_keeps_rate_and_concurrency_waits() {
+        let start = Instant::now();
+        let epoch = nanos("2026-02-01T00:00:00Z");
+        let mut scheduler = TaskScheduler::from_manifest(
+            &two_queue_manifest(TaskRateLimits {
+                max_concurrent_dispatches: 1,
+                max_dispatches_per_second: 0.5,
+            }),
+            start,
+        );
+        for index in 0..40 {
+            let mut queued = task(&format!("secret-{index}"));
+            queued.schedule_time = Some("2026-02-01T00:30:00Z".into());
+            scheduler
+                .enqueue_at(
+                    if index % 2 == 0 { "a" } else { "b" },
+                    queued,
+                    TaskRetryConfig::default(),
+                    64,
+                    start,
+                )
+                .unwrap();
+        }
+        let before = scheduler.idle_projection(start.into(), Some(epoch));
+        assert_eq!(before["excluded"], 40);
+        assert_eq!(before["reasons"]["scheduleTime"], 40);
+        assert_eq!(before["waiting"].as_array().unwrap().len(), 32);
+        assert_eq!(before["omitted"], 8);
+        assert!(!before.to_string().contains("secret-"));
+        scheduler.run_now("a", None);
+        let released = scheduler.idle_projection(start.into(), Some(epoch));
+        assert_eq!(released["runnable"], 20);
+        assert_eq!(released["excluded"], 20);
+        assert_eq!(released["waiting"][0]["reason"], "rateLimit");
+        let (dispatches, _) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(2),
+            Some(epoch),
+            "demo",
+            |_| Some(DEFAULT_REGION.into()),
+            10,
+        );
+        assert_eq!(dispatches.len(), 1);
+        let active =
+            scheduler.idle_projection((start + Duration::from_secs(2)).into(), Some(epoch));
+        assert_eq!(active["runnable"], 20);
+        assert!(active["waiting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["reason"] == "concurrencyLimit"));
+        assert!(scheduler.finish_with_outcome_at(
+            "a",
+            dispatches[0].id,
+            dispatches[0].generation,
+            true,
+            start
+        ));
+        assert_eq!(
+            scheduler.idle_projection(start.into(), Some(epoch))["failedTotal"],
+            1
+        );
+        scheduler.reset(start);
+        assert_eq!(
+            scheduler.idle_projection(start.into(), Some(epoch))["failedTotal"],
+            0
+        );
+    }
+
+    #[test]
+    fn idle_projection_tracks_schedule_retry_rate_and_generation_boundaries() {
+        let start = Instant::now();
+        let epoch = nanos("2026-02-01T00:00:05Z");
+        let mut scheduler = scheduler_with("secret-payload", Some("2026-02-01T00:00:05Z"), start);
+        let future = scheduler.idle_projection(start.into(), Some(epoch - 1));
+        assert_eq!(future["excluded"], 1);
+        assert_eq!(future["runnable"], 0);
+        assert!(!future.to_string().contains("secret-payload"));
+        assert_eq!(
+            scheduler.idle_projection(start.into(), Some(epoch))["runnable"],
+            1
+        );
+        let (dispatches, _) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(1),
+            Some(epoch),
+            "demo",
+            |_| Some(DEFAULT_REGION.into()),
+            1,
+        );
+        let dispatch = &dispatches[0];
+        assert_eq!(
+            scheduler.idle_projection(start.into(), Some(epoch))["runnable"],
+            1
+        );
+        let deadline = super::TaskTime::Real(start + Duration::from_secs(5));
+        scheduler.set_phase(dispatch, super::ActivePhase::Retry(deadline));
+        for offset in 0..=6 {
+            let projection = scheduler
+                .idle_projection((start + Duration::from_secs(offset)).into(), Some(epoch));
+            assert_eq!(projection["runnable"], usize::from(offset >= 5));
+            assert_eq!(projection["excluded"], usize::from(offset < 5));
+        }
+        scheduler.set_phase(dispatch, super::ActivePhase::Rate(deadline));
+        assert_eq!(
+            scheduler.idle_projection(start.into(), Some(epoch))["runnable"],
+            1
+        );
+        scheduler.set_phase(dispatch, super::ActivePhase::Dispatch);
+        assert_eq!(
+            scheduler.idle_projection(start.into(), Some(epoch))["runnable"],
+            1
+        );
+        let old_generation = scheduler.generation;
+        scheduler.generation += 1;
+        scheduler.set_phase(dispatch, super::ActivePhase::Retry(deadline));
+        assert_eq!(
+            scheduler.idle_projection(start.into(), Some(epoch))["runnable"],
+            1
+        );
+        assert_ne!(old_generation, scheduler.generation);
     }
 
     #[test]

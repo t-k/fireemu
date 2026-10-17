@@ -40,6 +40,7 @@ use crate::http::{
     StreamCompletion, StreamStartError,
 };
 use crate::runner::{Invocation, InvokeOutcome, Runner, SpawnSpec};
+use crate::task_scheduler::ActivePhase;
 
 /// Default maximum schedule runs enqueued per clock advance and job (spec 11.6); the rest
 /// stays due and is enqueued as invocations complete, so nothing is discarded.
@@ -1503,6 +1504,8 @@ impl FunctionsRuntime {
                         break;
                     };
                     runtime.task_clock_wake.notify_waiters();
+                    // A rewind can turn the last runnable task into future-only work.
+                    runtime.idle.notify_waiters();
                     runtime.wake.notify_one();
                     if let Err(error) = runtime.sync_clock().await {
                         eprintln!("[functions] {error}");
@@ -1517,6 +1520,18 @@ impl FunctionsRuntime {
             crate::task_scheduler::TaskTime::Virtual(self.clock_snapshot().elapsed_nanos)
         } else {
             std::time::Instant::now().into()
+        }
+    }
+
+    fn task_projection_time(&self) -> (crate::task_scheduler::TaskTime, Option<i128>) {
+        if self.config.clock_policy.tasks_virtual {
+            let snapshot = self.clock_snapshot();
+            (
+                crate::task_scheduler::TaskTime::Virtual(snapshot.elapsed_nanos),
+                Some(snapshot.instant.as_nanos()),
+            )
+        } else {
+            (self.task_now(), self.task_epoch_nanos())
         }
     }
 
@@ -2966,6 +2981,7 @@ impl FunctionsRuntime {
                 "/{}/{}/{}",
                 dispatch.project, dispatch.region, dispatch.function
             );
+            self.set_task_phase(dispatch, ActivePhase::Dispatch);
             let attempt_started = self.task_now();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(task.dispatch_deadline_seconds),
@@ -2986,6 +3002,7 @@ impl FunctionsRuntime {
                             dispatch.generation,
                         );
                     }
+                    self.set_task_phase(dispatch, ActivePhase::Concurrency);
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     let retry_deadline = started.and_then(|first_delivery| {
                         task_retry_deadline(first_delivery, dispatch.retry, attempt)
@@ -3019,14 +3036,21 @@ impl FunctionsRuntime {
             let backoff = Duration::from_millis(dispatch.retry.backoff_millis(attempt));
             let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
             let backoff_deadline = self.task_now() + backoff;
-            self.wait_task_until(
-                retry_deadline.map_or(backoff_deadline, |expiry| expiry.min(backoff_deadline)),
-            )
-            .await;
+            let deadline =
+                retry_deadline.map_or(backoff_deadline, |expiry| expiry.min(backoff_deadline));
+            self.set_task_phase(dispatch, ActivePhase::Retry(deadline));
+            self.wait_task_until(deadline).await;
             if !self.wait_for_task_token(dispatch, retry_deadline).await {
                 return true;
             }
         }
+    }
+
+    fn set_task_phase(&self, dispatch: &crate::task_scheduler::Dispatch, phase: ActivePhase) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.task_scheduler.set_phase(dispatch, phase);
+        }
+        self.idle.notify_waiters();
     }
 
     async fn wait_for_task_token(
@@ -3060,6 +3084,7 @@ impl FunctionsRuntime {
                     if self.task_now() >= deadline {
                         return false;
                     }
+                    self.set_task_phase(dispatch, ActivePhase::Rate(deadline));
                     self.wait_task_until(deadline).await;
                 }
             }
@@ -3332,6 +3357,7 @@ impl FunctionsRuntime {
         use std::sync::atomic::Ordering;
 
         self.task_clock_wake.notify_waiters();
+        self.idle.notify_waiters();
         self.wake.notify_one();
 
         // Publish the request before trying the guard, including same-thread re-entry.
@@ -4219,6 +4245,12 @@ impl FunctionsRuntime {
     /// run due beyond the catch-up cap.
     #[must_use]
     pub fn is_idle(&self) -> bool {
+        self.is_idle_with_scope(false)
+    }
+
+    /// Runnable scope leaves future task schedules and retry backoff untouched.
+    #[must_use]
+    pub fn is_idle_with_scope(&self, runnable_only: bool) -> bool {
         self.inner
             .lock()
             .map(|i| {
@@ -4226,9 +4258,26 @@ impl FunctionsRuntime {
                     && i.running.is_empty()
                     && i.reserved_event_bytes == 0
                     && !i.catch_up_pending
-                    && i.task_scheduler.outstanding() == 0
+                    && if runnable_only {
+                        let (now, epoch) = self.task_projection_time();
+                        i.task_scheduler.idle_projection(now, epoch)["runnable"] == 0
+                    } else {
+                        i.task_scheduler.outstanding() == 0
+                    }
             })
             .unwrap_or(true)
+    }
+
+    /// Bounded task phase diagnostics without payloads or request metadata.
+    #[must_use]
+    pub fn task_idle_diagnostics(&self) -> Value {
+        self.inner.lock().map_or_else(
+            |_| json!({}),
+            |inner| {
+                let (now, epoch) = self.task_projection_time();
+                inner.task_scheduler.idle_projection(now, epoch)
+            },
+        )
     }
 
     /// Returns the exact source-event ownership projection without payload contents.

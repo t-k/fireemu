@@ -1193,6 +1193,8 @@ pub struct RuntimeConfig {
     /// Whether `--hub-port` or `emulators.hub` pinned the Hub address. A busy default port
     /// only disables the Hub; a busy explicit one is an error.
     pub hub_addr_explicit: bool,
+    /// CLI-only opt-in to an OS-assigned Hub port; numeric zero remains disabled.
+    pub hub_auto_port: bool,
     /// Emulator UI bind address (`emulators.ui`). Only the port is honoured; the UI listener
     /// binds loopback.
     pub ui_addr: String,
@@ -1615,6 +1617,7 @@ impl Default for RuntimeConfig {
             pubsub_enabled: false,
             hub_addr: format!("127.0.0.1:{DEFAULT_HUB_PORT}"),
             hub_addr_explicit: false,
+            hub_auto_port: false,
             ui_addr: format!("127.0.0.1:{DEFAULT_UI_PORT}"),
             ui_enabled: true,
             ui_addr_explicit: false,
@@ -3683,7 +3686,9 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "daemon",
 ];
 
-pub const CANONICAL_SCHEMA_URL: &str = "https://fireemu.dev/spec/config/fireemu.schema.json";
+pub const CANONICAL_SCHEMA_URL: &str =
+    "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json";
+const LEGACY_SCHEMA_URL: &str = "https://fireemu.dev/spec/config/fireemu.schema.json";
 
 /// The Firebase project configuration composed by a canonical fireemu configuration.
 /// Its path is resolved by the CLI because that layer knows which file contained this JSON.
@@ -4699,8 +4704,25 @@ impl RuntimeConfig {
     }
 
     /// Builds the runtime config from parsed JSON.
-    #[allow(clippy::too_many_lines)]
     pub fn from_json(json: &Value) -> Result<Self, ConfigError> {
+        let cfg = Self::inspect_json(json)?;
+        cfg.validate_startup()?;
+        Ok(cfg)
+    }
+
+    /// Checks requirements that are only needed when starting a daemon.
+    pub fn validate_startup(&self) -> Result<(), ConfigError> {
+        if self.functions_clock.any_virtual() && !self.clock_start_pinned {
+            return Err(ConfigError(
+                "functions.clock virtual policies require daemon.clockStart".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Resolves configuration for inspection while retaining all static shape checks.
+    #[allow(clippy::too_many_lines)]
+    pub fn inspect_json(json: &Value) -> Result<Self, ConfigError> {
         let obj = json
             .as_object()
             .ok_or_else(|| ConfigError("config must be a JSON object".into()))?;
@@ -4710,7 +4732,10 @@ impl RuntimeConfig {
             }
         }
         if let Some(schema) = obj.get("$schema") {
-            if schema.as_str() != Some(CANONICAL_SCHEMA_URL) {
+            if !matches!(
+                schema.as_str(),
+                Some(CANONICAL_SCHEMA_URL | LEGACY_SCHEMA_URL)
+            ) {
                 return Err(ConfigError(format!(
                     "$schema must be {CANONICAL_SCHEMA_URL:?}"
                 )));
@@ -5339,11 +5364,6 @@ impl RuntimeConfig {
                 .as_object()
                 .ok_or_else(|| ConfigError("appCheck must be an object".to_owned()))?;
             cfg.app_check = Self::parse_app_check(app_check)?;
-        }
-        if cfg.functions_clock.any_virtual() && !cfg.clock_start_pinned {
-            return Err(ConfigError(
-                "functions.clock virtual policies require daemon.clockStart".into(),
-            ));
         }
         cfg.functions_clock
             .validate(cfg.clock_start)

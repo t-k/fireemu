@@ -1211,6 +1211,57 @@ fn decide_find_nearest(query: &Query, indexes: &IndexSet, ctx: PlanningContext) 
     )
 }
 
+/// Every distinct missing index of a validated canonical query, in DNF planning order.
+/// This supplements diagnostics without changing the planner's first refusal. Callers apply
+/// the same query and DNF limits as for [`plan_scans`] before collecting requirements.
+#[must_use]
+pub fn missing_requirements(
+    query: &Query,
+    aggregations: &[Aggregation],
+    indexes: &IndexSet,
+    ctx: &PlanningContext,
+) -> Vec<IndexDefinition> {
+    let Some(collection) = query.scope.collection_id() else {
+        return Vec::new();
+    };
+    let group = query.scope.all_descendants();
+    let query = if query.find_nearest.is_some() {
+        nearest_with_aggregation_fields(query, aggregations)
+    } else {
+        query.clone()
+    };
+    let order = query.effective_order_by();
+    let mut missing = Vec::new();
+    for disjunction in query.dnf() {
+        let decision = if let Some(nearest) = &query.find_nearest {
+            decide_nearest_disjunct(
+                &disjunction,
+                &order,
+                nearest,
+                indexes,
+                collection,
+                group,
+                *ctx,
+            )
+        } else {
+            let requirement = if aggregations.is_empty() {
+                requirement_for(&disjunction, &order)
+            } else {
+                requirement_for_aggregation(&disjunction, &order, aggregations)
+            };
+            decide_disjunct(&requirement, indexes, collection, group, *ctx)
+        };
+        if let DisjunctDecision::Missing(requirement) | DisjunctDecision::Assumed(requirement) =
+            decision
+        {
+            if !missing.contains(&requirement) {
+                missing.push(requirement);
+            }
+        }
+    }
+    missing
+}
+
 /// The index scans of each DNF disjunct of a served query, in [`Query::dnf`] order, as the
 /// planner chose them (an assumed index stands for itself). `None` for a query no index
 /// plan describes (kindless) or one that is not served. `aggregations` is empty for a plain

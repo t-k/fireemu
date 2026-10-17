@@ -119,8 +119,8 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     ),
     opt(
         &["--hub-port"],
-        Value::Required("<n>"),
-        "Emulator Hub port. Default: 4400.",
+        Value::Required("<n|auto>"),
+        "Emulator Hub port; auto assigns an available port, 0 disables it. Default: 4400.",
     ),
     opt(
         &["--logging-port"],
@@ -214,6 +214,10 @@ const EXPORT_OPTIONS: &[OptionSpec] = &[
 ];
 
 const DOCTOR_OPTIONS: &[OptionSpec] = &[opt(
+    &["--export-dir"],
+    Value::Required("path"),
+    "Inspect an export destination and its ancestors without starting a daemon or changing files. Export checks again when it writes. Cannot be combined with --connect.",
+), opt(
     &["--connect"],
     Value::Required("http://127.0.0.1:<port>"),
     "Also report what a running suite says, through its control URL (the control port is printed at startup). Default: only the offline report.",
@@ -301,7 +305,7 @@ impl Topic {
             Self::Up => "  fireemu up [options]\n  fireemu emulators:start [options]\n",
             Self::Exec => "  fireemu exec [options] \"shell script\"\n  fireemu exec [options] -- <command...>\n  fireemu emulators:exec [options] \"shell script\"\n  fireemu emulators:exec [options] -- <command...>\n",
             Self::Export => "  fireemu emulators:export <dir> [options]\n",
-            Self::Doctor => "  fireemu doctor [--connect <control url>]\n",
+            Self::Doctor => "  fireemu doctor [--connect <control url> | --export-dir <path>]\n",
             Self::Capabilities => "  fireemu capabilities [options]\n",
         }
     }

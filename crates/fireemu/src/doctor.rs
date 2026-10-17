@@ -251,6 +251,28 @@ pub fn run() -> std::process::ExitCode {
     }
 }
 
+/// Inspects an export destination without starting a daemon or modifying the filesystem.
+pub fn run_export_dir(path: &Path) -> std::process::ExitCode {
+    let result = fireemu_export_publication::preflight(path)
+        .and_then(|()| crate::import_export::may_overwrite(path));
+    match result {
+        Ok(()) => {
+            println!(
+                "export destination: {} (preflight passed; checked again when exporting)",
+                path.display()
+            );
+            std::process::ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!(
+                "export destination: {}: {error}\nChoose a dedicated directory whose ancestors are owned by you or root and are not group/world writable; for example, a private directory below your home. This check does not change permissions.",
+                path.display()
+            );
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 /// `doctor --connect <control url>`: the offline report followed by what a running daemon
 /// retains (`GET /v1/sessions/default/resources`), one line per service. An explicit mode, so
 /// the plain `doctor` stays offline; the control API must be loopback.

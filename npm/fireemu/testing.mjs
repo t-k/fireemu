@@ -55,6 +55,7 @@ function endpoints(descriptor,control){
 /** Create an independent emulator world; no method changes the parent's environment. */
 export async function createTestWorld(options={}){
   options={...options,nodePathExcludes:Array.isArray(options.nodePathExcludes)?[...options.nodePathExcludes]:options.nodePathExcludes,config:typeof options.config==='object'?structuredClone(options.config):options.config,services:options.services?[...options.services]:undefined,env:{...(options.env??process.env)},clock:options.clock?{...options.clock}:undefined};
+  if(options.hub!==undefined&&typeof options.hub!=='boolean')throw TypeError('hub must be a boolean');
   if(options.ui!==undefined&&typeof options.ui!=='boolean')throw TypeError('ui must be a boolean');
   const binary=resolveBinary(options.binaryPath?resolve(options.binaryPath):undefined);
   if(!binary)throw Error('fireemu could not start a test world: install the platform package or supply binaryPath');
@@ -94,7 +95,8 @@ export async function createTestWorld(options={}){
     const prepared=await prepareGeneration(snapshot,generationDirectory);
     const readyFile=join(generationDirectory,'ready.json');
     const args=['up','--config',prepared.configPath,'--project',snapshot.config.daemon.authProject,'--only',services.join(','),'--ready-file',readyFile,'--owner-stdin','--log-verbosity','quiet'];
-    for(const name of ['firestore','http','storage','functions','eventarc','tasks','pubsub','hub','logging'])args.push(`--${name}-port`,'0');
+    for(const name of ['firestore','http','storage','functions','eventarc','tasks','pubsub','logging'])args.push(`--${name}-port`,'0');
+    args.push('--hub-port',options.hub?'auto':'0');
     args.push('--ui-port',options.ui?'auto':'0');
     if(prepared.seed)args.push('--import',prepared.seed);
     const temporary=join(generationDirectory,'tmp');

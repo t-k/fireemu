@@ -77,7 +77,7 @@ await withTestWorld(settings, async world => {
 });
 ```
 
-Each world owns one daemon, OS-assigned service ports, a control token, private temporary directories and a creation snapshot of configuration, Rules, indexes, Functions sources, dependency links and optional import data. Even the same project ID is independent across worlds. Hub and logging listeners are disabled in this helper. The UI is disabled by default and can be enabled explicitly with `ui: true`. Defaults are a pinned `2026-01-01T00:00:00Z`, seed 1, virtual Date/Tasks and native JavaScript timers.
+Each world owns one daemon, OS-assigned service ports, a control token, private temporary directories and a creation snapshot of configuration, Rules, indexes, Functions sources, dependency links and optional import data. Even the same project ID is independent across worlds. Logging is disabled in this helper. Hub and UI listeners are disabled by default and can be enabled explicitly with `hub: true` and `ui: true`, respectively. Defaults are a pinned `2026-01-01T00:00:00Z`, seed 1, virtual Date/Tasks and native JavaScript timers.
 
 `config` accepts a configuration object or a path to `fireemu.toml`, `fireemu.json` or `firebase.json`. TOML is parsed by the same native loader as the CLI (including case-insensitive `.toml` extensions); keep the npm helper and native binary at the same version. Canonical resource paths remain relative to `cwd`, while `firebaseJson` is relative to the configuration file and its resource paths are relative to that Firebase file. You can reuse `fireemu init` output directly: `createTestWorld({ cwd: process.cwd(), config: 'fireemu.toml' })`. In v0.23.0 the helper accepts only JSON files or objects; when staying on that release, keep JSON as the single configuration source and pass its path explicitly rather than maintaining a TOML copy.
 
@@ -199,3 +199,32 @@ await withTestWorld({ services: ['auth'], clockStart: new Date(start).toISOStrin
 ```
 
 Use the secret's actual period and matching algorithm/digit count. Keep invalid-code responses generic; this recipe does not add externally visible distinctions between an expired, incorrect or reused code.
+
+
+## Export and import test data
+
+Enable the auxiliary Hub listener with `hub: true` to use the existing CLI export command from `world.run`. Hub is not a product name in `services`. The helper binds an OS-assigned port (`--hub-port auto`); numeric `--hub-port 0` still disables Hub. Configuration-file Hub ports do not override this helper option.
+
+```js
+const world = await createTestWorld({ hub: true, services: ['auth', 'firestore', 'storage'] });
+try {
+  // Use an absolute caller-owned path outside world.directory.
+  await world.run('fireemu', [
+    'emulators:export', exportPath, '--project', world.projectId,
+  ]);
+} finally {
+  await world.dispose();
+}
+const restored = await createTestWorld({ import: exportPath, services: ['auth', 'firestore', 'storage'] });
+try {
+  // Connect fresh clients through restored.endpoints or restored.run(...).
+} finally {
+  await restored.dispose();
+}
+```
+
+Pass `--project` explicitly: the export command does not infer it from `GCLOUD_PROJECT`. If using a development binary, pass its absolute path to both `binaryPath` and `world.run`. `world.endpoints.hub` and `world.environment.FIREBASE_EMULATOR_HUB` expose the enabled listener. Each generation also owns a private Hub locator containing its capability token, used automatically by commands launched through `world.run`. Worlds sharing a project ID still have independent locators, tokens, endpoints and data.
+
+Reset retires the old listener and locator and creates fresh credentials. Import inputs are copied at creation, so subsequent edits or removal of the caller's export directory do not change reset behavior. Dispose removes world-owned files and listeners; exports placed outside `world.directory` remain caller-owned. Export security and I/O failures reject `world.run` with the command’s exit status and error output.
+
+This export covers Auth users and password credentials, Firestore documents, and Storage object bytes and metadata. It is not a whole-world snapshot: App Check state, virtual clocks, Functions process state and validity of previously issued tokens are not preserved by this workflow.

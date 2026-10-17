@@ -1790,7 +1790,7 @@ fn federated_only_account_export_does_not_invent_an_email_link_provider() {
 }
 
 #[test]
-fn api_created_password_account_keeps_password_provider_without_hash() {
+fn api_created_password_account_authenticates_after_two_export_round_trips() {
     let dir = scratch("api-password-auth-round-trip");
     let source = copy_fixture("official-multiproduct", &dir);
     let out = dir.join("out");
@@ -1800,7 +1800,13 @@ fn api_created_password_account_keeps_password_provider_without_hash() {
         .arg("--export-on-exit")
         .arg(&out)
         .args(["--", "/bin/sh", "-c"])
-        .arg(r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}'"#)
+        .arg(r#"
+set -eu
+base="http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1"
+for operation in signUp signInWithPassword; do
+    curl -fsS -X POST "$base/accounts:$operation?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}' >/dev/null
+done
+"#)
         .output()
         .unwrap();
     let log = text(&output);
@@ -1826,7 +1832,8 @@ fn api_created_password_account_keeps_password_provider_without_hash() {
         .arg(&out)
         .arg("--export-on-exit")
         .arg(&again)
-        .args(["--", "true"])
+        .args(["--", "/bin/sh", "-c"])
+        .arg(r#"curl -fsS -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}' >/dev/null"#)
         .output()
         .unwrap();
     let second_log = text(&second);
@@ -1843,6 +1850,84 @@ fn api_created_password_account_keeps_password_provider_without_hash() {
         .expect("the password account is re-exported");
     assert_eq!(user["providerUserInfo"][0]["providerId"], "password");
     assert!(user.get("emailLinkSignin").is_none(), "{user}");
+    let third = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&again)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(r#"curl -fsS -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}' >/dev/null"#)
+        .output()
+        .unwrap();
+    assert!(third.status.success(), "{}", text(&third));
+}
+
+#[test]
+fn native_admin_and_tenant_passwords_survive_fresh_daemon_restore() {
+    let dir = scratch("native-admin-tenant-passwords");
+    let source = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        source.join("auth_export/accounts-customer-a.json"),
+        r#"{"kind":"identitytoolkit#DownloadAccountResponse","users":[]}"#,
+    )
+    .unwrap();
+    let out = dir.join("out");
+    let create = r#"
+set -eu
+base="http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1"
+post() { curl -fsS -X POST "$base/$1" -H 'Content-Type: application/json' -d "$2" >/dev/null; }
+admin() { curl -fsS -X POST "$base/$1" -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' -d "$2" >/dev/null; }
+admin projects/demo-export/accounts '{"localId":"native-admin","email":"admin@example.com","password":"admin-password"}'
+post 'accounts:signUp?key=fake-api-key' '{"tenantId":"customer-a","email":"native-tenant@example.com","password":"tenant-password"}'
+admin projects/demo-export/accounts:update '{"localId":"user-password","password":"changed-password"}'
+post 'accounts:signInWithPassword?key=fake-api-key' '{"email":"admin@example.com","password":"admin-password"}'
+post 'accounts:signInWithPassword?key=fake-api-key' '{"tenantId":"customer-a","email":"native-tenant@example.com","password":"tenant-password"}'
+"#;
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "/bin/sh", "-c"])
+        .arg(create)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let changed_email = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-password")
+        .unwrap()["email"]
+        .as_str()
+        .unwrap();
+    let probe = format!(
+        r#"
+set -eu
+base="http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1"
+post() {{ curl -fsS -X POST "$base/accounts:signInWithPassword?key=fake-api-key" -H 'Content-Type: application/json' -d "$1" >/dev/null; }}
+post '{{"email":"admin@example.com","password":"admin-password"}}'
+post '{{"tenantId":"customer-a","email":"native-tenant@example.com","password":"tenant-password"}}'
+post '{{"email":"{changed_email}","password":"changed-password"}}'
+if post '{{"email":"native-tenant@example.com","password":"tenant-password"}}'; then exit 1; fi
+if post '{{"tenantId":"customer-a","email":"native-tenant@example.com","password":"wrong-password"}}'; then exit 1; fi
+"#
+    );
+    let again = dir.join("again");
+    for (input, output) in [(&out, &again), (&again, &dir.join("third"))] {
+        let result = exec()
+            .args(["--only", "auth", "--import"])
+            .arg(input)
+            .arg("--export-on-exit")
+            .arg(output)
+            .args(["--", "/bin/sh", "-c"])
+            .arg(&probe)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}", text(&result));
+    }
 }
 
 #[test]
@@ -1875,6 +1960,7 @@ fn removed_password_provider_is_not_reintroduced_by_export_round_trip() {
         .find(|user| user["localId"] == "user-password")
         .expect("the updated account is exported");
     assert!(user.get("passwordHash").is_none(), "{user}");
+    assert!(user.get("fireemuImportedPassword").is_none());
     assert!(user["providerUserInfo"]
         .as_array()
         .unwrap()
@@ -2879,17 +2965,23 @@ fn export_on_exit_into_a_sealed_directory(name: &str, command: &[&str]) -> (Outp
     use std::os::unix::fs::PermissionsExt as _;
 
     let dir = scratch(name);
-    // The export target's parent has to be created at exit, inside a directory this user
-    // cannot write to, so the export fails after the command has already run.
+    // Seal the parent only after startup so the exit-time check, rather than preflight, rejects publication.
     let sealed = dir.join("sealed");
     std::fs::create_dir_all(&sealed).unwrap();
     let target = sealed.join("inner").join("out");
-    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o500)).unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     let output = exec()
         .arg("--export-on-exit")
         .arg(&target)
-        .arg("--")
+        .args([
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"chmod 500 "$1"; shift; exec "$@""#,
+            "fireemu",
+        ])
+        .arg(&sealed)
         .args(command)
         .output()
         .unwrap();

@@ -2649,3 +2649,92 @@ fn the_default_hook_has_no_task_queues_and_releases_nothing() {
     assert_eq!(r.body["enqueued"], true, "{}", r.body);
     assert!(r.body.get("released").is_none());
 }
+
+#[tokio::test]
+async fn await_idle_validates_and_echoes_scope_even_without_functions() {
+    let state = state(Arc::new(AtomicUsize::new(0)));
+    for scope in [json!("unknown"), json!(true), json!(null)] {
+        let response =
+            fireemu_adapter_http::control::await_idle(&state, &json!({"scope": scope})).await;
+        assert_eq!(response.status, 400);
+    }
+    for scope in ["all", "runnable"] {
+        let response =
+            fireemu_adapter_http::control::await_idle(&state, &json!({"scope": scope})).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body["scope"], scope);
+    }
+    let response = fireemu_adapter_http::control::await_idle(&state, &json!({})).await;
+    assert_eq!(response.body["scope"], "all");
+}
+
+struct ScopedFunctions {
+    future_only: std::sync::atomic::AtomicBool,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl fireemu_adapter_http::control::FunctionsHook for ScopedFunctions {
+    fn on_clock_changed(&self) {}
+    fn run_schedule(&self, _: &str) -> Result<(), fireemu_adapter_http::control::RunScheduleError> {
+        Ok(())
+    }
+    fn is_idle(&self) -> bool {
+        false
+    }
+    fn is_idle_with_scope(&self, scope: fireemu_adapter_http::control::IdleScope) -> bool {
+        scope == fireemu_adapter_http::control::IdleScope::Runnable
+            && self.future_only.load(Ordering::SeqCst)
+    }
+    fn idle_diagnostics(&self, _: fireemu_adapter_http::control::IdleScope) -> Value {
+        json!({"excluded": 1, "failedTotal": 2, "waiting": [{"excluded": true, "reason": "retryBackoff"}]})
+    }
+    fn idle_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.notify.clone()
+    }
+    fn status(&self) -> Value {
+        json!({"tasksInFlight": 1})
+    }
+    fn publish(&self, _: &str, _: &[Value]) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn project(&self) -> String {
+        "demo-app".into()
+    }
+}
+
+#[tokio::test]
+async fn await_idle_scope_keeps_default_and_wakes_on_future_retry_transition() {
+    let mut state = state(Arc::new(AtomicUsize::new(0)));
+    let functions = Arc::new(ScopedFunctions {
+        future_only: std::sync::atomic::AtomicBool::new(false),
+        notify: Arc::new(tokio::sync::Notify::new()),
+    });
+    state.functions = Some(functions.clone());
+    let response =
+        fireemu_adapter_http::control::await_idle(&state, &json!({"timeoutSeconds": 0})).await;
+    assert_eq!(response.status, 504);
+    assert_eq!(response.body["error"]["status"]["tasks"]["excluded"], 0);
+    assert_eq!(response.body["error"]["status"]["tasks"]["future"], 1);
+    assert_eq!(
+        response.body["error"]["status"]["tasks"]["waiting"][0]["excluded"],
+        false
+    );
+    assert!(response.body.to_string().contains("failedTotal"));
+    let advance = async {
+        tokio::task::yield_now().await;
+        functions.future_only.store(true, Ordering::SeqCst);
+        functions.notify.notify_waiters();
+    };
+    let request = json!({"scope": "runnable", "timeoutSeconds": 1});
+    let (response, ()) = tokio::join!(
+        fireemu_adapter_http::control::await_idle(&state, &request),
+        advance
+    );
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body["scope"], "runnable");
+    assert_eq!(response.body["tasks"]["excluded"], 1);
+    assert_eq!(response.body["tasks"]["waiting"][0]["excluded"], true);
+    let response =
+        fireemu_adapter_http::control::await_idle(&state, &json!({"timeoutSeconds": 0})).await;
+    assert_eq!(response.status, 504);
+}

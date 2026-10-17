@@ -301,3 +301,134 @@ proptest! {
         }
     }
 }
+
+/// All diagnostics are the missing set, not merely the first branch's refusal.
+#[test]
+fn missing_requirements_preserve_aggregation_fields() {
+    use fireemu_core_firestore::index::missing_requirements;
+    use fireemu_core_firestore::store::Aggregation;
+    let query = Query::new(QueryScope::collection(None, tasks()))
+        .with_filter(FilterExpr::Or(vec![
+            field("content", FieldOp::Equal, Value::String("foo".into())),
+            field("status", FieldOp::Equal, Value::String("published".into())),
+        ]))
+        .with_order(OrderClause {
+            field: fp("createdAt"),
+            direction: Direction::Descending,
+        })
+        .canonicalize()
+        .unwrap();
+    let aggregations = [Aggregation::Sum(fp("amount"))];
+    let requirements = missing_requirements(
+        &query,
+        &aggregations,
+        &IndexSet::default(),
+        &ctx(
+            FirestoreEdition::Standard,
+            IndexValidationPolicy::Production,
+        ),
+    );
+    assert_eq!(requirements.len(), 2);
+    assert!(requirements.iter().all(|requirement| requirement
+        .fields
+        .iter()
+        .any(|field| field.path == fp("amount"))));
+    let mut indexes = IndexSet::default();
+    for requirement in requirements {
+        indexes.add_composite(requirement);
+    }
+    assert!(missing_requirements(
+        &query,
+        &aggregations,
+        &indexes,
+        &ctx(
+            FirestoreEdition::Standard,
+            IndexValidationPolicy::Production
+        )
+    )
+    .is_empty());
+}
+
+proptest! {
+    #[test]
+    fn missing_requirements_match_the_unconfigured_field_set(
+        branches in proptest::collection::vec(0u8..8, 1..25),
+        configured in any::<u8>(),
+        report in any::<bool>(),
+    ) {
+        use fireemu_core_firestore::index::missing_requirements;
+        let query = Query::new(QueryScope::collection(None, tasks()))
+            .with_filter(FilterExpr::Or(branches.iter().enumerate().map(|(value, n)| field(&format!("field{n}"), FieldOp::Equal, Value::Integer(i64::try_from(value).unwrap()))).collect()))
+            .with_order(OrderClause { field: fp("createdAt"), direction: Direction::Descending })
+            .canonicalize().unwrap();
+        let context = ctx(FirestoreEdition::Standard, if report { IndexValidationPolicy::ProductionReport } else { IndexValidationPolicy::Production });
+        let expected_index = |n| IndexDefinition {
+            collection_group: tasks(), query_scope: IndexQueryScope::Collection,
+            fields: vec![
+                IndexField { path: fp(&format!("field{n}")), mode: IndexFieldMode::Ascending },
+                IndexField { path: fp("createdAt"), mode: IndexFieldMode::Descending },
+                IndexField { path: fp("__name__"), mode: IndexFieldMode::Descending },
+            ],
+        };
+        let mut indexes = IndexSet::default();
+        for n in 0..8 { if configured & (1 << n) != 0 { indexes.add_composite(expected_index(n)); } }
+        let mut expected = Vec::new();
+        let mut branches = branches;
+        branches.sort_unstable();
+        for n in branches {
+            let index = expected_index(n);
+            if configured & (1 << n) == 0 && !expected.contains(&index) { expected.push(index); }
+        }
+        let actual = missing_requirements(&query, &[], &indexes, &context);
+        prop_assert_eq!(&actual, &expected);
+        let decision = decide(&query, &indexes, &context);
+        if let Some(first) = actual.first() {
+            let representative = match decision {
+                IndexDecision::MissingRequired { requirement } | IndexDecision::AssumedIndex { requirement } => requirement,
+                other => panic!("unexpected decision: {other:?}"),
+            };
+            prop_assert_eq!(&representative, first);
+        }
+    }
+}
+
+#[test]
+fn missing_requirements_keep_vector_and_scope_semantics() {
+    use fireemu_core_firestore::index::missing_requirements;
+    use fireemu_core_firestore::query::{DistanceMeasure, FindNearest};
+    let query = Query::new(QueryScope::collection(None, tasks()))
+        .with_filter(FilterExpr::Or(vec![
+            field("content", FieldOp::Equal, Value::String("foo".into())),
+            field("status", FieldOp::Equal, Value::String("published".into())),
+        ]))
+        .with_find_nearest(FindNearest {
+            vector_field: fp("embedding"),
+            query_vector: vec![0.0, 1.0],
+            distance_measure: DistanceMeasure::Cosine,
+            limit: 5,
+            distance_result_field: None,
+            distance_threshold: None,
+        })
+        .canonicalize()
+        .unwrap();
+    let context = ctx(
+        FirestoreEdition::Standard,
+        IndexValidationPolicy::Production,
+    );
+    let requirements = missing_requirements(&query, &[], &IndexSet::default(), &context);
+    assert_eq!(requirements.len(), 2);
+    for requirement in &requirements {
+        assert_eq!(
+            requirement.fields.last().unwrap().mode,
+            IndexFieldMode::Vector { dimension: 2 }
+        );
+    }
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(requirements[0].clone());
+    assert_eq!(
+        missing_requirements(&query, &[], &indexes, &context),
+        requirements[1..]
+    );
+    let kindless = Query::new(QueryScope::kindless_all_descendants(None));
+    assert!(missing_requirements(&kindless, &[], &indexes, &context).is_empty());
+}

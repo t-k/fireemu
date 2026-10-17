@@ -145,7 +145,7 @@ step("init creates a strict canonical configuration through the packaged launche
   mkdirSync(initialized);
   run(process.execPath, [launcher, "init", "--yes"], { cwd: initialized });
   const text = readFileSync(join(initialized, "fireemu.toml"), "utf8");
-  if (!text.startsWith("#:schema https://fireemu.dev/spec/config/fireemu.schema.json\n")) {
+  if (!text.startsWith("#:schema https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json\n")) {
     throw new Error("init did not write a TOML schema directive");
   }
   const generated = JSON.parse(run(process.execPath, [launcher, "config", "show", "--json"], { cwd: initialized }).stdout);

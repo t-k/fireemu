@@ -8,6 +8,19 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- Test worlds can opt into an isolated export Hub with `hub: true`, export Auth/Firestore/Storage state, and restore it into fresh worlds.
+- `awaitIdle` accepts `scope: "runnable"` to exclude future task schedules and retry delays while retaining due and active work. Task diagnostics explain waiting phases and deadlines.
+- `doctor --export-dir` inspects export destination safety without changing the filesystem. Export-on-exit destinations are checked before startup.
+
+### Fixed
+
+- Auth export/import preserves native password credentials after account creation, password changes, and resets.
+- Capability inspection accepts an unpinned virtual clock with a warning while startup retains its clock requirement and all commands retain static configuration validation.
+- OR queries report all distinct missing branch indexes in supplementary diagnostics while preserving the SDK error format.
+- Generated configuration schema URLs point to the repository's published schema; existing `fireemu.dev` annotations remain accepted for compatibility.
+
 ## [0.25.0] - 2026-10-17
 
 ### Added

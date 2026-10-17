@@ -5779,6 +5779,18 @@ impl FunctionsHook for Hook {
         self.0.is_idle()
     }
 
+    fn is_idle_with_scope(&self, scope: fireemu_adapter_http::control::IdleScope) -> bool {
+        self.0
+            .is_idle_with_scope(scope == fireemu_adapter_http::control::IdleScope::Runnable)
+    }
+
+    fn idle_diagnostics(
+        &self,
+        _scope: fireemu_adapter_http::control::IdleScope,
+    ) -> serde_json::Value {
+        self.0.task_idle_diagnostics()
+    }
+
     fn idle_notify(&self) -> Arc<tokio::sync::Notify> {
         self.0.idle_notify()
     }

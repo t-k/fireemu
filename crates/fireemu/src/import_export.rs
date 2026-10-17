@@ -3580,9 +3580,7 @@ fn export_auth(
     Ok(())
 }
 
-/// The fireemu-only account member that carries a foreign hash `accounts:batchCreate`
-/// imported (the Identity Toolkit document has no algorithm field for it), so an export and
-/// restore keep the credential instead of dropping it (external review 2026-09-24).
+/// The fireemu-only account member carrying native and imported foreign hashes with their algorithm parameters, which the Identity Toolkit export document cannot describe.
 const IMPORTED_PASSWORD_MEMBER: &str = "fireemuImportedPassword";
 
 fn imported_password_json(
@@ -3635,28 +3633,26 @@ fn exported_account(
     user: &fireemu_core_auth::store::UserRecord,
     tenant_id: Option<&str>,
 ) -> UserRecord {
-    let (password_hash, salt) = match store
+    use fireemu_core_auth::store::{ExportablePassword, PasswordDigest};
+    let (password_hash, salt, imported_extra) = match store
         .password_digest(&user.local_id)
-        .and_then(fireemu_core_auth::store::PasswordDigest::emulator_form)
+        .map(PasswordDigest::export_form)
     {
-        Some((salt, password)) => (
+        Some(ExportablePassword::Emulator { salt, password }) => (
             Some(fake_hash::encode(salt, password)),
             Some(salt.to_owned()),
+            Vec::new(),
         ),
-        None => (None, None),
-    };
-    // A foreign hash `accounts:batchCreate` imported travels in the fireemu-only member.
-    let imported_extra = store
-        .password_digest(&user.local_id)
-        .filter(|digest| digest.emulator_form().is_none())
-        .and_then(fireemu_core_auth::store::PasswordDigest::imported_hash)
-        .map(|hash| {
+        Some(ExportablePassword::Hash(hash)) => (
+            None,
+            None,
             vec![(
                 IMPORTED_PASSWORD_MEMBER.to_owned(),
-                imported_password_json(hash),
-            )]
-        })
-        .unwrap_or_default();
+                imported_password_json(&hash),
+            )],
+        ),
+        None => (None, None, Vec::new()),
+    };
     let has_password = password_hash.is_some() || store.has_password(&user.local_id);
     let email_link_signin =
         user.provider == fireemu_core_auth::store::Provider::EmailLink && !has_password;
@@ -6749,5 +6745,205 @@ mod provider_seed_account_boundary_tests {
             target.restore_provider_config_seeds();
             assert!(target.oidc_config("oidc.source").is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod credential_persistence_tests {
+    use fireemu_adapter_http::identity_toolkit::{self as api, AuthState};
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::{determinism::SplitMix64, time::LogicalInstant};
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+
+    fn state() -> AuthState {
+        AuthState {
+            store: Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(5),
+                TotpPolicy::default(),
+            ))),
+            clock: Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            wall_clock: None,
+            totp_extension_enabled: false,
+            barrier: None,
+            events: None,
+            notices: None,
+            blocking: None,
+            operation_gate: Arc::new(Mutex::new(())),
+            control_token: None,
+            registry: None,
+            allow_routed_projects: false,
+            stateless_refresh_tokens: true,
+            idp_continuations: api::IdpContinuationPolicy::Disabled,
+            query_limits: api::AuthQueryLimits::EmulatorUnbounded,
+            client_api_key: api::ClientApiKeyPolicy::Optional,
+            fake_custom_token_expiry: api::FakeCustomTokenExpiry::Ignore,
+            custom_token_trust: None,
+            allow_unsigned_custom_tokens: true,
+            idp_assertions: api::IdpAssertionPolicy::Fixture,
+            app_check: None,
+            app_check_policy: None,
+            tenancy: None,
+        }
+    }
+
+    fn post(state: &AuthState, route: &str, body: &Value) -> api::JsonResponse {
+        api::handle_with(
+            state,
+            "POST",
+            &format!("/identitytoolkit.googleapis.com/v1/{route}"),
+            &api::RequestHeaders {
+                authorization: route
+                    .starts_with("projects/")
+                    .then(|| "Bearer owner".to_owned()),
+                content_type: Some("application/json".to_owned()),
+                ..api::RequestHeaders::default()
+            },
+            body,
+        )
+    }
+
+    fn login(state: &AuthState, password: &str) -> api::JsonResponse {
+        post(
+            state,
+            "accounts:signInWithPassword",
+            &json!({"email":"persist@example.com", "password": password, "returnSecureToken":true}),
+        )
+    }
+
+    fn restore(state: &AuthState, plaintext: &str) {
+        let mut store = state.store.lock().unwrap();
+        let user = store.user_by_email("persist@example.com").unwrap();
+        let record = super::exported_account(&store, user, None);
+        assert!(record.password_hash.is_none());
+        let imported =
+            super::imported_user(&record, std::path::Path::new("credential-test.json")).unwrap();
+        let hash = imported
+            .imported_password
+            .as_ref()
+            .expect("every native credential is exported");
+        assert!(!hash.spec.contains(plaintext));
+        assert!(!hash
+            .hash
+            .windows(plaintext.len())
+            .any(|bytes| bytes == plaintext.as_bytes()));
+        let mut fresh = AuthStore::new("demo-app", SplitMix64::new(19), TotpPolicy::default());
+        fresh.import_user_trusted(imported).unwrap();
+        *store = fresh;
+    }
+
+    fn update(state: &AuthState, kind: u8, current: &str, next: &str) {
+        let signed_in = login(state, current);
+        assert_eq!(signed_in.status, 200);
+        let response = match kind {
+            0 => post(
+                state,
+                "projects/demo-app/accounts:update",
+                &json!({"localId":signed_in.body["localId"], "password":next}),
+            ),
+            1 => post(
+                state,
+                "accounts:update",
+                &json!({"idToken":signed_in.body["idToken"], "password":next}),
+            ),
+            _ => {
+                let code = post(
+                    state,
+                    "projects/demo-app/accounts:sendOobCode",
+                    &json!({"requestType":"PASSWORD_RESET", "email":"persist@example.com", "returnOobLink":true}),
+                );
+                assert_eq!(code.status, 200);
+                post(
+                    state,
+                    "accounts:resetPassword",
+                    &json!({"oobCode":code.body["oobCode"], "newPassword":next}),
+                )
+            }
+        };
+        assert_eq!(response.status, 200, "{}", response.body["error"]);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+        #[test]
+        fn credential_operation_sequences_preserve_current_password(
+            initial in "[a-zA-Z0-9]{8,24}",
+            admin_created in proptest::prelude::any::<bool>(),
+            steps in proptest::collection::vec((0u8..4, "[a-zA-Z0-9]{8,24}"), 1..8),
+        ) {
+            let state = state();
+            let route = if admin_created { "projects/demo-app/accounts" } else { "accounts:signUp" };
+            assert_eq!(post(&state, route, &json!({"email":"persist@example.com", "password":initial})).status, 200);
+            let mut current = initial;
+            for (kind, next) in steps {
+                let old = current.clone();
+                if kind < 3 {
+                    update(&state, kind, &current, &next);
+                    current = next;
+                }
+                restore(&state, &current);
+                assert_eq!(login(&state, "known-wrong-password").status, 400);
+                if old != current {
+                    assert_eq!(login(&state, &old).status, 400);
+                }
+                assert_eq!(login(&state, &current).status, 200);
+                // Successful imported-hash authentication rehashes to native material.
+                restore(&state, &current);
+                assert_eq!(login(&state, &current).status, 200);
+            }
+        }
+    }
+
+    #[test]
+    fn admin_client_and_reset_changes_reject_previous_password_after_restore() {
+        for route in ["projects/demo-app/accounts", "accounts:signUp"] {
+            let state = state();
+            assert_eq!(
+                post(
+                    &state,
+                    route,
+                    &json!({"email":"persist@example.com", "password":"initial-password"})
+                )
+                .status,
+                200
+            );
+            let mut current = "initial-password".to_owned();
+            for kind in 0..3 {
+                let next = format!("changed-password-{kind}");
+                update(&state, kind, &current, &next);
+                restore(&state, &next);
+                assert_eq!(login(&state, &current).status, 400);
+                assert_eq!(login(&state, &next).status, 200);
+                current = next;
+            }
+        }
+    }
+
+    #[test]
+    fn foreign_hash_login_then_native_reexport_preserves_password() {
+        let state = state();
+        let response = post(
+            &state,
+            "projects/demo-app/accounts:batchCreate",
+            &json!({
+                "hashAlgorithm":"SHA1", "rounds":1,
+                "users":[{"localId":"foreign", "email":"persist@example.com", "passwordHash":"W6ph5Mm5Pz8GgiULbPgzG37mj9g="}]
+            }),
+        );
+        assert_eq!(response.status, 200, "{}", response.body["error"]);
+        assert!(response.body.get("error").is_none());
+        restore(&state, "password");
+        assert_eq!(login(&state, "wrong-password").status, 400);
+        assert_eq!(login(&state, "password").status, 200);
+        restore(&state, "password");
+        assert_eq!(login(&state, "password").status, 200);
+        update(&state, 0, "password", "changed-password");
+        restore(&state, "changed-password");
+        assert_eq!(login(&state, "password").status, 400);
+        assert_eq!(login(&state, "changed-password").status, 200);
     }
 }

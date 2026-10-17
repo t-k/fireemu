@@ -550,7 +550,10 @@ mod tests {
         let error = refusal(json!({"firestore": {"textSearch": {
             "visibilityLag": {"maxLogicalDelayMillis": "5"}
         }}}));
-        assert_eq!(error, "firestore.textSearch.visibilityLag.maxLogicalDelayMillis must be an integer, found a string");
+        assert_eq!(
+            error,
+            "firestore.textSearch.visibilityLag.maxLogicalDelayMillis must be an integer, found a string"
+        );
     }
 
     #[test]
@@ -854,22 +857,25 @@ mod tests {
                     } // A literal array, not an indexed object.
                     let (base, indices) = receiver.split_once('[').unwrap_or((receiver, ""));
                     let path = match (function, base) {
-                        ("from_json" | "apply_firebase_json", "obj")
+                        ("inspect_json" | "apply_firebase_json", "obj")
                         | ("firebase_json_reference", "json")
                         | ("record_development_defaults", "input") => "",
-                        ("from_json", "fs") => "/firestore",
-                        ("from_json", "p") => "/projects",
-                        ("from_json", "storage") => "/storage",
-                        ("from_json" | "parse_auth_tenants" | "parse_idp_assertions", "auth") => {
-                            "/auth"
-                        }
-                        ("from_json", "client") => "/auth/client",
+                        ("inspect_json", "fs") => "/firestore",
+                        ("inspect_json", "p") => "/projects",
+                        ("inspect_json", "storage") => "/storage",
+                        (
+                            "inspect_json" | "parse_auth_tenants" | "parse_idp_assertions",
+                            "auth",
+                        ) => "/auth",
+                        ("inspect_json", "client") => "/auth/client",
                         ("parse_auth_config_override_value", "client") => {
                             "/auth/configOverrides/*/config/client"
                         }
-                        ("from_json", "sign_in") => "/auth/signIn",
-                        ("from_json", "item") => "/auth/passwordPolicyOverrides/*",
-                        ("from_json", receiver) if receiver.starts_with("refusal.body") => continue,
+                        ("inspect_json", "sign_in") => "/auth/signIn",
+                        ("inspect_json", "item") => "/auth/passwordPolicyOverrides/*",
+                        ("inspect_json", receiver) if receiver.starts_with("refusal.body") => {
+                            continue;
+                        }
                         ("parse_password_policy", "object") => "/auth/passwordPolicy",
                         ("parse_password_constraints", "object") => {
                             "/auth/passwordPolicy/constraints"
@@ -968,7 +974,8 @@ mod tests {
                         path.push('/');
                         path.push_str(key);
                         // This obsolete key is deliberately read only to refuse it.
-                        if function == "from_json" && path == "/firestore/indexValidationPolicy" {
+                        if function == "inspect_json" && path == "/firestore/indexValidationPolicy"
+                        {
                             continue;
                         }
                         let nodes = if function.starts_with("apply_") || function == "emulator_addr"
@@ -996,7 +1003,7 @@ mod tests {
             r#"fs["seed"]"#,
             r#"fs.contains_key("seed")"#,
         ] {
-            let source = format!("fn from_json() {{ {read}; }}");
+            let source = format!("fn inspect_json() {{ {read}; }}");
             assert!(
                 !loader_schema_disagreements(&source, schema()).is_empty(),
                 "{read}"
@@ -1011,7 +1018,7 @@ mod tests {
             r#"fs["edition"]"#,
             r#"fs.contains_key("edition")"#,
         ] {
-            let source = format!("fn from_json() {{ {read}; }}");
+            let source = format!("fn inspect_json() {{ {read}; }}");
             assert!(
                 loader_schema_disagreements(&source, schema()).is_empty(),
                 "{read}"
@@ -1040,11 +1047,11 @@ mod tests {
 
     #[test]
     fn corpus_includes_toml_examples() {
-        assert!(corpus("examples")
-            .iter()
-            .any(|(name, _)| std::path::Path::new(name)
+        assert!(corpus("examples").iter().any(|(name, _)| {
+            std::path::Path::new(name)
                 .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))));
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+        }));
     }
 
     #[test]

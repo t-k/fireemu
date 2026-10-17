@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "$id": "https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json",
   "title": "fireemu canonical configuration",
   "description": "Single source of truth for the daemon configuration (spec section 17). Unknown keys are errors everywhere. Cross-field constraints that JSON Schema cannot express are enforced by tools/config-schema-check and by the Rust config loader.",
   "type": "object",
@@ -9,7 +9,7 @@
   "properties": {
     "$schema": {
       "type": "string",
-      "const": "https://fireemu.dev/spec/config/fireemu.schema.json"
+      "enum": ["https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json", "https://fireemu.dev/spec/config/fireemu.schema.json"]
     },
     "eventarc": {
       "type": "object",

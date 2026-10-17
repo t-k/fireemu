@@ -7,6 +7,10 @@
 
 mod scratch;
 
+#[cfg(unix)]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
 use scratch::Scratch;
 
 use std::path::{Path, PathBuf};
@@ -1474,6 +1478,9 @@ fn export_without_a_running_suite_says_which_suite_it_looked_for() {
 
 #[test]
 fn a_bad_import_or_export_target_fails_before_anything_starts() {
+    #[cfg(unix)]
+    let dir = trusted_temp::TrustedTempDir::new("cli-import");
+    #[cfg(not(unix))]
     let dir = scratch("import");
     let marker = dir.join("ran");
     let occupied = dir.join("occupied");

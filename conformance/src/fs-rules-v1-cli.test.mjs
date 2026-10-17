@@ -148,20 +148,23 @@ test("the production preflight hands the run's task id on, so a run is not its o
   }
 });
 
-
-test("the official command preserves quoted paths and shell metacharacters", { skip: process.platform === "win32" }, () => {
-  assert.equal(typeof runner.officialSessionCommand, "function");
-  const root = mkdtempSync(join(tmpdir(), "fs3-quote-' space-"));
-  try {
-    const script = join(root, "capture ' $(printf injected) `printf injected`.mjs");
-    writeFileSync(script, "console.log(JSON.stringify(process.argv.slice(2)));\n");
-    const executable = join(root, "node ' $HOME `printf injected`");
-    symlinkSync(process.execPath, executable);
-    const command = runner.officialSessionCommand(executable, script);
-    const result = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8", timeout: 5000 });
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), ["session-official"]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+test(
+  "the official command preserves quoted paths and shell metacharacters",
+  { skip: process.platform === "win32" },
+  () => {
+    assert.equal(typeof runner.officialSessionCommand, "function");
+    const root = mkdtempSync(join(tmpdir(), "fs3-quote-' space-"));
+    try {
+      const script = join(root, "capture ' $(printf injected) `printf injected`.mjs");
+      writeFileSync(script, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+      const executable = join(root, "node ' $HOME `printf injected`");
+      symlinkSync(process.execPath, executable);
+      const command = runner.officialSessionCommand(executable, script);
+      const result = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8", timeout: 5000 });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), ["session-official"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

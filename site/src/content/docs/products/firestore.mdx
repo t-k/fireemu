@@ -159,13 +159,13 @@ Production ends an end user's native gRPC `Listen` stream with `INTERNAL` an hou
 
 ## Transactions and history
 
-Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. Transactions lock what they read, as production does. Starting with the next release, contended gRPC and WebChannel writes wait without occupying runtime workers. Canceling a waiting Commit ends that request's deadlock wait; its transaction keeps read locks until it commits, rolls back or expires.
+Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. Transactions lock what they read, as production does. Starting with v0.27.0, contended gRPC and WebChannel writes wait without occupying runtime workers. Canceling a waiting Commit ends that request's deadlock wait; its transaction keeps read locks until it commits, rolls back or expires.
 
 A test that updates the same documents many times therefore holds many versions in memory. These local limits, which production does not have, bound it:
 
 - Each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, each session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions.
 - On a pinned clock (`daemon.clockStart`), a database keeps at most 1,024 versions of any one document.
-- Starting with the next release, strict Listen retains the latest 4,096 boundary records per live database. A resumed stream echoes the original boundary's `read_time`, then sends the new snapshot time with `CURRENT`. Token bytes are opaque and may change without a write. An expired record or expired document history triggers `RESET` and a full replay; reset, restore and daemon restart discard the records. This bound is local to Fireemu and is not a production limit.
+- Starting with v0.27.0, strict Listen retains the latest 4,096 boundary records per live database. A resumed stream echoes the original boundary's `read_time`, then sends the new snapshot time with `CURRENT`. Token bytes are opaque and may change without a write. An expired record or expired document history triggers `RESET` and a full replay; reset, restore and daemon restart discard the records. This bound is local to Fireemu and is not a production limit.
 - A commit that would cross a limit is refused whole with `RESOURCE_EXHAUSTED` and the message `Firestore retained history capacity is exhausted`.
 
 To use less memory, lower the limits in `firestore.history`:

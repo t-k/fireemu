@@ -139,7 +139,7 @@ When a Functions codebase is loaded, the Functions page shows registered functio
 
 For clock-sensitive and parallel integration tests, [test clocks and independent worlds](docs/test-worlds.md) describes explicit Node Date/timer/Cloud Tasks policies and the `fireemu/testing` helper. Separate worlds isolate their clocks, Rules, Functions and service state, including when they use the same project ID. The `fireemu/control` client also works in `fireemu exec` commands and shares URL resolution and authentication with `world.control()`, so callers do not need to concatenate control URLs.
 
-Functions test worlds in v0.25.0 and v0.26.0 copy inherited `NODE_PATH` trees, including global development links. For local-only dependencies, use `env: { ...process.env, NODE_PATH: '' }`; otherwise select required roots or use `nodePathExcludes`. The next release after v0.26.0 clears ambient `NODE_PATH` by default and requires `env.NODE_PATH` to opt in. See [dependency snapshots and migration](docs/test-worlds.md#create-parallel-worlds).
+Functions test worlds in v0.25.0 and v0.26.0 copy inherited `NODE_PATH` trees, including global development links. For local-only dependencies, use `env: { ...process.env, NODE_PATH: '' }`; otherwise select required roots or use `nodePathExcludes`. Starting with v0.27.0, Fireemu clears ambient `NODE_PATH` by default and requires `env.NODE_PATH` to opt in. See [dependency snapshots and migration](docs/test-worlds.md#create-parallel-worlds).
 
 ### Export data
 
@@ -501,7 +501,7 @@ See the [configuration schema](spec/config/fireemu.schema.json) for available se
 
 ### Firestore history limits
 
-In the next release, contended gRPC and WebChannel writes wait without occupying runtime workers, so other requests can release the transaction holding their locks. Canceling a waiting Commit ends that request's deadlock wait; the transaction keeps its read locks until it commits, rolls back or expires.
+Starting with v0.27.0, contended gRPC and WebChannel writes wait without occupying runtime workers, so other requests can release the transaction holding their locks. Canceling a waiting Commit ends that request's deadlock wait; the transaction keeps its read locks until it commits, rolls back or expires.
 
 Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. A test that updates the same documents many times therefore holds many versions in memory. These limits are local; production has none of them:
 
@@ -509,7 +509,7 @@ Like production, Fireemu keeps every version of a document written in the last h
 - On a pinned clock (`daemon.clockStart`), time does not pass on its own, so a database keeps at most 1,024 versions of any one document. This limit works like `maxVersionsPerPath` below: once a document goes past it, older snapshots are released for the whole database.
 - A commit that would cross a limit is refused whole with `RESOURCE_EXHAUSTED` and the message `Firestore retained history capacity is exhausted`.
 
-In the next release, strict Listen resume tokens identify their exact issued boundary: the first resume echo retains that boundary's `read_time`, while `CURRENT` and the final boundary use the new snapshot time. Strict keeps the latest 4,096 boundary records per live database, independently of other databases. A token whose record or document history has expired triggers `RESET` and a full replay; reset, restore and daemon restart also discard issuance records. Token bytes are opaque and may change without a document write. Emulator-profile tokens retain their existing format.
+Starting with v0.27.0, strict Listen resume tokens identify their exact issued boundary: the first resume echo retains that boundary's `read_time`, while `CURRENT` and the final boundary use the new snapshot time. Strict keeps the latest 4,096 boundary records per live database, independently of other databases. A token whose record or document history has expired triggers `RESET` and a full replay; reset, restore and daemon restart also discard issuance records. Token bytes are opaque and may change without a document write. Emulator-profile tokens retain their existing format.
 
 Versions older than an hour are released by the next commit after the clock passes them. To use less memory, lower the limits in the `firestore.history` section:
 

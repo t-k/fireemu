@@ -133,7 +133,7 @@ Functions worlds snapshot local sources and dependencies so caller edits do not 
 
 For local-only dependencies on those versions, pass `env: { ...process.env, NODE_PATH: '' }`. If globals are required, select only their directories in `env.NODE_PATH`; `nodePathExcludes` omits exact unused package names, including scoped names, before following their links. Required dependency failures are still errors.
 
-**Upcoming change (Unreleased, after v0.26.0):** ambient `NODE_PATH` is cleared by default. Ordinary parent environment variables remain inherited. Pass `env: { ...process.env }` to explicitly retain globals, or supply a narrowed `env.NODE_PATH`. An environment object containing `NODE_PATH` is an opt-in even when constructed with a spread. Local sources and ancestor `node_modules` are still snapshotted. See [dependency snapshot limits](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#create-parallel-worlds).
+**v0.27.0+:** ambient `NODE_PATH` is cleared by default. Ordinary parent environment variables remain inherited. Pass `env: { ...process.env }` to explicitly retain globals, or supply a narrowed `env.NODE_PATH`. An environment object containing `NODE_PATH` is an opt-in even when constructed with a spread. Local sources and ancestor `node_modules` are still snapshotted. See [dependency snapshot limits](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#create-parallel-worlds).
 
 Enable `hub: true` to [export a test world and import its data into a fresh one](../data/#export-independent-test-worlds).
 

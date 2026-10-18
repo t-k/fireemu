@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-18
+
 ### Changed
 
 - Test worlds no longer inherit the parent process's global `NODE_PATH` by default. To retain global dependencies, pass `env: { ...process.env }` or select the required directories in `env.NODE_PATH`; explicitly selected roots still support `nodePathExcludes`, private snapshots and reset isolation. Other parent environment variables remain inherited.
@@ -832,7 +834,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/t-k/fireemu/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/t-k/fireemu/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/t-k/fireemu/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/t-k/fireemu/compare/v0.23.0...v0.24.0

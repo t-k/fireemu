@@ -392,6 +392,16 @@ pub trait TopicDelivery: Send + Sync {
         messages: &[BridgeMessage],
     ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError>;
 
+    /// Reserves a Scheduler publication whose schedule handler is admitted separately. Ordinary
+    /// topic subscribers still receive the message; bridges without schedules use normal admission.
+    fn reserve_scheduler(
+        &self,
+        topic: &str,
+        messages: &[BridgeMessage],
+    ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+        self.reserve(topic, messages)
+    }
+
     /// Returns a notification raised when a failed capacity admission may succeed again.
     /// Implementations should notify it after releasing a reservation; adapters without a
     /// recoverable capacity signal leave the retry driver disabled.
@@ -563,7 +573,7 @@ impl PubSubHandle {
         messages: Vec<PubsubMessage>,
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let now = self.now();
-        self.publish_prepared(topic, now, |state| {
+        self.publish_prepared(topic, now, false, |state| {
             if self.paging_policy == PagingPolicy::Strict
                 && messages.len() <= fireemu_core_pubsub::state::MAX_MESSAGES_PER_PUBLISH
                 && state.topic_exists(topic)
@@ -593,6 +603,7 @@ impl PubSubHandle {
         &self,
         topic: &TopicName,
         now: LogicalInstant,
+        scheduler: bool,
         prepare: impl FnOnce(
             &mut PubSubState,
         ) -> Result<fireemu_core_pubsub::PreparedPublication, PubSubError>,
@@ -609,9 +620,12 @@ impl PubSubHandle {
                     .cloned()
                     .map(|message| BridgeMessage { message })
                     .collect::<Vec<_>>();
-                bridge
-                    .reserve(&topic.to_full(), &bridge_messages)
-                    .map_err(Self::topic_delivery_error)
+                let reservation = if scheduler {
+                    bridge.reserve_scheduler(&topic.to_full(), &bridge_messages)
+                } else {
+                    bridge.reserve(&topic.to_full(), &bridge_messages)
+                };
+                reservation.map_err(Self::topic_delivery_error)
             })
             .transpose()?;
         let published = state.commit_prepared(prepared, now)?;
@@ -645,8 +659,23 @@ impl PubSubHandle {
         at: LogicalInstant,
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let _publication = self.lock_publication();
-        self.publish_prepared(topic, at, |state| {
+        self.publish_prepared(topic, at, false, |state| {
             state.prepare_publish_with_message_ids(topic, messages, at)
+        })
+    }
+
+    /// Publishes a Scheduler message after its schedule handler has been reserved separately.
+    /// Broker subscribers and ordinary Functions topic subscribers retain the same admission and commit order.
+    pub fn publish_scheduler_message(
+        &self,
+        topic: &TopicName,
+        message: PubsubMessage,
+        message_id: String,
+        at: LogicalInstant,
+    ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
+        let _publication = self.lock_publication();
+        self.publish_prepared(topic, at, true, |state| {
+            state.prepare_publish_with_message_ids(topic, vec![(message, message_id)], at)
         })
     }
 
@@ -715,7 +744,7 @@ impl PubSubHandle {
     fn commit_dead_letter(&self, forward: &DeadLetterForward) {
         let _publication = self.lock_publication();
         let now = self.now();
-        let published = self.publish_prepared(&forward.dead_letter_topic, now, |state| {
+        let published = self.publish_prepared(&forward.dead_letter_topic, now, false, |state| {
             state.prepare_dead_letter_publication(forward, now)
         });
         if published.is_ok() {

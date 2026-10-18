@@ -5855,7 +5855,7 @@ impl fireemu_adapter_functions::runtime::ScheduleTopicPublisher for PubSubSchedu
             ordering_key: String::new(),
         };
         self.handle
-            .publish_with_message_ids(&topic, vec![(message, message_id.to_owned())], at)
+            .publish_scheduler_message(&topic, message, message_id.to_owned(), at)
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
@@ -5907,6 +5907,31 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
         Box<dyn fireemu_adapter_pubsub::TopicDeliveryReservation>,
         fireemu_adapter_pubsub::TopicDeliveryError,
     > {
+        self.reserve_publication(topic, messages, false)
+    }
+
+    fn reserve_scheduler(
+        &self,
+        topic: &str,
+        messages: &[fireemu_adapter_pubsub::BridgeMessage],
+    ) -> Result<
+        Box<dyn fireemu_adapter_pubsub::TopicDeliveryReservation>,
+        fireemu_adapter_pubsub::TopicDeliveryError,
+    > {
+        self.reserve_publication(topic, messages, true)
+    }
+}
+
+impl PubSubBridge {
+    fn reserve_publication(
+        &self,
+        topic: &str,
+        messages: &[fireemu_adapter_pubsub::BridgeMessage],
+        scheduler: bool,
+    ) -> Result<
+        Box<dyn fireemu_adapter_pubsub::TopicDeliveryReservation>,
+        fireemu_adapter_pubsub::TopicDeliveryError,
+    > {
         let Some(topic) = owned_pubsub_topic(self.0.project(), topic) else {
             return Ok(Box::new(EmptyPubSubReservation));
         };
@@ -5928,8 +5953,13 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
                 value
             })
             .collect();
-        self.0
-            .reserve_pubsub_events(topic.topic(), &values)
+        let reservation = if scheduler {
+            self.0
+                .reserve_scheduler_pubsub_events(topic.topic(), &values)
+        } else {
+            self.0.reserve_pubsub_events(topic.topic(), &values)
+        };
+        reservation
             .map(|reservation| {
                 Box::new(FunctionsPubSubReservation(Some(reservation)))
                     as Box<dyn fireemu_adapter_pubsub::TopicDeliveryReservation>
@@ -11695,6 +11725,176 @@ exports.add = onCall({{}}, observe("add"));
         );
         runtime.shutdown().await;
         dispatcher.await.unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Exercise the complete broker-to-Node delivery lifecycle.
+    async fn strict_user_schedule_topic_publishes_and_scheduler_runs_deliver_once_per_subscriber() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_pubsub::PubSubHandle;
+        use fireemu_core_pubsub::PubsubMessage;
+        use fireemu_core_types::time::LogicalInstant;
+        use std::time::Duration;
+
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let source =
+            std::env::temp_dir().join(format!("fireemu-schedule-topic-{}", std::process::id()));
+        std::fs::create_dir(&source).unwrap();
+        let fixture = Fixture(source);
+        std::fs::write(
+            fixture.0.join("package.json"),
+            r#"{"private":true,"main":"index.cjs"}"#,
+        )
+        .unwrap();
+        std::fs::write(fixture.0.join("index.cjs"), r#"
+const { appendFileSync } = require("node:fs");
+const { join } = require("node:path");
+const handler = name => async (data, context) => appendFileSync(join(__dirname, "calls.jsonl"), JSON.stringify({ name, data, context }) + "\n");
+const tick = handler("tick");
+tick.__endpoint = { platform: "gcfv1", scheduleTrigger: { schedule: "every 5 minutes" } };
+const observer = handler("observer");
+observer.__trigger = { eventTrigger: { eventType: "google.pubsub.topic.publish", resource: "projects/demo-app/topics/firebase-schedule-tick-us-central1" } };
+module.exports = { tick, observer };
+"#).unwrap();
+        let spawn = SpawnSpec {
+            command: vec![
+                std::env::var("FIREEMU_NODE").unwrap_or_else(|_| "node".into()),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tools/runner-node/index.mjs")
+                    .display()
+                    .to_string(),
+                "--source".into(),
+                fixture.0.display().to_string(),
+            ],
+            cwd: None,
+            env: vec![
+                ("GCLOUD_PROJECT".into(), "demo-app".into()),
+                ("FIREEMU_HTTP_PROFILE".into(), "strict".into()),
+            ],
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )));
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![CodebaseSpec {
+                name: "default".into(),
+                manifest,
+                runner,
+                spawn: Some(spawn),
+                cleanup_dir: None,
+            }],
+            FunctionsConfig::for_tests(100, "test-secret".into()),
+            clock.clone(),
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+        )
+        .unwrap();
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        let resources = function_pubsub_resources(
+            "demo-app",
+            runtime.manifest(),
+            fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
+        provision_function_pubsub_resources(&mut state.lock().unwrap(), &resources).unwrap();
+        let handle = PubSubHandle::new(
+            state,
+            clock.clone(),
+            Some(Arc::new(PubSubBridge::new(runtime.clone()))),
+        );
+        runtime.set_schedule_topic_publisher(Arc::new(PubSubSchedulePublisher::new(
+            handle.clone(),
+            "demo-app",
+        )));
+        let topic = TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap();
+        let user = handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"user message".to_vec(),
+                    attributes: BTreeMap::from([
+                        ("scheduled".into(), "true".into()),
+                        ("custom".into(), "kept".into()),
+                    ]),
+                    ordering_key: "user-order".into(),
+                }],
+            )
+            .unwrap();
+        let pending = runtime.status()["pending"].clone();
+        if pending != 2 {
+            runtime.shutdown().await;
+        }
+        assert_eq!(
+            pending, 2,
+            "the user publish reaches both the schedule and the ordinary subscriber"
+        );
+        assert!(!user[0].message.data.is_empty());
+        runtime.run_schedule("tick").unwrap();
+        let manual_pending = runtime.status()["pending"].clone();
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        let natural_pending = runtime.status()["pending"].clone();
+        let dispatcher = tokio::spawn(runtime.clone().dispatch_loop());
+        let idle = runtime.await_idle(Duration::from_secs(10)).await;
+        let history = runtime.history();
+        runtime.shutdown().await;
+        dispatcher.await.unwrap();
+        assert_eq!(
+            manual_pending, 4,
+            "the manual run reaches each subscriber once"
+        );
+        assert_eq!(
+            natural_pending, 6,
+            "a natural occurrence also reaches each subscriber once"
+        );
+        assert!(idle.is_ok(), "{idle:?}");
+        let calls: Vec<serde_json::Value> = std::fs::read_to_string(fixture.0.join("calls.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(calls.len(), 6);
+        for function in ["tick", "observer"] {
+            let published = calls
+                .iter()
+                .find(|call| {
+                    call["name"] == function && call["context"]["eventId"] == user[0].message_id
+                })
+                .expect("the user's original message reaches each handler");
+            assert_eq!(
+                published["data"]["data"],
+                super::base64_encode(b"user message")
+            );
+            assert_eq!(
+                published["data"]["attributes"],
+                serde_json::json!({"scheduled": "true", "custom": "kept"})
+            );
+            assert_eq!(published["data"]["orderingKey"], "user-order");
+            assert_eq!(published["data"]["messageId"], user[0].message_id);
+            assert_eq!(published["context"]["resource"]["name"], topic.to_full());
+
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|r| r.function == function && r.outcome == "ok")
+                    .count(),
+                3,
+                "{history:?}"
+            );
+        }
     }
 
     #[test]

@@ -47,6 +47,9 @@ const v1 = async (data, context) => log({ name: "okV1", data, context });
 v1.run = v1;
 v1.__endpoint = { platform: "gcfv1", scheduleTrigger: { schedule: "every 1 minutes" } };
 exports.okV1 = v1;
+const europeV1 = async (data, context) => log({ name: "europeV1", data, context });
+europeV1.__endpoint = { platform: "gcfv1", region: ["europe-west1"], scheduleTrigger: { schedule: "every 1 minutes" } };
+exports.europeV1 = europeV1;
 `;
 
 async function start(t, profile) {
@@ -160,13 +163,61 @@ test("strict: a bare handler (its own wrapper) is called directly, as before", a
 test("strict: a Gen1 handler gets the Pub/Sub context of the message the Scheduler published", async (t) => {
   const f = await start(t, "strict");
   await f.invoke("okV1", event(JOB.replace("okV2", "okV1"), "42-3"), 1);
-  const [call] = await f.calls();
+  const calls = await f.calls();
+  assert.equal(calls.length, 1);
+  const [call] = calls;
+  assert.deepEqual(call.data, {});
   assert.match(call.context.eventId, /^2\d{16}$/);
   assert.equal(call.context.resource.name, "projects/demo-app/topics/firebase-schedule-okV1-us-central1");
   assert.equal(call.context.resource.type, "type.googleapis.com/google.pubsub.v1.PubsubMessage");
   assert.equal(call.context.resource.service, "pubsub.googleapis.com");
   assert.equal(call.context.timestamp, "2026-10-05T08:45:00Z");
   assert.equal(call.context.eventType, "google.pubsub.topic.publish");
+});
+
+for (const [name, region] of [["okV1", "us-central1"], ["europeV1", "europe-west1"]]) {
+  test(`strict: a user's publish reaches ${name} with its Pub/Sub data and context`, async (t) => {
+    const f = await start(t, "strict");
+    const message = {
+      messageId: "11700000000000001", data: Buffer.from("user message").toString("base64"),
+      attributes: { scheduled: "true", custom: "kept" }, orderingKey: "ordered",
+      publishTime: "2026-10-05T08:45:00.125Z",
+    };
+    const published = {
+      specversion: "1.0", id: message.messageId,
+      type: "google.cloud.pubsub.topic.v1.messagePublished",
+      source: `//pubsub.googleapis.com/projects/demo-app/topics/firebase-schedule-${name}-${region}`,
+      time: message.publishTime, data: { message },
+    };
+    const result = await f.invoke(name, published, 1);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const calls = await f.calls();
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.deepEqual(call.data, message);
+    assert.equal(call.context.eventId, message.messageId);
+    assert.equal(call.context.timestamp, message.publishTime);
+    assert.equal(call.context.resource.name, `projects/demo-app/topics/firebase-schedule-${name}-${region}`);
+    assert.equal(call.context.resource.type, "type.googleapis.com/google.pubsub.v1.PubsubMessage");
+    assert.equal(call.context.eventType, "google.pubsub.topic.publish");
+  });
+}
+
+test("strict: a schedule accepts a user Pub/Sub event only for its own project, name and region", async (t) => {
+  const f = await start(t, "strict");
+  for (const topic of [
+    "projects/other-project/topics/firebase-schedule-okV1-us-central1",
+    "projects/demo-app/topics/firebase-schedule-other-us-central1",
+    "projects/demo-app/topics/firebase-schedule-okV1-europe-west1",
+  ]) {
+    const result = await f.invoke("okV1", {
+      id: "11700000000000001", type: "google.cloud.pubsub.topic.v1.messagePublished",
+      source: `//pubsub.googleapis.com/${topic}`, time: "2026-10-05T08:45:00Z",
+      data: { message: { data: "eA==", attributes: {} } },
+    }, 1);
+    assert.equal(result.ok, false, topic);
+  }
+  assert.deepEqual(await f.calls(), []);
 });
 
 test("emulator: every scheduled invocation is unchanged (direct handler call, the job's resource name)", async (t) => {

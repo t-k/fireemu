@@ -2666,6 +2666,16 @@ impl FunctionsRuntime {
         crate::events::auth_context_for(self.config.auth_context, auth_type, auth_id)
     }
 
+    fn pubsub_matches<'a>(
+        &'a self,
+        topic: &'a str,
+        include_schedules: bool,
+    ) -> impl Iterator<Item = &'a fireemu_core_functions::manifest::FunctionSpec> {
+        self.manifest.functions.iter().filter(move |function| {
+            matches_pubsub_topic(function, topic, self.profile, include_schedules)
+        })
+    }
+
     /// Reserves the complete Pub/Sub topic-trigger fan-out for broker messages that already have
     /// stable Pub/Sub message ids. The returned reservation is committed only after the broker
     /// publication becomes visible, so capacity refusal cannot lose a broker event.
@@ -2673,6 +2683,25 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         topic: &str,
         messages: &[Value],
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        self.reserve_pubsub_events_inner(topic, messages, true)
+    }
+
+    /// Reserves ordinary topic subscribers for a Scheduler publication. Its schedule handler
+    /// already has a reservation, so only that implicit subscription is excluded.
+    pub fn reserve_scheduler_pubsub_events(
+        self: &Arc<Self>,
+        topic: &str,
+        messages: &[Value],
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        self.reserve_pubsub_events_inner(topic, messages, false)
+    }
+
+    fn reserve_pubsub_events_inner(
+        self: &Arc<Self>,
+        topic: &str,
+        messages: &[Value],
+        include_schedules: bool,
     ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
         if !self.background_triggers_enabled() {
             return Ok(self.empty_event_reservation());
@@ -2689,7 +2718,7 @@ impl FunctionsRuntime {
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty())
                 .ok_or(SourceEventAdmissionError::InvalidEvent)?;
-            for function in self.manifest.pubsub_matches(topic) {
+            for function in self.pubsub_matches(topic, include_schedules) {
                 let payload =
                     Arc::new(self.pubsub_payload(function, message_id, topic, message, time));
                 let copies = self.delivery_copies(
@@ -2744,7 +2773,7 @@ impl FunctionsRuntime {
             if !deliver {
                 continue; // the message is accepted and dropped, as Pub/Sub does without a subscriber
             }
-            for f in self.manifest.pubsub_matches(topic) {
+            for f in self.pubsub_matches(topic, true) {
                 let payload = self.pubsub_payload(f, &message_id, topic, message, time);
                 self.enqueue_delivery(
                     &mut inner,
@@ -5887,6 +5916,18 @@ impl FunctionsRuntime {
     }
 }
 
+fn matches_pubsub_topic(
+    function: &fireemu_core_functions::manifest::FunctionSpec,
+    topic: &str,
+    profile: FunctionsHttpProfile,
+    include_schedules: bool,
+) -> bool {
+    matches!(&function.trigger, Trigger::PubSub { topic: subscribed } if subscribed == topic)
+        || (include_schedules
+            && profile == FunctionsHttpProfile::Strict
+            && function.schedule_topic().as_deref() == Some(topic))
+}
+
 /// The error an HTTP invocation reports for a `dropConnection` fault: the functions port
 /// closes the client's connection instead of answering.
 pub const DROP_CONNECTION: &str = "fault plan: connection dropped";
@@ -6159,6 +6200,177 @@ mod task_completion_tests {
             }
         }
         base.shutdown().await;
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn pubsub_topic_matching_respects_profile_generation_origin_and_exact_name(
+            name in "[a-z][a-zA-Z0-9]{0,15}",
+            region in proptest::sample::select(vec!["us-central1", "europe-west1"]),
+            first_generation in proptest::bool::ANY,
+            strict in proptest::bool::ANY,
+            include_schedules in proptest::bool::ANY,
+            exact_topic in proptest::bool::ANY,
+            schedule in proptest::bool::ANY,
+        ) {
+            let topic = format!("firebase-schedule-{name}-{region}");
+            let trigger = if schedule {
+                json!({"type": "schedule", "schedule": "every 5 minutes"})
+            } else {
+                json!({"type": "pubsub", "topic": topic})
+            };
+            let manifest = parse_manifest(&json!({"functions": [{"name": name, "region": region, "generation": if first_generation { 1 } else { 2 }, "trigger": trigger}]})).unwrap();
+            let candidate = if exact_topic { topic } else { format!("{topic}-other") };
+            let profile = if strict { super::FunctionsHttpProfile::Strict } else { super::FunctionsHttpProfile::Emulator };
+            proptest::prop_assert_eq!(
+                super::matches_pubsub_topic(&manifest.functions[0], &candidate, profile, include_schedules),
+                exact_topic && (!schedule || (strict && first_generation && include_schedules))
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Keep the profile, payload and routing boundaries in one scenario.
+    async fn user_publishes_to_gen1_schedule_topics_keep_their_pubsub_message_and_fan_out() {
+        use super::{CodebaseSpec, FunctionsHttpProfile};
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState,
+        };
+        for profile in [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator] {
+            let base = runtime().await;
+            let manifest = parse_manifest(&json!({"functions": [
+                {"name": "tick", "generation": 1, "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+                {"name": "other", "generation": 1, "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+                {"name": "second", "generation": 2, "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+                {"name": "observer", "trigger": {"type": "pubsub", "topic": "firebase-schedule-tick-us-central1"}}
+            ]})).unwrap();
+            let runtime = FunctionsRuntime::with_codebases(
+                vec![CodebaseSpec {
+                    name: "default".into(),
+                    manifest,
+                    runner: base.runner(),
+                    spawn: None,
+                    cleanup_dir: None,
+                }],
+                base.config.clone(),
+                base.clock.clone(),
+                profile,
+            )
+            .unwrap();
+            let message = json!({"messageId": "11700000000000001", "data": "dXNlciBtZXNzYWdl", "attributes": {"scheduled": "true", "custom": "kept"}, "orderingKey": "ordered"});
+            runtime
+                .reserve_pubsub_events(
+                    "firebase-schedule-tick-us-central1",
+                    std::slice::from_ref(&message),
+                )
+                .unwrap()
+                .publish();
+            let delivered: Vec<_> = runtime
+                .inner
+                .lock()
+                .unwrap()
+                .payloads
+                .values()
+                .map(|queued| (queued.function.clone(), queued.payload.clone()))
+                .collect();
+            let names: Vec<_> = delivered.iter().map(|(name, _)| name.as_str()).collect();
+            assert_eq!(
+                names,
+                if profile == FunctionsHttpProfile::Strict {
+                    vec!["tick", "observer"]
+                } else {
+                    vec!["observer"]
+                }
+            );
+            for (_, event) in &delivered {
+                assert_eq!(event["id"], message["messageId"]);
+                assert_eq!(event["data"]["message"]["data"], message["data"]);
+                assert_eq!(
+                    event["data"]["message"]["attributes"],
+                    message["attributes"]
+                );
+                assert_eq!(
+                    event["data"]["message"]["orderingKey"],
+                    message["orderingKey"]
+                );
+                assert_eq!(
+                    event["type"],
+                    "google.cloud.pubsub.topic.v1.messagePublished"
+                );
+            }
+            let before = runtime.status()["pending"].clone();
+            for topic in [
+                "firebase-schedule-other-us-central1-miss",
+                "firebase-schedule-second-us-central1",
+                "firebase-schedule-tick",
+            ] {
+                runtime
+                    .reserve_pubsub_events(topic, std::slice::from_ref(&message))
+                    .unwrap()
+                    .publish();
+            }
+            assert_eq!(runtime.status()["pending"], before);
+            runtime
+                .reserve_scheduler_pubsub_events(
+                    "firebase-schedule-tick-us-central1",
+                    std::slice::from_ref(&message),
+                )
+                .unwrap()
+                .publish();
+            let subscribers: Vec<_> = runtime
+                .inner
+                .lock()
+                .unwrap()
+                .payloads
+                .values()
+                .map(|queued| queued.function.clone())
+                .collect();
+            assert_eq!(
+                subscribers.iter().filter(|name| *name == "tick").count(),
+                usize::from(profile == FunctionsHttpProfile::Strict)
+            );
+            assert_eq!(
+                subscribers
+                    .iter()
+                    .filter(|name| *name == "observer")
+                    .count(),
+                2
+            );
+
+            let faults = Arc::new(Mutex::new(FaultState::default()));
+            faults.lock().unwrap().install(FaultPlan {
+                seed: 1,
+                rules: vec![FaultRule {
+                    matches: FaultMatch {
+                        operation: "functions.deliver".into(),
+                        nth: None,
+                        function: Some("other".into()),
+                        event_type: Some("google.cloud.pubsub.topic.v1.messagePublished".into()),
+                    },
+                    action: FaultAction::Duplicate { count: 1 },
+                }],
+            });
+            runtime.set_faults(faults);
+            let ids = runtime.publish("firebase-schedule-other-us-central1", &[message]);
+            let delivered = runtime
+                .inner
+                .lock()
+                .unwrap()
+                .payloads
+                .values()
+                .filter(|queued| queued.function == "other")
+                .map(|queued| queued.payload.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                delivered.len(),
+                2 * usize::from(profile == FunctionsHttpProfile::Strict)
+            );
+            for event in &delivered {
+                assert_eq!(event["id"], ids[0]);
+            }
+            runtime.shutdown().await;
+            base.shutdown().await;
+        }
     }
 
     #[tokio::test]

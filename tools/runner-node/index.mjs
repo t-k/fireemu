@@ -1519,9 +1519,13 @@ async function invoke(functions, manifest, msg) {
     spec,
     async () => {
       if (spec.generation === 1) {
-        const context = v1Context(msg);
+        // A Gen1 schedule also receives ordinary publishes to its own job topic, with the original message and context.
+        const publishedToSchedule = strictProfile() && msg.trigger === "schedule" &&
+          msg.event.type === "google.cloud.pubsub.topic.v1.messagePublished" &&
+          msg.event.source === `//pubsub.googleapis.com/projects/${process.env.GCLOUD_PROJECT}/topics/firebase-schedule-${spec.name}-${spec.region || "us-central1"}`;
+        const context = v1Context(publishedToSchedule ? { ...msg, trigger: "pubsub" } : msg);
         let data = msg.event.data;
-        if (msg.trigger === "schedule") data = {};
+        if (msg.trigger === "schedule") data = publishedToSchedule ? msg.event.data.message : {};
         // v1 `topic().onPublish(message, context)`: the message itself is the data.
         if (msg.trigger === "pubsub") data = msg.event.data.message;
         await fn(data, context);

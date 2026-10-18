@@ -165,6 +165,7 @@ A test that updates the same documents many times therefore holds many versions 
 
 - Each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, each session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions.
 - On a pinned clock (`daemon.clockStart`), a database keeps at most 1,024 versions of any one document.
+- Starting with the next release, strict Listen retains the latest 4,096 boundary records per live database. A resumed stream echoes the original boundary's `read_time`, then sends the new snapshot time with `CURRENT`. Token bytes are opaque and may change without a write. An expired record or expired document history triggers `RESET` and a full replay; reset, restore and daemon restart discard the records. This bound is local to Fireemu and is not a production limit.
 - A commit that would cross a limit is refused whole with `RESOURCE_EXHAUSTED` and the message `Firestore retained history capacity is exhausted`.
 
 To use less memory, lower the limits in `firestore.history`:

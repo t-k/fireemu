@@ -5,8 +5,8 @@
 //! on the database (or a target is added), every active target is refreshed against one
 //! database snapshot; the diff against its last known `(path, version)` set becomes
 //! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
-//! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
-//! the snapshot version; a target made current in that snapshot gets its token with
+//! `NO_CHANGE` boundary carrying the snapshot read time and an opaque resume token for
+//! that boundary; a target made current in that snapshot gets its token with
 //! `CURRENT` instead of a `NO_CHANGE` of its own. A target added with a resume token (or a
 //! read time) replays only what changed since that version: a global boundary with the resume
 //! point's token comes first, then the target's state at the token is recomputed from the
@@ -40,6 +40,7 @@ use tonic::Status;
 use crate::decode::{parse_parent, Parent};
 use crate::encode::{decode_instant, decode_write, encode_document, encode_instant};
 use crate::gateway::Gateway;
+use crate::local::listen_tokens::{ListenResumeTokens, ResumeBoundary};
 use crate::local::{CommitNotification, LocalBackend};
 use crate::rules::{write_guard, Principal, RulesEnforcer};
 
@@ -383,6 +384,9 @@ enum TargetKind {
 enum Resume {
     /// A version the stream handed out earlier (or a read time).
     Version(CommitVersion),
+    /// A strict opaque issuance, hydrated before allocating this refresh's replacement.
+    Issued([u8; 11]),
+    Boundary(ResumeBoundary),
     /// A read time: the version current at that instant, while it is still retained.
     ReadTime(fireemu_core_types::time::LogicalInstant),
     /// Not a token this daemon issued, or one whose version was compacted away: full replay
@@ -1043,70 +1047,94 @@ fn refresh_all(
     // One critical section: every target sees the same version, read time and documents.
     let expected_epoch = ctx.epoch;
     let local = ctx.local.clone();
-    let snapshot = ctx
-        .local
-        .with_snapshot(parent, |db, version, read_at, generation| {
-            let (database_hash, generation_changed) =
-                cached_database_hash_at(parent, generation, database_hash_cache);
-            if generation_changed {
-                input = RefreshInput::Full;
-                invalidate_targets(targets, out);
-            }
-            if local.epoch() != expected_epoch {
-                return Err(Status::aborted("the session was reset"));
-            }
-            let read_time = encode_instant(read_at);
-            let binding = TokenBinding {
-                epoch: local.epoch(),
-                strict: ctx.gateway.production_refusals(),
-                database: database_hash,
-                target: 0,
-            };
-            let token = resume_token(version, &binding);
-            let delta_paths = complete_delta_paths(&input, version);
-            let mut removed = Vec::new();
-            for (id, state) in targets.iter_mut() {
-                let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
-                    if state.current && state.resume.is_none() {
-                        if let Some(paths) = delta_paths {
-                            if refresh_target_delta(db, *id, state, read_time, paths)?.is_some() {
-                                return Ok(());
+    let snapshot =
+        ctx.local
+            .with_listen_snapshot(parent, |db, version, read_at, generation, history| {
+                let (database_hash, generation_changed) =
+                    cached_database_hash_at(parent, generation, database_hash_cache);
+                if generation_changed {
+                    input = RefreshInput::Full;
+                    invalidate_targets(targets, out);
+                }
+                if local.epoch() != expected_epoch {
+                    return Err(Status::aborted("the session was reset"));
+                }
+                let read_time = encode_instant(read_at);
+                let binding = TokenBinding {
+                    epoch: local.epoch(),
+                    strict: ctx.gateway.production_refusals(),
+                    database: database_hash,
+                    target: 0,
+                };
+                // Capture every supplied point before issuance can evict an older record.
+                let token = if binding.strict {
+                    let mut history = history
+                        .lock()
+                        .map_err(|_| Status::unavailable("Listen token history is poisoned"))?;
+                    for state in targets.values_mut() {
+                        if let Some(Resume::Issued(bytes)) = state.resume.as_ref() {
+                            state.resume = Some(
+                                history
+                                    .lookup(bytes)
+                                    .map_or(Resume::Invalid, Resume::Boundary),
+                            );
+                        }
+                    }
+                    history.issue(version, read_time, strict_scope_check(&binding))?
+                } else {
+                    resume_token(version, &binding)
+                };
+                let delta_paths = complete_delta_paths(&input, version);
+                let mut removed = Vec::new();
+                for (id, state) in targets.iter_mut() {
+                    let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
+                        if state.current && state.resume.is_none() {
+                            if let Some(paths) = delta_paths {
+                                if refresh_target_delta(db, *id, state, read_time, paths)?.is_some()
+                                {
+                                    return Ok(());
+                                }
                             }
                         }
-                    }
-                    refresh_target_full(db, *id, state, read_time, &binding, version)
-                });
-                match refreshed {
-                    Ok(()) => {
-                        out.append(&mut state.pending);
-                        if !state.current {
-                            state.current = true;
-                            let bound = if binding.strict {
-                                binding
-                            } else {
-                                TokenBinding {
-                                    target: state.target_hash,
-                                    ..binding
-                                }
-                            };
-                            let target_token = resume_token(version, &bound);
-                            out.push(target_change(
-                                pb::target_change::TargetChangeType::Current,
-                                vec![*id],
-                                Some(target_token),
-                                Some(read_time),
-                            ));
+                        refresh_target_full(
+                            db, *id, state, read_time, &binding, version, &token, history,
+                        )
+                    });
+                    match refreshed {
+                        Ok(()) => {
+                            out.append(&mut state.pending);
+                            if !state.current {
+                                state.current = true;
+                                let bound = if binding.strict {
+                                    binding
+                                } else {
+                                    TokenBinding {
+                                        target: state.target_hash,
+                                        ..binding
+                                    }
+                                };
+                                let target_token = if binding.strict {
+                                    token.clone()
+                                } else {
+                                    resume_token(version, &bound)
+                                };
+                                out.push(target_change(
+                                    pb::target_change::TargetChangeType::Current,
+                                    vec![*id],
+                                    Some(target_token),
+                                    Some(read_time),
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            state.pending.clear();
+                            out.push(removed_with_cause(*id, &e));
+                            removed.push(*id);
                         }
                     }
-                    Err(e) => {
-                        state.pending.clear();
-                        out.push(removed_with_cause(*id, &e));
-                        removed.push(*id);
-                    }
                 }
-            }
-            Ok((read_time, token, removed, version))
-        });
+                Ok((read_time, token, removed, version))
+            });
     let (read_time, token, removed, version) = match snapshot.and_then(|r| r) {
         Ok(s) => s,
         Err(e) => {
@@ -1187,9 +1215,9 @@ fn authorize_target(
 ///
 /// A resumed target starts with a global boundary, as production answers a resume
 /// (AUTH-FS-CROSS stage 2, packet v7): its token is `boundary`'s for the resume point, so a
-/// stream that drops before the diff resumes from there again, and its read time is the
-/// snapshot's, so the client's snapshot version never goes back. The client raises its
-/// snapshot from its cache there, not current, until `CURRENT`.
+/// stream that drops before the diff resumes from there again. Strict echoes the original
+/// issuance read time; CURRENT and the final boundary carry the new snapshot time.
+#[allow(clippy::too_many_arguments)]
 fn refresh_target_full(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
@@ -1197,14 +1225,33 @@ fn refresh_target_full(
     read_time: prost_types::Timestamp,
     boundary: &TokenBinding,
     snapshot_version: CommitVersion,
+    snapshot_token: &[u8],
+    history: &std::sync::Mutex<ListenResumeTokens>,
 ) -> Result<(), Status> {
+    let original_boundary = match state.resume.as_ref() {
+        Some(Resume::Boundary(point)) => Some(*point),
+        _ => None,
+    };
     let resumed = resolve_resume(db, id, state)?;
     if let Some(from) = resumed {
+        let (token, echoed_time) = if let Some(point) = original_boundary {
+            (point.token.to_vec(), point.read_time)
+        } else if boundary.strict {
+            (
+                history
+                    .lock()
+                    .map_err(|_| Status::unavailable("Listen token history is poisoned"))?
+                    .issue(from, read_time, strict_scope_check(boundary))?,
+                read_time,
+            )
+        } else {
+            (resume_token(from, boundary), read_time)
+        };
         state.pending.push(target_change(
             pb::target_change::TargetChangeType::NoChange,
             vec![],
-            Some(resume_token(from, boundary)),
-            Some(read_time),
+            Some(token),
+            Some(echoed_time),
         ));
     }
     // How production answers this resume: see `ResumeAnswer`.
@@ -1250,7 +1297,7 @@ fn refresh_target_full(
             state.pending.push(target_change(
                 pb::target_change::TargetChangeType::NoChange,
                 vec![],
-                Some(resume_token(snapshot_version, boundary)),
+                Some(snapshot_token.to_vec()),
                 Some(read_time),
             ));
         }
@@ -1478,8 +1525,9 @@ fn resolve_resume(
     };
     let version = match resume {
         Resume::Version(v) => Some(v),
+        Resume::Boundary(point) => Some(point.version),
         Resume::ReadTime(t) => db.version_at_retained(t),
-        Resume::Invalid => None,
+        Resume::Issued(_) | Resume::Invalid => None,
     }
     .filter(|v| db.is_retained(*v));
     if let Some(v) = version {
@@ -1582,19 +1630,20 @@ fn target_hash(kind: &TargetKind) -> u64 {
     fnv(&format!("{kind:?}"))
 }
 
-/// Strict: 8-byte big-endian version and a 3-byte binding check. Emulator: four 8-byte words.
-/// The truncated check can collide; it is an opaque binding check, not authentication.
+/// The short scope check only classifies foreign/malformed bytes; it is not authentication.
+fn strict_scope_check(binding: &TokenBinding) -> [u8; 3] {
+    let check = fnv(&format!(
+        "{}/{}/{}",
+        binding.epoch, binding.database, binding.target
+    ));
+    check.to_be_bytes()[5..].try_into().unwrap_or([0; 3])
+}
+
+/// Emulator tokens retain four 8-byte words. Strict issuance uses the database's bounded
+/// history instead; token payloads are opaque and never authorize document reads.
 fn resume_token(version: CommitVersion, binding: &TokenBinding) -> Vec<u8> {
     let mut out = Vec::with_capacity(32);
     out.extend_from_slice(&version.value().to_be_bytes());
-    if binding.strict {
-        let check = fnv(&format!(
-            "{}/{}/{}",
-            binding.epoch, binding.database, binding.target
-        ));
-        out.extend_from_slice(&check.to_be_bytes()[5..]);
-        return out;
-    }
     out.extend_from_slice(&binding.epoch.to_be_bytes());
     out.extend_from_slice(&binding.database.to_be_bytes());
     out.extend_from_slice(&binding.target.to_be_bytes());
@@ -1607,18 +1656,14 @@ fn parse_resume_token(bytes: &[u8], binding: &TokenBinding) -> Resume {
         let Ok(raw) = <[u8; 11]>::try_from(bytes) else {
             return Resume::Invalid;
         };
-        let version =
-            CommitVersion::from_value(u64::from_be_bytes(raw[..8].try_into().unwrap_or([0; 8])));
         let global = TokenBinding {
             target: 0,
             ..*binding
         };
-        if raw[8..] != resume_token(version, binding)[8..]
-            && raw[8..] != resume_token(version, &global)[8..]
-        {
+        if raw[8..] != strict_scope_check(binding) && raw[8..] != strict_scope_check(&global) {
             return Resume::Invalid;
         }
-        return Resume::Version(version);
+        return Resume::Issued(raw);
     }
     if !is_token_shaped(bytes) {
         return Resume::Invalid;
@@ -2189,6 +2234,146 @@ mod refresh_tests {
                     .expect("unbounded query stays incremental");
         }
         assert_eq!(examined, 50);
+    }
+    fn global_boundary(out: &[pb::ListenResponse]) -> (&[u8], Option<prost_types::Timestamp>) {
+        out.iter()
+            .rev()
+            .find_map(|response| match response.response_type.as_ref() {
+                Some(pb::listen_response::ResponseType::TargetChange(change))
+                    if change.target_ids.is_empty() && !change.resume_token.is_empty() =>
+                {
+                    Some((change.resume_token.as_slice(), change.read_time))
+                }
+                _ => None,
+            })
+            .expect("global boundary")
+    }
+
+    #[test]
+    fn resuming_the_last_retained_issuance_captures_it_before_eviction_then_resets() {
+        let mut fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap().clone();
+        let (token, old_time) = fixture
+            .context
+            .local
+            .with_listen_snapshot(&parent, |_, version, read_at, generation, history| {
+                let mut history = history.lock().unwrap();
+                *history = ListenResumeTokens::new(1);
+                let at = encode_instant(read_at);
+                let token = history
+                    .issue(
+                        version,
+                        at,
+                        strict_scope_check(&TokenBinding {
+                            strict: true,
+                            epoch: fixture.context.epoch,
+                            database: database_hash(&parent, generation),
+                            target: 0,
+                        }),
+                    )
+                    .unwrap();
+                (token, at)
+            })
+            .unwrap();
+        let mut request = query_request(2, "second");
+        if let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+            &mut request.target_change
+        {
+            target.resume_type = Some(pb::target::ResumeType::ResumeToken(token.clone()));
+        }
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &request,
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let echoed = out
+            .iter()
+            .find_map(|response| match response.response_type.as_ref() {
+                Some(pb::listen_response::ResponseType::TargetChange(change))
+                    if change.resume_token == token =>
+                {
+                    Some(change)
+                }
+                _ => None,
+            })
+            .expect("captured issuance survives its eviction during this refresh");
+        assert_eq!(echoed.read_time, Some(old_time));
+        assert_ne!(global_boundary(&out).0, token);
+        out.clear();
+        if let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+            &mut request.target_change
+        {
+            target.target_id = 3;
+        }
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &request,
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert!(out
+            .iter()
+            .any(|response| matches!(response.response_type.as_ref(),
+            Some(pb::listen_response::ResponseType::TargetChange(change))
+                if change.target_change_type == pb::target_change::TargetChangeType::Reset as i32
+                    && change.target_ids == [3])));
+        assert!(!out.iter().any(|response| matches!(response.response_type.as_ref(),
+            Some(pb::listen_response::ResponseType::TargetChange(change)) if change.resume_token == token)));
+    }
+
+    #[test]
+    fn a_fresh_same_seed_backend_never_resumes_another_backends_issuance() {
+        let mut first = generation_fixture();
+        let mut second = generation_fixture();
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for (fixture, out) in [(&mut first, &mut old), (&mut second, &mut new)] {
+            refresh_all(
+                &fixture.context,
+                fixture.parent.as_ref(),
+                &mut fixture.targets,
+                RefreshInput::Full,
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                out,
+            )
+            .unwrap();
+        }
+        let old_token = global_boundary(&old).0.to_vec();
+        assert_ne!(old_token, global_boundary(&new).0);
+        let mut request = query_request(2, "second");
+        if let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+            &mut request.target_change
+        {
+            target.resume_type = Some(pb::target::ResumeType::ResumeToken(old_token));
+        }
+        new.clear();
+        handle_listen_request(
+            &second.context,
+            &mut second.parent,
+            &mut second.targets,
+            &request,
+            &mut second.cache,
+            &mut second.last_snapshot_version,
+            &mut new,
+        )
+        .unwrap();
+        assert!(new
+            .iter()
+            .any(|response| matches!(response.response_type.as_ref(),
+            Some(pb::listen_response::ResponseType::TargetChange(change))
+                if change.target_change_type == pb::target_change::TargetChangeType::Reset as i32
+                    && change.target_ids == [2])));
     }
 }
 

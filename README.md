@@ -507,6 +507,8 @@ Like production, Fireemu keeps every version of a document written in the last h
 - On a pinned clock (`daemon.clockStart`), time does not pass on its own, so a database keeps at most 1,024 versions of any one document. This limit works like `maxVersionsPerPath` below: once a document goes past it, older snapshots are released for the whole database.
 - A commit that would cross a limit is refused whole with `RESOURCE_EXHAUSTED` and the message `Firestore retained history capacity is exhausted`.
 
+In the next release, strict Listen resume tokens identify their exact issued boundary: the first resume echo retains that boundary's `read_time`, while `CURRENT` and the final boundary use the new snapshot time. Strict keeps the latest 4,096 boundary records per live database, independently of other databases. A token whose record or document history has expired triggers `RESET` and a full replay; reset, restore and daemon restart also discard issuance records. Token bytes are opaque and may change without a document write. Emulator-profile tokens retain their existing format.
+
 Versions older than an hour are released by the next commit after the clock passes them. To use less memory, lower the limits in the `firestore.history` section:
 
 ```toml

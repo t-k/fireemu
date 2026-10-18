@@ -64,6 +64,8 @@ struct DatabaseEntry {
     cell: RwLock<DatabaseCell>,
     /// Wakes writers refused for lock contention when a transaction finishes.
     releases: TransactionReleases,
+    /// Strict boundary records share this database entry's lifecycle and isolation.
+    listen_tokens: Mutex<listen_tokens::ListenResumeTokens>,
 }
 
 impl DatabaseEntry {
@@ -76,6 +78,7 @@ impl DatabaseEntry {
                 state,
             }),
             releases: TransactionReleases::default(),
+            listen_tokens: Mutex::default(),
         }
     }
 }
@@ -3530,6 +3533,33 @@ impl LocalBackend {
                 db.current_version(),
                 db.read_time(now),
                 self.database_generation(parent),
+            ))
+        })
+    }
+
+    /// A Listen refresh and its issuance history belong to the same live database entry.
+    /// The history mutex is taken only briefly by the caller, never across query evaluation.
+    pub(crate) fn with_listen_snapshot<T>(
+        &self,
+        parent: &Parent,
+        f: impl FnOnce(
+            &FirestoreState,
+            CommitVersion,
+            fireemu_core_types::time::LogicalInstant,
+            u64,
+            &Mutex<listen_tokens::ListenResumeTokens>,
+        ) -> T,
+    ) -> Result<T, Status> {
+        let now = self.write_time();
+        let _admitted = self.barrier.admit();
+        let handle = self.database_handle(parent)?;
+        handle.read_status(|db| {
+            Ok(f(
+                db,
+                db.current_version(),
+                db.read_time(now),
+                self.database_generation(parent),
+                &handle.0.listen_tokens,
             ))
         })
     }
@@ -8903,5 +8933,145 @@ mod lock_tests {
             )
             .await;
         assert!(released);
+    }
+}
+
+// Kept inside this bound source so the verification evidence includes the complete registry.
+pub(crate) mod listen_tokens {
+    //! Bounded, database-owned strict Listen boundary identities. Token bytes are opaque;
+    //! the immutable issuance record, rather than a commit timestamp, identifies a boundary.
+
+    use std::collections::{BTreeMap, VecDeque};
+
+    use fireemu_core_firestore::store::CommitVersion;
+    use prost_types::Timestamp;
+    use tonic::Status;
+
+    /// A database retains this many strict boundary issuances independently of other databases.
+    /// Older tokens reset and replay, just like tokens whose document history expired.
+    pub(crate) const MAX_LISTEN_RESUME_POINTS: usize = 4096;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(crate) struct ResumeBoundary {
+        pub(crate) token: [u8; 11],
+        pub(crate) version: CommitVersion,
+        pub(crate) read_time: Timestamp,
+    }
+
+    /// Owned by the live database entry, so reset, deletion and restore discard its records.
+    #[derive(Debug)]
+    pub(crate) struct ListenResumeTokens {
+        points: BTreeMap<[u8; 11], ResumeBoundary>,
+        order: VecDeque<[u8; 11]>,
+        capacity: usize,
+    }
+
+    impl Default for ListenResumeTokens {
+        fn default() -> Self {
+            Self::new(MAX_LISTEN_RESUME_POINTS)
+        }
+    }
+
+    impl ListenResumeTokens {
+        pub(crate) fn new(capacity: usize) -> Self {
+            Self {
+                points: BTreeMap::new(),
+                order: VecDeque::new(),
+                capacity,
+            }
+        }
+
+        pub(crate) fn lookup(&self, token: &[u8; 11]) -> Option<ResumeBoundary> {
+            self.points.get(token).copied()
+        }
+
+        pub(crate) fn issue(
+            &mut self,
+            version: CommitVersion,
+            read_time: Timestamp,
+            scope_check: [u8; 3],
+        ) -> Result<Vec<u8>, Status> {
+            // Random identities also prevent a fresh backend using the same configured seed
+            // from confusing an earlier process's token with one of its own boundaries.
+            for _ in 0..8 {
+                let mut token = [0; 11];
+                fireemu_adapter_support::entropy::fill(&mut token[..8])
+                    .map_err(|_| Status::unavailable("Listen token entropy is unavailable"))?;
+                token[8..].copy_from_slice(&scope_check);
+                if self.points.contains_key(&token) {
+                    continue;
+                }
+                let point = ResumeBoundary {
+                    token,
+                    version,
+                    read_time,
+                };
+                self.points.insert(token, point);
+                self.order.push_back(token);
+                while self.order.len() > self.capacity {
+                    if let Some(oldest) = self.order.pop_front() {
+                        self.points.remove(&oldest);
+                    }
+                }
+                return Ok(token.to_vec());
+            }
+            Err(Status::unavailable(
+                "Listen token identity allocation failed",
+            ))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(32))]
+            #[test]
+            fn issuance_history_is_immutable_and_fifo_bounded(
+                capacity in 1_usize..8,
+                times in prop::collection::vec(-100_i64..100, 1..40),
+            ) {
+                let mut history = ListenResumeTokens::new(capacity);
+                let mut reference = VecDeque::new();
+                for seconds in times {
+                    let time = Timestamp { seconds, nanos: 123 };
+                    let version = CommitVersion::from_value(7);
+                    let token = history.issue(version, time, [1, 2, 3]).unwrap();
+                    let key: [u8; 11] = token.try_into().unwrap();
+                    reference.push_back(ResumeBoundary { token: key, version, read_time: time });
+                    while reference.len() > capacity {
+                        let expired = reference.pop_front().unwrap();
+                        prop_assert!(history.lookup(&expired.token).is_none());
+                    }
+                    prop_assert_eq!(history.points.len(), reference.len());
+                    prop_assert_eq!(history.order.len(), reference.len());
+                    for expected in &reference {
+                        prop_assert_eq!(history.lookup(&expected.token), Some(*expected));
+                        prop_assert_eq!(history.lookup(&expected.token), Some(*expected));
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn separate_database_histories_do_not_evict_each_other() {
+            let mut first = ListenResumeTokens::new(1);
+            let token = first
+                .issue(CommitVersion::from_value(0), Timestamp::default(), [0; 3])
+                .unwrap();
+            let key = token.try_into().unwrap();
+            let point = first.lookup(&key);
+            let mut other = ListenResumeTokens::new(1);
+            for _ in 0..10 {
+                other
+                    .issue(CommitVersion::from_value(0), Timestamp::default(), [0; 3])
+                    .unwrap();
+            }
+            assert!(point.is_some());
+            assert_eq!(first.lookup(&key), point);
+            assert_eq!(other.lookup(&key), None);
+        }
     }
 }

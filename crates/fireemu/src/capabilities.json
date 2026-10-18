@@ -511,7 +511,7 @@
       "live diffs after every commit",
       "once",
       "resume from a resume token or read time: the state at that version is recomputed from the retained MVCC history and only the changes since are replayed, followed by an ExistenceFilter with the current count (an undecodable or future token RESETs)",
-      "resume tokens live exactly as long as the read_time retention window: a token whose version has been compacted away is refused explicitly with RESET and a full replay, never resumed against unrelated history",
+      "strict resume tokens retain their exact issued boundary read_time in the latest 4096 records per live database; missing issuance records or compacted versions RESET and fully replay, never resume against unrelated history; reset/restore/restart discard records; emulator tokens keep version-based retention",
       "back-pressure: bounded response channel, commits coalesced into one refresh while the client is slow, 1000 targets per stream (RESOURCE_EXHAUSTED beyond)",
       "a target refused on its own merits (missing composite index, malformed or out-of-database query, rules denial) is answered with TargetChange REMOVE carrying that cause and the stream keeps serving its other targets; stream-level errors are reserved for session-wide or database-wide failures",
       "an end user's native gRPC Listen stream ends with INTERNAL an hour after it opened, as production ends it, only with productionExact or firestore.listenStreamLifetime \"oneHour\" (strict profile); by default it stays open, and POST /v1/firestore/listen:expire on the control API ends every held end-user stream at once with that status, answering {\"expired\": n}, so a client's reconnect can be tested without waiting an hour"

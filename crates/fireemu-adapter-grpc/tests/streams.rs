@@ -1890,8 +1890,8 @@ where
 }
 
 /// The boundary a resume starts with carries a token for the resume point itself, so a stream
-/// that drops before the diff resumes from there again and skips no change; its read time is
-/// the snapshot's, so a client's snapshot version never goes back.
+/// that drops before the diff resumes from there again and skips no change. The echo keeps
+/// its issuance read time, while CURRENT and the final boundary use the new snapshot.
 #[tokio::test]
 async fn a_resume_starts_with_a_boundary_at_its_token() {
     let (mut client, handle) = start(false).await;
@@ -1936,9 +1936,100 @@ async fn a_resume_starts_with_a_boundary_at_its_token() {
     let (later_token, later_time) = next_boundary(&mut listen).await;
     assert_ne!(later_token, token, "the boundary after the diff moves on");
     let (read, early, later) = (read_time.unwrap(), early_time.unwrap(), later_time.unwrap());
-    assert!((early.seconds, early.nanos) >= (read.seconds, read.nanos));
-    assert_eq!(early, later, "both boundaries are the same snapshot's");
+    assert_eq!(early, read, "the echo retains the original boundary time");
+    assert!((later.seconds, later.nanos) >= (read.seconds, read.nanos));
     handle.abort();
+}
+
+/// A version may have several read boundaries without any intervening commit. Resuming
+/// either token must echo that token's original boundary, not its commit or reconnect time.
+#[tokio::test]
+async fn strict_resume_echo_keeps_each_issued_boundary_time_without_a_commit() {
+    use fireemu_core_types::determinism::Clock;
+    use fireemu_core_types::time::LogicalDuration;
+
+    for populated in [false, true] {
+        let (mut client, handle, clock) = start_with_clock().await;
+        if populated {
+            commit_writes(&mut client, vec![set_write("echo/a", &[("v", s("1"))])]).await;
+        }
+        let mut issued = Vec::new();
+        for id in [1, 2] {
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(5))
+                .unwrap();
+            let (tx, rx) = mpsc::channel(8);
+            let mut responses = client
+                .listen(ReceiverStream::new(rx))
+                .await
+                .unwrap()
+                .into_inner();
+            tx.send(add_query_target(id, "echo")).await.unwrap();
+            let (token, at) = next_boundary(&mut responses).await;
+            issued.push((token, at.unwrap()));
+        }
+        assert_ne!(
+            issued[0].0, issued[1].0,
+            "distinct boundaries need distinct opaque identities"
+        );
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(5))
+            .unwrap();
+        let now = fireemu_adapter_grpc::encode::encode_instant(clock.lock().unwrap().now());
+        for (token, at) in issued {
+            // Echo the older token twice, including after the newer boundary was issued.
+            for _ in 0..2 {
+                let (tx, rx) = mpsc::channel(8);
+                let mut responses = client
+                    .listen(ReceiverStream::new(rx))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                tx.send(resume_request(3, "echo", token.clone(), None))
+                    .await
+                    .unwrap();
+                let (echoed, echo_at) = next_boundary(&mut responses).await;
+                assert_eq!(echoed, token);
+                assert_eq!(
+                    echo_at,
+                    Some(at),
+                    "resume echo must keep its issuance read time"
+                );
+                let mut current = None;
+                loop {
+                    let response =
+                        tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .unwrap();
+                    if let Some(pb::listen_response::ResponseType::TargetChange(change)) =
+                        response.response_type
+                    {
+                        if change.target_change_type
+                            == pb::target_change::TargetChangeType::Current as i32
+                        {
+                            current = Some(change.clone());
+                        }
+                        if change.target_ids.is_empty() && change.target_change_type == 0 {
+                            let current = current.expect("CURRENT before the new global boundary");
+                            assert_eq!(current.read_time, Some(now));
+                            assert_eq!(change.read_time, Some(now));
+                            assert_eq!(current.resume_token, change.resume_token);
+                            assert_ne!(change.resume_token, token);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        handle.abort();
+        handle.await.unwrap_err();
+    }
 }
 
 /// The first `count` names `name(i)` the partition sampler picks, so a small test group splits
@@ -2383,6 +2474,7 @@ async fn start_with_clock() -> (
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
     let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    BACKEND.with(|b| *b.borrow_mut() = Some(backend.clone()));
     let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -4788,7 +4880,6 @@ mod resume_token_properties {
                 let (_, global) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
                 assert_eq!(bound.len(), 11);
                 assert_eq!(bound, global);
-                assert_eq!(u64::from_be_bytes(bound[..8].try_into().unwrap()), u64::from(version));
                 if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
                     t.target_id = 2;
                     t.resume_type = Some(pb::target::ResumeType::ResumeToken(bound.clone()));
@@ -5010,4 +5101,169 @@ mod current_boundary_properties {
             });
         }
     }
+}
+
+/// `WebChannel` must preserve the same issuance timestamp as native gRPC, including when
+/// reconnecting an empty target without any intervening document write.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_webchannel_resume_echo_uses_the_original_boundary_time() {
+    use fireemu_adapter_grpc::rest::RestState;
+    use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
+    use fireemu_core_types::time::LogicalDuration;
+    use serde_json::{json, Value as Json};
+    use std::fmt::Write as _;
+
+    fn request(method: &str, params: BTreeMap<String, String>, body: String) -> ChannelRequest {
+        ChannelRequest {
+            kind: StreamKind::Listen,
+            method: method.to_owned(),
+            params,
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body,
+        }
+    }
+    fn open(hub: &Hub, token: Option<&str>) -> String {
+        let mut target =
+            json!({"targetId": 1, "documents": {"documents": [format!("{DOCS}/open/missing")]}});
+        if let Some(token) = token {
+            target["resumeToken"] = json!(token);
+        }
+        let message = json!({"database": DB, "addTarget": target}).to_string();
+        let encoded = message.bytes().fold(String::new(), |mut encoded, byte| {
+            write!(&mut encoded, "%{byte:02X}").unwrap();
+            encoded
+        });
+        let ChannelResponse::Full {
+            status, headers, ..
+        } = hub.handle(&request(
+            "POST",
+            BTreeMap::from([
+                ("database".to_owned(), DB.to_owned()),
+                ("VER".to_owned(), "8".to_owned()),
+                ("RID".to_owned(), "1".to_owned()),
+            ]),
+            format!("count=1&ofs=0&req0___data__={encoded}"),
+        ))
+        else {
+            panic!("handshake")
+        };
+        assert_eq!(status, 200);
+        headers
+            .into_iter()
+            .find(|(name, _)| *name == "x-http-session-id")
+            .unwrap()
+            .1
+    }
+    async fn changes(hub: &Hub, sid: &str, boundaries: usize) -> Vec<Json> {
+        let mut out = Vec::new();
+        let mut aid = 0;
+        let mut seen = 0;
+        for _ in 0..32 {
+            let ChannelResponse::Stream { mut body, .. } = hub.handle(&request(
+                "GET",
+                BTreeMap::from([
+                    ("SID".to_owned(), sid.to_owned()),
+                    ("RID".to_owned(), "rpc".to_owned()),
+                    ("AID".to_owned(), aid.to_string()),
+                    ("CI".to_owned(), "1".to_owned()),
+                    ("TO".to_owned(), "1000".to_owned()),
+                    ("TYPE".to_owned(), "xmlhttp".to_owned()),
+                ]),
+                String::new(),
+            )) else {
+                panic!("back channel")
+            };
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let (_, payload) = std::str::from_utf8(&chunk)
+                .unwrap()
+                .split_once('\n')
+                .unwrap();
+            let arrays: Json = serde_json::from_str(payload).unwrap();
+            for array in arrays.as_array().unwrap() {
+                aid = array[0].as_u64().unwrap();
+                if let Some(change) = array[1][0].get("targetChange") {
+                    if change["resumeToken"].is_string()
+                        && change["targetIds"].as_array().is_none_or(Vec::is_empty)
+                    {
+                        seen += 1;
+                    }
+                    out.push(change.clone());
+                }
+            }
+            if seen >= boundaries {
+                return out;
+            }
+        }
+        panic!("missing global boundaries");
+    }
+    let (_, handle, clock) = start_with_clock().await;
+    let local = BACKEND.with(|b| b.borrow().as_ref().unwrap().clone());
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let hub = Hub::new(Arc::new(RestState {
+        local,
+        gateway: Arc::new(gateway),
+        rules: None,
+        app_check: None,
+        control_token: None,
+    }));
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5))
+        .unwrap();
+    let first = open(&hub, None);
+    let initial = changes(&hub, &first, 1).await;
+    let boundary = initial.last().unwrap();
+    let token = boundary["resumeToken"].as_str().unwrap();
+    let at = &boundary["readTime"];
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5))
+        .unwrap();
+    let resumed = open(&hub, Some(token));
+    let resumed_changes = changes(&hub, &resumed, 2).await;
+    let boundaries: Vec<_> = resumed_changes
+        .iter()
+        .filter(|change| {
+            change["resumeToken"].is_string()
+                && change["targetIds"].as_array().is_none_or(Vec::is_empty)
+        })
+        .collect();
+    assert_eq!(boundaries[0]["resumeToken"], token);
+    assert_eq!(&boundaries[0]["readTime"], at);
+    assert_ne!(&boundaries[1]["readTime"], at);
+    let current = resumed_changes
+        .iter()
+        .find(|change| change["targetChangeType"] == "CURRENT")
+        .unwrap();
+    assert_eq!(current["readTime"], boundaries[1]["readTime"]);
+    assert_eq!(current["resumeToken"], boundaries[1]["resumeToken"]);
+    for sid in [first, resumed] {
+        hub.handle(&request(
+            "POST",
+            BTreeMap::from([
+                ("SID".to_owned(), sid),
+                ("TYPE".to_owned(), "terminate".to_owned()),
+            ]),
+            String::new(),
+        ));
+    }
+    handle.abort();
+    handle.await.unwrap_err();
 }

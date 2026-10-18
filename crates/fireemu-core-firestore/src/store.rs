@@ -11,6 +11,7 @@ use core::cmp::Ordering;
 use core::fmt;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use fireemu_core_limits::catalogs::FIRESTORE_STANDARD_2026_08_25;
@@ -595,6 +596,59 @@ pub struct HistoryProjection {
 
 impl std::error::Error for FirestoreError {}
 
+/// Identity and cancellation state of one pending Commit request.
+/// Clones share cancellation; dropping a clone does not cancel the request.
+#[derive(Debug, Clone)]
+pub struct CommitWaitOwner(Arc<AtomicBool>);
+
+impl Default for CommitWaitOwner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CommitWaitOwner {
+    #[must_use]
+    /// Creates an active identity for one request and all its retries.
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(true)))
+    }
+    /// Permanently deactivates this request without acquiring a database lock.
+    pub fn cancel(&self) {
+        self.0.store(false, AtomicOrdering::SeqCst);
+    }
+    #[must_use]
+    /// Whether the request still owns a live wait edge.
+    pub fn is_active(&self) -> bool {
+        self.0.load(AtomicOrdering::SeqCst)
+    }
+}
+
+// Request ownership is transient: database snapshots retain transaction/read locks,
+// but never capture transport requests that can no longer exist after restoration.
+#[derive(Debug, Default)]
+struct OwnedCommitWaits(Vec<(CommitWaitOwner, Vec<Write>)>);
+
+impl Clone for OwnedCommitWaits {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl OwnedCommitWaits {
+    fn remove(&mut self, owner: &CommitWaitOwner) {
+        self.0
+            .retain(|(pending, _)| pending.is_active() && !Arc::ptr_eq(&pending.0, &owner.0));
+    }
+
+    fn insert(&mut self, owner: &CommitWaitOwner, writes: &[Write]) {
+        self.remove(owner);
+        if owner.is_active() {
+            self.0.push((owner.clone(), writes.to_vec()));
+        }
+    }
+}
+
 // Each flag is an independent fact about one transaction (mode, a pending lock wait, an unpinned
 // snapshot, an expiry nobody was refused for); a state enum would multiply them.
 #[allow(clippy::struct_excessive_bools)]
@@ -623,6 +677,7 @@ struct Transaction {
     /// Pending writes while the adapter waits for another transaction's locks. A requester
     /// forms a deadlock only if these writes also collide with its own read locks.
     waiting_to_commit: Option<Vec<Write>>,
+    owned_commit_waits: OwnedCommitWaits,
     /// Retains the deadlock refusal for a pending Commit retried after the release notification.
     deadlock_victim: bool,
     /// A read-only transaction begun without a `readTime` takes its snapshot at its first use, not
@@ -2352,6 +2407,7 @@ impl FirestoreState {
             state: TransactionState::Active,
             activity: 0,
             waiting_to_commit: None,
+            owned_commit_waits: OwnedCommitWaits::default(),
             deadlock_victim: false,
             snapshot_pending: false,
             lifetime_expired: false,
@@ -2499,6 +2555,7 @@ impl FirestoreState {
         if let Some(transaction) = self.transactions.get_mut(id) {
             transaction.state = state;
             transaction.waiting_to_commit = None;
+            transaction.owned_commit_waits.0.clear();
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_sub(transaction.conflict_ledger_bytes);
@@ -3735,10 +3792,23 @@ impl FirestoreState {
         now: LogicalInstant,
         admit: impl FnOnce(&CommitResult, HistoryProjection) -> Result<R, FirestoreError>,
     ) -> Result<(CommitResult, R), FirestoreError> {
+        self.commit_with_history_admission_owned(writes, transaction, now, None, admit)
+    }
+
+    /// Applies a commit with request-scoped ownership of its contention wait.
+    #[allow(clippy::too_many_lines)]
+    pub fn commit_with_history_admission_owned<R>(
+        &mut self,
+        writes: &[Write],
+        transaction: Option<&TransactionId>,
+        now: LogicalInstant,
+        owner: Option<&CommitWaitOwner>,
+        admit: impl FnOnce(&CommitResult, HistoryProjection) -> Result<R, FirestoreError>,
+    ) -> Result<(CommitResult, R), FirestoreError> {
         if let Some(id) = transaction {
             self.validate_transaction_commit(id, writes, now)?;
         }
-        self.check_contention(writes, transaction, now)?;
+        self.check_contention(writes, transaction, now, owner)?;
         Self::check_transform_budget(writes)?;
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
@@ -4065,14 +4135,19 @@ impl FirestoreState {
         writes: &[Write],
         own: Option<&TransactionId>,
         now: LogicalInstant,
+        owner: Option<&CommitWaitOwner>,
     ) -> Result<(), FirestoreError> {
+        if let Some(transaction) = own.and_then(|id| self.transactions.get_mut(id)) {
+            if let Some(owner) = owner {
+                transaction.owned_commit_waits.remove(owner);
+            } else {
+                transaction.waiting_to_commit = None;
+            }
+        }
         if writes.is_empty() {
             return Ok(());
         }
         self.prune_transactions(now);
-        if let Some(transaction) = own.and_then(|id| self.transactions.get_mut(id)) {
-            transaction.waiting_to_commit = None;
-        }
         let floor = self.compaction_floor;
         let holders: Vec<(TransactionId, LogicalInstant, bool)> = self
             .transactions
@@ -4085,10 +4160,22 @@ impl FirestoreState {
                     && self.holder_locks_writes(holder, writes)
             })
             .map(|(id, holder)| {
-                let cycle = holder.waiting_to_commit.as_ref().is_some_and(|pending| {
-                    own.and_then(|id| self.transactions.get(id))
-                        .is_some_and(|requester| self.holder_locks_writes(requester, pending))
-                });
+                let cycle = own
+                    .and_then(|id| self.transactions.get(id))
+                    .is_some_and(|requester| {
+                        holder
+                            .waiting_to_commit
+                            .iter()
+                            .chain(
+                                holder
+                                    .owned_commit_waits
+                                    .0
+                                    .iter()
+                                    .filter(|(owner, _)| owner.is_active())
+                                    .map(|(_, pending)| pending),
+                            )
+                            .any(|pending| self.holder_locks_writes(requester, pending))
+                    });
                 (id.clone(), holder.started_at, cycle)
             })
             .collect();
@@ -4122,13 +4209,17 @@ impl FirestoreState {
                 return Ok(());
             }
             if let Some(transaction) = self.transactions.get_mut(id) {
-                transaction.waiting_to_commit = Some(writes.to_vec());
+                if let Some(owner) = owner {
+                    transaction.owned_commit_waits.insert(owner, writes);
+                } else {
+                    transaction.waiting_to_commit = Some(writes.to_vec());
+                }
             }
         }
         Err(FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()))
     }
 
-    /// Clears the pending Commit when its adapter stops waiting for contention.
+    /// Clears the legacy unowned Commit wait; request-owned waits remain independent.
     pub fn stop_waiting_to_commit(&mut self, id: &TransactionId) {
         if let Some(transaction) = self.transactions.get_mut(id) {
             transaction.waiting_to_commit = None;
@@ -4154,6 +4245,24 @@ impl FirestoreState {
             })
             .map(|(id, _)| id.clone())
             .collect()
+    }
+
+    /// Number of live Commit requests waiting on this transaction's behalf.
+    /// Cancellation removes a request logically before its entry is physically pruned.
+    #[must_use]
+    pub fn transaction_commit_wait_count(&self, id: &TransactionId) -> usize {
+        self.transactions
+            .get(id)
+            .filter(|transaction| transaction.state == TransactionState::Active)
+            .map_or(0, |transaction| {
+                usize::from(transaction.waiting_to_commit.is_some())
+                    + transaction
+                        .owned_commit_waits
+                        .0
+                        .iter()
+                        .filter(|(owner, _)| owner.is_active())
+                        .count()
+            })
     }
 
     /// Whether `id` names a transaction that is still active (a commit refused for lock

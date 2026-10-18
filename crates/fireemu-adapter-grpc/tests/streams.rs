@@ -77,6 +77,17 @@ async fn start_configured(
     FirestoreClient<tonic::transport::Channel>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_configured_with_wait(rules_source, policy, std::time::Duration::ZERO).await
+}
+
+async fn start_configured_with_wait(
+    rules_source: Option<&str>,
+    policy: IndexValidationPolicy,
+    wait: std::time::Duration,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -91,7 +102,8 @@ async fn start_configured(
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let backend =
+        Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7).with_contention_wait(wait));
     BACKEND.with(|b| *b.borrow_mut() = Some(backend.clone()));
     let mut service = GatewayService::local(gateway, backend);
     if let Some(rules_source) = rules_source {
@@ -5266,4 +5278,195 @@ async fn strict_webchannel_resume_echo_uses_the_original_boundary_time() {
     }
     handle.abort();
     handle.await.unwrap_err();
+}
+
+/// Two contended streams must leave both runtime workers available to release their holder.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn contended_write_streams_leave_runtime_workers_available() {
+    use std::time::{Duration, Instant};
+    let (mut client, server) = start_configured_with_wait(
+        None,
+        IndexValidationPolicy::Production,
+        Duration::from_secs(10),
+    )
+    .await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("open/worker-locked", &[("v", s("before"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/open/worker-locked"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                transaction.clone(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut streams = Vec::new();
+    for _ in 0..2 {
+        let (tx, rx) = mpsc::channel(8);
+        let mut stream = client
+            .write(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let handshake = stream.next().await.unwrap().unwrap();
+        streams.push((tx, stream, handshake.stream_token));
+    }
+    let started = Instant::now();
+    for (tx, _, token) in &streams {
+        tx.send(pb::WriteRequest {
+            stream_token: token.clone(),
+            writes: vec![set_write("open/worker-locked", &[("v", s("after"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    // Allow the stream tasks to enter their contention waits before issuing unrelated work.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let other = client
+        .get_document(pb::GetDocumentRequest {
+            name: "projects/demo-other/databases/(default)/documents/open/probe".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(other.code(), tonic::Code::NotFound);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    for (_, stream, _) in &mut streams {
+        let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.write_results.len(), 1);
+    }
+    drop(streams);
+    server.abort();
+    let _ = server.await;
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "runtime progress took {elapsed:?}"
+    );
+}
+
+/// A stream still applies contention deadlines and reset guards after suspending its write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn waiting_write_streams_preserve_deadlines_and_reset_guards() {
+    use std::time::Duration;
+    for reset in [false, true] {
+        let wait = if reset {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_millis(250)
+        };
+        let (mut client, server) =
+            start_configured_with_wait(None, IndexValidationPolicy::Production, wait).await;
+        let backend = BACKEND.with(|slot| slot.borrow().clone().unwrap());
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        assert_eq!(
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/open/wait-bound"),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(transaction)
+                    ),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        let (tx, rx) = mpsc::channel(8);
+        let mut stream = client
+            .write(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(pb::WriteRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let handshake = stream.next().await.unwrap().unwrap();
+        tx.send(pb::WriteRequest {
+            stream_token: handshake.stream_token,
+            writes: vec![set_write("open/wait-bound", &[("v", s("forbidden"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if reset {
+            backend.reset();
+        }
+        let error = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Aborted);
+        if reset {
+            assert!(error.message().contains("reset"), "{error}");
+        } else {
+            assert!(LocalBackend::is_contention(&error), "{error}");
+        }
+        assert_eq!(
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/open/wait-bound"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        drop(tx);
+        drop(stream);
+        server.abort();
+        let _ = server.await;
+    }
 }

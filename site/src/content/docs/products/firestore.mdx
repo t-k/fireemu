@@ -159,7 +159,7 @@ Production ends an end user's native gRPC `Listen` stream with `INTERNAL` an hou
 
 ## Transactions and history
 
-Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. Transactions lock what they read, as production does.
+Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. Transactions lock what they read, as production does. Starting with the next release, contended gRPC and WebChannel writes wait without occupying runtime workers. Canceling a waiting Commit ends that request's deadlock wait; its transaction keeps read locks until it commits, rolls back or expires.
 
 A test that updates the same documents many times therefore holds many versions in memory. These local limits, which production does not have, bound it:
 

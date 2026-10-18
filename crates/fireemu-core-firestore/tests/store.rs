@@ -4705,3 +4705,191 @@ fn stopping_a_commit_wait_preserves_both_transactions_until_a_real_release() {
         Value::Integer(1)
     );
 }
+
+#[test]
+fn cancelled_owned_commit_wait_keeps_transactions_and_read_locks() {
+    use fireemu_core_firestore::store::CommitWaitOwner;
+    let mut s = FirestoreState::new();
+    let older = s.begin_transaction(false, t(1)).unwrap();
+    let younger = s.begin_transaction(false, t(1)).unwrap();
+    for id in [&older, &younger] {
+        s.get_in_transaction(id, &path("owned/doc")).unwrap();
+    }
+    let writes = [set("owned/doc", &[("v", Value::Integer(1))])];
+    let owner = CommitWaitOwner::new();
+    s.commit_with_history_admission_owned(&writes, Some(&younger), t(2), Some(&owner), |_, _| {
+        Ok(())
+    })
+    .unwrap_err();
+    owner.cancel();
+    assert_eq!(
+        s.commit(&writes, Some(&older), t(3)).unwrap_err(),
+        FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
+    );
+    assert!(s.transaction_is_active(&older) && s.transaction_is_active(&younger));
+    s.rollback(&younger).unwrap();
+    s.commit(&writes, Some(&older), t(4)).unwrap();
+}
+
+mod owned_commit_wait_properties {
+    use super::*;
+    use fireemu_core_firestore::store::CommitWaitOwner;
+    use proptest::prelude::*;
+
+    fn owned_attempt(
+        s: &mut FirestoreState,
+        id: &TransactionId,
+        owner: &CommitWaitOwner,
+        target: usize,
+    ) {
+        let write = set(
+            if target == 0 { "owned/a" } else { "owned/b" },
+            &[("v", Value::Integer(1))],
+        );
+        assert_eq!(
+            s.commit_with_history_admission_owned(
+                &[write],
+                Some(id),
+                t(2),
+                Some(owner),
+                |_, _| Ok(())
+            )
+            .unwrap_err(),
+            FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
+        );
+    }
+
+    fn fixture() -> (FirestoreState, [TransactionId; 2], TransactionId) {
+        let mut s = FirestoreState::new();
+        let a = s.begin_transaction(false, t(1)).unwrap();
+        let b = s.begin_transaction(false, t(1)).unwrap();
+        let younger = s.begin_transaction(false, t(1)).unwrap();
+        s.get_in_transaction(&a, &path("owned/a")).unwrap();
+        s.get_in_transaction(&b, &path("owned/b")).unwrap();
+        s.get_in_transaction(&younger, &path("owned/x")).unwrap();
+        (s, [a, b], younger)
+    }
+
+    fn probe(
+        s: &mut FirestoreState,
+        older: &TransactionId,
+        younger: &TransactionId,
+        live_edge: bool,
+    ) {
+        let releases = s.transaction_releases();
+        let result = s.commit(
+            &[set("owned/x", &[("v", Value::Integer(1))])],
+            Some(older),
+            t(3),
+        );
+        if live_edge {
+            assert!(result.is_ok());
+            assert!(!s.transaction_is_active(younger));
+            assert_eq!(s.transaction_releases(), releases + 2);
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
+            );
+            assert!(s.transaction_is_active(older) && s.transaction_is_active(younger));
+            assert_eq!(s.transaction_releases(), releases);
+        }
+    }
+
+    #[test]
+    fn owned_commit_waits_preserve_each_other_in_both_cancellation_orders() {
+        for cancelled in 0..2 {
+            for target in 0..2 {
+                let (mut s, old, young) = fixture();
+                let owners = [CommitWaitOwner::new(), CommitWaitOwner::new()];
+                owned_attempt(&mut s, &young, &owners[0], 0);
+                owned_attempt(&mut s, &young, &owners[1], 1);
+                owners[cancelled].cancel();
+                // Retrying the cancelled request cannot resurrect its old edge.
+                owned_attempt(&mut s, &young, &owners[cancelled], cancelled);
+                s.stop_waiting_to_commit(&young);
+                probe(&mut s, &old[target], &young, target != cancelled);
+            }
+        }
+    }
+
+    #[test]
+    fn owned_commit_wait_snapshots_drop_requests_without_cancelling_originals() {
+        let (mut s, old, young) = fixture();
+        let owner = CommitWaitOwner::new();
+        owned_attempt(&mut s, &young, &owner, 0);
+        let mut restored = s.clone();
+        assert!(owner.is_active());
+        probe(&mut restored, &old[0], &young, false);
+        probe(&mut s, &old[0], &young, true);
+    }
+
+    #[test]
+    fn owned_commit_wait_old_incarnation_cancellation_cannot_clear_reused_transaction() {
+        let (mut old_state, _, old_young) = fixture();
+        let old_owner = CommitWaitOwner::new();
+        owned_attempt(&mut old_state, &old_young, &old_owner, 0);
+        let (mut replacement, older, younger) = fixture();
+        assert_eq!(old_young, younger);
+        let new_owner = CommitWaitOwner::new();
+        owned_attempt(&mut replacement, &younger, &new_owner, 0);
+        old_owner.cancel();
+        probe(&mut replacement, &older[0], &younger, true);
+    }
+
+    #[test]
+    fn owned_commit_wait_cancellation_and_capability_drop_do_not_release_read_locks() {
+        let (mut s, old, young) = fixture();
+        let owner = CommitWaitOwner::new();
+        owned_attempt(&mut s, &young, &owner, 0);
+        drop(owner.clone());
+        assert!(owner.is_active());
+        owner.cancel();
+        let held_clone = owner.clone();
+        assert!(!held_clone.is_active());
+        s.rollback(&young).unwrap();
+        assert!(s
+            .commit_with_history_admission_owned(
+                &[set("owned/a", &[])],
+                Some(&young),
+                t(3),
+                Some(&owner),
+                |_, _| Ok(())
+            )
+            .is_err());
+        assert!(s.transaction_is_active(&old[0]));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 128, failure_persistence: None, ..ProptestConfig::default() })]
+        #[test]
+        fn owned_commit_wait_edges_match_live_request_reference(
+            actions in proptest::collection::vec((0_usize..2, 0_u8..4, 0_usize..2), 0..24),
+            target in 0_usize..2,
+            clone_state in any::<bool>(),
+        ) {
+            let (mut s, old, young) = fixture();
+            let mut owners = [CommitWaitOwner::new(), CommitWaitOwner::new()];
+            let mut active = [true; 2];
+            let mut pending = [None; 2];
+            for (index, action, destination) in actions {
+                match action {
+                    0 => {
+                        owned_attempt(&mut s, &young, &owners[index], destination);
+                        pending[index] = active[index].then_some(destination);
+                    }
+                    1 => { owners[index].cancel(); active[index] = false; pending[index] = None; }
+                    2 => {
+                        owners[index].cancel();
+                        owners[index] = CommitWaitOwner::new();
+                        active[index] = true;
+                        pending[index] = None;
+                    }
+                    _ => s.stop_waiting_to_commit(&young),
+                }
+            }
+            if clone_state { s = s.clone(); pending = [None; 2]; }
+            probe(&mut s, &old[target], &young, pending.contains(&Some(target)));
+        }
+    }
+}

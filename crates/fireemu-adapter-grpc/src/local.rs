@@ -23,9 +23,9 @@ use fireemu_core_firestore::index_usage::WriteRoute;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
-    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreError,
-    FirestoreState, HistoryCapacityError, HistoryProjection, HistoryUsage, ListedDocument,
-    Precondition, QueryExecutionId, QueryStats, TransactionId, Write, WriteOp,
+    Aggregation, CommitResult, CommitVersion, CommitWaitOwner, Document, DocumentChange,
+    FirestoreError, FirestoreState, HistoryCapacityError, HistoryProjection, HistoryUsage,
+    ListedDocument, Precondition, QueryExecutionId, QueryStats, TransactionId, Write, WriteOp,
 };
 use fireemu_core_firestore::ttl::{SweepSchedule, TtlCatalog, TtlError, TtlState};
 use fireemu_core_firestore::value::Value;
@@ -89,6 +89,7 @@ impl DatabaseEntry {
 struct TransactionReleases {
     seen: Mutex<u64>,
     changed: std::sync::Condvar,
+    async_changed: tokio::sync::Notify,
 }
 
 impl TransactionReleases {
@@ -97,6 +98,7 @@ impl TransactionReleases {
             if *seen != releases {
                 *seen = releases;
                 self.changed.notify_all();
+                self.async_changed.notify_waiters();
             }
         }
     }
@@ -200,6 +202,23 @@ impl DatabaseHandle {
         }
     }
 
+    /// Waits for this database's release publications without occupying a worker thread.
+    async fn await_release_until(&self, marker: u64, deadline: &ContentionDeadline) {
+        loop {
+            let notified = self.0.releases.async_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.release_marker() != marker || self.is_detached() || deadline.expired() {
+                return;
+            }
+            let _ = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline.wake_at()),
+                notified,
+            )
+            .await;
+        }
+    }
+
     /// Reads under this database's own lock; `None` once detached or poisoned.
     pub(crate) fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
         self.read_status(|state| Ok(f(state))).ok()
@@ -228,6 +247,7 @@ impl DatabaseHandle {
         if let Ok(mut cell) = self.0.cell.write() {
             cell.detached = true;
             cell.state = FirestoreState::new();
+            self.0.releases.async_changed.notify_waiters();
         }
     }
 }
@@ -964,6 +984,52 @@ thread_local! {
     /// through this slot and the connection task waits without the slot instead.
     static NO_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static CONTENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static COMMIT_WAIT_OWNER: std::cell::RefCell<Option<CommitWaitOwner>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Cancels exactly one request's pending deadlock edges on every exit, without a DB lock.
+pub(crate) struct CommitWaitLease {
+    owner: CommitWaitOwner,
+    cancels: bool,
+}
+
+impl CommitWaitLease {
+    pub(crate) fn new() -> Self {
+        Self {
+            owner: CommitWaitOwner::new(),
+            cancels: true,
+        }
+    }
+
+    fn inherited_or_new() -> Self {
+        COMMIT_WAIT_OWNER
+            .with(|slot| slot.borrow().clone())
+            .map_or_else(Self::new, |owner| Self {
+                owner,
+                cancels: false,
+            })
+    }
+
+    pub(crate) fn owner(&self) -> &CommitWaitOwner {
+        &self.owner
+    }
+}
+
+impl Drop for CommitWaitLease {
+    fn drop(&mut self) {
+        if self.cancels {
+            self.owner.cancel();
+        }
+    }
+}
+
+/// Restores request-local context even if a blocking attempt panics.
+struct CommitWaitScope(Option<CommitWaitOwner>);
+
+impl Drop for CommitWaitScope {
+    fn drop(&mut self) {
+        COMMIT_WAIT_OWNER.with(|slot| *slot.borrow_mut() = self.0.take());
+    }
 }
 
 /// Clears the operation-local actor slot on entry and on the way out.
@@ -3435,23 +3501,30 @@ impl LocalBackend {
             .lock()
             .map_err(|_| Status::unavailable("Functions event admission is unavailable"))?
             .clone();
+        let owner = COMMIT_WAIT_OWNER.with(|slot| slot.borrow().clone());
         let (result, (event, publication, history)) = db
-            .commit_with_history_admission(writes, transaction, now, |result, projection| {
-                let history = self.reserve_history(parent, projection)?;
-                let event = CommitEvent {
-                    actor,
-                    project: parent.project.as_str().to_owned(),
-                    database: parent.database.as_str().to_owned(),
-                    version: result.version.value(),
-                    commit_time: Some(result.commit_time),
-                    changes: result.changes.clone(),
-                };
-                let publication = sink.as_ref().map_or_else(
-                    || Ok(Box::new(NoopCommitPublication) as Box<dyn CommitPublication>),
-                    |sink| sink.reserve(&event).map_err(FirestoreError::EventAdmission),
-                )?;
-                Ok((event, publication, history))
-            })
+            .commit_with_history_admission_owned(
+                writes,
+                transaction,
+                now,
+                owner.as_ref(),
+                |result, projection| {
+                    let history = self.reserve_history(parent, projection)?;
+                    let event = CommitEvent {
+                        actor,
+                        project: parent.project.as_str().to_owned(),
+                        database: parent.database.as_str().to_owned(),
+                        version: result.version.value(),
+                        commit_time: Some(result.commit_time),
+                        changes: result.changes.clone(),
+                    };
+                    let publication = sink.as_ref().map_or_else(
+                        || Ok(Box::new(NoopCommitPublication) as Box<dyn CommitPublication>),
+                        |sink| sink.reserve(&event).map_err(FirestoreError::EventAdmission),
+                    )?;
+                    Ok((event, publication, history))
+                },
+            )
             .map_err(|error| status_from_error(&error))?;
         history.commit(db.history_usage());
         publication.publish();
@@ -3492,16 +3565,24 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
         self.retry_on_contention(parent, None, writes, || {
-            self.fault(parent.project.as_str(), "firestore.commit")?;
-            let now = self.write_time();
-            let result = self.with_db(parent, |db| {
-                guard(db, writes, now)?;
-                let result =
-                    self.commit_with_events(parent, db, writes, None, now, WriteRoute::Internal)?;
-                Ok(result)
-            })?;
-            Ok(crate::streams::WireCommit::from_result(&result))
+            self.commit_writes_once(parent, writes, guard)
         })
+    }
+
+    /// One atomic stream write attempt, without waiting for a conflicting transaction.
+    pub(crate) fn commit_writes_once(
+        &self,
+        parent: &Parent,
+        writes: &[Write],
+        guard: WriteGuard<'_>,
+    ) -> Result<crate::streams::WireCommit, Status> {
+        self.fault(parent.project.as_str(), "firestore.commit")?;
+        let now = self.write_time();
+        let result = self.with_db(parent, |db| {
+            guard(db, writes, now)?;
+            self.commit_with_events(parent, db, writes, None, now, WriteRoute::Internal)
+        })?;
+        Ok(crate::streams::WireCommit::from_result(&result))
     }
 
     /// Current version and read time of a database (Listen boundaries, resume tokens).
@@ -5899,11 +5980,11 @@ impl LocalBackend {
         mut attempt: impl FnMut() -> Result<T, Status>,
     ) -> Result<T, Status> {
         let deadline = self.contention_deadline();
-        let mut owns_wait = false;
+        let lease = CommitWaitLease::inherited_or_new();
         loop {
             let handle = self.database_handle(parent)?;
             let marker = handle.release_marker();
-            match attempt() {
+            match Self::with_commit_wait_owner(Some(lease.owner()), &mut attempt) {
                 Err(status) if Self::is_contention(&status) => {
                     let released = self.expire_lock_leases(&handle, lease_writes, own);
                     if NO_WAIT.with(std::cell::Cell::get) {
@@ -5914,14 +5995,7 @@ impl LocalBackend {
                         }
                         return Err(status);
                     }
-                    owns_wait = true;
                     if !Self::should_wait_for_release(&handle, own, &deadline) {
-                        if let Some(id) = own {
-                            let _ = handle.with(|db| {
-                                db.stop_waiting_to_commit(id);
-                                Ok(())
-                            });
-                        }
                         return Err(status);
                     }
                     if !released {
@@ -5937,17 +6011,18 @@ impl LocalBackend {
                     self.expire_lock_leases(&handle, lease_writes, own);
                     return Err(status);
                 }
-                outcome => {
-                    if let Some(id) = own.filter(|_| owns_wait) {
-                        let _ = handle.with(|db| {
-                            db.stop_waiting_to_commit(id);
-                            Ok(())
-                        });
-                    }
-                    return outcome;
-                }
+                outcome => return outcome,
             }
         }
+    }
+
+    pub(crate) fn with_commit_wait_owner<T>(
+        owner: Option<&CommitWaitOwner>,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let previous = COMMIT_WAIT_OWNER.with(|slot| slot.replace(owner.cloned()));
+        let _scope = CommitWaitScope(previous);
+        f()
     }
 
     /// Runs `f` with lock-contention waits disabled on this thread and reports whether a
@@ -6019,7 +6094,7 @@ impl LocalBackend {
         }
     }
 
-    /// [`Self::retry_on_contention`] for an async caller: the wait runs off the runtime.
+    /// Retries contention with release notifications, without occupying a runtime or blocking-pool worker.
     pub async fn retry_on_contention_async<T>(
         &self,
         parent: &Parent,
@@ -6028,30 +6103,19 @@ impl LocalBackend {
         mut attempt: impl FnMut() -> Result<T, Status>,
     ) -> Result<T, Status> {
         let deadline = self.contention_deadline();
-        let mut owns_wait = false;
+        let lease = CommitWaitLease::inherited_or_new();
         loop {
             let handle = self.database_handle(parent)?;
+            // Capture before the attempt, so a release between refusal and registration is visible.
             let marker = handle.release_marker();
-            match attempt() {
+            match Self::with_commit_wait_owner(Some(lease.owner()), &mut attempt) {
                 Err(status) if Self::is_contention(&status) => {
                     let released = self.expire_lock_leases(&handle, lease_writes, own);
-                    owns_wait = true;
                     if !Self::should_wait_for_release(&handle, own, &deadline) {
-                        if let Some(id) = own {
-                            let _ = handle.with(|db| {
-                                db.stop_waiting_to_commit(id);
-                                Ok(())
-                            });
-                        }
                         return Err(status);
                     }
                     if !released {
-                        let waiter = handle.clone();
-                        let until = deadline.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            waiter.wait_for_release_until(marker, &until)
-                        })
-                        .await;
+                        handle.await_release_until(marker, &deadline).await;
                     }
                 }
                 Err(status)
@@ -6059,19 +6123,10 @@ impl LocalBackend {
                         && status.message()
                             == fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION =>
                 {
-                    // Preserve lease bookkeeping even though a deadlock victim never waits.
                     self.expire_lock_leases(&handle, lease_writes, own);
                     return Err(status);
                 }
-                outcome => {
-                    if let Some(id) = own.filter(|_| owns_wait) {
-                        let _ = handle.with(|db| {
-                            db.stop_waiting_to_commit(id);
-                            Ok(())
-                        });
-                    }
-                    return outcome;
-                }
+                outcome => return outcome,
             }
         }
     }
@@ -6121,7 +6176,8 @@ impl LocalBackend {
         let Some(key) = key else {
             return false;
         };
-        handle
+        let before = handle.release_marker();
+        let released = handle
             .with(|db| {
                 // Recheck idleness and roll back under the same database write lock. A read
                 // followed by a later write lock could otherwise sample an idle holder, let a
@@ -6152,7 +6208,14 @@ impl LocalBackend {
                 }
                 Ok(rolled_back)
             })
-            .unwrap_or(false)
+            .unwrap_or(false);
+        // REST waits on the backend-wide generation, including releases from lease bookkeeping.
+        if handle.release_marker() != before {
+            self.release_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.release_notify.notify_waiters();
+        }
+        released
     }
 
     /// `Rollback`.
@@ -7644,7 +7707,7 @@ mod lock_tests {
 
     use super::*;
 
-    fn backend() -> Arc<LocalBackend> {
+    pub(super) fn backend() -> Arc<LocalBackend> {
         Arc::new(LocalBackend::new(
             Gateway {
                 enforce_limits: true,
@@ -9073,5 +9136,129 @@ pub(crate) mod listen_tokens {
             assert_eq!(first.lookup(&key), point);
             assert_eq!(other.lookup(&key), None);
         }
+    }
+}
+
+#[cfg(test)]
+mod commit_wait_scope_tests {
+    use super::{CommitWaitLease, LocalBackend, COMMIT_WAIT_OWNER};
+
+    #[test]
+    fn nested_attempts_inherit_without_canceling_and_restore_after_panic() {
+        let lease = CommitWaitLease::new();
+        let capability = lease.owner().clone();
+        LocalBackend::with_commit_wait_owner(Some(&capability), || {
+            let inherited = CommitWaitLease::inherited_or_new();
+            drop(inherited);
+            assert!(capability.is_active());
+            let inner = CommitWaitLease::new();
+            let outcome = std::panic::catch_unwind(|| {
+                LocalBackend::with_commit_wait_owner(Some(inner.owner()), || {
+                    panic!("attempt panic")
+                });
+            });
+            assert!(outcome.is_err());
+            let restored = CommitWaitLease::inherited_or_new();
+            drop(inner);
+            assert!(restored.owner().is_active());
+            // Canceling the restored capability proves it is the outer identity.
+            restored.owner().cancel();
+            assert!(!capability.is_active());
+        });
+        assert!(COMMIT_WAIT_OWNER.with(|slot| slot.borrow().is_none()));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn canceled_outer_request_cannot_publish_a_live_wait_from_a_late_blocking_attempt() {
+        use super::pb;
+        use crate::rules::{allow_all, allow_all_reads};
+        let backend = super::lock_tests::backend();
+        let database = "projects/demo-app/databases/(default)";
+        let name = format!("{database}/documents/items/late");
+        let mut transactions = Vec::new();
+        for _ in 0..2 {
+            let transaction = backend
+                .begin_transaction(&pb::BeginTransactionRequest {
+                    database: database.to_owned(),
+                    ..Default::default()
+                })
+                .unwrap();
+            backend
+                .get_document(
+                    &pb::GetDocumentRequest {
+                        name: name.clone(),
+                        consistency_selector: Some(
+                            pb::get_document_request::ConsistencySelector::Transaction(
+                                transaction.clone(),
+                            ),
+                        ),
+                        ..Default::default()
+                    },
+                    &allow_all_reads,
+                )
+                .unwrap_err();
+            transactions.push(transaction);
+        }
+        let request = pb::CommitRequest {
+            database: database.to_owned(),
+            transaction: transactions[1].clone(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let lease = CommitWaitLease::new();
+        let owner = lease.owner().clone();
+        let (entered, entered_rx) = std::sync::mpsc::channel();
+        let (proceed, proceed_rx) = std::sync::mpsc::channel();
+        let waiting = backend.clone();
+        let mut older_request = request.clone();
+        older_request.transaction.clone_from(&transactions[0]);
+        let late = std::thread::spawn(move || {
+            LocalBackend::with_commit_wait_owner(Some(&owner), || {
+                LocalBackend::without_waiting(|| {
+                    waiting.commit_with(&request, &|_, _, _| {
+                        entered.send(()).unwrap();
+                        proceed_rx.recv().unwrap();
+                        Ok(())
+                    })
+                })
+            })
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        // The attempt holds the database lock, so cancellation must need no database lock.
+        drop(lease);
+        proceed.send(()).unwrap();
+        let (result, contended) = late.join().unwrap();
+        assert!(contended);
+        assert!(LocalBackend::is_contention(&result.unwrap_err()));
+        let result = backend.commit_once(&older_request, &allow_all).unwrap_err();
+        assert!(LocalBackend::is_contention(&result), "{result}");
+        backend
+            .rollback(&pb::RollbackRequest {
+                database: database.to_owned(),
+                transaction: transactions.pop().unwrap(),
+                ..Default::default()
+            })
+            .unwrap();
+        backend.commit_once(&older_request, &allow_all).unwrap();
+    }
+
+    #[test]
+    fn dropping_the_request_cancels_a_capability_held_by_a_late_blocking_attempt() {
+        let lease = CommitWaitLease::new();
+        let late_attempt = lease.owner().clone();
+        let ordinary_attempt_clone = late_attempt.clone();
+        drop(ordinary_attempt_clone);
+        assert!(late_attempt.is_active());
+        drop(lease);
+        assert!(!late_attempt.is_active());
     }
 }

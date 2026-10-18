@@ -215,7 +215,7 @@ pub async fn write_stream(
         {
             break;
         }
-        let outcome = handle_write_request(&ctx, &mut state, &req);
+        let outcome = handle_write_request(&ctx, &mut state, &req).await;
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
             break;
@@ -256,7 +256,8 @@ fn token_bytes(prefix: u64, n: u64) -> Vec<u8> {
     token
 }
 
-fn handle_write_request(
+#[allow(clippy::too_many_lines)]
+async fn handle_write_request(
     ctx: &StreamContext,
     state: &mut WriteStreamState,
     req: &pb::WriteRequest,
@@ -344,24 +345,29 @@ fn handle_write_request(
     for w in &writes {
         LocalBackend::check_database(parent, &w.op.path().resource_name())?;
     }
-    let principal = ctx.refresh_principal(parent.project.as_str())?;
-    let guard = write_guard(ctx.rules.as_ref(), &principal);
-    // The epoch is re-checked inside the commit critical section: a reset that starts
-    // after the check above cannot be raced by this write.
-    let epoch = ctx.epoch;
-    let local = ctx.local.clone();
-    let actor = crate::local::Actor::from_principal(&principal);
-    let guarded = move |db: &fireemu_core_firestore::store::FirestoreState,
-                        writes: &[Write],
-                        now: fireemu_core_types::time::LogicalInstant|
-          -> Result<(), Status> {
-        if local.epoch() != epoch {
-            return Err(Status::aborted("the session was reset"));
-        }
-        local.set_actor(actor.clone());
-        guard(db, writes, now)
-    };
-    let result = ctx.local.commit_writes(parent, &writes, &guarded)?;
+    let result = ctx
+        .local
+        .retry_on_contention_async(parent, None, &writes, || {
+            let principal = ctx.refresh_principal(parent.project.as_str())?;
+            let guard = write_guard(ctx.rules.as_ref(), &principal);
+            // The epoch is re-checked inside the commit critical section: a reset that starts
+            // after the check above cannot be raced by this write.
+            let epoch = ctx.epoch;
+            let local = ctx.local.clone();
+            let actor = crate::local::Actor::from_principal(&principal);
+            let guarded = move |db: &fireemu_core_firestore::store::FirestoreState,
+                                writes: &[Write],
+                                now: fireemu_core_types::time::LogicalInstant|
+                  -> Result<(), Status> {
+                if local.epoch() != epoch {
+                    return Err(Status::aborted("the session was reset"));
+                }
+                local.set_actor(actor.clone());
+                guard(db, writes, now)
+            };
+            ctx.local.commit_writes_once(parent, &writes, &guarded)
+        })
+        .await?;
     Ok(pb::WriteResponse {
         stream_id,
         stream_token: token_bytes(state.token_prefix, state.issued),

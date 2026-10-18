@@ -50,6 +50,15 @@ fn hub_and_local_with_profile(
     acceptance: TokenAcceptance,
     strict: bool,
 ) -> (Hub, Arc<LocalBackend>) {
+    hub_and_local_with_wait(rules, acceptance, strict, std::time::Duration::ZERO)
+}
+
+fn hub_and_local_with_wait(
+    rules: Option<&str>,
+    acceptance: TokenAcceptance,
+    strict: bool,
+    wait: std::time::Duration,
+) -> (Hub, Arc<LocalBackend>) {
     let gateway = Gateway {
         enforce_limits: strict,
         ctx: PlanningContext {
@@ -68,7 +77,8 @@ fn hub_and_local_with_profile(
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let local = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let local =
+        Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7).with_contention_wait(wait));
     let rules = rules.map(|src| {
         let auth = Arc::new(Mutex::new(AuthStore::new(
             "demo-app",
@@ -1780,5 +1790,213 @@ fn listen_encoder_keeps_nondefaults_and_emulator_output() {
         };
         assert_eq!(listen_response_to_json(&response, true), strict);
         assert_eq!(listen_response_to_json(&response, false), emulator);
+    }
+}
+
+/// Waiting writes must leave workers available to process other channels and release locks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn contended_webchannel_writes_leave_runtime_workers_available() {
+    use std::time::{Duration, Instant};
+    let (hub, local) = hub_and_local_with_wait(
+        None,
+        TokenAcceptance::Verified,
+        true,
+        Duration::from_secs(10),
+    );
+    let transaction = local
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .unwrap();
+    let locked = format!("{DB}/documents/open/worker-locked");
+    assert_eq!(
+        local
+            .get_document(
+                &pb::GetDocumentRequest {
+                    name: locked.clone(),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(
+                            transaction.clone()
+                        )
+                    ),
+                    ..Default::default()
+                },
+                &fireemu_adapter_grpc::rules::allow_all_reads
+            )
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    let mut sessions = Vec::new();
+    for _ in 0..2 {
+        let sid = open_write_session(&hub);
+        let handshake = read_long_poll_kind(&hub, StreamKind::Write, &sid, 0).await;
+        let aid = last_array_id(&handshake);
+        let token = response_payloads(&handshake)[0]["streamToken"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        sessions.push((sid, aid, token));
+    }
+    let started = Instant::now();
+    for (sid, aid, token) in &sessions {
+        let request = json!({"streamToken": token, "writes": [{"update": {"name": locked, "fields": {"v": {"integerValue": "1"}}}}]}).to_string();
+        let (status, _, _) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Write,
+            method: "POST".to_owned(),
+            params: params(&[("SID", sid), ("RID", "2"), ("AID", &aid.to_string())]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &request)]),
+        }));
+        assert_eq!(status, 200);
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let probe = local.clone();
+    tokio::spawn(async move {
+        let error = probe
+            .get_document(
+                &pb::GetDocumentRequest {
+                    name: "projects/demo-other/databases/(default)/documents/open/probe".to_owned(),
+                    ..Default::default()
+                },
+                &fireemu_adapter_grpc::rules::allow_all_reads,
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::NotFound);
+        probe
+            .commit(&pb::CommitRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .unwrap();
+    })
+    .await
+    .unwrap();
+    let elapsed = started.elapsed();
+    for (sid, aid, _) in sessions {
+        let response = read_long_poll_kind(&hub, StreamKind::Write, &sid, aid).await;
+        assert!(
+            response_payloads(&response)
+                .iter()
+                .any(|value| value.get("writeResults").is_some()),
+            "{response}"
+        );
+        let (status, _, _) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Write,
+            method: "GET".to_owned(),
+            params: params(&[("SID", &sid), ("TYPE", "terminate")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        }));
+        assert_eq!(status, 200);
+    }
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "runtime progress took {elapsed:?}"
+    );
+}
+
+/// Suspended channel writes retain their deadline and reject an epoch changed during the wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn waiting_webchannel_writes_preserve_deadlines_and_reset_guards() {
+    use std::time::Duration;
+    for reset in [false, true] {
+        let wait = if reset {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_millis(250)
+        };
+        let (hub, local) = hub_and_local_with_wait(None, TokenAcceptance::Verified, true, wait);
+        let transaction = local
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        let name = format!("{DB}/documents/open/wait-bound");
+        assert_eq!(
+            local
+                .get_document(
+                    &pb::GetDocumentRequest {
+                        name: name.clone(),
+                        consistency_selector: Some(
+                            pb::get_document_request::ConsistencySelector::Transaction(transaction)
+                        ),
+                        ..Default::default()
+                    },
+                    &fireemu_adapter_grpc::rules::allow_all_reads
+                )
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        let sid = open_write_session(&hub);
+        let handshake = read_long_poll_kind(&hub, StreamKind::Write, &sid, 0).await;
+        let aid = last_array_id(&handshake);
+        let token = response_payloads(&handshake)[0]["streamToken"]
+            .as_str()
+            .unwrap();
+        let request =
+            json!({"streamToken": token, "writes": [{"update": {"name": name}}]}).to_string();
+        let (status, _, _) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Write,
+            method: "POST".to_owned(),
+            params: params(&[("SID", &sid), ("RID", "2"), ("AID", &aid.to_string())]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &request)]),
+        }));
+        assert_eq!(status, 200);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if reset {
+            local.reset();
+        }
+        let response = read_long_poll_kind(&hub, StreamKind::Write, &sid, aid).await;
+        let payloads = response_payloads(&response);
+        let error = payloads
+            .iter()
+            .find_map(|payload| payload.get("error"))
+            .expect("waiting write must be refused");
+        assert_eq!(error["status"], "ABORTED");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            if reset {
+                message.contains("reset")
+            } else {
+                message.contains("Too much contention")
+            },
+            "{error}"
+        );
+        assert_eq!(
+            local
+                .get_document(
+                    &pb::GetDocumentRequest {
+                        name,
+                        ..Default::default()
+                    },
+                    &fireemu_adapter_grpc::rules::allow_all_reads
+                )
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        let _ = hub.handle(&ChannelRequest {
+            kind: StreamKind::Write,
+            method: "GET".to_owned(),
+            params: params(&[("SID", &sid), ("TYPE", "terminate")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        });
     }
 }

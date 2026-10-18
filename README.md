@@ -501,6 +501,8 @@ See the [configuration schema](spec/config/fireemu.schema.json) for available se
 
 ### Firestore history limits
 
+In the next release, contended gRPC and WebChannel writes wait without occupying runtime workers, so other requests can release the transaction holding their locks. Canceling a waiting Commit ends that request's deadlock wait; the transaction keeps its read locks until it commits, rolls back or expires.
+
 Like production, Fireemu keeps every version of a document written in the last hour, so a `read_time` read, a read-only transaction or a resumed listener can see it. A test that updates the same documents many times therefore holds many versions in memory. These limits are local; production has none of them:
 
 - Each database retains at most 1 GiB of logical history bytes and 1,000,000 versions, each session 1 GiB and 1,000,000 versions, and the daemon 4 GiB and 4,000,000 versions. Logical bytes follow Firestore's storage size model and are not the process's memory, which can be several times larger.

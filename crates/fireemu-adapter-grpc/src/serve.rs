@@ -508,33 +508,24 @@ async fn rest_call(
     // waits for a transaction to finish, then runs the request again.
     let request = Arc::new(request);
     let deadline = state.local.contention_deadline();
-    let decoded_path = crate::rest::decode_path(&request.request.path).ok();
-    let waiting_transaction = decoded_path
-        .as_deref()
-        .and_then(|path| path.strip_prefix("/v1/"))
-        .and_then(|path| path.strip_suffix(":commit"))
-        .and_then(|path| crate::decode::parse_parent(path).ok())
-        .and_then(|parent| {
-            let token = request.request.body.get("transaction")?.as_str()?;
-            let token = crate::rest::json::base64_decode(token).ok()?;
-            let own = state.local.txn_of(&parent, &token).ok()??;
-            Some((parent, own))
-        });
+    // The outer request owns cancellation; a detached blocking attempt gets only a capability clone.
+    let wait_lease = commit.then(crate::local::CommitWaitLease::new);
     let mut permit = permit;
-    let mut waited = false;
     let response = loop {
         let attempt_permit = permit;
         let seen = state.local.release_count();
         let (attempt_state, attempt_request) = (Arc::clone(&state), Arc::clone(&request));
+        let owner = wait_lease.as_ref().map(|lease| lease.owner().clone());
         let (response, contended) = tokio::task::spawn_blocking(move || {
             let _permit = attempt_permit;
-            crate::local::LocalBackend::without_waiting(|| {
-                attempt_state.handle(&attempt_request.request)
+            crate::local::LocalBackend::with_commit_wait_owner(owner.as_ref(), || {
+                crate::local::LocalBackend::without_waiting(|| {
+                    attempt_state.handle(&attempt_request.request)
+                })
             })
         })
         .await
         .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
-        waited |= contended;
         if !contended || deadline.expired() {
             break response;
         }
@@ -551,14 +542,6 @@ async fn rest_call(
             None => break too_many_concurrent_requests(),
         }
     };
-    if let Some((parent, own)) = waiting_transaction.filter(|_| waited) {
-        if let Ok(handle) = state.local.database_handle(&parent) {
-            let _ = handle.with(|db| {
-                db.stop_waiting_to_commit(&own);
-                Ok(())
-            });
-        }
-    }
     if crate::rest::drops_connection(&response) {
         // A `dropConnection` fault: the connection closes without a response.
         return Err(dropped());

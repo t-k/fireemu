@@ -14,6 +14,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Canceling a waiting transactional Commit removes only that request's deadlock wait, preserving the transaction and other active requests. Late REST attempts cannot revive canceled waits.
+- Contended gRPC and WebChannel Write streams wait asynchronously, leaving runtime workers available for other RPCs and the lock holder. Lease expiry also wakes existing stream and REST waiters.
 - Strict Listen resumes echo the original token boundary's read time before sending the new snapshot time. Opaque 11-byte tokens distinguish same-version boundaries; each live database retains its latest 4,096 issuance records, with RESET/full replay after eviction or lifecycle invalidation.
 - Strict mode delivers user publishes to first-generation scheduled function topics with their original Pub/Sub payload and message ID, while preserving single delivery for Scheduler and manual runs.
 - Completed the public site's guidance for export preflight, isolated test-world exports, runnable idle, OR index diagnostics and TOTP enrollment-code reuse.

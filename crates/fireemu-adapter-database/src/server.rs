@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 
-use crate::realtime::{split_frames, Opened, Session};
+use crate::realtime::{split_frames, Opened, Prepared, Received, Session};
 use crate::rest::{
     parse_body, refusal_response, Database, Handled, HttpRequest, HttpResponse, SseEvent,
 };
@@ -388,6 +388,33 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     database.close_realtime(client);
 }
 
+/// Answers one prepared message under the database lock. Pushes already queued for the
+/// connection come from earlier commits (every push is queued under this lock), so they go
+/// first, ahead of the pushes and answer this message causes.
+fn answer_text(
+    shared: &Shared,
+    session: &mut Session,
+    pushes: &mut mpsc::Receiver<Vec<String>>,
+    prepared: Prepared,
+) -> Received {
+    let now = (shared.config.clock)();
+    let mut database = shared
+        .database
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let mut earlier = Vec::new();
+    while let Ok(frames) = pushes.try_recv() {
+        earlier.extend(frames);
+    }
+    let mut received = session.dispatch_prepared(&mut database, prepared, now);
+    deliver(shared, &mut database, std::mem::take(&mut received.events));
+    if !earlier.is_empty() {
+        earlier.append(&mut received.replies);
+        received.replies = earlier;
+    }
+    received
+}
+
 /// Writes frames, giving up after `limit` on a client that stopped reading.
 async fn send_within<S: AsyncWrite + Unpin>(
     socket: &mut S,
@@ -463,17 +490,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                         let Some(prepared) = session.prepare(&text) else {
                             continue;
                         };
-                        let received = {
-                            let now = (shared.config.clock)();
-                            let mut database = shared
-                                .database
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner);
-                            let mut received =
-                                session.dispatch_prepared(&mut database, prepared, now);
-                            deliver(shared, &mut database, std::mem::take(&mut received.events));
-                            received
-                        };
+                        let received = answer_text(shared, &mut session, pushes, prepared);
                         if let Some(code) = received.close {
                             send_close(socket, code).await;
                             return;
@@ -505,5 +522,115 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rest::RestOptions;
+
+    fn shared() -> Shared {
+        Shared {
+            database: Arc::new(Mutex::new(Database::new(RestOptions::default(), 1))),
+            streams: Arc::new(Mutex::new(BTreeMap::new())),
+            listeners: Mutex::new(BTreeMap::new()),
+            config: ServerConfig::default(),
+        }
+    }
+
+    fn connect(shared: &Shared) -> (Session, mpsc::Receiver<Vec<String>>) {
+        let opened = shared
+            .database
+            .lock()
+            .unwrap()
+            .open_realtime("/.ws?v=5&ns=o", Some("h"), 0)
+            .unwrap();
+        let Opened::Session(session, _) = opened else {
+            panic!("no session")
+        };
+        let (sender, receiver) = mpsc::channel(16);
+        shared
+            .listeners
+            .lock()
+            .unwrap()
+            .insert(session.client(), sender);
+        (session, receiver)
+    }
+
+    fn send(
+        shared: &Shared,
+        session: &mut Session,
+        pushes: &mut mpsc::Receiver<Vec<String>>,
+        frame: &str,
+    ) -> Vec<String> {
+        let prepared = session.prepare(frame).unwrap();
+        answer_text(shared, session, pushes, prepared).replies
+    }
+
+    #[test]
+    fn queued_pushes_go_before_the_connections_own() {
+        let shared = shared();
+        let (mut a, mut a_pushes) = connect(&shared);
+        let (mut b, mut b_pushes) = connect(&shared);
+        send(
+            &shared,
+            &mut a,
+            &mut a_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#,
+        );
+        // B's write queues a push for A that A's task has not written yet.
+        send(
+            &shared,
+            &mut b,
+            &mut b_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/a","d":1}}}"#,
+        );
+        assert_eq!(
+            send(
+                &shared,
+                &mut a,
+                &mut a_pushes,
+                r#"{"t":"d","d":{"r":2,"a":"p","b":{"p":"/a","d":2}}}"#
+            ),
+            vec![
+                r#"{"t":"d","d":{"b":{"p":"a","d":1},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"b":{"p":"a","d":2},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":""}}}"#.to_owned(),
+            ]
+        );
+        assert!(a_pushes.try_recv().is_err());
+    }
+
+    #[test]
+    fn queued_pushes_go_before_a_new_listens_value() {
+        let shared = shared();
+        let (mut a, mut a_pushes) = connect(&shared);
+        let (mut b, mut b_pushes) = connect(&shared);
+        send(
+            &shared,
+            &mut a,
+            &mut a_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#,
+        );
+        send(
+            &shared,
+            &mut b,
+            &mut b_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/a/b","d":1}}}"#,
+        );
+        assert_eq!(
+            send(
+                &shared,
+                &mut a,
+                &mut a_pushes,
+                r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/a/b","h":""}}}"#
+            ),
+            vec![
+                r#"{"t":"d","d":{"b":{"p":"a/b","d":1},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"b":{"p":"a/b","d":1},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#.to_owned(),
+            ]
+        );
     }
 }

@@ -823,12 +823,37 @@ proptest! {
 /// A comparison's refusal names the comparison.
 #[test]
 fn comparison_refusals_name_the_function() {
-    let r = row(vec![("n".to_owned(), Value::Null)]);
+    let r = row(vec![
+        ("n".to_owned(), Value::Null),
+        ("i".to_owned(), Value::Integer(1)),
+    ]);
     for op in OPS {
         let got = call(op, vec![field("x"), field("n")]).eval_in(&r, Unrecorded::Refuse);
-        assert!(
-            matches!(got, Eval::Error(EvalError::Unobserved { function, .. }) if function == op),
-            "{op}: {got:?}"
+        assert_eq!(
+            got,
+            Eval::Error(EvalError::Unobserved {
+                function: comparison_name(op),
+                reason: "an operand is absent"
+            }),
+            "{op}"
         );
+        // Two present operands are refused for their kinds, not for absence.
+        for args in [
+            vec![field("i"), Expr::Constant(s("a"))],
+            vec![field("i"), field("n")],
+        ] {
+            assert_eq!(
+                call(op, args).eval_in(&r, Unrecorded::Refuse),
+                Eval::Error(EvalError::Unobserved {
+                    function: comparison_name(op),
+                    reason: "the operands differ in kind, or one is null or NaN"
+                }),
+                "{op}"
+            );
+        }
     }
+}
+
+fn comparison_name(op: &str) -> &'static str {
+    OPS.into_iter().find(|name| *name == op).unwrap()
 }

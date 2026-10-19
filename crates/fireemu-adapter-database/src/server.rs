@@ -401,12 +401,26 @@ async fn send_text<S: AsyncWrite + Unpin>(
     socket.flush().await
 }
 
-async fn send_close<S: AsyncWrite + Unpin>(socket: &mut S, code: CloseCode) {
+async fn send_close<S: AsyncWrite + Unpin>(socket: &mut S, code: CloseCode, limit: Duration) {
     // The connection ends either way; a failed close concerns that client only.
-    let _ = socket
-        .write_all(&encode(Opcode::Close, &code.code().to_be_bytes()))
-        .await;
-    let _ = socket.shutdown().await;
+    let _ = write_within(
+        socket,
+        &encode(Opcode::Close, &code.code().to_be_bytes()),
+        limit,
+    )
+    .await;
+    let _ = tokio::time::timeout(limit, socket.shutdown()).await;
+}
+
+/// Writes raw bytes, giving up after `limit` on a client that stopped reading.
+async fn write_within<S: AsyncWrite + Unpin>(
+    socket: &mut S,
+    bytes: &[u8],
+    limit: Duration,
+) -> std::io::Result<()> {
+    tokio::time::timeout(limit, socket.write_all(bytes))
+        .await
+        .unwrap_or_else(|_| Err(std::io::ErrorKind::TimedOut.into()))
 }
 
 /// Serves one realtime connection until the client closes it or breaks the protocol.
@@ -420,12 +434,15 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         Opened::Shutdown(frames) => {
             // The official emulator drops the connection after the shutdown message, without
             // a close frame.
-            let _ = send_text(&mut socket, &frames).await;
-            let _ = socket.shutdown().await;
+            let _ = send_within(&mut socket, &frames, shared.config.realtime_idle).await;
+            let _ = tokio::time::timeout(shared.config.realtime_idle, socket.shutdown()).await;
             return;
         }
         Opened::Session(session, frames) => {
-            if send_text(&mut socket, &frames).await.is_err() {
+            if send_within(&mut socket, &frames, shared.config.realtime_idle)
+                .await
+                .is_err()
+            {
                 return;
             }
             session
@@ -506,7 +523,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     loop {
         match decode(&buffer, limit) {
             Err(error) => {
-                send_close(socket, error.close_code()).await;
+                send_close(socket, error.close_code(), idle).await;
                 return;
             }
             // The SDKs send a keepalive every 45 s, so a connection silent for longer than the
@@ -521,7 +538,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                                 deadline = tokio::time::Instant::now() + idle;
                             }
                             Err(_) => {
-                                send_close(socket, CloseCode::Normal).await;
+                                send_close(socket, CloseCode::Normal, idle).await;
                                 return;
                             }
                         }
@@ -529,7 +546,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                     message = pushes.recv() => {
                         // A closed queue means the connection was dropped for falling behind.
                         let Some(frames) = message else {
-                            let _ = socket.shutdown().await;
+                            let _ = tokio::time::timeout(idle, socket.shutdown()).await;
                             return;
                         };
                         if send_within(socket, &frames, idle).await.is_err() {
@@ -542,7 +559,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                 buffer.drain(..used);
                 let message = match assembler.push(frame) {
                     Err(error) => {
-                        send_close(socket, error.close_code()).await;
+                        send_close(socket, error.close_code(), idle).await;
                         return;
                     }
                     Ok(None) => continue,
@@ -556,19 +573,19 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                         };
                         let received = answer_text(shared, &mut session, pushes, prepared);
                         if let Some(code) = received.close {
-                            send_close(socket, code).await;
+                            send_close(socket, code, idle).await;
                             return;
                         }
                         if received.drop_connection {
                             // Frames to send before dropping (a reset), if any.
                             let _ = send_within(socket, &received.replies, idle).await;
-                            let _ = socket.shutdown().await;
+                            let _ = tokio::time::timeout(idle, socket.shutdown()).await;
                             return;
                         }
                         send_within(socket, &received.replies, idle).await
                     }
                     Message::Ping(payload) => {
-                        socket.write_all(&encode(Opcode::Pong, &payload)).await
+                        write_within(socket, &encode(Opcode::Pong, &payload), idle).await
                     }
                     Message::Binary(_) | Message::Pong => Ok(()),
                     Message::Close(code) => {
@@ -576,8 +593,8 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                             .map(u16::to_be_bytes)
                             .map(Vec::from)
                             .unwrap_or_default();
-                        let _ = socket.write_all(&encode(Opcode::Close, &payload)).await;
-                        let _ = socket.shutdown().await;
+                        let _ = write_within(socket, &encode(Opcode::Close, &payload), idle).await;
+                        let _ = tokio::time::timeout(idle, socket.shutdown()).await;
                         return;
                     }
                 };

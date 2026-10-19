@@ -25,8 +25,8 @@ pub enum Style {
 pub use crate::json_parse::ParseError;
 
 /// Parses one JSON value. Integers that fit an i64 stay integers; other numbers become the
-/// correctly rounded double of their text (and integral doubles integers, see
-/// [`Number::from_f64`]).
+/// correctly rounded double of their text and stay doubles (`1.0` is a double, ledger 1475);
+/// numbers beyond the double range become the strings `"Infinity"` and `"-Infinity"`.
 pub fn parse(text: &str) -> Result<Json, ParseError> {
     crate::json_parse::parse(text)
 }

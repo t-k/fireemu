@@ -6892,3 +6892,395 @@ fn the_privileged_emulator_routes_refuse_a_remote_peer() {
         }
     }
 }
+
+/// A REST surface on an Enterprise database under one profile.
+fn enterprise_state(strict: bool, rules: Option<&str>) -> RestState {
+    let gateway = Gateway {
+        enforce_limits: strict,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Enterprise,
+            api_mode: FirestoreApiMode::Native,
+            policy: if strict {
+                IndexValidationPolicy::Production
+            } else {
+                IndexValidationPolicy::Emulator
+            },
+        },
+        indexes: IndexSet::default(),
+    };
+    state_with_gateway(gateway, rules, TokenAcceptance::Verified).0
+}
+
+/// A successful pipeline answer with each element's `executionTime` checked and left out.
+fn without_execution_time(status: u16, mut body: Value) -> (u16, Value) {
+    if status == 200 {
+        for element in body.as_array_mut().into_iter().flatten() {
+            assert!(element["executionTime"].is_string(), "{element}");
+            element.as_object_mut().unwrap().remove("executionTime");
+        }
+    }
+    (status, body)
+}
+
+fn pipeline_body(stages: &Value) -> Value {
+    json!({
+        "database": "projects/demo-app/databases/(default)",
+        "structuredPipeline": {"pipeline": {"stages": stages}, "options": {}},
+    })
+}
+
+fn seed_nest(s: &RestState) {
+    for (path, fields) in [
+        (
+            "nest/a",
+            json!({"profile": {"mapValue": {"fields": {"score": {"integerValue": "7"}}}}, "name": {"stringValue": "a"}}),
+        ),
+        (
+            "nest/b",
+            json!({"profile": {"mapValue": {"fields": {"score": {"integerValue": "8"}}}}, "name": {"stringValue": "b"}}),
+        ),
+        ("nest/a/sub/s1", json!({"k": {"stringValue": "x"}})),
+    ] {
+        let (status, body) = call(
+            s,
+            "PATCH",
+            &format!("{DOCS}/{path}"),
+            json!({"fields": fields}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+}
+
+/// The REST route executes the same finite subset as gRPC, on both profiles, with one array
+/// element per result (the first element of an empty answer carries no result).
+#[test]
+fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        let run = |stages: Value| {
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                pipeline_body(&stages),
+            );
+            without_execution_time(status, body)
+        };
+        let (status, body) = run(json!([
+            {"name": "collection", "options": {}, "args": [{"referenceValue": "/nest"}]},
+            {"name": "where", "options": {}, "args": [{"functionValue": {"name": "equal", "args": [{"fieldReferenceValue": "profile.score"}, {"integerValue": "7"}]}}]},
+            {"name": "select", "options": {}, "args": [{"mapValue": {"fields": {"label": {"fieldReferenceValue": "name"}}}}]},
+        ]));
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert_eq!(
+            body,
+            json!([{"results": [{"fields": {"label": {"stringValue": "a"}}}]}]),
+            "strict={strict}"
+        );
+        let (status, body) = run(json!([
+            {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+            {"name": "select", "args": [{"mapValue": {"fields": {
+                "id": {"functionValue": {"name": "document_id", "args": [{"fieldReferenceValue": "__name__"}]}},
+                "coll": {"functionValue": {"name": "collection_id", "args": [{"fieldReferenceValue": "__name__"}]}},
+            }}}]},
+            {"name": "offset", "args": [{"integerValue": "1"}]},
+            {"name": "limit", "args": [{"integerValue": "5"}]},
+        ]));
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert_eq!(
+            body,
+            json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
+            "strict={strict}"
+        );
+        let (status, body) = run(json!([
+            {"name": "collection", "args": [{"referenceValue": "/nest/a/sub"}]},
+            {"name": "select", "args": [{"mapValue": {"fields": {
+                "up": {"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}},
+            }}}]},
+        ]));
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert_eq!(
+            body,
+            json!([{"results": [{"fields": {"up": {"referenceValue": "projects/demo-app/databases/(default)/documents/nest/a"}}}]}])
+        );
+        let (status, body) =
+            run(json!([{"name": "collection", "args": [{"referenceValue": "/nothing"}]}]));
+        assert_eq!((status, body), (200, json!([{}])), "strict={strict}");
+    }
+}
+
+/// The refusals keep their gRPC codes inside the stream array: unknown functions and
+/// stages `UNIMPLEMENTED`, malformed pipelines `INVALID_ARGUMENT`, a run-time refusal under
+/// strict UNIMPLEMENTED; a refusal answers no partial results over REST.
+#[test]
+fn rest_execute_pipeline_refusals_keep_their_codes() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        let run = |body: Value| {
+            let (status, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
+            without_execution_time(status, body)
+        };
+        let collection = json!({"name": "collection", "args": [{"referenceValue": "/nest"}]});
+        for (label, body, status, name) in [
+            (
+                "unknown stage",
+                pipeline_body(
+                    &json!([collection, {"name": "explode", "args": [{"stringValue": "x"}]}]),
+                ),
+                501,
+                "UNIMPLEMENTED",
+            ),
+            (
+                "unknown function",
+                pipeline_body(
+                    &json!([collection, {"name": "where", "args": [{"functionValue": {"name": "greater_than", "args": [{"fieldReferenceValue": "name"}, {"stringValue": "a"}]}}]}]),
+                ),
+                501,
+                "UNIMPLEMENTED",
+            ),
+            (
+                "write stage",
+                pipeline_body(&json!([collection, {"name": "delete"}])),
+                501,
+                "UNIMPLEMENTED",
+            ),
+            (
+                "input misplaced",
+                pipeline_body(&json!([{"name": "limit", "args": [{"integerValue": "1"}]}])),
+                400,
+                "INVALID_ARGUMENT",
+            ),
+            ("no pipeline", json!({}), 400, "INVALID_ARGUMENT"),
+            (
+                "transaction selector",
+                json!({"structuredPipeline": {"pipeline": {"stages": [collection]}}, "readTime": "2026-08-29T12:00:00Z"}),
+                501,
+                "UNIMPLEMENTED",
+            ),
+        ] {
+            let (got, body) = run(body);
+            assert_eq!(got, status, "strict={strict} {label}: {body}");
+            assert_eq!(
+                stream_error(&body)["error"]["status"],
+                name,
+                "strict={strict} {label}"
+            );
+            assert_eq!(body.as_array().map(Vec::len), Some(1), "{label}");
+        }
+        let top_parent = pipeline_body(
+            &json!([collection, {"name": "select", "args": [{"mapValue": {"fields": {
+                "up": {"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}},
+            }}}]}]),
+        );
+        let (status, body) = run(top_parent);
+        if strict {
+            assert_eq!(status, 501, "{body}");
+            assert_eq!(body.as_array().map(Vec::len), Some(1));
+        } else {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(
+                body[0],
+                json!({"results": [{"fields": {"up": {"referenceValue": "projects/demo-app/databases/(default)/documents"}}}]})
+            );
+        }
+    }
+}
+
+/// Owner first, as over gRPC, also on Enterprise; and a body field the request does not have
+/// is refused by the strict transcoder only.
+#[test]
+fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
+    let s = enterprise_state(
+        true,
+        Some("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }"),
+    );
+    let (status, body) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({"bogus": 1}),
+        None,
+    );
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(stream_error(&body)["error"]["status"], "PERMISSION_DENIED");
+    let collection = json!([{"name": "collection", "args": [{"referenceValue": "/nest"}]}]);
+    let mut extra = pipeline_body(&collection);
+    extra["structuredPipeline"]["bogus"] = json!(1);
+    let (status, body) = call(
+        &enterprise_state(true, None),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        extra.clone(),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
+        "Invalid JSON payload received. Unknown name \"bogus\" at 'structured_pipeline': Cannot find field."
+    );
+    let (status, body) = call(
+        &enterprise_state(false, None),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        extra,
+    );
+    assert_eq!(status, 200, "{body}");
+    // On Standard only strict has the route (production's refusal); the emulator profile keeps
+    // its plain 404.
+    let (status, body) = call(
+        &state_with_profile(true),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        pipeline_body(&collection),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["status"],
+        "FAILED_PRECONDITION"
+    );
+    let not_found = json!({"fireemuText": "Not Found\n"});
+    let (status, body) = call(
+        &state_with_profile(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        pipeline_body(&collection),
+    );
+    assert_eq!((status, body), (404, not_found.clone()));
+    // The route is the database's documents root only, on either profile.
+    for strict in [true, false] {
+        for path in ["nest:executePipeline", "nest/a:executePipeline"] {
+            let (status, body) = call(
+                &enterprise_state(strict, None),
+                "POST",
+                &format!("{DOCS}/{path}"),
+                pipeline_body(&collection),
+            );
+            assert_eq!(
+                (status, body),
+                (404, not_found.clone()),
+                "strict={strict} {path}"
+            );
+        }
+    }
+}
+
+/// The strict transcoder accepts every field of the request message (camelCase or the proto
+/// names), so each body reaches validation or compilation and none answers `Unknown name`;
+/// `requestOptions` is accepted and ignored on both profiles.
+#[test]
+fn rest_execute_pipeline_transcodes_every_request_field() {
+    let collection = json!([{"name": "collection", "args": [{"referenceValue": "/nest"}]}]);
+    let pipeline = json!({"pipeline": {"stages": collection}});
+    let cases = [
+        (
+            "transaction",
+            json!({"structuredPipeline": pipeline, "transaction": "AQI="}),
+            501,
+        ),
+        (
+            "newTransaction",
+            json!({"structuredPipeline": pipeline, "newTransaction": {"readOnly": {}}}),
+            501,
+        ),
+        (
+            "autoCommitTransaction alone",
+            json!({"structuredPipeline": pipeline, "autoCommitTransaction": true}),
+            400,
+        ),
+        (
+            "autoCommitTransaction with newTransaction",
+            json!({"structuredPipeline": pipeline, "newTransaction": {"readWrite": {}}, "autoCommitTransaction": true}),
+            501,
+        ),
+        (
+            "requestOptions",
+            json!({"structuredPipeline": pipeline, "requestOptions": {"requestTags": ["t"]}}),
+            200,
+        ),
+    ];
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        for (label, body, status) in cases.clone() {
+            let (got, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
+            assert_eq!(got, status, "strict={strict} {label}: {body}");
+            assert!(
+                !body.to_string().contains("Unknown name"),
+                "strict={strict} {label}: {body}"
+            );
+        }
+    }
+    // The proto field names are accepted by the strict transcoder.
+    let s = enterprise_state(true, None);
+    seed_nest(&s);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({"structured_pipeline": pipeline, "auto_commit_transaction": false, "request_options": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body.as_array().map(Vec::len), Some(2), "{body}");
+}
+
+/// Under Security Rules a pipeline runs for the owner only: the owner gets results, a
+/// signed-in user with a valid body gets 403 and nothing else.
+#[test]
+fn rest_execute_pipeline_runs_for_the_owner_under_rules() {
+    let s = enterprise_state(
+        true,
+        Some("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }"),
+    );
+    seed_nest(&s);
+    let body =
+        pipeline_body(&json!([{"name": "collection", "args": [{"referenceValue": "/nest"}]}]));
+    let (status, owner) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body.clone());
+    assert_eq!(status, 200, "{owner}");
+    assert_eq!(owner.as_array().map(Vec::len), Some(2));
+    let (status, denied) = call_as(&s, "POST", &format!("{DOCS}:executePipeline"), body, None);
+    assert_eq!(status, 403, "{denied}");
+    assert_eq!(denied.as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        stream_error(&denied)["error"]["status"],
+        "PERMISSION_DENIED"
+    );
+}
+
+/// Over REST too, a result without a select is the whole source document, and every element
+/// carries the execution time.
+#[test]
+fn rest_execute_pipeline_results_carry_document_metadata_without_select() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        let (status, stored) = call(&s, "GET", &format!("{DOCS}/nest/a"), json!({}));
+        assert_eq!(status, 200, "{stored}");
+        let run = |stages: &Value| {
+            call(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                pipeline_body(stages),
+            )
+        };
+        let (status, body) = run(&json!([
+            {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+            {"name": "limit", "args": [{"integerValue": "1"}]},
+        ]));
+        assert_eq!(status, 200, "{body}");
+        let element = &body[0];
+        assert_eq!(element["results"], json!([stored]), "strict={strict}");
+        assert!(
+            element["executionTime"].is_string(),
+            "strict={strict} {body}"
+        );
+        let (status, body) =
+            run(&json!([{"name": "collection", "args": [{"referenceValue": "/nothing"}]}]));
+        assert_eq!(status, 200);
+        assert_eq!(body.as_array().map(Vec::len), Some(1));
+        assert!(body[0]["executionTime"].is_string(), "{body}");
+        assert!(body[0].get("results").is_none());
+    }
+}

@@ -6206,11 +6206,9 @@ async fn drain_pipeline(
             response.results.len() <= 1,
             "one document per wire response"
         );
-        for doc in &response.results {
-            assert!(doc.name.is_empty());
-            assert!(doc.create_time.is_none());
-            assert!(doc.update_time.is_none());
-        }
+        // Every response carries the snapshot's execution time; which results are whole
+        // documents is pinned by execute_pipeline_results_carry_document_metadata_without_select.
+        assert!(response.execution_time.is_some());
         documents.extend(response.results);
         received += 1;
     }
@@ -7445,10 +7443,9 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     };
     structured.pipeline.as_mut().unwrap().stages[0].args[0] = s("/empty-scale");
     let mut stream = client.execute_pipeline(empty).await.unwrap().into_inner();
-    assert_eq!(
-        stream.message().await.unwrap(),
-        Some(pb::ExecutePipelineResponse::default())
-    );
+    let response = stream.message().await.unwrap().unwrap();
+    assert!(response.results.is_empty() && response.transaction.is_empty());
+    assert!(response.execution_time.is_some());
     assert!(stream.message().await.unwrap().is_none());
     handle.abort();
 }
@@ -11250,6 +11247,99 @@ async fn native_rollback_as_the_first_request_after_the_total_lifetime_is_answer
         } else {
             rolled.unwrap();
         }
+        handle.abort();
+    }
+}
+
+/// Without a select, each pipeline result is the source document: its full name, create
+/// time and update time, under both profiles (the official emulator answers them; the SDKs
+/// build `PipelineResult.ref`, `id`, `createTime` and `updateTime` from them). After a
+/// select, results stay fields-only. Every response carries the execution time.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_results_carry_document_metadata_without_select() {
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write("meta/a", &[("n", i(1))]),
+                    update_write("meta/b", &[("n", i(2))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let stored = |id: &str| {
+            let mut client = client.clone();
+            let name = format!("{DOCS}/meta/{id}");
+            async move {
+                client
+                    .get_document(pb::GetDocumentRequest {
+                        name,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+            }
+        };
+        let (a, b) = (stored("a").await, stored("b").await);
+        let responses = |stages| {
+            let mut client = client.clone();
+            async move {
+                let mut stream = client
+                    .execute_pipeline(pipeline_request(stages))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut out = Vec::new();
+                while let Some(response) = stream.message().await.unwrap() {
+                    out.push(response);
+                }
+                out
+            }
+        };
+        let whole = responses(vec![pipeline_stage("collection", s("meta"))]).await;
+        let results: Vec<_> = whole.iter().flat_map(|r| r.results.clone()).collect();
+        assert_eq!(results, vec![a.clone(), b.clone()], "{policy:?}");
+        assert!(
+            whole.iter().all(|r| r.execution_time.is_some()),
+            "{policy:?}"
+        );
+        let selected = responses(vec![
+            pipeline_stage("collection", s("meta")),
+            pipeline_select("n"),
+        ])
+        .await;
+        let results: Vec<_> = selected.iter().flat_map(|r| r.results.clone()).collect();
+        assert_eq!(results.len(), 2);
+        for result in &results {
+            assert!(result.name.is_empty(), "{policy:?}");
+            assert!(result.create_time.is_none() && result.update_time.is_none());
+        }
+        assert!(
+            selected.iter().all(|r| r.execution_time.is_some()),
+            "{policy:?}"
+        );
+        let filtered = responses(vec![
+            pipeline_stage("collection", s("meta")),
+            pipeline_equal("n", i(2)),
+            pipeline_offset(0),
+            pipeline_stage("limit", i(1)),
+        ])
+        .await;
+        let results: Vec<_> = filtered.iter().flat_map(|r| r.results.clone()).collect();
+        assert_eq!(results, vec![b.clone()], "{policy:?}");
+        let empty = responses(vec![pipeline_stage("collection", s("meta-empty"))]).await;
+        assert_eq!(empty.len(), 1);
+        assert!(empty[0].results.is_empty());
+        assert!(empty[0].execution_time.is_some(), "{policy:?}");
         handle.abort();
     }
 }

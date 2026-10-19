@@ -10,6 +10,7 @@ pub mod coverage;
 pub(crate) mod document_response;
 pub mod json;
 pub mod json_syntax;
+pub mod pipeline_json;
 pub mod transcode;
 
 pub mod admin_fields;
@@ -1452,19 +1453,21 @@ impl RestState {
                     .and_then(|body| self.run_aggregation_query(principal, resource, &body)),
             ),
             // The template is `{database=projects/*/databases/*}/documents:executePipeline`;
-            // any other resource names no route.
-            // Only the strict profile has this route: before it the emulator profile named no
-            // REST pipeline route, and it may add no rejection.
+            // any other resource names no route. An Enterprise database executes on both
+            // profiles; on a Standard one only strict has the route (production's refusal),
+            // since the emulator profile named no REST pipeline route before and may add no
+            // rejection.
             "executePipeline" => {
-                if self.gateway.production_refusals()
-                    && matches!(
-                        resource.split('/').collect::<Vec<_>>().as_slice(),
-                        ["projects", _, "databases", _, "documents"]
-                    )
-                {
-                    stream_errors(self.execute_pipeline(principal))
-                } else {
-                    Ok(not_found_text())
+                let enterprise = self.gateway.ctx.edition
+                    == fireemu_core_types::edition::FirestoreEdition::Enterprise;
+                match resource.split('/').collect::<Vec<_>>().as_slice() {
+                    ["projects", project, "databases", database, "documents"]
+                        if enterprise || self.gateway.production_refusals() =>
+                    {
+                        let database = format!("projects/{project}/databases/{database}");
+                        stream_errors(self.execute_pipeline(principal, &database, body))
+                    }
+                    _ => Ok(not_found_text()),
                 }
             }
             "partitionQuery" => self
@@ -1542,17 +1545,82 @@ impl RestState {
         }
     }
 
-    /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
-    /// an Enterprise database has no REST pipeline route here.
-    fn execute_pipeline(&self, principal: &Caller) -> Result<RestResponse, Status> {
+    /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does.
+    /// An Enterprise database runs the pipeline through the same validation, compilation and
+    /// executor as gRPC, over one snapshot of the input, and answers one array element per
+    /// result (`[{}]` when there is none). A refusal answers no partial results.
+    fn execute_pipeline(
+        &self,
+        principal: &Caller,
+        database: &str,
+        body: &Value,
+    ) -> Result<RestResponse, Status> {
         // Owner first, as over gRPC.
         if let Some(rules) = &self.rules {
             rules.require_owner(principal, "ExecutePipeline")?;
         }
-        if self.gateway.ctx.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise {
-            return Ok(not_found_text());
+        if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Enterprise {
+            return Err(crate::production_status::pipeline_requires_enterprise());
         }
-        Err(crate::production_status::pipeline_requires_enterprise())
+        let body = self.transcoded("executePipeline", body)?;
+        let request = pipeline_json::request_from_json(database, &body).map_err(|e| bad(&e))?;
+        let ast = crate::pipeline::validate_pipeline(&request)?;
+        let canonical = ast.canonical_text();
+        let unrecorded = if self.gateway.production_refusals() {
+            fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
+        } else {
+            fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+        };
+        let parent = crate::decode::parse_parent(&format!("{database}/documents"))
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let refuse = |error| crate::service::pipeline_status(error, &canonical);
+        let compiled =
+            crate::pipeline::compile_pipeline(&request, &parent, unrecorded).map_err(refuse)?;
+        let guard = self.read_guard(principal);
+        let (responses, _warnings) = self
+            .local
+            .run_query(&compiled.input, &*guard)
+            .map_err(refuse)?;
+        // Without a select a result is the source document itself; every element carries the
+        // input snapshot's read time as its execution time.
+        let whole_documents =
+            fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages).is_none();
+        let execution_time = responses.iter().find_map(|r| r.read_time);
+        let mut cursor =
+            fireemu_core_firestore::pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
+        let mut out = Vec::new();
+        for document in responses.iter().filter_map(|r| r.document.as_ref()) {
+            if cursor.is_exhausted() {
+                break;
+            }
+            let row = crate::pipeline::document_row(document).map_err(refuse)?;
+            let fields = cursor
+                .push(row)
+                .map_err(|error| refuse(Status::unimplemented(error.to_string())))?;
+            if let Some(fields) = fields {
+                let result = if whole_documents {
+                    document.clone()
+                } else {
+                    crate::pipeline::result_document(&fields)
+                };
+                out.push(pipeline_json::response_to_json(
+                    &pb::ExecutePipelineResponse {
+                        results: vec![result],
+                        execution_time,
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+        if out.is_empty() {
+            out.push(pipeline_json::response_to_json(
+                &pb::ExecutePipelineResponse {
+                    execution_time,
+                    ..Default::default()
+                },
+            ));
+        }
+        Ok(ok(Value::Array(out)))
     }
 
     /// `:partitionQuery`, which the official emulator answers `UNIMPLEMENTED` (a documented

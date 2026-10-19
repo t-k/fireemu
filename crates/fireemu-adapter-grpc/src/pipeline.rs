@@ -742,8 +742,9 @@ fn is_plain_alias(alias: &str) -> bool {
         && !is_reserved_name(alias)
 }
 
-/// The executor's output row as a pipeline result document: fields only, without a name
-/// or times, as the finite subset has always answered.
+/// A projected output row as a pipeline result document: fields only, without a name or
+/// times (as the official emulator answers after a select; production is unobserved). A
+/// pipeline without a select answers the source documents themselves instead.
 #[must_use]
 pub fn result_document(
     fields: &std::collections::BTreeMap<String, fireemu_core_firestore::value::Value>,

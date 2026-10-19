@@ -47,9 +47,9 @@ pub(crate) struct Listen {
     /// The listened location.
     pub path: Path,
     /// The tag the client registered it under (`None` for a plain listen).
-    pub tag: Option<u64>,
+    pub tag: Option<i64>,
     /// The query and its tag, for a tagged query served as a window.
-    pub window: Option<(QueryParams, u64)>,
+    pub window: Option<(QueryParams, i64)>,
     /// What the client was last sent.
     pub last: Json,
 }
@@ -64,6 +64,8 @@ impl Listen {
 
     /// The data the listen currently shows.
     pub fn view(&self, tree: &Tree) -> Json {
+        #[cfg(test)]
+        VIEWS.with(|views| views.set(views.get() + 1));
         match self.window_children(tree) {
             None if self.path.is_priority() => priority_at(tree, &self.path),
             None => wire_json(tree.get(&self.path)),
@@ -103,7 +105,7 @@ impl Listen {
         }
     }
 
-    fn tag(&self) -> Option<u64> {
+    fn tag(&self) -> Option<i64> {
         self.window.as_ref().map(|(_, tag)| *tag)
     }
 
@@ -285,24 +287,35 @@ impl Listen {
                 _ => message("m", location, &changed, tag),
             };
         }
-        let mut sequence: Vec<(String, Json)> = kept
-            .iter()
-            .map(|path| (path.keys()[depth..].join("/"), value_at(tree, path)))
-            .collect();
-        if query.limit.is_some() {
-            // Children an entry wrote whole; one written deeper still enters whole.
-            let covered: Vec<&String> = kept
-                .iter()
-                .filter(|path| path.depth() == depth + 1)
-                .map(|path| &path.keys()[depth])
-                .collect();
-            sequence.extend(
-                after
-                    .iter()
-                    .filter(|(key, _)| !before.contains_key(*key) && !covered.contains(key))
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            );
+        // An entry for a child the client does not hold arrives as the whole child, as the
+        // official emulator sends it (the client could not apply it deeper).
+        let mut sequence: Vec<(String, Json)> = Vec::new();
+        let mut whole: Vec<&String> = Vec::new();
+        for path in &kept {
+            let key = &path.keys()[depth];
+            if before.contains_key(key) {
+                sequence.push((path.keys()[depth..].join("/"), value_at(tree, path)));
+            } else if !whole.contains(&key) {
+                whole.push(key);
+                sequence.push((key.clone(), value_at(tree, &location.child(key))));
+            }
         }
+        if query.limit.is_none() {
+            return message("m", location, &sequence, tag);
+        }
+        // Children that entered without an entry of their own arrive whole too.
+        let entered: Vec<(String, Json)> = after
+            .iter()
+            .filter(|(key, _)| !before.contains_key(*key) && !whole.contains(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        // A merge that only brings one child the client does not hold sends that child.
+        if let ([(key, value)], [], [_]) =
+            (sequence.as_slice(), entered.as_slice(), whole.as_slice())
+        {
+            return vec![frame("d", &location.child(key), value, tag)];
+        }
+        sequence.extend(entered);
         sequence.reverse();
         message("m", location, &sequence, tag)
     }
@@ -427,7 +440,7 @@ fn window_diff(
 }
 
 /// One message with `entries` as its data in their order, or none when there are none.
-fn message(action: &str, path: &Path, entries: &[(String, Json)], tag: Option<u64>) -> Vec<String> {
+fn message(action: &str, path: &Path, entries: &[(String, Json)], tag: Option<i64>) -> Vec<String> {
     if entries.is_empty() {
         return Vec::new();
     }
@@ -450,15 +463,26 @@ fn message(action: &str, path: &Path, entries: &[(String, Json)], tag: Option<u6
 }
 
 /// A pushed data message.
-pub(crate) fn frame(action: &str, path: &Path, data: &Json, tag: Option<u64>) -> String {
+pub(crate) fn frame(action: &str, path: &Path, data: &Json, tag: Option<i64>) -> String {
     frame_text(action, path, &render(data, Style::Compact), tag)
 }
 
-fn frame_text(action: &str, path: &Path, data: &str, tag: Option<u64>) -> String {
+fn frame_text(action: &str, path: &Path, data: &str, tag: Option<i64>) -> String {
     let tag = tag.map(|t| format!(",\"t\":{t}")).unwrap_or_default();
     format!(
         "{{\"t\":\"d\",\"d\":{{\"b\":{{\"p\":{},\"d\":{data}{tag}}},\"a\":{}}}}}",
         render(&Json::String(path.keys().join("/")), Style::Compact),
         render(&Json::string(action), Style::Compact),
     )
+}
+
+#[cfg(test)]
+thread_local! {
+    static VIEWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many views this thread has built (tests only).
+#[cfg(test)]
+pub(crate) fn views_built() -> usize {
+    VIEWS.with(std::cell::Cell::get)
 }

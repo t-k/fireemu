@@ -609,3 +609,116 @@ fn closing_one_connection_keeps_the_pushes_queued_for_others() {
         vec![(reader.client(), push("d", "a", "1", None))]
     );
 }
+
+#[test]
+#[rustfmt::skip]
+fn tags_are_32_bit_integers_negative_ones_included() {
+    replay("r13", &[
+        (("REST", r#"PUT /w.json {"a":1,"b":2,"c":3}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":-1,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":2},"t":-1},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"p","b":{"p":"/w/b","d":20}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":20,"t":-1},"a":"d"}}"#]),
+        (("A", r#"{"r":2,"a":"n","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":-1}}"#), &[r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":""}}}"#]),
+        (("B", r#"{"r":2,"a":"p","b":{"p":"/w/a","d":10}}"#), &[]),
+        (("A", r#"{"r":3,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":2147483647,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":10,"b":20},"t":2147483647},"a":"d"}}"#, r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":{}}}}"#]),
+    ]);
+}
+
+#[test]
+fn other_tags_end_the_connection() {
+    // The official emulator stops answering the connection for a tag that is not a 32-bit
+    // integer, and answers a null tag with an internal error and a reset.
+    for tag in ["2.5", r#""x""#, "2147483648", "-2147483649", "1e2", "true"] {
+        let mut db = Database::new(RestOptions::default(), 1);
+        rest(&mut db, "PUT", "/w.json?ns=l14", r#"{"a":1}"#);
+        let mut s = open(&mut db, "l14");
+        let frame = request(
+            1,
+            "q",
+            &format!(r#"{{"p":"/w","q":{{"i":".key","l":2,"vf":"l"}},"t":{tag},"h":""}}"#),
+        );
+        let received = s.receive(&mut db, &frame, NOW);
+        assert!(received.drop_connection, "{tag}");
+        assert!(received.replies.is_empty(), "{tag}");
+        assert_eq!(db.listen_count(), 0, "{tag}");
+    }
+    let mut db = Database::new(RestOptions::default(), 1);
+    let mut s = open(&mut db, "l14");
+    let received = s.receive(
+        &mut db,
+        &request(
+            1,
+            "q",
+            r#"{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":null,"h":""}"#,
+        ),
+        NOW,
+    );
+    assert!(received.drop_connection);
+    assert_eq!(
+        received.replies,
+        vec![
+            reply(1, "internal_error", r#""An internal error occurred""#),
+            r#"{"t":"c","d":{"t":"r","d":"127.0.0.1:9000"}}"#.to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn limits_that_are_not_integers_are_connection_errors() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    rest(&mut db, "PUT", "/w.json?ns=l15", r#"{"a":1}"#);
+    let mut s = open(&mut db, "l15");
+    for frame in [
+        r#"{"t":"d","d":{"r":1,"a":"g","b":{"p":"/w","q":{"i":".key","l":5.0,"vf":"l"}}}}"#,
+        r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/w","q":{"i":".key","l":2.0,"vf":"l"},"t":3,"h":""}}}"#,
+        r#"{"t":"d","d":{"r":3,"a":"g","b":{"p":"/w","q":{"i":".key","l":2.5,"vf":"l"}}}}"#,
+    ] {
+        let replies = send(&mut db, &mut s, frame);
+        assert_eq!(replies.len(), 1, "{frame}");
+        assert!(replies[0].contains("Error on incoming message"), "{frame}");
+    }
+}
+
+/// A merge below a child the client does not hold sends the whole child: a range window
+/// keeps the entries in the order sent, a limit window that gains only that child gets it
+/// as one `d` message.
+#[test]
+#[rustfmt::skip]
+fn entries_below_children_the_client_lacks_arrive_whole() {
+    replay("r15", &[
+        (("REST", r#"PUT /w.json {"z":1}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","sp":"b","ep":"c"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"m","b":{"p":"/w","d":{"b/x":0}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":{"x":0}},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":2,"a":"m","b":{"p":"/w","d":{"c/x":1,"b/y":2}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":{"x":1},"b/y":2},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":3,"a":"p","b":{"p":"/w/c/x","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/c/x","d":null,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":4,"a":"m","b":{"p":"/","d":{"w/c/y":5}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":{"y":5}},"t":1},"a":"m"}}"#]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":2,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":{"x":0,"y":2},"c":{"y":5}},"t":2},"a":"d"}}"#, r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":5,"a":"m","b":{"p":"/w","d":{"a/x":3}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/a","d":{"x":3},"t":2},"a":"d"}}"#]),
+        (("B", r#"{"r":6,"a":"p","b":{"p":"/w/0/x","d":4}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/0","d":{"x":4},"t":2},"a":"d"}}"#]),
+    ]);
+}
+
+#[test]
+fn plain_listens_receive_a_write_before_windows() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    rest(&mut db, "PUT", "/s.json?ns=l16", r#"{"a":1,"b":2,"c":3}"#);
+    let mut s = open(&mut db, "l16");
+    send(
+        &mut db,
+        &mut s,
+        &request(
+            1,
+            "q",
+            r#"{"p":"/s","q":{"i":".key","l":2,"vf":"r"},"t":2,"h":""}"#,
+        ),
+    );
+    send(&mut db, &mut s, &request(2, "q", r#"{"p":"/s","h":""}"#));
+    let id = s.client();
+    rest(&mut db, "DELETE", "/s/c.json?ns=l16", "");
+    assert_eq!(
+        db.drain_pushes(),
+        vec![
+            (id, push("d", "s/c", "null", None)),
+            (id, push("m", "s", r#"{"a":1,"c":null}"#, Some(2))),
+        ]
+    );
+}

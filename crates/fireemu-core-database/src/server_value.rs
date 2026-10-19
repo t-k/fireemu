@@ -94,9 +94,7 @@ fn resolve_placeholder(
         Json::Object(op) if op.len() == 1 => match op.get("increment") {
             Some(Json::Number(delta)) => {
                 let sum = match existing.map(|n| &n.content) {
-                    Some(Content::Leaf(Leaf::Number(current))) => current
-                        .increment(*delta)
-                        .ok_or_else(|| invalid("the increment overflows the number range"))?,
+                    Some(Content::Leaf(Leaf::Number(current))) => current.increment(*delta),
                     _ => *delta,
                 };
                 Ok(Json::Number(sum))

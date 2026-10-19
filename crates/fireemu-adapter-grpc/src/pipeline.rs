@@ -1,7 +1,9 @@
 //! `ExecutePipeline` decoding for the strict validator (`FS-PIPE-RPC-1`): the request's
 //! database, consistency selector and options are checked, the wire stages become
 //! [`StageSpec`]s with typed arguments that the core canonicalizes. The finite latest-read
-//! collection/where(equal)/select/limit subset executes locally; other semantics are refused.
+//! collection/where(equal)/select/offset/limit subset executes locally through the core
+//! pipeline executor ([`compile_pipeline`]); other semantics are refused. The older lowering
+//! to an equivalent `RunQuery` ([`compile_supported`]) stays as the differential baseline.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
@@ -9,6 +11,7 @@
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
+use fireemu_core_firestore::pipeline_exec::{self, Expr, ExprError, Placement, Stage, Unrecorded};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
@@ -166,14 +169,12 @@ pub fn project_document(
     document
 }
 
-/// Compiles the finite local Enterprise subset: collection, exact field equality,
-/// field-reference select aliases, offset and limit. Every other stage or option is refused
-/// explicitly by the caller.
-#[allow(clippy::too_many_lines)]
-pub fn compile_supported(
-    req: &pb::ExecutePipelineRequest,
+/// The collection input of a locally executable pipeline: its stages, the `RunQuery` parent
+/// and the collection ID. Consistency selectors and pipeline options are refused.
+fn collection_input<'a>(
+    req: &'a pb::ExecutePipelineRequest,
     parent: &Parent,
-) -> Result<CompiledPipeline, Status> {
+) -> Result<(&'a pb::Pipeline, String, String), Status> {
     if req.consistency_selector.is_some() || req.auto_commit_transaction {
         return Err(Status::unimplemented(
             "pipeline consistency and auto-commit are unsupported locally",
@@ -216,6 +217,62 @@ pub fn compile_supported(
                 .map_err(|e| Status::invalid_argument(e.to_string()))?,
         )
     };
+    let query_parent = parent_doc.as_ref().map_or_else(
+        || {
+            format!(
+                "projects/{}/databases/{}/documents",
+                parent.project, parent.database
+            )
+        },
+        DocumentPath::resource_name,
+    );
+    Ok((pipeline, query_parent, collection_id.to_string()))
+}
+
+/// A `RunQuery` over one collection, in name order, with an optional filter, projection,
+/// offset and limit.
+fn collection_query(
+    query_parent: String,
+    collection_id: String,
+    r#where: Option<pb::structured_query::Filter>,
+    select: Option<pb::structured_query::Projection>,
+    offset: i32,
+    limit: Option<i32>,
+) -> pb::RunQueryRequest {
+    pb::RunQueryRequest {
+        parent: query_parent,
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                select,
+                from: vec![pb::structured_query::CollectionSelector {
+                    collection_id,
+                    all_descendants: false,
+                }],
+                r#where,
+                order_by: Vec::new(),
+                start_at: None,
+                end_at: None,
+                offset,
+                limit,
+                find_nearest: None,
+            },
+        )),
+        consistency_selector: None,
+        request_options: None,
+        explain_options: None,
+    }
+}
+
+/// Compiles the finite local Enterprise subset into the equivalent `RunQuery`: collection,
+/// exact top-level field equality, top-level field-reference select aliases, offset and
+/// limit. This lowering no longer serves requests; it is the baseline the executor is
+/// compared against.
+#[allow(clippy::too_many_lines)]
+pub fn compile_supported(
+    req: &pb::ExecutePipelineRequest,
+    parent: &Parent,
+) -> Result<CompiledPipeline, Status> {
+    let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
     let mut projection: Option<Vec<(String, FieldPath)>> = None;
     let mut where_filter = None;
     let mut offset = 0;
@@ -327,15 +384,6 @@ pub fn compile_supported(
             }
         }
     }
-    let query_parent = parent_doc.as_ref().map_or_else(
-        || {
-            format!(
-                "projects/{}/databases/{}/documents",
-                parent.project, parent.database
-            )
-        },
-        DocumentPath::resource_name,
-    );
     let limit_i32 = limit.and_then(|value| i32::try_from(value).ok());
     let select = projection
         .as_ref()
@@ -347,33 +395,387 @@ pub fn compile_supported(
                 })
                 .collect(),
         });
-    let structured = pb::StructuredQuery {
-        select,
-        from: vec![pb::structured_query::CollectionSelector {
-            collection_id: collection_id.to_string(),
-            all_descendants: false,
-        }],
-        r#where: where_filter,
-        order_by: Vec::new(),
-        start_at: None,
-        end_at: None,
-        offset,
-        limit: limit_i32,
-        find_nearest: None,
-    };
     Ok(CompiledPipeline {
-        query: pb::RunQueryRequest {
-            parent: query_parent,
-            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
-                structured,
-            )),
-            consistency_selector: None,
-            request_options: None,
-            explain_options: None,
-        },
+        query: collection_query(
+            query_parent,
+            collection_id,
+            where_filter,
+            select,
+            offset,
+            limit_i32,
+        ),
         projection,
         limit,
     })
+}
+
+/// A pipeline compiled for the core executor.
+#[derive(Debug, Clone)]
+pub struct CompiledExecution {
+    /// The input: a name-ordered scan of the collection (projected to the fields the stages
+    /// read once a select narrows the rows), read through the `RunQuery` stream so that every
+    /// page reads the same snapshot.
+    pub input: pb::RunQueryRequest,
+    /// The stages the executor runs over the input rows.
+    pub stages: Vec<Stage>,
+}
+
+/// Compiles the finite local Enterprise subset for the core executor: collection input,
+/// then an optional single `where(equal(operand, scalar literal))`, an optional `select`,
+/// an optional `offset` and an optional `limit`, in that order. Operands are field
+/// references (nested paths included) and the table's value functions (`document_id`,
+/// `collection_id`, `parent`). Every other stage, function or arrangement is refused.
+/// `unrecorded` decides whether shapes with unrecorded production behavior (dotted or quoted
+/// select aliases) are refused or answered as the official emulator answers them.
+pub fn compile_pipeline(
+    req: &pb::ExecutePipelineRequest,
+    parent: &Parent,
+    unrecorded: Unrecorded,
+) -> Result<CompiledExecution, Status> {
+    let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
+    let mut stages = Vec::new();
+    let mut last_rank = 0u8;
+    let (mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
+        (false, false, false, false);
+    let mut pushdown = None;
+    for stage in pipeline.stages.iter().skip(1) {
+        let rank = match stage.name.as_str() {
+            "where" | "select" => 1,
+            "offset" => 2,
+            "limit" => 3,
+            _ => 4,
+        };
+        if rank < last_rank {
+            return Err(Status::unimplemented(
+                "pipeline stages are out of supported order",
+            ));
+        }
+        last_rank = rank;
+        match stage.name.as_str() {
+            "where" => {
+                if seen_where || seen_select || seen_limit {
+                    return Err(Status::unimplemented("duplicate or misplaced where stage"));
+                }
+                seen_where = true;
+                let (condition, filter) = decode_condition(stage)?;
+                pushdown = filter;
+                stages.push(Stage::Where(condition));
+            }
+            "select" => {
+                if seen_select {
+                    return Err(Status::unimplemented(
+                        "duplicate select stage is unsupported locally",
+                    ));
+                }
+                seen_select = true;
+                stages.push(Stage::Select(decode_select(stage, unrecorded)?));
+            }
+            "offset" => {
+                if seen_offset {
+                    return Err(Status::unimplemented(
+                        "duplicate offset stage is unsupported locally",
+                    ));
+                }
+                seen_offset = true;
+                let Some(pb::value::ValueType::IntegerValue(n)) =
+                    stage.args.first().and_then(|v| v.value_type.as_ref())
+                else {
+                    return Err(Status::invalid_argument("offset must be an integer"));
+                };
+                let offset = i32::try_from(*n).map_err(|_| {
+                    Status::unimplemented("offset exceeds the finite local execution range")
+                })?;
+                let offset = u64::try_from(offset)
+                    .map_err(|_| Status::invalid_argument("offset must not be negative"))?;
+                stages.push(Stage::Offset(offset));
+            }
+            "limit" => {
+                if seen_limit {
+                    return Err(Status::unimplemented(
+                        "duplicate limit stage is unsupported locally",
+                    ));
+                }
+                seen_limit = true;
+                let Some(pb::value::ValueType::IntegerValue(n)) =
+                    stage.args.first().and_then(|v| v.value_type.as_ref())
+                else {
+                    return Err(Status::invalid_argument("limit must be an integer"));
+                };
+                let limit = u32::try_from(*n)
+                    .map_err(|_| Status::invalid_argument("limit is out of range"))?;
+                stages.push(Stage::Limit(u64::from(limit)));
+            }
+            other => {
+                return Err(Status::unimplemented(format!(
+                    "pipeline stage {other:?} is unsupported locally"
+                )))
+            }
+        }
+    }
+    // A select narrows the rows, so the scan copies only the fields the stages read.
+    let projection =
+        pipeline_exec::referenced_fields(&stages).map(|paths| pb::structured_query::Projection {
+            fields: paths
+                .iter()
+                .map(|path| pb::structured_query::FieldReference {
+                    field_path: path.canonical(),
+                })
+                .collect(),
+        });
+    Ok(CompiledExecution {
+        input: collection_query(query_parent, collection_id, pushdown, projection, 0, None),
+        stages,
+    })
+}
+
+fn expr_status(error: ExprError) -> Status {
+    match error {
+        ExprError::Unsupported(message) => Status::unimplemented(message),
+        ExprError::Invalid(message) => Status::invalid_argument(message),
+    }
+}
+
+/// Where an operand stands: directly in a stage (`where` operand, `select` value) or as a
+/// function argument.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Position {
+    Stage,
+    Argument,
+}
+
+/// Decodes an operand expression: a field reference, a call of a table value function or,
+/// as a function argument only, a reference literal. `__name__` is accepted only as a
+/// function argument.
+fn decode_operand(value: &pb::Value, position: Position) -> Result<Expr, Status> {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        None => Err(Status::invalid_argument("expression argument is missing")),
+        Some(V::FieldReferenceValue(field)) => {
+            let path =
+                FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?;
+            if path.is_document_name() && position == Position::Stage {
+                return Err(Status::unimplemented(
+                    "__name__ field references are unsupported locally outside document functions",
+                ));
+            }
+            Ok(Expr::Field(path))
+        }
+        Some(V::FunctionValue(function)) => {
+            match pipeline_exec::function(&function.name) {
+                None => {
+                    return Err(Status::unimplemented(format!(
+                        "function {:?} is unsupported locally",
+                        function.name
+                    )))
+                }
+                Some(def) if def.placement != Placement::Value => {
+                    return Err(Status::unimplemented(format!(
+                        "function {:?} is unsupported in this position locally",
+                        function.name
+                    )))
+                }
+                Some(_) => {}
+            }
+            if !function.options.is_empty() {
+                return Err(Status::invalid_argument(format!(
+                    "function {:?} takes no options",
+                    function.name
+                )));
+            }
+            let args = function
+                .args
+                .iter()
+                .map(|arg| decode_operand(arg, Position::Argument))
+                .collect::<Result<Vec<_>, _>>()?;
+            Expr::call(&function.name, args, Placement::Value).map_err(expr_status)
+        }
+        Some(V::ReferenceValue(reference)) if position == Position::Argument => Ok(Expr::Constant(
+            fireemu_core_firestore::value::Value::Reference(reference.clone()),
+        )),
+        Some(_) => Err(Status::unimplemented(
+            "literal expression operands are unsupported locally",
+        )),
+    }
+}
+
+/// Decodes `where(equal(operand, scalar literal))`. A field operand also gives the same
+/// filter the `RunQuery` lowering sends, for the scan to apply before it copies documents.
+fn decode_condition(
+    stage: &pb::pipeline::Stage,
+) -> Result<(Expr, Option<pb::structured_query::Filter>), Status> {
+    let Some(pb::value::ValueType::FunctionValue(function)) =
+        stage.args.first().and_then(|v| v.value_type.as_ref())
+    else {
+        return Err(Status::invalid_argument(
+            "where requires an equal expression",
+        ));
+    };
+    let Some(def) =
+        pipeline_exec::function(&function.name).filter(|def| def.placement == Placement::Condition)
+    else {
+        return Err(Status::unimplemented(
+            "where expression is unsupported locally",
+        ));
+    };
+    // `equal` is the table's only condition and takes two arguments; the wording is the
+    // finite subset's.
+    if function.args.len() != def.arity || !function.options.is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "{} requires exactly two arguments and no options",
+            def.name
+        )));
+    }
+    let left = match function.args[0].value_type.as_ref() {
+        None => return Err(Status::invalid_argument("equal first argument is missing")),
+        Some(
+            pb::value::ValueType::FieldReferenceValue(_) | pb::value::ValueType::FunctionValue(_),
+        ) => decode_operand(&function.args[0], Position::Stage)?,
+        Some(_) => {
+            return Err(Status::unimplemented(
+                "equal first argument is unsupported locally",
+            ))
+        }
+    };
+    let right = match function.args[1].value_type.as_ref() {
+        None => return Err(Status::invalid_argument("where literal is missing")),
+        Some(
+            pb::value::ValueType::ArrayValue(_)
+            | pb::value::ValueType::MapValue(_)
+            | pb::value::ValueType::FieldReferenceValue(_)
+            | pb::value::ValueType::VariableReferenceValue(_)
+            | pb::value::ValueType::FunctionValue(_)
+            | pb::value::ValueType::PipelineValue(_),
+        ) => {
+            return Err(Status::unimplemented(
+                "where literal is unsupported locally",
+            ))
+        }
+        Some(_) => Expr::Constant(
+            crate::decode::decode_value(&function.args[1])
+                .map_err(|e| Status::invalid_argument(e.to_string()))?,
+        ),
+    };
+    let pushdown = match &left {
+        Expr::Field(path) => Some(equal_filter(path.canonical(), &function.args[1])),
+        Expr::Constant(_) | Expr::Call { .. } => None,
+    };
+    let condition =
+        Expr::call(def.name, vec![left, right], Placement::Condition).map_err(expr_status)?;
+    Ok((condition, pushdown))
+}
+
+/// Decodes `select({alias: operand, ...})`. An alias is a field path, as the official
+/// emulator treats it: an invalid path, `__name__`, a repeated path and an alias inside
+/// another are refused as it refuses them. A dotted or quoted alias nests or unquotes the
+/// output key there; production is unobserved, so it is refused unless `unrecorded` follows
+/// the official emulator.
+fn decode_select(
+    stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
+) -> Result<Vec<(FieldPath, Expr)>, Status> {
+    let Some(pb::value::ValueType::MapValue(map)) =
+        stage.args.first().and_then(|v| v.value_type.as_ref())
+    else {
+        return Err(Status::invalid_argument("select requires an alias map"));
+    };
+    let mut aliases = Vec::with_capacity(map.fields.len());
+    for (alias, value) in &map.fields {
+        // Strict answers only aliases whose output key cannot depend on how production
+        // reads an alias; every other alias, invalid ones included, is unobserved.
+        if unrecorded == Unrecorded::Refuse && !is_plain_alias(alias) {
+            return Err(Status::unimplemented(format!(
+                "select alias {alias:?} is not a plain identifier; its output shape is not observed locally"
+            )));
+        }
+        if value.value_type.is_none() {
+            return Err(Status::unimplemented(
+                "select expressions are unsupported locally",
+            ));
+        }
+        let path = FieldPath::parse(alias).map_err(|e| {
+            Status::invalid_argument(format!("select alias {alias:?} is not a field path: {e}"))
+        })?;
+        if path
+            .segments()
+            .iter()
+            .any(|segment| is_reserved_name(segment))
+        {
+            return Err(Status::invalid_argument(format!(
+                "select alias {alias:?} uses a reserved field name"
+            )));
+        }
+        aliases.push((alias, path, decode_operand(value, Position::Stage)?));
+    }
+    if aliases.is_empty() {
+        return Err(Status::invalid_argument(
+            "select requires a non-empty alias map",
+        ));
+    }
+    aliases.sort_by(|a, b| a.1.cmp(&b.1));
+    for pair in aliases.windows(2) {
+        if pair[0].1.is_prefix_of(&pair[1].1) {
+            return Err(Status::invalid_argument(format!(
+                "select aliases {:?} and {:?} set a field and itself or one of its children",
+                pair[0].0, pair[1].0
+            )));
+        }
+    }
+    Ok(aliases
+        .into_iter()
+        .map(|(_, path, expr)| (path, expr))
+        .collect())
+}
+
+/// A name like `__x__`, which Firestore reserves.
+fn is_reserved_name(segment: &str) -> bool {
+    segment.len() >= 4 && segment.starts_with("__") && segment.ends_with("__")
+}
+
+/// An alias that is one unquoted identifier (`[A-Za-z_][A-Za-z0-9_]*`) and not reserved:
+/// its output key is the alias itself whether production reads aliases as keys or as paths.
+fn is_plain_alias(alias: &str) -> bool {
+    let mut chars = alias.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !is_reserved_name(alias)
+}
+
+/// A projected output row as a pipeline result document: fields only, without a name or
+/// times (as the official emulator answers after a select; production is unobserved). A
+/// pipeline without a select answers the source documents themselves instead.
+#[must_use]
+pub fn result_document(
+    fields: &std::collections::BTreeMap<String, fireemu_core_firestore::value::Value>,
+) -> pb::Document {
+    pb::Document {
+        fields: fields
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::encode::encode_value(v)))
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// A `RunQuery` result document as an executor row.
+pub fn document_row(document: &pb::Document) -> Result<pipeline_exec::Row, Status> {
+    let path = DocumentPath::from_resource_name(&document.name).ok_or_else(|| {
+        Status::internal(format!(
+            "pipeline input {:?} is not a document name",
+            document.name
+        ))
+    })?;
+    let fields = document
+        .fields
+        .iter()
+        .map(|(k, v)| {
+            crate::decode::decode_value(v)
+                .map(|value| (k.clone(), value))
+                .map_err(|e| Status::internal(format!("pipeline input field {k:?}: {e}")))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(pipeline_exec::Row { path, fields })
 }
 
 fn decode_equal_filter(
@@ -417,11 +819,28 @@ fn decode_equal_filter(
     let Some(literal) = function.args[1].value_type.as_ref() else {
         return Err(Status::invalid_argument("where literal is missing"));
     };
-    let field_ref = pb::structured_query::FieldReference {
-        field_path: field.clone(),
-    };
-    let filter_type = match literal {
-        pb::value::ValueType::NullValue(_) => {
+    if matches!(
+        literal,
+        pb::value::ValueType::ArrayValue(_)
+            | pb::value::ValueType::MapValue(_)
+            | pb::value::ValueType::FieldReferenceValue(_)
+            | pb::value::ValueType::VariableReferenceValue(_)
+            | pb::value::ValueType::FunctionValue(_)
+            | pb::value::ValueType::PipelineValue(_)
+    ) {
+        return Err(Status::unimplemented(
+            "where literal is unsupported locally",
+        ));
+    }
+    Ok(equal_filter(field.clone(), &function.args[1]))
+}
+
+/// The `RunQuery` filter equivalent to `equal(field, literal)` for a scalar literal: null
+/// and NaN become the unary `IS_NULL` / `IS_NAN`, anything else a field equality.
+fn equal_filter(field_path: String, value: &pb::Value) -> pb::structured_query::Filter {
+    let field_ref = pb::structured_query::FieldReference { field_path };
+    let filter_type = match &value.value_type {
+        Some(pb::value::ValueType::NullValue(_)) => {
             pb::structured_query::filter::FilterType::UnaryFilter(
                 pb::structured_query::UnaryFilter {
                     op: pb::structured_query::unary_filter::Operator::IsNull as i32,
@@ -431,7 +850,7 @@ fn decode_equal_filter(
                 },
             )
         }
-        pb::value::ValueType::DoubleValue(value) if value.is_nan() => {
+        Some(pb::value::ValueType::DoubleValue(double)) if double.is_nan() => {
             pb::structured_query::filter::FilterType::UnaryFilter(
                 pb::structured_query::UnaryFilter {
                     op: pb::structured_query::unary_filter::Operator::IsNan as i32,
@@ -441,27 +860,17 @@ fn decode_equal_filter(
                 },
             )
         }
-        pb::value::ValueType::ArrayValue(_)
-        | pb::value::ValueType::MapValue(_)
-        | pb::value::ValueType::FieldReferenceValue(_)
-        | pb::value::ValueType::VariableReferenceValue(_)
-        | pb::value::ValueType::FunctionValue(_)
-        | pb::value::ValueType::PipelineValue(_) => {
-            return Err(Status::unimplemented(
-                "where literal is unsupported locally",
-            ));
-        }
         _ => pb::structured_query::filter::FilterType::FieldFilter(
             pb::structured_query::FieldFilter {
                 field: Some(field_ref),
                 op: pb::structured_query::field_filter::Operator::Equal as i32,
-                value: Some(function.args[1].clone()),
+                value: Some(value.clone()),
             },
         ),
     };
-    Ok(pb::structured_query::Filter {
+    pb::structured_query::Filter {
         filter_type: Some(filter_type),
-    })
+    }
 }
 
 /// A wire value as a validation argument. A nested pipeline is typed but its stages are

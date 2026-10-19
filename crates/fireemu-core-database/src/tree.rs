@@ -15,6 +15,9 @@ enum Write {
     Value(Path, Option<Node>),
     /// Set the priority of the node at a path, if it exists.
     Priority(Path, Option<Priority>),
+    /// A write of what is already stored: the official emulator keeps the stored form
+    /// (1.0 written over 1 leaves 1).
+    Unchanged,
 }
 
 /// The data of one namespace.
@@ -124,10 +127,16 @@ impl Tree {
             };
             let resolved = resolve(value, stored_priority(Some(node)).as_ref(), context)?;
             let priority = Priority::from_json(&resolved)?;
+            if priority == node.priority {
+                return Ok(Write::Unchanged);
+            }
             return Ok(Write::Priority(parent, priority));
         }
         let resolved = resolve(value, self.get(path), context)?;
         let node = Node::from_json(&resolved, path, &self.limits)?;
+        if node.as_ref() == self.get(path) {
+            return Ok(Write::Unchanged);
+        }
         Ok(Write::Value(path.clone(), node))
     }
 
@@ -141,6 +150,7 @@ impl Tree {
                     node.priority = priority;
                 }
             }
+            Write::Unchanged => {}
         }
     }
 

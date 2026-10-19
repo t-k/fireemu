@@ -1463,3 +1463,100 @@ fn bodies_are_parsed_before_the_lock_when_there_is_one() {
         Handled::Stream { .. } => panic!("no stream expected"),
     }
 }
+
+#[test]
+fn increments_beyond_the_double_range_stop_at_the_largest_double() {
+    // The official emulator answers 1.7976931348623157E308 for 1e308 + 1e308.
+    let mut db = Database::new(RestOptions::default(), 1);
+    call(&mut db, "PUT", "/i.json?ns=t9", "1e308");
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/i.json?ns=t9",
+            r#"{".sv":{"increment":1e308}}"#
+        ),
+        (200, "1.7976931348623157E308".to_owned())
+    );
+    call(&mut db, "PUT", "/i.json?ns=t9", "-1e308");
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/i.json?ns=t9",
+            r#"{".sv":{"increment":-1e308}}"#
+        ),
+        (200, "-1.7976931348623157E308".to_owned())
+    );
+}
+
+#[test]
+fn limits_must_be_positive_integers() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    call(&mut db, "PUT", "/q.json?ns=t10", r#"{"a":1,"b":2,"c":3}"#);
+    for (limit, message) in [
+        ("2.0", "limitToFirst must be an integer"),
+        ("2.5", "limitToFirst must be an integer"),
+        ("1e1", "limitToFirst must be an integer"),
+        ("-1", "limitToFirst must be positive"),
+        ("0", "limitToFirst must be positive"),
+    ] {
+        assert_eq!(
+            call(
+                &mut db,
+                "GET",
+                &format!("/q.json?ns=t10&orderBy=%22%24key%22&limitToFirst={limit}"),
+                ""
+            ),
+            (400, error(message)),
+            "{limit}"
+        );
+    }
+}
+
+#[test]
+fn a_write_answers_what_was_written_even_when_it_keeps_the_stored_form() {
+    // The official emulator answers 1.0 for a PUT of 1.0 over 1, and still reads back 1.
+    let mut db = Database::new(RestOptions::default(), 1);
+    call(&mut db, "PUT", "/n.json?ns=t11", "1");
+    assert_eq!(
+        call(&mut db, "PUT", "/n.json?ns=t11", "1.0"),
+        (200, "1.0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/n.json?ns=t11", ""),
+        (200, "1".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/n.json?ns=t11", "-0.0"),
+        (200, "-0.0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/n.json?ns=t11", "0"),
+        (200, "0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/n.json?ns=t11", ""),
+        (200, "-0.0".to_owned())
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/p.json?ns=t11",
+        r#"{".value":1,".priority":5}"#,
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/p/.priority.json?ns=t11", "5"),
+        (200, "5".to_owned())
+    );
+    // An equal priority keeps the stored double, on a node with children too.
+    call(&mut db, "PUT", "/o.json?ns=t11", r#"{"k":1,".priority":5}"#);
+    assert_eq!(
+        call(&mut db, "PUT", "/o/.priority.json?ns=t11", "5"),
+        (200, "5".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/o/.priority.json?ns=t11", ""),
+        (200, "5.0".to_owned())
+    );
+}

@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "profile": "emulator",
+  "firestore": { "edition": "enterprise", "apiMode": "native" }
+}

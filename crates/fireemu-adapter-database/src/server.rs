@@ -14,6 +14,7 @@ mod long_polling;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -30,7 +31,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 
-use crate::realtime::{split_frames, Opened, Session};
+use crate::realtime::{split_frames, Opened, Prepared, Received, Session};
 use crate::rest::{
     parse_body, refusal_response, Database, Handled, HttpRequest, HttpResponse, SseEvent,
 };
@@ -53,8 +54,12 @@ pub struct ServerConfig {
     pub header_timeout: Duration,
     /// How long a client may take to send a request body.
     pub body_timeout: Duration,
-    /// How many events a stream may have waiting before it is closed as too slow.
+    /// How many events a stream, or messages a realtime connection, may have waiting before
+    /// it is closed as too slow.
     pub stream_queue: usize,
+    /// How many bytes of messages a realtime connection may have waiting before it is
+    /// closed as too slow (a whole-location value can be large).
+    pub stream_queue_bytes: usize,
     /// How long a realtime connection may stay silent (the SDKs send a keepalive every
     /// 45 s).
     pub realtime_idle: Duration,
@@ -74,6 +79,7 @@ impl Default for ServerConfig {
             header_timeout: Duration::from_secs(30),
             body_timeout: Duration::from_secs(120),
             stream_queue: 1024,
+            stream_queue_bytes: 64 * 1024 * 1024,
             realtime_idle: Duration::from_secs(120),
             long_poll_hold: Duration::from_secs(90),
             clock: Arc::new(|| {
@@ -87,8 +93,67 @@ impl Default for ServerConfig {
 
 type Body = BoxBody<Bytes, Infallible>;
 type Streams = Arc<Mutex<BTreeMap<u64, mpsc::Sender<SseEvent>>>>;
-/// The push queue of each realtime connection; every entry is one whole message.
-type Listeners = Mutex<BTreeMap<u64, mpsc::Sender<String>>>;
+/// Where each realtime connection's pushes go.
+type Listeners = Mutex<BTreeMap<u64, Sink>>;
+
+/// A realtime connection's push destination: a WebSocket connection's bounded queue, or a
+/// long-polling connection's outbox, filled directly under the database lock.
+enum Sink {
+    Socket(PushQueue),
+    LongPoll(Arc<long_polling::Connection>),
+}
+
+/// The sending side of a WebSocket connection's push queue; every entry is one whole
+/// message. It is bounded in messages (`stream_queue`) and in bytes (`stream_queue_bytes`).
+struct PushQueue {
+    sender: mpsc::Sender<String>,
+    bytes: Arc<AtomicUsize>,
+}
+
+/// The receiving side of a connection's push queue.
+pub(crate) struct Pushes {
+    receiver: mpsc::Receiver<String>,
+    bytes: Arc<AtomicUsize>,
+}
+
+fn push_queue(messages: usize) -> (PushQueue, Pushes) {
+    let (sender, receiver) = mpsc::channel(messages.max(1));
+    let bytes = Arc::new(AtomicUsize::new(0));
+    (
+        PushQueue {
+            sender,
+            bytes: Arc::clone(&bytes),
+        },
+        Pushes { receiver, bytes },
+    )
+}
+
+impl PushQueue {
+    /// Queues a message; `false` when the queue is full in messages or in bytes.
+    fn offer(&self, message: String, budget: usize) -> bool {
+        let size = message.len();
+        let before = self.bytes.fetch_add(size, AtomicOrdering::SeqCst);
+        if before.saturating_add(size) > budget || self.sender.try_send(message).is_err() {
+            self.bytes.fetch_sub(size, AtomicOrdering::SeqCst);
+            return false;
+        }
+        true
+    }
+}
+
+impl Pushes {
+    async fn recv(&mut self) -> Option<String> {
+        let message = self.receiver.recv().await?;
+        self.bytes.fetch_sub(message.len(), AtomicOrdering::SeqCst);
+        Some(message)
+    }
+
+    fn try_recv(&mut self) -> Option<String> {
+        let message = self.receiver.try_recv().ok()?;
+        self.bytes.fetch_sub(message.len(), AtomicOrdering::SeqCst);
+        Some(message)
+    }
+}
 
 struct Shared {
     database: Arc<Mutex<Database>>,
@@ -223,9 +288,11 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     for (client, message) in pushes {
-        let delivered = listeners
-            .get(&client)
-            .is_some_and(|sender| sender.try_send(message).is_ok());
+        let budget = shared.config.stream_queue_bytes;
+        let delivered = listeners.get(&client).is_some_and(|sink| match sink {
+            Sink::Socket(queue) => queue.offer(message, budget),
+            Sink::LongPoll(connection) => long_polling::deliver(connection, message, budget),
+        });
         if !delivered {
             listeners.remove(&client);
             database.close_realtime(client);
@@ -349,12 +416,26 @@ async fn send_text<S: AsyncWrite + Unpin>(
     socket.flush().await
 }
 
-async fn send_close<S: AsyncWrite + Unpin>(socket: &mut S, code: CloseCode) {
+async fn send_close<S: AsyncWrite + Unpin>(socket: &mut S, code: CloseCode, limit: Duration) {
     // The connection ends either way; a failed close concerns that client only.
-    let _ = socket
-        .write_all(&encode(Opcode::Close, &code.code().to_be_bytes()))
-        .await;
-    let _ = socket.shutdown().await;
+    let _ = write_within(
+        socket,
+        &encode(Opcode::Close, &code.code().to_be_bytes()),
+        limit,
+    )
+    .await;
+    let _ = tokio::time::timeout(limit, socket.shutdown()).await;
+}
+
+/// Writes raw bytes, giving up after `limit` on a client that stopped reading.
+async fn write_within<S: AsyncWrite + Unpin>(
+    socket: &mut S,
+    bytes: &[u8],
+    limit: Duration,
+) -> std::io::Result<()> {
+    tokio::time::timeout(limit, socket.write_all(bytes))
+        .await
+        .unwrap_or_else(|_| Err(std::io::ErrorKind::TimedOut.into()))
 }
 
 /// Serves one realtime connection until the client closes it or breaks the protocol.
@@ -368,24 +449,27 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         Opened::Shutdown(frames) => {
             // The official emulator drops the connection after the shutdown message, without
             // a close frame.
-            let _ = send_text(&mut socket, &frames).await;
-            let _ = socket.shutdown().await;
+            let _ = send_within(&mut socket, &frames, shared.config.realtime_idle).await;
+            let _ = tokio::time::timeout(shared.config.realtime_idle, socket.shutdown()).await;
             return;
         }
         Opened::Session(session, frames) => {
-            if send_text(&mut socket, &frames).await.is_err() {
+            if send_within(&mut socket, &frames, shared.config.realtime_idle)
+                .await
+                .is_err()
+            {
                 return;
             }
             session
         }
     };
     let client = session.client();
-    let (sender, mut pushes) = mpsc::channel(shared.config.stream_queue.max(1));
+    let (queue, mut pushes) = push_queue(shared.config.stream_queue);
     shared
         .listeners
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .insert(client, sender);
+        .insert(client, Sink::Socket(queue));
     run_realtime(shared, &mut socket, session, &mut pushes, limit).await;
     // The database lock first, in the order `deliver` takes them.
     let mut database = shared
@@ -398,6 +482,33 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&client);
     database.close_realtime(client);
+}
+
+/// Answers one prepared message under the database lock. Pushes already queued for the
+/// connection come from earlier commits (every push is queued under this lock), so they go
+/// first, ahead of the pushes and answer this message causes.
+fn answer_text(
+    shared: &Shared,
+    session: &mut Session,
+    pushes: &mut Pushes,
+    prepared: Prepared,
+) -> Received {
+    let now = (shared.config.clock)();
+    let mut database = shared
+        .database
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let mut earlier = Vec::new();
+    while let Some(message) = pushes.try_recv() {
+        earlier.extend(split_frames(message));
+    }
+    let mut received = session.dispatch_prepared(&mut database, prepared, now);
+    deliver(shared, &mut database, std::mem::take(&mut received.events));
+    if !earlier.is_empty() {
+        earlier.append(&mut received.replies);
+        received.replies = earlier;
+    }
+    received
 }
 
 /// Writes frames, giving up after `limit` on a client that stopped reading.
@@ -416,7 +527,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     shared: &Arc<Shared>,
     socket: &mut S,
     mut session: Session,
-    pushes: &mut mpsc::Receiver<String>,
+    pushes: &mut Pushes,
     limit: usize,
 ) {
     let idle = shared.config.realtime_idle;
@@ -427,7 +538,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     loop {
         match decode(&buffer, limit) {
             Err(error) => {
-                send_close(socket, error.close_code()).await;
+                send_close(socket, error.close_code(), idle).await;
                 return;
             }
             // The SDKs send a keepalive every 45 s, so a connection silent for longer than the
@@ -442,7 +553,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                                 deadline = tokio::time::Instant::now() + idle;
                             }
                             Err(_) => {
-                                send_close(socket, CloseCode::Normal).await;
+                                send_close(socket, CloseCode::Normal, idle).await;
                                 return;
                             }
                         }
@@ -450,7 +561,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                     message = pushes.recv() => {
                         // A closed queue means the connection was dropped for falling behind.
                         let Some(message) = message else {
-                            let _ = socket.shutdown().await;
+                            let _ = tokio::time::timeout(idle, socket.shutdown()).await;
                             return;
                         };
                         if send_within(socket, &split_frames(message), idle).await.is_err() {
@@ -463,7 +574,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                 buffer.drain(..used);
                 let message = match assembler.push(frame) {
                     Err(error) => {
-                        send_close(socket, error.close_code()).await;
+                        send_close(socket, error.close_code(), idle).await;
                         return;
                     }
                     Ok(None) => continue,
@@ -475,29 +586,21 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                         let Some(prepared) = session.prepare(&text) else {
                             continue;
                         };
-                        let received = {
-                            let now = (shared.config.clock)();
-                            let mut database = shared
-                                .database
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner);
-                            let mut received =
-                                session.dispatch_prepared(&mut database, prepared, now);
-                            deliver(shared, &mut database, std::mem::take(&mut received.events));
-                            received
-                        };
+                        let received = answer_text(shared, &mut session, pushes, prepared);
                         if let Some(code) = received.close {
-                            send_close(socket, code).await;
+                            send_close(socket, code, idle).await;
                             return;
                         }
                         if received.drop_connection {
-                            let _ = socket.shutdown().await;
+                            // Frames to send before dropping (a reset), if any.
+                            let _ = send_within(socket, &received.replies, idle).await;
+                            let _ = tokio::time::timeout(idle, socket.shutdown()).await;
                             return;
                         }
                         send_within(socket, &received.replies, idle).await
                     }
                     Message::Ping(payload) => {
-                        socket.write_all(&encode(Opcode::Pong, &payload)).await
+                        write_within(socket, &encode(Opcode::Pong, &payload), idle).await
                     }
                     Message::Binary(_) | Message::Pong => Ok(()),
                     Message::Close(code) => {
@@ -505,8 +608,8 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                             .map(u16::to_be_bytes)
                             .map(Vec::from)
                             .unwrap_or_default();
-                        let _ = socket.write_all(&encode(Opcode::Close, &payload)).await;
-                        let _ = socket.shutdown().await;
+                        let _ = write_within(socket, &encode(Opcode::Close, &payload), idle).await;
+                        let _ = tokio::time::timeout(idle, socket.shutdown()).await;
                         return;
                     }
                 };
@@ -515,5 +618,126 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rest::RestOptions;
+
+    fn shared() -> Shared {
+        Shared {
+            database: Arc::new(Mutex::new(Database::new(RestOptions::default(), 1))),
+            streams: Arc::new(Mutex::new(BTreeMap::new())),
+            listeners: Mutex::new(BTreeMap::new()),
+            long_polls: long_polling::Connections::default(),
+            config: ServerConfig::default(),
+        }
+    }
+
+    fn connect(shared: &Shared) -> (Session, Pushes) {
+        let opened = shared
+            .database
+            .lock()
+            .unwrap()
+            .open_realtime("/.ws?v=5&ns=o", Some("h"), 0)
+            .unwrap();
+        let Opened::Session(session, _) = opened else {
+            panic!("no session")
+        };
+        let (queue, pushes) = push_queue(16);
+        shared
+            .listeners
+            .lock()
+            .unwrap()
+            .insert(session.client(), Sink::Socket(queue));
+        (session, pushes)
+    }
+
+    fn send(
+        shared: &Shared,
+        session: &mut Session,
+        pushes: &mut Pushes,
+        frame: &str,
+    ) -> Vec<String> {
+        let prepared = session.prepare(frame).unwrap();
+        answer_text(shared, session, pushes, prepared).replies
+    }
+
+    #[test]
+    fn a_push_queue_takes_messages_up_to_its_byte_budget() {
+        let (queue, mut pushes) = push_queue(16);
+        let message = "12345678".to_owned();
+        assert!(queue.offer(message.clone(), 8));
+        assert!(!queue.offer(message.clone(), 15));
+        assert_eq!(pushes.try_recv(), Some(message.clone()));
+        assert!(queue.offer(message, 8));
+    }
+
+    #[test]
+    fn queued_pushes_go_before_the_connections_own() {
+        let shared = shared();
+        let (mut a, mut a_pushes) = connect(&shared);
+        let (mut b, mut b_pushes) = connect(&shared);
+        send(
+            &shared,
+            &mut a,
+            &mut a_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#,
+        );
+        // B's write queues a push for A that A's task has not written yet.
+        send(
+            &shared,
+            &mut b,
+            &mut b_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/a","d":1}}}"#,
+        );
+        assert_eq!(
+            send(
+                &shared,
+                &mut a,
+                &mut a_pushes,
+                r#"{"t":"d","d":{"r":2,"a":"p","b":{"p":"/a","d":2}}}"#
+            ),
+            vec![
+                r#"{"t":"d","d":{"b":{"p":"a","d":1},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"b":{"p":"a","d":2},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":""}}}"#.to_owned(),
+            ]
+        );
+        assert!(a_pushes.try_recv().is_none());
+    }
+
+    #[test]
+    fn queued_pushes_go_before_a_new_listens_value() {
+        let shared = shared();
+        let (mut a, mut a_pushes) = connect(&shared);
+        let (mut b, mut b_pushes) = connect(&shared);
+        send(
+            &shared,
+            &mut a,
+            &mut a_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#,
+        );
+        send(
+            &shared,
+            &mut b,
+            &mut b_pushes,
+            r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/a/b","d":1}}}"#,
+        );
+        assert_eq!(
+            send(
+                &shared,
+                &mut a,
+                &mut a_pushes,
+                r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/a/b","h":""}}}"#
+            ),
+            vec![
+                r#"{"t":"d","d":{"b":{"p":"a/b","d":1},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"b":{"p":"a/b","d":1},"a":"d"}}"#.to_owned(),
+                r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#.to_owned(),
+            ]
+        );
     }
 }

@@ -452,3 +452,16 @@ async fn a_message_the_server_cannot_handle_ends_the_connection() {
     assert_eq!(database.lock().unwrap().listen_count(), 0);
     assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
 }
+
+#[tokio::test]
+async fn pushes_waiting_for_a_request_go_before_the_connections_own() {
+    let (address, _) = start(ServerConfig::default()).await;
+    let (mut lp, _) = Lp::start(&address, "lp6").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    // Another client writes while no request is held: the push waits in the outbox.
+    get(&address, "PUT", "/a.json?ns=lp6", "1").await;
+    assert_eq!(
+        lp.poll(&[&request(2, "p", r#"{"p":"/a","d":2}"#)]).await,
+        "pRTLPCB(2,[{\"t\":\"d\",\"d\":{\"b\":{\"p\":\"a\",\"d\":1},\"a\":\"d\"}},{\"t\":\"d\",\"d\":{\"b\":{\"p\":\"a\",\"d\":2},\"a\":\"d\"}},{\"t\":\"d\",\"d\":{\"r\":2,\"b\":{\"s\":\"ok\",\"d\":\"\"}}}]);\n"
+    );
+}

@@ -14,7 +14,7 @@ use fireemu_core_database::path::PRIORITY_KEY;
 use fireemu_core_database::push_id::PushIdGenerator;
 use fireemu_core_database::server_value::{resolve, stored_priority, SERVER_VALUE_KEY};
 use fireemu_core_database::{
-    Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, QueryParams,
+    Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, Priority, QueryParams,
     ServerValueContext, Tree,
 };
 
@@ -204,6 +204,19 @@ pub(crate) enum Change {
         /// The entries.
         entries: Vec<Patched>,
     },
+}
+
+impl Change {
+    /// Whether an effective part of the write lies at, above or below `location`.
+    pub(crate) fn touches(&self, location: &Path) -> bool {
+        let related = |path: &Path| location.contains(path) || path.contains(location);
+        match self {
+            Change::Put { path, effective } => *effective && related(path),
+            Change::Patch { base, entries } => entries
+                .iter()
+                .any(|entry| entry.effective && related(&base.join(&entry.path))),
+        }
+    }
 }
 
 /// One entry of a multipath update.
@@ -423,7 +436,7 @@ impl Database {
         let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
         tree.set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
-        let response = written(tree, &call.path, &call.output, call.want_etag);
+        let response = written(tree, &call.path, &value, &call.output, call.want_etag);
         let [path] = written_paths;
         let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
         Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
@@ -582,8 +595,17 @@ impl Database {
             subscription.last = fresh;
             events.push((*id, event));
         }
-        for listen in self.listens.values_mut() {
-            if listen.namespace != namespace {
+        // Plain listens go first: an SDK holding the whole location (a query served without
+        // its index) then sees each write there before the windows built from it, as the
+        // official emulator's order gives it in the cases observed.
+        let (plain, windows): (Vec<&mut Listen>, Vec<&mut Listen>) = self
+            .listens
+            .values_mut()
+            .partition(|listen| listen.window.is_none());
+        for listen in plain.into_iter().chain(windows) {
+            // A write that touches neither the location nor anything above it sends nothing;
+            // its view is not rebuilt either.
+            if listen.namespace != namespace || !change.touches(&listen.path) {
                 continue;
             }
             let fresh = listen.view(&ns.tree);
@@ -652,7 +674,7 @@ impl Database {
     }
 
     /// Removes the client's listen at `path` registered under `tag`.
-    pub(crate) fn remove_listen(&mut self, client: u64, path: &Path, tag: Option<u64>) {
+    pub(crate) fn remove_listen(&mut self, client: u64, path: &Path, tag: Option<i64>) {
         self.listens.retain(|_, listen| {
             !(listen.client == client && listen.path == *path && listen.tag == tag)
         });
@@ -1034,11 +1056,26 @@ fn not_modified() -> HttpResponse {
     }
 }
 
-fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpResponse {
+/// The answer to a `PUT`: what was written, in the form it was written (the official
+/// emulator answers `1.0` for 1.0 written over 1, which keeps 1); a value with server values
+/// answers what they resolved to.
+fn written(
+    tree: &Tree,
+    path: &Path,
+    value: &Json,
+    output: &Output,
+    want_etag: bool,
+) -> HttpResponse {
     let json = if path.is_priority() {
-        written_priority_at(tree, path)
+        match Priority::from_json(value) {
+            Ok(Some(priority)) => priority.to_json(),
+            _ => written_priority_at(tree, path),
+        }
     } else {
-        output_json(tree.get(path), Format::Export)
+        match Node::from_json(value, path, tree.limits()) {
+            Ok(node) => output_json(node.as_ref(), Format::Export),
+            Err(_) => output_json(tree.get(path), Format::Export),
+        }
     };
     let tag = want_etag.then(|| tag_at(tree, path));
     json_response(&json, output, tag)
@@ -1215,5 +1252,66 @@ fn stream_event(
             }
         }
         _ => put_event(&Path::root(), fresh),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::realtime::Opened;
+
+    #[test]
+    fn unrelated_writes_rebuild_no_view() {
+        let mut db = Database::new(RestOptions::default(), 1);
+        let big: BTreeMap<String, Json> =
+            (0..50).map(|i| (format!("k{i}"), Json::int(i))).collect();
+        db.tree_mut("u")
+            .set(
+                &Path::from_keys(["big"]),
+                &Json::Object(big),
+                ServerValueContext { now_millis: 0 },
+            )
+            .unwrap();
+        let Ok(Opened::Session(mut session, _)) = db.open_realtime("/.ws?v=5&ns=u", Some("h"), 0)
+        else {
+            panic!("no session")
+        };
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/big","h":""}}}"#,
+            0,
+        );
+        let before = crate::listen::views_built();
+        for i in 0..10 {
+            session.receive(
+                &mut db,
+                &format!(
+                    r#"{{"t":"d","d":{{"r":{},"a":"p","b":{{"p":"/other","d":{i}}}}}}}"#,
+                    i + 2
+                ),
+                0,
+            );
+        }
+        assert_eq!(crate::listen::views_built(), before);
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":20,"a":"p","b":{"p":"/big/k1","d":7}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
+        // A write of what is stored changes nothing, so it rebuilds nothing either.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":21,"a":"p","b":{"p":"/big/k1","d":7.0}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
+        // Neither does a merge whose only entry there changes nothing.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":22,"a":"m","b":{"p":"/","d":{"other":99,"big/k1":7}}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
     }
 }

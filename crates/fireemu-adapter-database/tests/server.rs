@@ -220,6 +220,22 @@ impl Client {
         self.send(0x1, text.as_bytes()).await;
     }
 
+    /// Sends a text frame; `false` when the server has gone.
+    async fn try_text(&mut self, text: &str) -> bool {
+        let mask = [7u8, 1, 2, 3];
+        let payload = text.as_bytes();
+        let mut frame = vec![0x81];
+        if payload.len() < 126 {
+            frame.push(0x80 | u8::try_from(payload.len()).unwrap());
+        } else {
+            frame.push(0x80 | 0x7E);
+            frame.extend_from_slice(&u16::try_from(payload.len()).unwrap().to_be_bytes());
+        }
+        frame.extend_from_slice(&mask);
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        self.stream.write_all(&frame).await.is_ok()
+    }
+
     /// The next frame: opcode and payload.
     async fn next(&mut self) -> (u8, Vec<u8>) {
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -405,7 +421,7 @@ async fn a_stream_that_stops_reading_is_closed_once_its_queue_fills() {
     read_until(&mut stream, "event: put").await;
     // Never read again: large events fill the socket buffers, then the queue.
     let big = format!("\"{}\"", "x".repeat(200_000));
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         for i in 0.. {
             exchange(
                 &address,
@@ -592,7 +608,7 @@ async fn a_listener_that_stops_reading_is_dropped_once_its_queue_fills() {
     reader.next_text().await;
     // Never read again: large pushes fill the socket buffers, then the queue.
     let big = format!("\"{}\"", "x".repeat(200_000));
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         for i in 0.. {
             exchange(
                 &address,
@@ -608,4 +624,120 @@ async fn a_listener_that_stops_reading_is_dropped_once_its_queue_fills() {
     })
     .await
     .expect("the stalled listener was never dropped");
+}
+
+#[tokio::test]
+async fn a_listener_whose_waiting_messages_pass_the_byte_budget_is_dropped() {
+    let (address, database) = start_with(ServerConfig {
+        stream_queue_bytes: 10_000,
+        realtime_idle: Duration::from_secs(120),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut reader, _) = Client::connect(&address, "/.ws?v=5&ns=w11").await;
+    reader.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/s","h":""}}}"#)
+        .await;
+    reader.next_text().await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // One message larger than the budget: the queue is far from full in messages.
+    let big = format!("\"{}\"", "x".repeat(20_000));
+    exchange(&address, "PUT", "/s.json?ns=w11&print=silent", &big).await;
+    assert_eq!(database.lock().unwrap().listen_count(), 0);
+}
+
+#[tokio::test]
+async fn a_client_that_stops_reading_is_dropped_after_the_write_deadline() {
+    let (address, database) = start_with(ServerConfig {
+        realtime_idle: Duration::from_millis(500),
+        ..ServerConfig::default()
+    })
+    .await;
+    exchange(
+        &address,
+        "PUT",
+        "/big.json?ns=w12&print=silent",
+        &format!("\"{}\"", "x".repeat(100_000)),
+    )
+    .await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w12").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/other","h":""}}}"#)
+        .await;
+    client.next_text().await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // Ask for the large value again and again without reading the answers.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for r in 2.. {
+            let frame =
+                format!(r#"{{"t":"d","d":{{"r":{r},"a":"g","b":{{"p":"/big","q":{{}}}}}}}}"#);
+            // A write that fails or blocks means the server has stopped reading too.
+            let _ = tokio::time::timeout(Duration::from_millis(200), client.try_text(&frame)).await;
+            if database.lock().unwrap().listen_count() == 0 {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the stalled client was never dropped");
+}
+
+#[tokio::test]
+async fn a_null_tag_is_answered_and_reset_before_the_connection_drops() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w13").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":null,"h":""}}}"#)
+        .await;
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"internal_error","d":"An internal error occurred"}}}"#
+    );
+    assert_eq!(
+        client.next_text().await,
+        format!(r#"{{"t":"c","d":{{"t":"r","d":"{address}"}}}}"#)
+    );
+    assert_eq!(client.next().await.0, 0xFF);
+}
+
+#[tokio::test]
+async fn a_client_that_pings_without_reading_is_dropped_after_the_write_deadline() {
+    let (address, database) = start_with(ServerConfig {
+        realtime_idle: Duration::from_millis(500),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w14").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#)
+        .await;
+    client.next_text().await;
+    let payload = [7u8; 125];
+    let mask = [1u8, 2, 3, 4];
+    let mut ping = vec![0x89, 0x80 | 0x7D];
+    ping.extend_from_slice(&mask);
+    ping.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    let batch: Vec<u8> = ping
+        .iter()
+        .copied()
+        .cycle()
+        .take(ping.len() * 200)
+        .collect();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            // Writing may block or fail once the server stops reading; that is expected.
+            let _ =
+                tokio::time::timeout(Duration::from_millis(100), client.stream.write_all(&batch))
+                    .await;
+            if database.lock().unwrap().listen_count() == 0 {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the stalled client was never dropped");
 }

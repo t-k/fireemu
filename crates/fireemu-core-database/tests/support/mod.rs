@@ -49,6 +49,6 @@ pub const NOW: ServerValueContext = ServerValueContext {
 /// A tree holding `value` at the root.
 pub fn tree_with(value: serde_json::Value) -> Tree {
     let mut tree = Tree::new(Limits::default());
-    tree.set(&Path::root(), &j(value), &NOW).unwrap();
+    tree.set(&Path::root(), &j(value), NOW).unwrap();
     tree
 }

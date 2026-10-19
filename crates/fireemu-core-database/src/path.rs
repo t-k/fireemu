@@ -1,13 +1,14 @@
 //! Paths: sequences of keys from the root.
 //!
 //! A path string is split at `/`; empty segments are dropped, so `/a//b/` names `a/b` and
-//! both `` and `/` name the root, as in the SDKs. Every segment is a valid key, with two
+//! both the empty string and `/` name the root, as in the SDKs. Every segment is a valid key, with two
 //! exceptions: `.info` may be the first segment (the read-only connection information) and
 //! `.priority` may be the last one (the priority of the parent location).
 
 use std::fmt;
 
-use crate::error::Result;
+use crate::error::{DatabaseError, ErrorKind, Result};
+use crate::key::validate_key;
 use crate::limits::Limits;
 
 /// The `.priority` pseudo-key.
@@ -29,8 +30,26 @@ impl Path {
 
     /// Parses a path string.
     pub fn parse(path: &str, limits: &Limits) -> Result<Self> {
-        let _ = (path, limits);
-        todo!()
+        let keys: Vec<String> = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let last = keys.len().saturating_sub(1);
+        for (index, key) in keys.iter().enumerate() {
+            let special = (index == 0 && key == INFO_KEY) || (index == last && key == PRIORITY_KEY);
+            if special {
+                continue;
+            }
+            if key == INFO_KEY || key == PRIORITY_KEY {
+                return Err(DatabaseError::new(
+                    ErrorKind::InvalidPath,
+                    format!("path {path:?} uses {key:?} where only a key may stand"),
+                ));
+            }
+            validate_key(key, limits)?;
+        }
+        Ok(Self { keys })
     }
 
     /// The path of `keys`, without validation (for paths built from validated keys).
@@ -46,7 +65,7 @@ impl Path {
     }
 
     /// The number of keys.
-    pub fn len(&self) -> usize {
+    pub fn depth(&self) -> usize {
         self.keys.len()
     }
 
@@ -62,8 +81,10 @@ impl Path {
 
     /// The parent, or `None` for the root.
     pub fn parent(&self) -> Option<Self> {
-        let _ = self;
-        todo!()
+        let (_, parent) = self.keys.split_last()?;
+        Some(Self {
+            keys: parent.to_vec(),
+        })
     }
 
     /// This path extended by `key`.
@@ -84,8 +105,7 @@ impl Path {
 
     /// Whether `self` equals `other` or is one of its ancestors.
     pub fn contains(&self, other: &Self) -> bool {
-        let _ = other;
-        todo!()
+        other.keys.starts_with(&self.keys)
     }
 
     /// Whether the path names a priority (its last key is `.priority`).

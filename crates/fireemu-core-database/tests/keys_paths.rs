@@ -1,5 +1,7 @@
 //! Keys, paths and numbers.
 
+#![allow(clippy::float_cmp)]
+
 mod support;
 
 use std::cmp::Ordering;
@@ -11,11 +13,21 @@ use support::p;
 #[test]
 fn keys_refuse_the_documented_characters_and_the_empty_key() {
     let limits = Limits::default();
-    for bad in ["", "a.b", "a$", "#", "[x", "x]", "a/b", "\u{0}", "a\u{1f}", "\u{7f}"] {
+    for bad in [
+        "", "a.b", "a$", "#", "[x", "x]", "a/b", "\u{0}", "a\u{1f}", "\u{7f}",
+    ] {
         let err = validate_key(bad, &limits).unwrap_err();
         assert_eq!(err.kind, ErrorKind::InvalidKey, "{bad:?}");
     }
-    for good in ["a", "-1", "with space", "日本語", "\u{80}", "emoji\u{1F600}", "a-b_c:d"] {
+    for good in [
+        "a",
+        "-1",
+        "with space",
+        "日本語",
+        "\u{80}",
+        "emoji\u{1F600}",
+        "a-b_c:d",
+    ] {
         validate_key(good, &limits).unwrap();
     }
 }
@@ -84,7 +96,14 @@ fn paths_allow_info_first_and_priority_last_only() {
     assert!(p("/.info/connected").is_info());
     assert!(p("/a/.priority").is_priority());
     assert!(p("/.priority").is_priority());
-    for bad in ["/a/.info", "/.priority/a", "/a/.value", "/a.b", "/a$", "/a/\u{0}"] {
+    for bad in [
+        "/a/.info",
+        "/.priority/a",
+        "/a/.value",
+        "/a.b",
+        "/a$",
+        "/a/\u{0}",
+    ] {
         let err = Path::parse(bad, &limits).unwrap_err();
         assert!(
             matches!(err.kind, ErrorKind::InvalidPath | ErrorKind::InvalidKey),
@@ -123,24 +142,55 @@ fn integral_doubles_in_the_safe_range_are_integers() {
 fn numbers_compare_exactly_across_representations() {
     let big = Number::Int(i64::MAX);
     assert_eq!(big.total_cmp(Number::Double(9.3e18)), Ordering::Less);
-    assert_eq!(Number::Int(i64::MIN).total_cmp(Number::Double(-9.3e18)), Ordering::Greater);
-    assert_eq!(Number::Int(1).total_cmp(Number::Double(1.5)), Ordering::Less);
-    assert_eq!(Number::Int(2).total_cmp(Number::Double(1.5)), Ordering::Greater);
-    assert_eq!(Number::Int(-1).total_cmp(Number::Double(-1.5)), Ordering::Greater);
-    assert_eq!(Number::Double(0.25).total_cmp(Number::Double(0.5)), Ordering::Less);
-    assert_eq!(Number::Double(1e300).total_cmp(Number::Int(5)), Ordering::Greater);
+    assert_eq!(
+        Number::Int(i64::MIN).total_cmp(Number::Double(-9.3e18)),
+        Ordering::Greater
+    );
+    assert_eq!(
+        Number::Int(1).total_cmp(Number::Double(1.5)),
+        Ordering::Less
+    );
+    assert_eq!(
+        Number::Int(2).total_cmp(Number::Double(1.5)),
+        Ordering::Greater
+    );
+    assert_eq!(
+        Number::Int(-1).total_cmp(Number::Double(-1.5)),
+        Ordering::Greater
+    );
+    assert_eq!(
+        Number::Double(0.25).total_cmp(Number::Double(0.5)),
+        Ordering::Less
+    );
+    assert_eq!(
+        Number::Double(1e300).total_cmp(Number::Int(5)),
+        Ordering::Greater
+    );
     // 2^63 as a double is above every i64.
-    assert_eq!(Number::Int(i64::MAX).total_cmp(Number::Double(9_223_372_036_854_775_808.0)), Ordering::Less);
+    assert_eq!(
+        Number::Int(i64::MAX).total_cmp(Number::Double(9_223_372_036_854_775_808.0)),
+        Ordering::Less
+    );
 }
 
 #[test]
 fn increment_adds_integers_exactly_and_falls_back_to_doubles_on_overflow() {
-    assert!(matches!(Number::Int(2).add(Number::Int(3)), Some(Number::Int(5))));
     assert!(matches!(
-        Number::Int(i64::MAX).add(Number::Int(1)),
+        Number::Int(2).increment(Number::Int(3)),
+        Some(Number::Int(5))
+    ));
+    assert!(matches!(
+        Number::Int(i64::MAX).increment(Number::Int(1)),
         Some(Number::Double(d)) if d == 9_223_372_036_854_775_808.0
     ));
-    assert!(matches!(Number::Int(1).add(Number::Double(0.5)), Some(Number::Double(d)) if d == 1.5));
-    assert!(matches!(Number::Double(0.5).add(Number::Double(0.5)), Some(Number::Int(1))));
-    assert!(Number::Double(f64::MAX).add(Number::Double(f64::MAX)).is_none());
+    assert!(
+        matches!(Number::Int(1).increment(Number::Double(0.5)), Some(Number::Double(d)) if d == 1.5)
+    );
+    assert!(matches!(
+        Number::Double(0.5).increment(Number::Double(0.5)),
+        Some(Number::Int(1))
+    ));
+    assert!(Number::Double(f64::MAX)
+        .increment(Number::Double(f64::MAX))
+        .is_none());
 }

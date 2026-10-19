@@ -8,7 +8,11 @@ use support::{j, p, tree_with};
 
 fn keys(tree: &Tree, path: &str, query: &QueryParams) -> Vec<String> {
     query.validate().unwrap();
-    query.run(tree.get(&p(path))).into_iter().map(|(k, _)| k.to_owned()).collect()
+    query
+        .run(tree.get(&p(path)))
+        .into_iter()
+        .map(|(k, _)| k.to_owned())
+        .collect()
 }
 
 fn child(path: &str) -> OrderBy {
@@ -81,11 +85,26 @@ fn order_by_priority_puts_no_priority_first_then_numbers_then_strings() {
 fn start_and_end_bounds_are_inclusive_and_after_before_exclusive() {
     let tree = tree_with(json!({"a": 1, "b": 2, "c": 2, "d": 3}));
     let by_value = || QueryParams::ordered_by(OrderBy::Value);
-    assert_eq!(keys(&tree, "/", &by_value().start_at(Json::int(2), None)), ["b", "c", "d"]);
-    assert_eq!(keys(&tree, "/", &by_value().start_after(Json::int(2), None)), ["d"]);
-    assert_eq!(keys(&tree, "/", &by_value().end_at(Json::int(2), None)), ["a", "b", "c"]);
-    assert_eq!(keys(&tree, "/", &by_value().end_before(Json::int(2), None)), ["a"]);
-    assert_eq!(keys(&tree, "/", &by_value().equal_to(Json::int(2), None)), ["b", "c"]);
+    assert_eq!(
+        keys(&tree, "/", &by_value().start_at(Json::int(2), None)),
+        ["b", "c", "d"]
+    );
+    assert_eq!(
+        keys(&tree, "/", &by_value().start_after(Json::int(2), None)),
+        ["d"]
+    );
+    assert_eq!(
+        keys(&tree, "/", &by_value().end_at(Json::int(2), None)),
+        ["a", "b", "c"]
+    );
+    assert_eq!(
+        keys(&tree, "/", &by_value().end_before(Json::int(2), None)),
+        ["a"]
+    );
+    assert_eq!(
+        keys(&tree, "/", &by_value().equal_to(Json::int(2), None)),
+        ["b", "c"]
+    );
 }
 
 #[test]
@@ -108,14 +127,21 @@ fn a_bound_key_name_splits_children_with_equal_values() {
         keys(&tree, "/", &by_value().end_before(Json::int(2), Some("c"))),
         ["a", "b"]
     );
-    assert_eq!(keys(&tree, "/", &by_value().equal_to(Json::int(2), Some("c"))), ["c"]);
+    assert_eq!(
+        keys(&tree, "/", &by_value().equal_to(Json::int(2), Some("c"))),
+        ["c"]
+    );
 }
 
 #[test]
 fn null_bounds_select_children_without_the_value() {
     let tree = mixed();
     assert_eq!(
-        keys(&tree, "/", &QueryParams::ordered_by(child("v")).equal_to(Json::Null, None)),
+        keys(
+            &tree,
+            "/",
+            &QueryParams::ordered_by(child("v")).equal_to(Json::Null, None)
+        ),
         ["leaf", "none"]
     );
 }
@@ -124,9 +150,18 @@ fn null_bounds_select_children_without_the_value() {
 fn key_bounds_compare_with_the_key_order() {
     let tree = tree_with(json!({"1": 1, "2": 1, "10": 1, "a": 1, "b": 1}));
     let by_key = || QueryParams::ordered_by(OrderBy::Key);
-    assert_eq!(keys(&tree, "/", &by_key().start_at(Json::string("2"), None)), ["2", "10", "a", "b"]);
-    assert_eq!(keys(&tree, "/", &by_key().end_before(Json::string("a"), None)), ["1", "2", "10"]);
-    assert_eq!(keys(&tree, "/", &by_key().start_after(Json::string("10"), None)), ["a", "b"]);
+    assert_eq!(
+        keys(&tree, "/", &by_key().start_at(Json::string("2"), None)),
+        ["2", "10", "a", "b"]
+    );
+    assert_eq!(
+        keys(&tree, "/", &by_key().end_before(Json::string("a"), None)),
+        ["1", "2", "10"]
+    );
+    assert_eq!(
+        keys(&tree, "/", &by_key().start_after(Json::string("10"), None)),
+        ["a", "b"]
+    );
 }
 
 #[test]
@@ -136,10 +171,17 @@ fn limits_keep_the_first_or_last_children_of_the_range() {
     assert_eq!(keys(&tree, "/", &by_value().limit_to_first(2)), ["a", "b"]);
     assert_eq!(keys(&tree, "/", &by_value().limit_to_last(2)), ["c", "d"]);
     assert_eq!(
-        keys(&tree, "/", &by_value().start_at(Json::int(2), None).limit_to_last(1)),
+        keys(
+            &tree,
+            "/",
+            &by_value().start_at(Json::int(2), None).limit_to_last(1)
+        ),
         ["d"]
     );
-    assert_eq!(keys(&tree, "/", &by_value().limit_to_first(10)), ["a", "b", "c", "d"]);
+    assert_eq!(
+        keys(&tree, "/", &by_value().limit_to_first(10)),
+        ["a", "b", "c", "d"]
+    );
     assert!(keys(&tree, "/", &by_value().limit_to_first(0)).is_empty());
 }
 
@@ -157,7 +199,10 @@ fn deep_child_paths_order_by_the_nested_value() {
         "y": {"m": {"n": 1}},
         "z": {"m": 7}
     }));
-    assert_eq!(keys(&tree, "/", &QueryParams::ordered_by(child("m/n"))), ["z", "y", "x"]);
+    assert_eq!(
+        keys(&tree, "/", &QueryParams::ordered_by(child("m/n"))),
+        ["z", "y", "x"]
+    );
 }
 
 #[test]
@@ -171,7 +216,11 @@ fn bound_values_must_fit_the_order() {
         QueryParams::ordered_by(OrderBy::Value).end_at(j(json!([1])), None),
     ];
     for query in bad {
-        assert_eq!(query.validate().unwrap_err().kind, ErrorKind::InvalidQuery, "{query:?}");
+        assert_eq!(
+            query.validate().unwrap_err().kind,
+            ErrorKind::InvalidQuery,
+            "{query:?}"
+        );
     }
     QueryParams::ordered_by(OrderBy::Value)
         .start_at(Json::Bool(false), Some("k"))

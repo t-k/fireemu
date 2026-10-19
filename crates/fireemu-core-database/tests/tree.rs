@@ -17,7 +17,10 @@ fn export(tree: &Tree, path: &str) -> serde_json::Value {
 #[test]
 fn set_and_get_round_trip_and_absent_reads_null() {
     let tree = tree_with(json!({"a": {"b": 1, "c": "x"}, "d": true}));
-    assert_eq!(plain(&tree, "/"), json!({"a": {"b": 1, "c": "x"}, "d": true}));
+    assert_eq!(
+        plain(&tree, "/"),
+        json!({"a": {"b": 1, "c": "x"}, "d": true})
+    );
     assert_eq!(plain(&tree, "/a/b"), json!(1));
     assert_eq!(plain(&tree, "/missing"), json!(null));
     assert_eq!(plain(&tree, "/a/b/deeper"), json!(null));
@@ -26,9 +29,9 @@ fn set_and_get_round_trip_and_absent_reads_null() {
 #[test]
 fn null_deletes_and_empty_parents_are_pruned() {
     let mut tree = tree_with(json!({"a": {"b": {"c": 1}}, "x": 1}));
-    tree.set(&p("/a/b/c"), &Json::Null, &NOW).unwrap();
+    tree.set(&p("/a/b/c"), &Json::Null, NOW).unwrap();
     assert_eq!(plain(&tree, "/"), json!({"x": 1}));
-    tree.set(&p("/x"), &Json::Null, &NOW).unwrap();
+    tree.set(&p("/x"), &Json::Null, NOW).unwrap();
     assert!(tree.root().is_none());
     assert_eq!(plain(&tree, "/"), json!(null));
 }
@@ -48,14 +51,14 @@ fn arrays_are_stored_as_objects_keyed_by_index_without_null_items() {
 #[test]
 fn writing_below_a_leaf_replaces_the_leaf() {
     let mut tree = tree_with(json!({"a": 5}));
-    tree.set(&p("/a/b"), &j(json!(1)), &NOW).unwrap();
+    tree.set(&p("/a/b"), &j(json!(1)), NOW).unwrap();
     assert_eq!(plain(&tree, "/"), json!({"a": {"b": 1}}));
 }
 
 #[test]
 fn deleting_below_a_leaf_changes_nothing() {
     let mut tree = tree_with(json!({"a": 5}));
-    tree.set(&p("/a/b"), &Json::Null, &NOW).unwrap();
+    tree.set(&p("/a/b"), &Json::Null, NOW).unwrap();
     assert_eq!(plain(&tree, "/"), json!({"a": 5}));
 }
 
@@ -78,35 +81,36 @@ fn priorities_are_written_with_dot_priority_and_dot_value() {
 #[test]
 fn setting_dot_priority_changes_only_an_existing_node() {
     let mut tree = tree_with(json!({"a": 1}));
-    tree.set(&p("/a/.priority"), &j(json!(7)), &NOW).unwrap();
+    tree.set(&p("/a/.priority"), &j(json!(7)), NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!({".value": 1, ".priority": 7}));
-    tree.set(&p("/a/.priority"), &Json::Null, &NOW).unwrap();
+    tree.set(&p("/a/.priority"), &Json::Null, NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!(1));
-    tree.set(&p("/missing/.priority"), &j(json!(7)), &NOW).unwrap();
+    tree.set(&p("/missing/.priority"), &j(json!(7)), NOW)
+        .unwrap();
     assert_eq!(export(&tree, "/"), json!({"a": 1}));
 }
 
 #[test]
 fn overwriting_a_value_drops_its_priority_but_child_writes_keep_it() {
     let mut tree = tree_with(json!({"a": {"x": 1, ".priority": 2}}));
-    tree.set(&p("/a/y"), &j(json!(2)), &NOW).unwrap();
+    tree.set(&p("/a/y"), &j(json!(2)), NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!({"x": 1, "y": 2, ".priority": 2}));
-    tree.set(&p("/a"), &j(json!({"z": 1})), &NOW).unwrap();
+    tree.set(&p("/a"), &j(json!({"z": 1})), NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!({"z": 1}));
 }
 
 #[test]
 fn a_priority_disappears_with_the_last_child() {
     let mut tree = tree_with(json!({"a": {"x": 1, ".priority": 2}}));
-    tree.set(&p("/a/x"), &Json::Null, &NOW).unwrap();
-    tree.set(&p("/a/x"), &j(json!(1)), &NOW).unwrap();
+    tree.set(&p("/a/x"), &Json::Null, NOW).unwrap();
+    tree.set(&p("/a/x"), &j(json!(1)), NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!({"x": 1}));
 }
 
 #[test]
 fn a_leaf_keeps_its_priority_when_a_child_replaces_it() {
     let mut tree = tree_with(json!({"a": {".value": 1, ".priority": 9}}));
-    tree.set(&p("/a/b"), &j(json!(1)), &NOW).unwrap();
+    tree.set(&p("/a/b"), &j(json!(1)), NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!({"b": 1, ".priority": 9}));
 }
 
@@ -114,18 +118,26 @@ fn a_leaf_keeps_its_priority_when_a_child_replaces_it() {
 fn invalid_priorities_and_value_shapes_are_refused() {
     let mut tree = Tree::new(Limits::default());
     let cases = [
-        (json!({"a": 1, ".priority": true}), ErrorKind::InvalidPriority),
-        (json!({"a": 1, ".priority": {"x": 1}}), ErrorKind::InvalidPriority),
+        (
+            json!({"a": 1, ".priority": true}),
+            ErrorKind::InvalidPriority,
+        ),
+        (
+            json!({"a": 1, ".priority": {"x": 1}}),
+            ErrorKind::InvalidPriority,
+        ),
         (json!({".value": 1, "a": 2}), ErrorKind::InvalidData),
         (json!({"a.b": 1}), ErrorKind::InvalidKey),
         (json!({"": 1}), ErrorKind::InvalidKey),
         (json!({".other": 1}), ErrorKind::InvalidKey),
     ];
     for (value, kind) in cases {
-        let err = tree.set(&p("/x"), &j(value.clone()), &NOW).unwrap_err();
+        let err = tree.set(&p("/x"), &j(value.clone()), NOW).unwrap_err();
         assert_eq!(err.kind, kind, "{value}");
     }
-    let err = tree.set(&p("/x/.priority"), &j(json!(true)), &NOW).unwrap_err();
+    let err = tree
+        .set(&p("/x/.priority"), &j(json!(true)), NOW)
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidPriority);
     assert!(tree.root().is_none());
 }
@@ -133,10 +145,12 @@ fn invalid_priorities_and_value_shapes_are_refused() {
 #[test]
 fn info_is_read_only() {
     let mut tree = Tree::new(Limits::default());
-    let err = tree.set(&p("/.info/connected"), &j(json!(true)), &NOW).unwrap_err();
+    let err = tree
+        .set(&p("/.info/connected"), &j(json!(true)), NOW)
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::ReadOnlyPath);
     let err = tree
-        .update(&Path::root(), &[(".info/x".to_owned(), j(json!(1)))], &NOW)
+        .update(&Path::root(), &[(".info/x".to_owned(), j(json!(1)))], NOW)
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::ReadOnlyPath);
 }
@@ -144,12 +158,19 @@ fn info_is_read_only() {
 #[test]
 fn depth_counts_keys_from_the_root_to_the_deepest_value() {
     let mut tree = Tree::new(Limits::default());
-    let deep = |n: usize| (0..n).map(|i| format!("k{i}")).collect::<Vec<_>>().join("/");
-    tree.set(&p(&deep(32)), &j(json!(1)), &NOW).unwrap();
-    let err = tree.set(&p(&deep(33)), &j(json!(1)), &NOW).unwrap_err();
+    let deep = |n: usize| {
+        (0..n)
+            .map(|i| format!("k{i}"))
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    tree.set(&p(&deep(32)), &j(json!(1)), NOW).unwrap();
+    let err = tree.set(&p(&deep(33)), &j(json!(1)), NOW).unwrap_err();
     assert_eq!(err.kind, ErrorKind::PathTooDeep);
-    tree.set(&p(&deep(31)), &j(json!({"x": 1})), &NOW).unwrap();
-    let err = tree.set(&p(&deep(31)), &j(json!({"x": {"y": 1}})), &NOW).unwrap_err();
+    tree.set(&p(&deep(31)), &j(json!({"x": 1})), NOW).unwrap();
+    let err = tree
+        .set(&p(&deep(31)), &j(json!({"x": {"y": 1}})), NOW)
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::PathTooDeep);
 }
 
@@ -160,10 +181,10 @@ fn strings_are_limited_in_bytes() {
         ..Limits::default()
     };
     let mut tree = Tree::new(limits);
-    tree.set(&p("/a"), &j(json!("abcd")), &NOW).unwrap();
-    let err = tree.set(&p("/a"), &j(json!("abcde")), &NOW).unwrap_err();
+    tree.set(&p("/a"), &j(json!("abcd")), NOW).unwrap();
+    let err = tree.set(&p("/a"), &j(json!("abcde")), NOW).unwrap_err();
     assert_eq!(err.kind, ErrorKind::StringTooLong);
-    let err = tree.set(&p("/a"), &j(json!("ああ")), &NOW).unwrap_err();
+    let err = tree.set(&p("/a"), &j(json!("ああ")), NOW).unwrap_err();
     assert_eq!(err.kind, ErrorKind::StringTooLong);
 }
 
@@ -173,7 +194,7 @@ fn server_timestamp_resolves_to_the_context_time() {
     tree.set(
         &p("/a"),
         &j(json!({"t": {".sv": "timestamp"}, "x": {".value": 1, ".priority": {".sv": "timestamp"}}})),
-        &NOW,
+        NOW,
     )
     .unwrap();
     assert_eq!(
@@ -186,18 +207,25 @@ fn server_timestamp_resolves_to_the_context_time() {
 fn increment_adds_to_the_stored_number_or_starts_from_the_delta() {
     let mut tree = tree_with(json!({"n": 5, "s": "text", "f": 0.5}));
     let inc = |d: serde_json::Value| j(json!({".sv": {"increment": d}}));
-    tree.set(&p("/n"), &inc(json!(2)), &NOW).unwrap();
-    tree.set(&p("/s"), &inc(json!(2)), &NOW).unwrap();
-    tree.set(&p("/missing"), &inc(json!(-3)), &NOW).unwrap();
-    tree.set(&p("/f"), &inc(json!(0.25)), &NOW).unwrap();
-    assert_eq!(plain(&tree, "/"), json!({"n": 7, "s": 2, "missing": -3, "f": 0.75}));
+    tree.set(&p("/n"), &inc(json!(2)), NOW).unwrap();
+    tree.set(&p("/s"), &inc(json!(2)), NOW).unwrap();
+    tree.set(&p("/missing"), &inc(json!(-3)), NOW).unwrap();
+    tree.set(&p("/f"), &inc(json!(0.25)), NOW).unwrap();
+    assert_eq!(
+        plain(&tree, "/"),
+        json!({"n": 7, "s": 2, "missing": -3, "f": 0.75})
+    );
 }
 
 #[test]
 fn increment_inside_an_object_uses_the_stored_child() {
     let mut tree = tree_with(json!({"a": {"count": 10}}));
-    tree.set(&p("/a"), &j(json!({"count": {".sv": {"increment": 1}}, "y": 1})), &NOW)
-        .unwrap();
+    tree.set(
+        &p("/a"),
+        &j(json!({"count": {".sv": {"increment": 1}}, "y": 1})),
+        NOW,
+    )
+    .unwrap();
     assert_eq!(plain(&tree, "/a"), json!({"count": 11, "y": 1}));
 }
 
@@ -212,7 +240,7 @@ fn unknown_or_malformed_server_values_are_refused() {
         json!({".sv": 5}),
         json!({".sv": "timestamp", "x": 1}),
     ] {
-        let err = tree.set(&p("/a"), &j(value.clone()), &NOW).unwrap_err();
+        let err = tree.set(&p("/a"), &j(value.clone()), NOW).unwrap_err();
         assert_eq!(err.kind, ErrorKind::InvalidServerValue, "{value}");
     }
 }
@@ -227,16 +255,20 @@ fn multipath_update_writes_each_path_and_keeps_siblings() {
             ("b".to_owned(), j(json!(null))),
             ("c/d/e".to_owned(), j(json!("new"))),
         ],
-        &NOW,
+        NOW,
     )
     .unwrap();
-    assert_eq!(plain(&tree, "/"), json!({"a": {"x": 10, "y": 2}, "c": {"d": {"e": "new"}}}));
+    assert_eq!(
+        plain(&tree, "/"),
+        json!({"a": {"x": 10, "y": 2}, "c": {"d": {"e": "new"}}})
+    );
 }
 
 #[test]
 fn update_at_a_base_path_is_relative_to_it() {
     let mut tree = tree_with(json!({"a": {"x": 1}}));
-    tree.update(&p("/a"), &[("y".to_owned(), j(json!(2)))], &NOW).unwrap();
+    tree.update(&p("/a"), &[("y".to_owned(), j(json!(2)))], NOW)
+        .unwrap();
     assert_eq!(plain(&tree, "/a"), json!({"x": 1, "y": 2}));
 }
 
@@ -246,16 +278,22 @@ fn overlapping_update_paths_are_refused_and_nothing_is_written() {
     let err = tree
         .update(
             &Path::root(),
-            &[("a".to_owned(), j(json!(1))), ("a/b".to_owned(), j(json!(2)))],
-            &NOW,
+            &[
+                ("a".to_owned(), j(json!(1))),
+                ("a/b".to_owned(), j(json!(2))),
+            ],
+            NOW,
         )
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::OverlappingUpdate);
     let err = tree
         .update(
             &Path::root(),
-            &[("a/".to_owned(), j(json!(1))), ("/a".to_owned(), j(json!(2)))],
-            &NOW,
+            &[
+                ("a/".to_owned(), j(json!(1))),
+                ("/a".to_owned(), j(json!(2))),
+            ],
+            NOW,
         )
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::OverlappingUpdate);
@@ -268,8 +306,11 @@ fn an_invalid_entry_aborts_the_whole_update() {
     let err = tree
         .update(
             &Path::root(),
-            &[("a".to_owned(), j(json!(1))), ("b".to_owned(), j(json!({"c.d": 1})))],
-            &NOW,
+            &[
+                ("a".to_owned(), j(json!(1))),
+                ("b".to_owned(), j(json!({"c.d": 1}))),
+            ],
+            NOW,
         )
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidKey);
@@ -285,7 +326,7 @@ fn update_server_values_resolve_against_the_tree_before_the_update() {
             ("n".to_owned(), j(json!({".sv": {"increment": 1}}))),
             ("m".to_owned(), j(json!({".sv": {"increment": 1}}))),
         ],
-        &NOW,
+        NOW,
     )
     .unwrap();
     assert_eq!(plain(&tree, "/"), json!({"n": 2, "m": 1}));
@@ -294,14 +335,18 @@ fn update_server_values_resolve_against_the_tree_before_the_update() {
 #[test]
 fn update_can_set_a_priority() {
     let mut tree = tree_with(json!({"a": 1}));
-    tree.update(&p("/a"), &[(".priority".to_owned(), j(json!(4)))], &NOW).unwrap();
+    tree.update(&p("/a"), &[(".priority".to_owned(), j(json!(4)))], NOW)
+        .unwrap();
     assert_eq!(export(&tree, "/a"), json!({".value": 1, ".priority": 4}));
 }
 
 #[test]
 fn shallow_truncates_children_to_true() {
     let tree = tree_with(json!({"a": {"b": 1}, "c": "x"}));
-    assert_eq!(s(&tree.root().unwrap().shallow()), json!({"a": true, "c": true}));
+    assert_eq!(
+        s(&tree.root().unwrap().shallow()),
+        json!({"a": true, "c": true})
+    );
     assert_eq!(s(&tree.get(&p("/c")).unwrap().shallow()), json!("x"));
 }
 
@@ -314,6 +359,6 @@ fn export_reads_back_to_the_same_tree() {
     }));
     let exported = tree.get_json(&Path::root(), Format::Export);
     let mut copy = Tree::new(Limits::default());
-    copy.set(&Path::root(), &exported, &NOW).unwrap();
+    copy.set(&Path::root(), &exported, NOW).unwrap();
     assert_eq!(copy, tree);
 }

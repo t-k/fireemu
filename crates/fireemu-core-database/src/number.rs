@@ -1,37 +1,25 @@
 //! Numbers of the Realtime Database.
 //!
-//! JSON numbers reach the core either as integers or as doubles. A double that holds an
-//! integer in the safe JavaScript range (|v| <= 2^53) is normalized to [`Number::Int`], so
-//! `1` and `1.0` are the same value, as they are for the JavaScript SDK. This is the
-//! provisional rule of design memo Q7 until production's number form is observed.
+//! JSON numbers reach the core either as integers or as doubles, and keep that type: `1.0`
+//! stays a double, as the official emulator keeps it (owner ledger 1475, provisional until
+//! production is observed). Values compare by number, so `1` equals `1.0` and `-0.0` equals
+//! `0`.
 
 use std::cmp::Ordering;
-
-/// 2^53: every integer of at most this magnitude is exact in a double. (JavaScript's
-/// `Number.MAX_SAFE_INTEGER` is one less.)
-pub const TWO_POW_53: i64 = 9_007_199_254_740_992;
 
 /// A finite number.
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
     /// An integer.
     Int(i64),
-    /// A finite double that is not an integer in the safe range.
+    /// A finite double.
     Double(f64),
 }
 
 impl Number {
     /// The number for `value`, or `None` when it is not finite.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     pub fn from_f64(value: f64) -> Option<Self> {
-        if !value.is_finite() {
-            return None;
-        }
-        if value.fract() == 0.0 && value.abs() <= TWO_POW_53 as f64 {
-            // In the safe range the conversion is exact; `-0.0` becomes `0`.
-            return Some(Self::Int(value as i64));
-        }
-        Some(Self::Double(value))
+        value.is_finite().then_some(Self::Double(value))
     }
 
     /// The value as a double (rounded for integers beyond 2^53).
@@ -58,7 +46,8 @@ impl Number {
     pub fn total_cmp(self, other: Self) -> Ordering {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a.cmp(&b),
-            (Self::Double(a), Self::Double(b)) => a.total_cmp(&b),
+            // Finite doubles always compare; -0.0 equals 0.0, as in JavaScript and Java.
+            (Self::Double(a), Self::Double(b)) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
             (Self::Int(a), Self::Double(b)) => cmp_int_double(a, b),
             (Self::Double(a), Self::Int(b)) => cmp_int_double(b, a).reverse(),
         }

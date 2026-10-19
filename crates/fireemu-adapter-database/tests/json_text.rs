@@ -134,7 +134,7 @@ fn integer_keyed_children_render_as_arrays_when_dense_enough() {
     let prioritized = stored(r#"{"l":{"0":{".value":"a",".priority":1},"1":"b"}}"#);
     assert_eq!(
         get(&prioritized, Format::Export, Style::Compact),
-        r#"{"l":[{".value":"a",".priority":1},"b"]}"#
+        r#"{"l":[{".value":"a",".priority":1.0},"b"]}"#
     );
     assert_eq!(
         get(&prioritized, Format::Plain, Style::Compact),
@@ -147,7 +147,7 @@ fn an_array_with_its_own_priority_stays_an_object_in_the_export() {
     let tree = stored(r#"{"l":{"0":"a",".priority":2}}"#);
     assert_eq!(
         get(&tree, Format::Export, Style::Compact),
-        r#"{"l":{"0":"a",".priority":2}}"#
+        r#"{"l":{"0":"a",".priority":2.0}}"#
     );
     assert_eq!(get(&tree, Format::Plain, Style::Compact), r#"{"l":["a"]}"#);
 }

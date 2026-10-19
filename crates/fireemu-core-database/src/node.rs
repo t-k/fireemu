@@ -217,8 +217,13 @@ impl Node {
                 "server values must be resolved before the data is stored",
             ));
         }
+        // The official emulator stores a `.priority` member's number as a double (it answers
+        // `2.0` for 2); a priority written to `<location>/.priority` keeps its type.
         let priority = match map.get(PRIORITY_KEY) {
-            Some(json) => Priority::from_json(json)?,
+            Some(json) => Priority::from_json(json)?.map(|priority| match priority {
+                Priority::Number(n) => Priority::Number(Number::Double(n.as_f64())),
+                other @ Priority::String(_) => other,
+            }),
             None => None,
         };
         if let Some(value) = map.get(VALUE_KEY) {

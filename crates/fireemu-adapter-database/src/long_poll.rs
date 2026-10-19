@@ -130,15 +130,20 @@ pub fn parse(params: &BTreeMap<String, String>) -> LpRequest {
 /// The answer to `start=t`: the page's callbacks when it named them, the connection, and
 /// the handshake as packet 0.
 pub fn start_script(callback: Option<i32>, id: &str, password: &str, handshake: &str) -> String {
-    let callbacks = callback.map_or_else(String::new, |cb| {
+    format!(
+        "{}pLPCommand('start','{id}','{password}');\n{}",
+        callbacks(callback),
+        packet(0, &[handshake.to_owned()])
+    )
+}
+
+/// The functions a start answer defines to reach the page's callbacks, when it named them.
+pub fn callbacks(callback: Option<i32>) -> String {
+    callback.map_or_else(String::new, |cb| {
         format!(
             "\nfunction pLPCommand(c, a1, a2, a3, a4) {{\nparent.window[\"pLPCommand{cb}\"] && parent.window[\"pLPCommand{cb}\"](c, a1, a2, a3, a4);\n}}\nfunction pRTLPCB(pN, data) {{\nparent.window[\"pRTLPCB{cb}\"] && parent.window[\"pRTLPCB{cb}\"](pN, data);\n}}\n         "
         )
-    });
-    format!(
-        "{callbacks}pLPCommand('start','{id}','{password}');\n{}",
-        packet(0, &[handshake.to_owned()])
-    )
+    })
 }
 
 /// Answer `number` carrying `messages`, each one JSON text.

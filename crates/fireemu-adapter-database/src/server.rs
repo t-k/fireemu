@@ -10,6 +10,8 @@
 //! under the lock, in commit order, to a bounded queue per connection. A connection that
 //! stops reading until its queue fills is dropped with its listens, and the SDK reconnects.
 
+mod long_polling;
+
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -56,6 +58,10 @@ pub struct ServerConfig {
     /// How long a realtime connection may stay silent (the SDKs send a keepalive every
     /// 45 s).
     pub realtime_idle: Duration,
+    /// How long a long-polling request is held waiting for messages; a connection whose
+    /// held request runs out, or that sends no request for as long, is closed (the official
+    /// emulator answers after about 90 s; the SDK sends a fresh request every 25 s).
+    pub long_poll_hold: Duration,
     /// The server time.
     pub clock: Clock,
 }
@@ -69,6 +75,7 @@ impl Default for ServerConfig {
             body_timeout: Duration::from_secs(120),
             stream_queue: 1024,
             realtime_idle: Duration::from_secs(120),
+            long_poll_hold: Duration::from_secs(90),
             clock: Arc::new(|| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -80,13 +87,14 @@ impl Default for ServerConfig {
 
 type Body = BoxBody<Bytes, Infallible>;
 type Streams = Arc<Mutex<BTreeMap<u64, mpsc::Sender<SseEvent>>>>;
-/// The push queue of each realtime connection; every entry is one message's frames.
-type Listeners = Mutex<BTreeMap<u64, mpsc::Sender<Vec<String>>>>;
+/// The push queue of each realtime connection; every entry is one whole message.
+type Listeners = Mutex<BTreeMap<u64, mpsc::Sender<String>>>;
 
 struct Shared {
     database: Arc<Mutex<Database>>,
     streams: Streams,
     listeners: Listeners,
+    long_polls: long_polling::Connections,
     config: ServerConfig,
 }
 
@@ -96,6 +104,7 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
         database,
         streams: Arc::new(Mutex::new(BTreeMap::new())),
         listeners: Mutex::new(BTreeMap::new()),
+        long_polls: long_polling::Connections::default(),
         config,
     });
     loop {
@@ -125,6 +134,9 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
 async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Body> {
     if is_websocket_upgrade(&request) {
         return upgrade(shared, request);
+    }
+    if request.uri().path() == "/.lp" {
+        return long_polling::answer(shared, &request).await;
     }
     let (parts, body) = request.into_parts();
     let collecting = Limited::new(body, shared.config.max_body_bytes).collect();
@@ -213,7 +225,7 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
     for (client, message) in pushes {
         let delivered = listeners
             .get(&client)
-            .is_some_and(|sender| sender.try_send(split_frames(message)).is_ok());
+            .is_some_and(|sender| sender.try_send(message).is_ok());
         if !delivered {
             listeners.remove(&client);
             database.close_realtime(client);
@@ -404,7 +416,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     shared: &Arc<Shared>,
     socket: &mut S,
     mut session: Session,
-    pushes: &mut mpsc::Receiver<Vec<String>>,
+    pushes: &mut mpsc::Receiver<String>,
     limit: usize,
 ) {
     let idle = shared.config.realtime_idle;
@@ -437,11 +449,11 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                     }
                     message = pushes.recv() => {
                         // A closed queue means the connection was dropped for falling behind.
-                        let Some(frames) = message else {
+                        let Some(message) = message else {
                             let _ = socket.shutdown().await;
                             return;
                         };
-                        if send_within(socket, &frames, idle).await.is_err() {
+                        if send_within(socket, &split_frames(message), idle).await.is_err() {
                             return;
                         }
                     }

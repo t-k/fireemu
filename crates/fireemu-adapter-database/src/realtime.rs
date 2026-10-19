@@ -68,6 +68,8 @@ pub struct Session {
     limit: usize,
     /// The members of the merge being answered, in the order they were sent.
     merge_order: Vec<String>,
+    /// Whether answers are split into WebSocket frames (not over long polling).
+    split: bool,
 }
 
 /// A received frame, reassembled and parsed without the database.
@@ -140,6 +142,7 @@ impl Database {
             pending: None,
             limit: self.options().realtime_message_bytes,
             merge_order: Vec::new(),
+            split: true,
         };
         Ok(Opened::Session(
             session,
@@ -210,6 +213,14 @@ fn invalid(message: impl Into<String>) -> Failure {
 }
 
 impl Session {
+    /// The session for a long-polling connection: answers stay whole messages, since the
+    /// transport carries them in packets rather than WebSocket frames.
+    #[must_use]
+    pub fn for_long_polling(mut self) -> Self {
+        self.split = false;
+        self
+    }
+
     /// The connection's number, which the database's queued data messages are addressed to.
     pub fn client(&self) -> u64 {
         self.client
@@ -277,11 +288,12 @@ impl Session {
         // The connection's own data messages go before the answer, as the official
         // emulator sends a listen's value, and a write's change, before acknowledging.
         let own = db.take_pushes(self.client);
-        received.replies = own
-            .into_iter()
-            .chain(replies)
-            .flat_map(split_frames)
-            .collect();
+        let messages = own.into_iter().chain(replies);
+        received.replies = if self.split {
+            messages.flat_map(split_frames).collect()
+        } else {
+            messages.collect()
+        };
         received
     }
 

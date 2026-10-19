@@ -712,9 +712,20 @@ impl Database {
 
     /// The next realtime client number and session id.
     pub(crate) fn next_client(&mut self) -> (u64, String) {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         self.clients += 1;
-        let id = (0..32)
+        (self.clients, self.token(32))
+    }
+
+    /// A long-polling connection's password: ten letters and digits, as the official
+    /// emulator's.
+    pub(crate) fn long_poll_password(&mut self) -> String {
+        self.token(10)
+    }
+
+    /// `length` letters and digits drawn from the session generator.
+    fn token(&mut self, length: usize) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        (0..length)
             .map(|_| {
                 self.session_rng = self.session_rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
                 let mut z = self.session_rng;
@@ -724,8 +735,7 @@ impl Database {
                 // 62 letters and digits; the modulo bias is irrelevant for a session id.
                 char::from(ALPHABET[usize::try_from(z % 62).unwrap_or(0)])
             })
-            .collect();
-        (self.clients, id)
+            .collect()
     }
 
     /// The next number of a connection error, counted across connections.

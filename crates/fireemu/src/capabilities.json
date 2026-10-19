@@ -649,7 +649,8 @@
       "duplicate IDs refused, duplicate shapes warned (FS_TEXT_DUPLICATE_INDEX_DEFINITION, field-order insensitive, apiScope aware), unresolved language override warned, unsupported, unknown (at every level) and output-only fields (index.state) refused"
     ],
     "notes": [
-      "Enterprise edition only"
+      "Enterprise edition only",
+      "a search index (searchConfig) in firestore.indexes.json is checked as firebase deploy checks it and loads under both profiles, but it does not reach the text index catalog and never takes part in query planning; one startup note per file says how many were left out"
     ],
     "precision": "strict-validation-only",
     "status": "implemented",

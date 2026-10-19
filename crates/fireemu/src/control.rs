@@ -89,12 +89,75 @@ pub enum IndexFileChecks {
     Deploy,
 }
 
-/// One field of a composite index entry, in the current or the older (`mode`) format.
-fn parse_index_field(f: &Value) -> Result<IndexField, String> {
+/// The `IndexField` modes, of which a field has exactly one.
+const INDEX_FIELD_MODES: [&str; 4] = ["order", "arrayConfig", "searchConfig", "vectorConfig"];
+
+/// Checks a `searchConfig` the way firebase-tools `validateIndex` does (each `textSpec` entry
+/// names a known `indexType` and `matchType`, `geoJsonIndexingDisabled` is a boolean), and the
+/// object shapes of the Admin API `IndexField.SearchConfig` message.
+fn check_search_config(path: &str, config: &Value) -> Result<(), String> {
+    let refuse = |what: &str| Err(format!("index field {path}: searchConfig{what}"));
+    if !config.is_object() {
+        return refuse(" must be an object");
+    }
+    match config.get("textSpec") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(text)) => {
+            let Some(specs) = text.get("indexSpecs").and_then(Value::as_array) else {
+                return refuse(".textSpec.indexSpecs must be an array");
+            };
+            for spec in specs {
+                if !matches!(
+                    spec.get("indexType").and_then(Value::as_str),
+                    Some("TOKENIZED" | "TEXT_INDEX_TYPE_UNSPECIFIED")
+                ) {
+                    return refuse(".textSpec.indexSpecs[].indexType must be TOKENIZED or TEXT_INDEX_TYPE_UNSPECIFIED");
+                }
+                if !matches!(
+                    spec.get("matchType").and_then(Value::as_str),
+                    Some("MATCH_GLOBALLY" | "TEXT_MATCH_TYPE_UNSPECIFIED")
+                ) {
+                    return refuse(".textSpec.indexSpecs[].matchType must be MATCH_GLOBALLY or TEXT_MATCH_TYPE_UNSPECIFIED");
+                }
+            }
+        }
+        Some(_) => return refuse(".textSpec must be an object"),
+    }
+    match config.get("geoSpec") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(geo)) => {
+            if geo
+                .get("geoJsonIndexingDisabled")
+                .is_some_and(|disabled| !disabled.is_boolean())
+            {
+                return refuse(".geoSpec.geoJsonIndexingDisabled must be a boolean");
+            }
+        }
+        Some(_) => return refuse(".geoSpec must be an object"),
+    }
+    Ok(())
+}
+
+/// One field of a composite index entry, in the current or the older (`mode`) format. A search
+/// field (`searchConfig`) is checked and answers `None`: fireemu neither plans nor executes text
+/// or geo search from this file.
+fn parse_index_field(f: &Value) -> Result<Option<IndexField>, String> {
     let path = f
         .get("fieldPath")
         .and_then(Value::as_str)
         .ok_or("index field without fieldPath")?;
+    if let Some(config) = f.get("searchConfig").filter(|config| !config.is_null()) {
+        let modes = INDEX_FIELD_MODES
+            .iter()
+            .filter(|mode| f.get(**mode).is_some_and(|value| !value.is_null()))
+            .count();
+        if modes != 1 {
+            return Err(one_index_field_mode(path));
+        }
+        check_search_config(path, config)?;
+        FieldPath::parse(path).map_err(|e| e.to_string())?;
+        return Ok(None);
+    }
     // The v1beta1 `mode` stands for `order` or `arrayConfig` when the field has neither
     // (`upgradeOldSpec`).
     let legacy = |wanted: &str| {
@@ -128,20 +191,34 @@ fn parse_index_field(f: &Value) -> Result<IndexField, String> {
             }
             IndexFieldMode::Vector { dimension }
         }
-        _ => {
-            return Err(format!(
-                "index field {path}: exactly one order, arrayConfig, or vectorConfig is required"
-            ))
-        }
+        _ => return Err(one_index_field_mode(path)),
     };
-    Ok(IndexField {
+    Ok(Some(IndexField {
         path: FieldPath::parse(path).map_err(|e| e.to_string())?,
         mode,
-    })
+    }))
 }
 
-/// Parses one `firestore.indexes.json` generation already read by a reload supervisor.
+fn one_index_field_mode(path: &str) -> String {
+    format!(
+        "index field {path}: exactly one order, arrayConfig, searchConfig, or vectorConfig is required"
+    )
+}
+
+/// [`parse_indexes_with_notes`] without the notes.
+#[cfg(test)]
 pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<IndexSet, String> {
+    parse_indexes_with_notes(path, text, checks).map(|(set, _)| set)
+}
+
+/// Parses one `firestore.indexes.json` generation already read by a reload supervisor, with
+/// the notes the file deserves when it loads: a search index (`searchConfig`) is checked and
+/// left out of the query-planning set, and one note says how many were.
+pub fn parse_indexes_with_notes(
+    path: &str,
+    text: &str,
+    checks: IndexFileChecks,
+) -> Result<(IndexSet, Vec<String>), String> {
     let json: Value = serde_json::from_str(text).map_err(|e| format!("{path}: {e}"))?;
     for key in ["indexes", "fieldOverrides"] {
         if json
@@ -153,6 +230,7 @@ pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<
         }
     }
     let mut set = IndexSet::default();
+    let mut search_indexes = 0usize;
     for (entry, idx) in json
         .get("indexes")
         .and_then(Value::as_array)
@@ -193,6 +271,13 @@ pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<
             .flatten()
             .map(parse_index_field)
             .collect::<Result<Vec<_>, _>>()?;
+        // A search index serves only search queries, so it never satisfies or changes an
+        // ordinary query's index requirement. The 200-entry cap above still counts it.
+        let Some(fields) = fields.into_iter().collect::<Option<Vec<_>>>() else {
+            CollectionId::try_new(collection).map_err(|e| e.to_string())?;
+            search_indexes += 1;
+            continue;
+        };
         let definition = IndexDefinition {
             collection_group: CollectionId::try_new(collection).map_err(|e| e.to_string())?,
             query_scope: scope,
@@ -209,7 +294,14 @@ pub fn parse_indexes(path: &str, text: &str, checks: IndexFileChecks) -> Result<
         set.add_composite(definition);
     }
     parse_field_overrides(path, &json, &mut set, checks)?;
-    Ok(set)
+    let notes = match search_indexes {
+        0 => Vec::new(),
+        count => vec![format!(
+            "{path}: {count} search {} (searchConfig) loaded but not used: fireemu does not run text or geo search from this file, and ordinary queries never use a search index",
+            if count == 1 { "index" } else { "indexes" }
+        )],
+    };
+    Ok((set, notes))
 }
 
 /// Reads the time-to-live policies a `firestore.indexes.json` declares, as `firebase deploy`
@@ -273,10 +365,12 @@ pub fn parse_index_file(
     text: &str,
     checks: IndexFileChecks,
 ) -> Result<(IndexSet, TtlCatalog), String> {
-    Ok((
-        parse_indexes(path, text, checks)?,
-        parse_ttl_policies(path, text)?,
-    ))
+    let (indexes, notes) = parse_indexes_with_notes(path, text, checks)?;
+    let ttl_policies = parse_ttl_policies(path, text)?;
+    for note in notes {
+        eprintln!("note: {note}");
+    }
+    Ok((indexes, ttl_policies))
 }
 
 /// A field override's `ttl`. `firebase deploy` refuses one that is not a boolean.
@@ -339,6 +433,16 @@ fn parse_field_overrides(
                     "COLLECTION_GROUP" => IndexQueryScope::CollectionGroup,
                     scope => return Err(format!("unsupported queryScope {scope}")),
                 };
+                // A search index is a composite index; `firebase deploy` accepts only `order`
+                // or `arrayConfig` here.
+                if index
+                    .get("searchConfig")
+                    .is_some_and(|config| !config.is_null())
+                {
+                    return Err(format!(
+                        "field override {path}: searchConfig is only accepted in a composite index (indexes[].fields), not in a field override"
+                    ));
+                }
                 let mode = match (
                     index.get("order").and_then(Value::as_str),
                     index.get("arrayConfig").and_then(Value::as_str),
@@ -1033,5 +1137,271 @@ mod tests {
             decide(&filtered.canonicalize().unwrap(), &indexes, &context),
             IndexDecision::MissingRequired { .. }
         ));
+    }
+
+    fn search(path: &str) -> Value {
+        json!({"fieldPath": path, "searchConfig": {"textSpec": {"indexSpecs": [
+            {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}})
+    }
+
+    fn both_checks() -> [IndexFileChecks; 2] {
+        [IndexFileChecks::Emulator, IndexFileChecks::Deploy]
+    }
+
+    /// A production `firestore.indexes.json` with a search index (`searchConfig`, Enterprise
+    /// full-text and geo search) loads under both profiles. The search index never takes part in
+    /// query planning: the set is the one of the same file without it, and one note says so.
+    #[test]
+    fn search_indexes_load_without_taking_part_in_planning() {
+        let ordinary = entry(&json!([asc("a"), asc("b")]));
+        let with_search = json!({"indexes": [
+            {"collectionGroup": "posts", "queryScope": "COLLECTION_GROUP", "fields": [search("body")]},
+            ordinary,
+            {"collectionGroup": "posts", "queryScope": "COLLECTION", "fields": [asc("a"), search("body")]}
+        ]});
+        let without = json!({"indexes": [ordinary]});
+        for checks in both_checks() {
+            let (set, notes) =
+                parse_indexes_with_notes("f.json", &with_search.to_string(), checks).unwrap();
+            assert_eq!(
+                set,
+                parse_indexes("f.json", &without.to_string(), checks).unwrap()
+            );
+            assert_eq!(notes.len(), 1, "{notes:?}");
+            assert!(
+                notes[0].contains("f.json")
+                    && notes[0].contains("2 search indexes")
+                    && notes[0].contains("searchConfig"),
+                "{}",
+                notes[0]
+            );
+            let (_, notes) =
+                parse_indexes_with_notes("f.json", &without.to_string(), checks).unwrap();
+            assert!(notes.is_empty(), "{notes:?}");
+        }
+        let one = json!({"indexes": [entry(&json!([search("body")]))]});
+        let (set, notes) =
+            parse_indexes_with_notes("f.json", &one.to_string(), IndexFileChecks::Deploy).unwrap();
+        assert!(set.composites().is_empty());
+        assert!(notes[0].contains("1 search index "), "{}", notes[0]);
+    }
+
+    /// firebase-tools `validateIndex` accepts a `searchConfig` without `textSpec`, a `geoSpec`
+    /// with a boolean `geoJsonIndexingDisabled`, the `*_UNSPECIFIED` enum values and an empty
+    /// `indexSpecs`.
+    #[test]
+    fn search_config_shapes_the_deploy_accepts_load() {
+        for config in [
+            json!({}),
+            json!({"geoSpec": {}}),
+            json!({"geoSpec": {"geoJsonIndexingDisabled": true}}),
+            json!({"textSpec": null, "geoSpec": null}),
+            json!({"textSpec": {"indexSpecs": []}}),
+            json!({"textSpec": {"indexSpecs": [
+                {"indexType": "TEXT_INDEX_TYPE_UNSPECIFIED", "matchType": "TEXT_MATCH_TYPE_UNSPECIFIED"},
+                {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]},
+                "geoSpec": {"geoJsonIndexingDisabled": false}}),
+        ] {
+            let file = json!({"indexes": [entry(&json!([{"fieldPath": "body", "searchConfig": config}]))]});
+            for checks in both_checks() {
+                assert!(
+                    parse_indexes("f", &file.to_string(), checks).is_ok(),
+                    "{config} {checks:?}"
+                );
+            }
+        }
+    }
+
+    /// The `searchConfig` checks of firebase-tools `validateIndex`, plus the object shapes the
+    /// Admin API `IndexField.SearchConfig` message requires, refuse the file and name the field.
+    #[test]
+    fn malformed_search_config_is_refused_naming_the_field() {
+        for (config, says) in [
+            (json!("TOKENIZED"), "searchConfig must be an object"),
+            (json!([]), "searchConfig must be an object"),
+            (json!({"textSpec": {}}), "textSpec.indexSpecs"),
+            (json!({"textSpec": "x"}), "textSpec must be an object"),
+            (
+                json!({"textSpec": {"indexSpecs": {}}}),
+                "textSpec.indexSpecs",
+            ),
+            (
+                json!({"textSpec": {"indexSpecs": [{"matchType": "MATCH_GLOBALLY"}]}}),
+                "indexType",
+            ),
+            (
+                json!({"textSpec": {"indexSpecs": [{"indexType": "NGRAM", "matchType": "MATCH_GLOBALLY"}]}}),
+                "indexType",
+            ),
+            (
+                json!({"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED"}]}}),
+                "matchType",
+            ),
+            (
+                json!({"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "PREFIX"}]}}),
+                "matchType",
+            ),
+            (
+                json!({"textSpec": {"indexSpecs": ["TOKENIZED"]}}),
+                "indexType",
+            ),
+            (
+                json!({"geoSpec": {"geoJsonIndexingDisabled": "yes"}}),
+                "geoJsonIndexingDisabled must be a boolean",
+            ),
+            (
+                json!({"geoSpec": {"geoJsonIndexingDisabled": null}}),
+                "geoJsonIndexingDisabled must be a boolean",
+            ),
+            (json!({"geoSpec": 5}), "geoSpec must be an object"),
+        ] {
+            let file = json!({"indexes": [entry(&json!([asc("a"), {"fieldPath": "body", "searchConfig": config}]))]});
+            for checks in both_checks() {
+                let error = parse_indexes("f", &file.to_string(), checks).unwrap_err();
+                assert!(
+                    error.contains("index field body") && error.contains(says),
+                    "{config} {checks:?}: {error}"
+                );
+            }
+        }
+    }
+
+    /// `IndexField` is a oneof: a field with `searchConfig` and another mode is refused.
+    /// The v1beta1 `mode` is not a mode of its own: `upgradeOldSpec` prefers `searchConfig`.
+    #[test]
+    fn search_config_beside_another_mode_is_refused() {
+        for other in [
+            json!({"order": "ASCENDING"}),
+            json!({"arrayConfig": "CONTAINS"}),
+            json!({"vectorConfig": {"dimension": 2, "flat": {}}}),
+        ] {
+            let mut field = search("body");
+            for (key, value) in other.as_object().unwrap() {
+                field[key] = value.clone();
+            }
+            let file = json!({"indexes": [entry(&json!([asc("a"), field]))]});
+            for checks in both_checks() {
+                let error = parse_indexes("f", &file.to_string(), checks).unwrap_err();
+                assert!(
+                    error.contains(
+                        "index field body: exactly one order, arrayConfig, searchConfig, or vectorConfig is required"
+                    ),
+                    "{other} {checks:?}: {error}"
+                );
+            }
+        }
+        let mut legacy = search("body");
+        legacy["mode"] = json!("ASCENDING");
+        let file = json!({"indexes": [entry(&json!([asc("a"), legacy]))]});
+        let (set, notes) =
+            parse_indexes_with_notes("f", &file.to_string(), IndexFileChecks::Deploy).unwrap();
+        assert!(set.composites().is_empty() && notes.len() == 1);
+    }
+
+    /// firebase-tools `validateField` accepts only `order` or `arrayConfig` in a field override,
+    /// and a search index is a composite index, so `searchConfig` in an override is refused under
+    /// both profiles, with a message that says where it belongs.
+    #[test]
+    fn a_search_config_field_override_is_refused_under_both_profiles() {
+        let file = json!({"indexes": [], "fieldOverrides": [{
+            "collectionGroup": "posts", "fieldPath": "body",
+            "indexes": [{"queryScope": "COLLECTION", "searchConfig": {}}]
+        }]});
+        let error = parse_indexes("f", &file.to_string(), IndexFileChecks::Emulator).unwrap_err();
+        assert!(
+            error.contains("field override body")
+                && error.contains("searchConfig")
+                && error.contains("composite index"),
+            "{error}"
+        );
+        let error = deploy(&file).unwrap_err();
+        assert!(error.contains("exactly one of"), "{error}");
+    }
+
+    fn mode_value(key: &str) -> Value {
+        match key {
+            "order" => json!("DESCENDING"),
+            "arrayConfig" => json!("CONTAINS"),
+            "searchConfig" => json!({"textSpec": {"indexSpecs": [
+                {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}),
+            _ => json!({"dimension": 4, "flat": {}}),
+        }
+    }
+
+    const MODE_KEYS: [&str; 4] = ["order", "arrayConfig", "searchConfig", "vectorConfig"];
+
+    proptest::proptest! {
+        /// Any combination of the four `IndexField` modes other than exactly one is refused, in
+        /// a composite index and under both profiles; exactly one loads.
+        #[test]
+        fn index_field_modes_are_a_oneof(present in proptest::collection::vec(proptest::bool::ANY, 4)) {
+            let mut field = json!({"fieldPath": "b"});
+            for (key, on) in MODE_KEYS.iter().zip(&present) {
+                if *on {
+                    field[*key] = mode_value(key);
+                }
+            }
+            let file = json!({"indexes": [entry(&json!([asc("a"), field]))]});
+            let exactly_one = present.iter().filter(|on| **on).count() == 1;
+            for checks in both_checks() {
+                let parsed = parse_indexes("f", &file.to_string(), checks);
+                proptest::prop_assert_eq!(parsed.is_ok(), exactly_one, "{} {:?}: {:?}", field, checks, parsed);
+            }
+        }
+
+        /// A text spec loads exactly when every entry names an `indexType` and a `matchType` of
+        /// the firebase-tools enums.
+        #[test]
+        fn text_specs_load_exactly_when_their_enums_are_known(
+            specs in proptest::collection::vec((
+                proptest::option::of(proptest::sample::select(vec!["TOKENIZED", "TEXT_INDEX_TYPE_UNSPECIFIED", "NGRAM", ""])),
+                proptest::option::of(proptest::sample::select(vec!["MATCH_GLOBALLY", "TEXT_MATCH_TYPE_UNSPECIFIED", "PREFIX", ""])),
+            ), 0..4)
+        ) {
+            let known = specs.iter().all(|(index_type, match_type)| {
+                matches!(index_type, Some("TOKENIZED" | "TEXT_INDEX_TYPE_UNSPECIFIED"))
+                    && matches!(match_type, Some("MATCH_GLOBALLY" | "TEXT_MATCH_TYPE_UNSPECIFIED"))
+            });
+            let specs = specs.iter().map(|(index_type, match_type)| {
+                let mut spec = json!({});
+                if let Some(index_type) = index_type { spec["indexType"] = json!(index_type); }
+                if let Some(match_type) = match_type { spec["matchType"] = json!(match_type); }
+                spec
+            }).collect::<Vec<_>>();
+            let field = json!({"fieldPath": "body", "searchConfig": {"textSpec": {"indexSpecs": specs}}});
+            let file = json!({"indexes": [entry(&json!([field]))]});
+            for checks in both_checks() {
+                proptest::prop_assert_eq!(parse_indexes("f", &file.to_string(), checks).is_ok(), known);
+            }
+        }
+
+        /// Differential: inserting search indexes anywhere in a file changes neither the planning
+        /// set nor whether the file loads, and the note counts them.
+        #[test]
+        fn search_indexes_never_change_the_planning_set(
+            ordinary in proptest::collection::vec((0u8..3, 0u8..3, proptest::bool::ANY), 0..5),
+            searches in proptest::collection::vec((0usize..6, proptest::bool::ANY), 0..4),
+        ) {
+            let fields = ["a", "b", "c"];
+            let ordinary = ordinary.iter().map(|(first, second, group)| json!({
+                "collectionGroup": "posts",
+                "queryScope": if *group { "COLLECTION_GROUP" } else { "COLLECTION" },
+                "fields": [asc(fields[usize::from(*first)]), {"fieldPath": fields[usize::from(*second)], "order": "DESCENDING"}],
+            })).collect::<Vec<_>>();
+            let mut mixed = ordinary.clone();
+            for (at, with_order) in &searches {
+                let fields = if *with_order { json!([asc("a"), search("body")]) } else { json!([search("body")]) };
+                mixed.insert((*at).min(mixed.len()), json!({"collectionGroup": "posts", "queryScope": "COLLECTION_GROUP", "fields": fields}));
+            }
+            for checks in both_checks() {
+                let plain = parse_indexes("f", &json!({"indexes": ordinary}).to_string(), checks);
+                let with = parse_indexes_with_notes("f", &json!({"indexes": mixed}).to_string(), checks);
+                proptest::prop_assert_eq!(plain.is_ok(), with.is_ok());
+                if let (Ok(plain), Ok((with, notes))) = (plain, with) {
+                    proptest::prop_assert_eq!(plain, with);
+                    proptest::prop_assert_eq!(notes.len(), usize::from(!searches.is_empty()));
+                }
+            }
+        }
     }
 }

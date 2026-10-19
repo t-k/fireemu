@@ -382,7 +382,9 @@ mod tests {
 
     #[test]
     fn a_chunked_body_that_looks_like_a_request_stays_a_body() {
-        let body = b"GET /\"z\" HTTP/1.1\r\n\r\n";
+        // A body whose blank line would end a misread header block and start a misread
+        // request line, whose quotes would then be escaped.
+        let body = b"GET /\"z\" HTTP/1.1\r\n\r\nP \"q\" H\r\n";
         let mut input = b"POST /a HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
         input.extend_from_slice(format!("{:x};name=v\r\n", body.len()).as_bytes());
         input.extend_from_slice(body);

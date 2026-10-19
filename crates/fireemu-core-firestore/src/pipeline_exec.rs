@@ -69,6 +69,17 @@ pub enum Eval {
     Error(EvalError),
 }
 
+/// What an input with unrecorded production behavior evaluates to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unrecorded {
+    /// An [`EvalError::Unobserved`] error, which the caller refuses (the strict profile).
+    Refuse,
+    /// What the official emulator (firebase-tools 15.28.2, Firestore emulator 1.22.0,
+    /// Enterprise) answers, where it answers; where it refuses, the error stays (the
+    /// emulator profile, which may refuse nothing the official emulator completes).
+    OfficialEmulator,
+}
+
 /// Where a function may appear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
@@ -86,7 +97,7 @@ pub struct Function {
     pub arity: usize,
     /// Where the function may appear.
     pub placement: Placement,
-    eval: fn(&[Eval]) -> Eval,
+    eval: fn(&[Eval], Unrecorded) -> Eval,
 }
 
 impl fmt::Debug for Function {
@@ -207,9 +218,16 @@ impl Expr {
         }
     }
 
-    /// Evaluates the expression against one row.
+    /// Evaluates the expression against one row, refusing unrecorded inputs.
     #[must_use]
     pub fn eval(&self, row: &Row) -> Eval {
+        self.eval_in(row, Unrecorded::Refuse)
+    }
+
+    /// Evaluates the expression against one row; `unrecorded` decides what inputs with
+    /// unrecorded production behavior give.
+    #[must_use]
+    pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
         match self {
             Self::Field(path) if path.is_document_name() => {
                 Eval::Value(Value::Reference(row.path.resource_name()))
@@ -219,8 +237,11 @@ impl Expr {
                 .map_or(Eval::Absent, Eval::Value),
             Self::Constant(value) => Eval::Value(value.clone()),
             Self::Call { function, args } => {
-                let args: Vec<Eval> = args.iter().map(|arg| arg.eval(row)).collect();
-                (function.eval)(&args)
+                let args: Vec<Eval> = args
+                    .iter()
+                    .map(|arg| arg.eval_in(row, unrecorded))
+                    .collect();
+                (function.eval)(&args, unrecorded)
             }
         }
     }
@@ -235,7 +256,7 @@ fn first_error(args: &[Eval]) -> Option<Eval> {
 
 /// `equal(a, b)`: an error wins, then an absent operand makes the result absent (a `where`
 /// drops the row, as the finite subset always did for a missing field).
-fn eval_equal(args: &[Eval]) -> Eval {
+fn eval_equal(args: &[Eval], _: Unrecorded) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -246,43 +267,58 @@ fn eval_equal(args: &[Eval]) -> Eval {
 }
 
 /// The document a reference argument names. Anything else (absent, another type, a name
-/// that is not a document) is unrecorded.
-fn document_argument(function: &'static str, args: &[Eval]) -> Result<DocumentPath, Eval> {
+/// that is not a document) is unrecorded; the official emulator answers null for an absent
+/// or null argument and refuses the rest.
+fn document_argument(
+    function: &'static str,
+    args: &[Eval],
+    unrecorded: Unrecorded,
+) -> Result<DocumentPath, Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
     }
     let unobserved = |reason| Err(Eval::Error(EvalError::Unobserved { function, reason }));
-    match args {
-        [Eval::Value(Value::Reference(name))] => DocumentPath::from_resource_name(name)
+    match (args, unrecorded) {
+        ([Eval::Value(Value::Reference(name))], _) => DocumentPath::from_resource_name(name)
             .map_or_else(|| unobserved("the reference does not name a document"), Ok),
-        [Eval::Absent] => unobserved("the argument is absent"),
+        ([Eval::Absent | Eval::Value(Value::Null)], Unrecorded::OfficialEmulator) => {
+            Err(Eval::Value(Value::Null))
+        }
+        ([Eval::Absent], Unrecorded::Refuse) => unobserved("the argument is absent"),
         _ => unobserved("the argument is not a document reference"),
     }
 }
 
-fn eval_document_id(args: &[Eval]) -> Eval {
-    match document_argument("document_id", args) {
+fn eval_document_id(args: &[Eval], unrecorded: Unrecorded) -> Eval {
+    match document_argument("document_id", args, unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.document_id().as_str().to_owned())),
         Err(e) => e,
     }
 }
 
-fn eval_collection_id(args: &[Eval]) -> Eval {
-    match document_argument("collection_id", args) {
+fn eval_collection_id(args: &[Eval], unrecorded: Unrecorded) -> Eval {
+    match document_argument("collection_id", args, unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.collection_id().as_str().to_owned())),
         Err(e) => e,
     }
 }
 
-fn eval_parent(args: &[Eval]) -> Eval {
-    match document_argument("parent", args) {
-        Ok(path) => path.parent_document().map_or(
-            Eval::Error(EvalError::Unobserved {
+/// The parent document; for a top-level document the official emulator answers the
+/// database's documents root as a reference.
+fn eval_parent(args: &[Eval], unrecorded: Unrecorded) -> Eval {
+    match document_argument("parent", args, unrecorded) {
+        Ok(path) => match (path.parent_document(), unrecorded) {
+            (Some(parent), _) => Eval::Value(Value::Reference(parent.resource_name())),
+            (None, Unrecorded::OfficialEmulator) => Eval::Value(Value::Reference(format!(
+                "projects/{}/databases/{}/documents",
+                path.project().as_str(),
+                path.database().as_str()
+            ))),
+            (None, Unrecorded::Refuse) => Eval::Error(EvalError::Unobserved {
                 function: "parent",
                 reason: "a top-level document has no parent document",
             }),
-            |parent| Eval::Value(Value::Reference(parent.resource_name())),
-        ),
+        },
         Err(e) => e,
     }
 }
@@ -317,14 +353,21 @@ pub enum Stage {
 #[derive(Debug, Clone)]
 pub struct Cursor {
     stages: Vec<Stage>,
+    unrecorded: Unrecorded,
     /// Rows still to skip (offset) or to keep (limit), per stage; unused for other stages.
     counters: Vec<u64>,
 }
 
 impl Cursor {
-    /// A cursor at the first row.
+    /// A cursor at the first row that refuses unrecorded inputs.
     #[must_use]
     pub fn new(stages: Vec<Stage>) -> Self {
+        Self::new_in(stages, Unrecorded::Refuse)
+    }
+
+    /// A cursor at the first row; `unrecorded` decides what unrecorded inputs give.
+    #[must_use]
+    pub fn new_in(stages: Vec<Stage>, unrecorded: Unrecorded) -> Self {
         let counters = stages
             .iter()
             .map(|stage| match stage {
@@ -332,7 +375,11 @@ impl Cursor {
                 Stage::Where(_) | Stage::Select(_) => 0,
             })
             .collect();
-        Self { stages, counters }
+        Self {
+            stages,
+            unrecorded,
+            counters,
+        }
     }
 
     /// Whether no later row can produce output (a limit is used up).
@@ -349,7 +396,7 @@ impl Cursor {
     pub fn push(&mut self, mut row: Row) -> Result<Option<BTreeMap<String, Value>>, EvalError> {
         for (stage, remaining) in self.stages.iter().zip(self.counters.iter_mut()) {
             match stage {
-                Stage::Where(condition) => match condition.eval(&row) {
+                Stage::Where(condition) => match condition.eval_in(&row, self.unrecorded) {
                     Eval::Value(Value::Boolean(true)) => {}
                     Eval::Value(Value::Boolean(false)) | Eval::Absent => return Ok(None),
                     Eval::Value(_) => {
@@ -363,7 +410,7 @@ impl Cursor {
                 Stage::Select(aliases) => {
                     let mut fields = BTreeMap::new();
                     for (alias, expr) in aliases {
-                        match expr.eval(&row) {
+                        match expr.eval_in(&row, self.unrecorded) {
                             Eval::Value(value) => {
                                 fields.insert(alias.clone(), value);
                             }
@@ -426,12 +473,22 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
     Some(minimal)
 }
 
-/// Runs stages over all rows, stopping once a limit is used up.
+/// Runs stages over all rows, stopping once a limit is used up and refusing unrecorded
+/// inputs.
 pub fn execute(
     stages: Vec<Stage>,
     rows: impl IntoIterator<Item = Row>,
 ) -> Result<Vec<BTreeMap<String, Value>>, EvalError> {
-    let mut cursor = Cursor::new(stages);
+    execute_in(stages, rows, Unrecorded::Refuse)
+}
+
+/// [`execute`] with a choice of what unrecorded inputs give.
+pub fn execute_in(
+    stages: Vec<Stage>,
+    rows: impl IntoIterator<Item = Row>,
+    unrecorded: Unrecorded,
+) -> Result<Vec<BTreeMap<String, Value>>, EvalError> {
+    let mut cursor = Cursor::new_in(stages, unrecorded);
     let mut out = Vec::new();
     for row in rows {
         if cursor.is_exhausted() {

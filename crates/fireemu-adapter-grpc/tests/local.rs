@@ -1634,6 +1634,17 @@ async fn start_with_edition(
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_with_edition_and_policy(edition, IndexValidationPolicy::Production).await
+}
+
+async fn start_with_edition_and_policy(
+    edition: FirestoreEdition,
+    policy: IndexValidationPolicy,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -1641,7 +1652,7 @@ async fn start_with_edition(
         ctx: PlanningContext {
             edition,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Production,
+            policy,
         },
         indexes: IndexSet::default(),
     };
@@ -6956,6 +6967,97 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     }
     handle.abort();
     assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+/// Inputs whose production result is unrecorded: the strict profile refuses them, the
+/// emulator profile answers what the official emulator (firebase-tools 15.28.2, Enterprise)
+/// answers (null for a document function of a missing or null value, the documents root for
+/// the parent of a top-level document) and refuses what it refuses (another type).
+#[tokio::test]
+async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
+    let name = || pipeline_field("__name__");
+    let select = || {
+        vec![
+            pipeline_stage("collection", s("edge")),
+            pipeline_select_map(vec![
+                (
+                    "missing",
+                    pipeline_function("document_id", vec![pipeline_field("missing")]),
+                ),
+                (
+                    "nul",
+                    pipeline_function("collection_id", vec![pipeline_field("nul")]),
+                ),
+                ("up", pipeline_function("parent", vec![name()])),
+            ]),
+        ]
+    };
+    let mistyped = || {
+        vec![
+            pipeline_stage("collection", s("edge")),
+            pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![pipeline_field("name")]),
+            )]),
+        ]
+    };
+    let null = pb::Value {
+        value_type: Some(pb::value::ValueType::NullValue(0)),
+    };
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "edge/a",
+                    &[("name", s("a")), ("nul", null.clone())],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        if policy == IndexValidationPolicy::Production {
+            let err = pipeline_error(&mut client, select()).await;
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+        } else {
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(select()))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert_eq!(
+                docs[0].fields,
+                [
+                    ("missing".to_owned(), null.clone()),
+                    ("nul".to_owned(), null.clone()),
+                    (
+                        "up".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::ReferenceValue(DOCS.to_owned())),
+                        }
+                    ),
+                ]
+                .into_iter()
+                .collect()
+            );
+        }
+        let err = pipeline_error(&mut client, mistyped()).await;
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        assert_eq!(
+            err.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_UNSUPPORTED_STAGE"
+        );
+        handle.abort();
+    }
 }
 
 #[tokio::test]

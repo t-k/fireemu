@@ -671,9 +671,19 @@ impl Firestore for GatewayService {
                 .run_query_with_caller(caller, compiled.input)
                 .await
                 .map_err(|error| pipeline_status(error, &canonical))?;
+            // Strict refuses inputs whose production result is unrecorded; the emulator
+            // profile answers them as the official emulator does, where it answers.
+            let unrecorded = if self.gateway.production_refusals() {
+                fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
+            } else {
+                fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+            };
             return Ok(Response::new(Box::pin(PipelineResponseStream {
                 inner: Some(response.into_inner()),
-                cursor: fireemu_core_firestore::pipeline_exec::Cursor::new(compiled.stages),
+                cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(
+                    compiled.stages,
+                    unrecorded,
+                ),
                 canonical,
                 emitted: false,
             })));

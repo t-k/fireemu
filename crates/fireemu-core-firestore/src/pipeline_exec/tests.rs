@@ -652,3 +652,78 @@ fn document_functions_name_why_an_input_is_unobserved() {
         Eval::Value(s("z"))
     );
 }
+
+/// The official emulator (firebase-tools 15.28.2, Enterprise) answers null for a document
+/// function of a missing or null value and the database root for the parent of a top-level
+/// document, and refuses other types; the emulator profile follows it, strict refuses all.
+#[test]
+fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers() {
+    let r = row(
+        "c/x",
+        &[
+            ("str", s("c/x")),
+            ("null", Value::Null),
+            ("num", Value::Integer(1)),
+        ],
+    );
+    let official = |e: &Expr| e.eval_in(&r, Unrecorded::OfficialEmulator);
+    for name in ["document_id", "collection_id", "parent"] {
+        for arg in ["missing", "null"] {
+            let e = call(name, vec![field(arg)]);
+            assert_eq!(official(&e), Eval::Value(Value::Null), "{name}({arg})");
+            assert!(unobserved(&e.eval(&r)), "{name}({arg})");
+            assert!(
+                unobserved(&e.eval_in(&r, Unrecorded::Refuse)),
+                "{name}({arg})"
+            );
+        }
+        for arg in ["str", "num"] {
+            assert!(
+                unobserved(&official(&call(name, vec![field(arg)]))),
+                "{name}({arg})"
+            );
+        }
+    }
+    let root = Value::Reference("projects/p/databases/(default)/documents".to_owned());
+    let top_parent = call("parent", vec![field("__name__")]);
+    assert_eq!(official(&top_parent), Eval::Value(root));
+    assert!(unobserved(&top_parent.eval(&r)));
+    // The root names no document: the official emulator refuses its ID too.
+    assert!(unobserved(&official(&call(
+        "document_id",
+        vec![top_parent.clone()]
+    ))));
+    assert!(unobserved(&official(&call(
+        "collection_id",
+        vec![top_parent]
+    ))));
+    // A subcollection document's parent is the same in both.
+    let sub = row("c/x/s/y", &[]);
+    let up = call("parent", vec![field("__name__")]);
+    assert_eq!(
+        up.eval_in(&sub, Unrecorded::OfficialEmulator),
+        up.eval(&sub)
+    );
+    // Through a cursor: a null result compares unequal and is kept by select.
+    let stages = vec![
+        Stage::Where(condition(
+            "equal",
+            vec![
+                call("document_id", vec![field("missing")]),
+                Expr::Constant(Value::Null),
+            ],
+        )),
+        Stage::Select(vec![(
+            "id".to_owned(),
+            call("document_id", vec![field("missing")]),
+        )]),
+    ];
+    let out = execute_in(
+        stages.clone(),
+        vec![r.clone()],
+        Unrecorded::OfficialEmulator,
+    )
+    .unwrap();
+    assert_eq!(out, vec![[("id".to_owned(), Value::Null)].into()]);
+    assert!(execute(stages, vec![r]).is_err());
+}

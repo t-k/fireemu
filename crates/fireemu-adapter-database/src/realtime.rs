@@ -9,7 +9,7 @@
 //! This module serves the handshake, keepalive, pings, `s` (stats), `echo`, `auth`, `gauth`,
 //! `unauth`, `appcheck`, `g` (get), `p` (put, with `h` as a transaction's compare-and-set),
 //! `m` (merge), `q` (listen) and `n` (unlisten); the data a listen receives is computed in
-//! [`crate::listen`]. `onDisconnect` comes with RTDB-02. Every answer follows the official
+//! the private `listen` module. `onDisconnect` comes with RTDB-02. Every answer follows the official
 //! emulator (firebase-database-emulator v4.11.2).
 
 use std::collections::{BTreeMap, BTreeSet};

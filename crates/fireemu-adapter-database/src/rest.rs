@@ -20,6 +20,7 @@ use fireemu_core_database::{
 
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{output_json, parse, priority_at, render, ParseError, Style};
+use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Location, Output, Refusal};
 
@@ -203,6 +204,11 @@ pub struct Database {
     indexes: BTreeMap<String, BTreeMap<Path, BTreeSet<String>>>,
     subscriptions: BTreeMap<u64, Subscription>,
     next_subscription: u64,
+    /// The listens of realtime connections, in the order they were made.
+    listens: BTreeMap<u64, Listen>,
+    next_listen: u64,
+    /// Data messages for realtime connections, `(client, frame)`, not yet delivered.
+    pushes: Vec<(u64, String)>,
     /// Realtime connections opened so far.
     clients: u64,
     /// Connection errors reported so far.
@@ -221,6 +227,9 @@ impl Database {
             indexes: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             next_subscription: 1,
+            listens: BTreeMap::new(),
+            next_listen: 1,
+            pushes: Vec::new(),
             clients: 0,
             errors: 0,
             session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
@@ -533,7 +542,66 @@ impl Database {
             subscription.last = fresh;
             events.push((*id, event));
         }
+        for listen in self.listens.values_mut() {
+            if listen.namespace != namespace {
+                continue;
+            }
+            let fresh = listen.view(&ns.tree);
+            if fresh == listen.last {
+                continue;
+            }
+            let frames = listen.changes(&ns.tree, change, &fresh);
+            listen.last = fresh;
+            self.pushes
+                .extend(frames.into_iter().map(|frame| (listen.client, frame)));
+        }
         events
+    }
+
+    /// Adds a realtime listen, replacing the client's listen with the same location and
+    /// tag. The current value is queued for the client unless `hash` matches it.
+    pub(crate) fn add_listen(&mut self, mut listen: Listen, hash: &str) {
+        self.remove_listen(listen.client, &listen.path, listen.tag);
+        let tree = self.tree_mut(&listen.namespace.clone());
+        let view = listen.view(tree);
+        if listen.hash(tree) != hash {
+            self.pushes.push((listen.client, listen.snapshot(&view)));
+        }
+        listen.last = view;
+        self.listens.insert(self.next_listen, listen);
+        self.next_listen += 1;
+    }
+
+    /// Removes the client's listen at `path` registered under `tag`.
+    pub(crate) fn remove_listen(&mut self, client: u64, path: &Path, tag: Option<u64>) {
+        self.listens.retain(|_, listen| {
+            !(listen.client == client && listen.path == *path && listen.tag == tag)
+        });
+    }
+
+    /// Takes the queued data messages of every realtime connection, in order.
+    pub fn drain_pushes(&mut self) -> Vec<(u64, String)> {
+        std::mem::take(&mut self.pushes)
+    }
+
+    /// Takes the queued data messages of one realtime connection, in order.
+    pub(crate) fn take_pushes(&mut self, client: u64) -> Vec<String> {
+        let (own, others) = std::mem::take(&mut self.pushes)
+            .into_iter()
+            .partition(|(to, _)| *to == client);
+        self.pushes = others;
+        own.into_iter().map(|(_, frame)| frame).collect()
+    }
+
+    /// Ends a realtime connection: its listens and undelivered messages go.
+    pub fn close_realtime(&mut self, client: u64) {
+        self.listens.retain(|_, listen| listen.client != client);
+        self.pushes.retain(|(to, _)| *to != client);
+    }
+
+    /// The number of realtime listens.
+    pub fn listen_count(&self) -> usize {
+        self.listens.len()
     }
 
     /// The tree of `namespace`, created empty on first use.

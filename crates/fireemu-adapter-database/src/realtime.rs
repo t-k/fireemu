@@ -7,9 +7,10 @@
 //! `{"t":"d","d":{"r":<request>,"b":{"s":<status>,"d":<data>}}}`.
 //!
 //! This module serves the handshake, keepalive, pings, `s` (stats), `echo`, `auth`, `gauth`,
-//! `unauth`, `appcheck`, `g` (get), `p` (put, with `h` as a transaction's compare-and-set)
-//! and `m` (merge). Listening (`q`, `n`) and `onDisconnect` come with RTDB-LISTEN-ORDER and
-//! RTDB-02. Every answer follows the official emulator (firebase-database-emulator v4.11.2).
+//! `unauth`, `appcheck`, `g` (get), `p` (put, with `h` as a transaction's compare-and-set),
+//! `m` (merge), `q` (listen) and `n` (unlisten); the data a listen receives is computed in
+//! [`crate::listen`]. `onDisconnect` comes with RTDB-02. Every answer follows the official
+//! emulator (firebase-database-emulator v4.11.2).
 
 use std::collections::BTreeMap;
 
@@ -20,6 +21,7 @@ use fireemu_core_database::{
 
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{render, wire_json, Style};
+use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Refusal};
 use crate::rest::{Change, Database, RulesMode, SseEvent};
@@ -205,6 +207,11 @@ fn invalid(message: impl Into<String>) -> Failure {
 }
 
 impl Session {
+    /// The connection's number, which the database's queued data messages are addressed to.
+    pub fn client(&self) -> u64 {
+        self.client
+    }
+
     /// Takes one received text frame.
     pub fn receive(&mut self, db: &mut Database, frame: &str, now_millis: i64) -> Received {
         match self.prepare(frame) {
@@ -253,7 +260,14 @@ impl Session {
             }
             Err(Failure::Malformed) => vec![self.connection_error(db)],
         };
-        received.replies = replies.into_iter().flat_map(split_frames).collect();
+        // The connection's own data messages go before the answer, as the official
+        // emulator sends a listen's value, and a write's change, before acknowledging.
+        let own = db.take_pushes(self.client);
+        received.replies = own
+            .into_iter()
+            .chain(replies)
+            .flat_map(split_frames)
+            .collect();
         received
     }
 
@@ -391,6 +405,15 @@ impl Session {
                 self.authorize(db)?;
                 self.merge(db, arguments, context, events)
             }
+            "q" => {
+                self.authorize(db)?;
+                self.listen(db, arguments)
+            }
+            "n" => {
+                let path = location(arguments, false, db)?;
+                db.remove_listen(self.client, &path, listen_tag(arguments));
+                Ok(Json::string(""))
+            }
             _ => Err(Failure::Malformed),
         }
     }
@@ -487,6 +510,48 @@ impl Session {
         Ok(selected)
     }
 
+    /// `q`: a plain listen, or a tagged query listen following its window. A query whose
+    /// order needs an undeclared index is followed whole, untagged, with a warning.
+    fn listen(&mut self, db: &mut Database, arguments: &BTreeMap<String, Json>) -> Answer {
+        let path = location(arguments, false, db)?;
+        let tag = listen_tag(arguments);
+        let query = match arguments.get("q") {
+            Some(Json::Object(q)) => wire_query(q)?,
+            _ => None,
+        };
+        let mut warnings = Vec::new();
+        let window = match (query, tag) {
+            (Some(query), Some(tag)) => {
+                if db.index_refusal(&self.namespace, &path, &query).is_some() {
+                    warnings.push(Json::string("no_index"));
+                    None
+                } else {
+                    Some((query, tag))
+                }
+            }
+            _ => None,
+        };
+        let hash = match arguments.get("h") {
+            Some(Json::String(hash)) => hash.clone(),
+            Some(other) => render(other, Style::Compact),
+            None => String::new(),
+        };
+        let listen = Listen {
+            client: self.client,
+            namespace: self.namespace.clone(),
+            path,
+            tag,
+            window,
+            last: Json::Null,
+        };
+        db.add_listen(listen, &hash);
+        Ok(if warnings.is_empty() {
+            Json::object::<&str>([])
+        } else {
+            Json::object([("w", Json::Array(warnings))])
+        })
+    }
+
     fn put(
         &mut self,
         db: &mut Database,
@@ -560,6 +625,14 @@ impl Session {
         let change = Change::Patch(path, relative.into_iter().map(|(_, p)| p).collect());
         events.extend(db.notify(&self.namespace, &change));
         Ok(Json::string(""))
+    }
+}
+
+/// The tag `t` of a query listen.
+fn listen_tag(arguments: &BTreeMap<String, Json>) -> Option<u64> {
+    match arguments.get("t") {
+        Some(Json::Number(fireemu_core_database::Number::Int(tag))) => u64::try_from(*tag).ok(),
+        _ => None,
     }
 }
 

@@ -1208,37 +1208,11 @@ fn priority_placeholders_add_to_the_stored_priority() {
     );
 }
 
-// Number forms. Ledger 1471 Q7 (integral values as integers) is in force; the official
-// emulator's forms wait for the owner's review of Q7 and are kept as ignored tests, so
-// flipping `json_text::NUMBER_FORM` (and the core's number model) shows what changes.
+// Number forms (ledger 1475, Q7 replaced): numbers keep their parsed type and doubles print
+// in Java's form, as the official emulator answers.
 
 #[test]
-fn q7_in_force_writes_integral_values_as_integers() {
-    let mut db = db();
-    assert_eq!(
-        call(
-            &mut db,
-            "PUT",
-            "/p.json?ns=n1",
-            r#"{".value":1,".priority":2}"#
-        )
-        .1,
-        r#"{".value":1,".priority":2}"#
-    );
-    assert_eq!(call(&mut db, "GET", "/p/.priority.json?ns=n1", "").1, "2");
-    assert_eq!(
-        call(&mut db, "PUT", "/a.json?ns=n1", r#"{"a":1.0,"d":-0.0}"#).1,
-        r#"{"a":1,"d":0}"#
-    );
-    assert_eq!(
-        call(&mut db, "PUT", "/b.json?ns=n1", "[1.5,1e7,1234.5]").1,
-        "[1.5,10000000,1234.5]"
-    );
-}
-
-#[test]
-#[ignore = "pending the owner's review of ledger 1471 Q7: the official emulator's number forms"]
-fn pending_q7_official_emulator_number_forms() {
+fn numbers_keep_their_type_as_the_official_emulator_answers() {
     let mut db = db();
     assert_eq!(
         call(

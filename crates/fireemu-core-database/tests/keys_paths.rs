@@ -149,17 +149,23 @@ fn path_relations() {
 }
 
 #[test]
-fn integral_doubles_in_the_safe_range_are_integers() {
-    assert!(matches!(Number::from_f64(1.0), Some(Number::Int(1))));
-    assert!(matches!(Number::from_f64(-0.0), Some(Number::Int(0))));
+fn doubles_keep_their_type() {
+    // Ledger 1475 (Q7 replaced): a double stays a double, as the official emulator keeps it.
+    assert!(matches!(Number::from_f64(1.0), Some(Number::Double(d)) if d == 1.0));
+    assert!(
+        matches!(Number::from_f64(-0.0), Some(Number::Double(d)) if d == 0.0 && d.is_sign_negative())
+    );
     assert!(matches!(Number::from_f64(1.5), Some(Number::Double(_))));
-    assert!(matches!(
-        Number::from_f64(9_007_199_254_740_992.0),
-        Some(Number::Int(9_007_199_254_740_992))
-    ));
     assert!(matches!(Number::from_f64(1e300), Some(Number::Double(_))));
     assert!(Number::from_f64(f64::NAN).is_none());
     assert!(Number::from_f64(f64::INFINITY).is_none());
+    // Equal values compare equal whatever their type, and -0.0 equals 0.0.
+    assert_eq!(Number::Int(1), Number::Double(1.0));
+    assert_eq!(Number::Double(-0.0), Number::Double(0.0));
+    assert_eq!(
+        Number::Double(-0.0).total_cmp(Number::Int(0)),
+        Ordering::Equal
+    );
 }
 
 #[test]
@@ -232,7 +238,7 @@ fn increment_adds_integers_exactly_and_falls_back_to_doubles_on_overflow() {
     );
     assert!(matches!(
         Number::Double(0.5).increment(Number::Double(0.5)),
-        Some(Number::Int(1))
+        Some(Number::Double(d)) if d == 1.0
     ));
     assert!(Number::Double(f64::MAX)
         .increment(Number::Double(f64::MAX))

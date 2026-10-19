@@ -101,6 +101,7 @@ impl Database {
         host: Option<&str>,
         now_millis: i64,
     ) -> Result<Opened, Refusal> {
+        request::check_escapes(target)?;
         let (_, params) = request::split_target(target);
         let namespace = route(
             params.get("ns").map(String::as_str),

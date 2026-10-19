@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use fireemu_core_database::{ErrorKind, Json, Limit, Limits, OrderBy, Path, QueryParams};
+use fireemu_core_types::codec::{self, PlusMode};
 
 use crate::json_text::{parse, Style};
 
@@ -57,23 +58,22 @@ pub fn split_target(target: &str) -> (&str, BTreeMap<String, String>) {
 }
 
 /// Decodes `%XX` escapes; a malformed escape stays as it is. `+` is not a space.
+///
+/// A target with a malformed escape is refused first ([`check_escapes`]), so the literal
+/// fallback only matters to callers that decode text of their own.
 pub fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-            if let Some(value) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(value);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
+    codec::percent_decode(text, PlusMode::Literal)
+}
+
+/// Refuses a target holding a `%` that does not introduce two hexadecimal digits, anywhere
+/// in its path or query. The official emulator answers such a request 400 `Bad Request`
+/// before it looks at the namespace, the method or the path.
+pub fn check_escapes(target: &str) -> Result<(), Refusal> {
+    if codec::percent_escapes_are_well_formed(target) {
+        Ok(())
+    } else {
+        Err(Refusal::bad("Bad Request"))
     }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The database location a raw path names. `writing` adds the depth limit.

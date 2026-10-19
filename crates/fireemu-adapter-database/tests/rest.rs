@@ -152,6 +152,38 @@ fn the_namespace_comes_from_ns_then_the_host_then_the_default() {
 }
 
 #[test]
+fn a_malformed_percent_escape_anywhere_in_the_target_is_a_bad_request() {
+    let mut db = db();
+    // Refused before the namespace, the method and the .json suffix are looked at.
+    for (method, target) in [
+        ("GET", "/x%zz.json?ns=hyg"),
+        ("GET", "/x%4.json?ns=hyg"),
+        ("GET", "/x%+f.json?ns=hyg"),
+        ("PUT", "/x%zz.json?ns=hyg"),
+        ("GET", "/x.json?ns=hyg&a=%zz"),
+        ("GET", "/x.json?ns=hyg&a=%2"),
+        ("GET", "/x.json?ns=hyg&a=%+f"),
+        ("GET", "/x.json?ns=hyg%zz"),
+        ("GET", "/x%zz?ns=hyg"),
+        ("TRACE", "/x.json?ns=hyg&a=%"),
+    ] {
+        assert_eq!(
+            call(&mut db, method, target, "1"),
+            (400, error("Bad Request")),
+            "{method} {target}"
+        );
+    }
+    // A well-formed escape of a byte that is not UTF-8, or of a percent sign, is not.
+    assert_eq!(call(&mut db, "GET", "/x%FF.json?ns=hyg", "").0, 200);
+    assert_eq!(call(&mut db, "GET", "/x.json?ns=hyg&a=%FF", "").0, 200);
+    assert_eq!(
+        call(&mut db, "PUT", "/x%25zz.json?ns=hyg", "1"),
+        (200, "1".to_owned())
+    );
+    assert_eq!(call(&mut db, "GET", "/.json?ns=hyg", "").1, r#"{"x%zz":1}"#);
+}
+
+#[test]
 fn invalid_namespaces_are_forbidden() {
     let mut db = db();
     for ns in ["Bad_NS", "", "a.b", "-a", "a_b"] {

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- A `firestore.indexes.json` with a search index (`searchConfig`, Enterprise full-text or geo search) no longer stops the daemon under either profile. The `searchConfig` is checked as `firebase deploy` checks it, the index is left out of query planning, and one note each time the file loads says how many were left out. A field with `searchConfig` beside another mode, a malformed `searchConfig`, and `searchConfig` in a field override are refused with a message that names the field; under `strict`, so is an unknown key inside `searchConfig`, which the Firestore Admin API refuses.
+
 ## [0.27.0] - 2026-10-18
 
 ### Changed

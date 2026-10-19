@@ -2623,12 +2623,15 @@ fn start_index_reload_supervisor(
                 }
             };
             match control::parse_index_file(&path, &text, checks) {
-                Ok((indexes, ttl_policies)) => {
+                Ok((indexes, ttl_policies, notes)) => {
                     if backend.replace_database_indexes(&database, indexes) {
                         backend.replace_shared_ttl_catalog(&database, ttl_policies);
                         observed_stamp = Some(stable_stamp);
                         observed_signature = Some(stable_signature);
                         eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                        for note in notes {
+                            eprintln!("note: {note}");
+                        }
                     } else {
                         eprintln!(
                             "warning: Firestore index reload failed; keeping the last-known-good indexes: index catalog lock poisoned"

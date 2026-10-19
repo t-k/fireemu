@@ -315,3 +315,118 @@ async fn a_connection_that_never_polls_is_closed() {
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
 }
+
+/// A step of the model: messages answered in one request, a write by another client while
+/// a request is held, or a held request released by the next one.
+#[derive(Debug, Clone)]
+enum Step {
+    Echo(usize),
+    WriteWhileHeld,
+    ReleasedByNext(usize),
+}
+
+fn step() -> impl proptest::strategy::Strategy<Value = Step> {
+    use proptest::prelude::*;
+    prop_oneof![
+        (1usize..4).prop_map(Step::Echo),
+        Just(Step::WriteWhileHeld),
+        (1usize..3).prop_map(Step::ReleasedByNext),
+    ]
+}
+
+/// The answer number and messages of a `pRTLPCB` answer.
+fn read_packet(body: &str) -> (u64, Vec<String>) {
+    let inner = body
+        .strip_prefix("pRTLPCB(")
+        .and_then(|rest| rest.strip_suffix(");\n"))
+        .unwrap_or_else(|| panic!("{body:?}"));
+    let (number, array) = inner.split_once(',').unwrap();
+    let fireemu_core_database::Json::Array(items) =
+        fireemu_adapter_database::json_text::parse(array).unwrap()
+    else {
+        panic!("{body:?}")
+    };
+    let messages = items
+        .iter()
+        .map(|m| {
+            fireemu_adapter_database::json_text::render(
+                m,
+                fireemu_adapter_database::json_text::Style::Compact,
+            )
+        })
+        .collect();
+    (number.parse().unwrap(), messages)
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(24))]
+
+    /// Every message reaches the client exactly once, in order, in answers numbered without
+    /// gaps, whichever request carries it.
+    #[test]
+    fn answers_carry_every_message_once_in_order(steps in proptest::collection::vec(step(), 1..8)) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (address, _) = start(ServerConfig::default()).await;
+            let (mut lp, _) = Lp::start(&address, "model").await;
+            let mut answers = Vec::new();
+            let mut expected = Vec::new();
+            answers.push(lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await);
+            expected.push(r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#.to_owned());
+            let mut r = 1;
+            let mut value = 0;
+            let echoes = |lp_r: &mut u64, n: usize, expected: &mut Vec<String>| -> Vec<String> {
+                (0..n).map(|_| {
+                    *lp_r += 1;
+                    expected.push(format!(r#"{{"t":"d","d":{{"r":{lp_r},"b":{{"s":"ok","d":"e"}}}}}}"#));
+                    request(*lp_r, "echo", r#"{"d":"e"}"#)
+                }).collect()
+            };
+            for step in &steps {
+                match step {
+                    Step::Echo(n) => {
+                        let messages = echoes(&mut r, *n, &mut expected);
+                        let refs: Vec<&str> = messages.iter().map(String::as_str).collect();
+                        answers.push(lp.poll(&refs).await);
+                    }
+                    Step::WriteWhileHeld => {
+                        let target = lp.target(&[]);
+                        let held = tokio::spawn({
+                            let address = address.clone();
+                            async move { get(&address, "GET", &target, "").await.2 }
+                        });
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        value += 1;
+                        get(&address, "PUT", "/a.json?ns=model", &value.to_string()).await;
+                        expected.push(format!(r#"{{"t":"d","d":{{"b":{{"p":"a","d":{value}}},"a":"d"}}}}"#));
+                        answers.push(held.await.unwrap());
+                    }
+                    Step::ReleasedByNext(n) => {
+                        let target = lp.target(&[]);
+                        let held = tokio::spawn({
+                            let address = address.clone();
+                            async move { get(&address, "GET", &target, "").await.2 }
+                        });
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        let messages = echoes(&mut r, *n, &mut expected);
+                        let refs: Vec<&str> = messages.iter().map(String::as_str).collect();
+                        answers.push(lp.poll(&refs).await);
+                        answers.push(held.await.unwrap());
+                    }
+                }
+            }
+            let mut packets: Vec<(u64, Vec<String>)> = answers.iter().map(|a| read_packet(a)).collect();
+            packets.sort_by_key(|(n, _)| *n);
+            let numbers: Vec<u64> = packets.iter().map(|(n, _)| *n).collect();
+            assert_eq!(numbers, (1..=packets.len() as u64).collect::<Vec<_>>());
+            let got: Vec<String> = packets.into_iter().flat_map(|(_, m)| m).collect();
+            let canonical = |text: &String| {
+                fireemu_adapter_database::json_text::render(
+                    &fireemu_adapter_database::json_text::parse(text).unwrap(),
+                    fireemu_adapter_database::json_text::Style::Compact,
+                )
+            };
+            assert_eq!(got, expected.iter().map(canonical).collect::<Vec<_>>());
+        });
+    }
+}

@@ -149,6 +149,8 @@ A missing or empty `queryScope` is read as `COLLECTION`, and the older `collecti
 
 The `emulator` profile loads the file as before, because the official emulator never reads it.
 
+A search index (an index field with `searchConfig`, for Enterprise full-text or geo search) loads under both profiles. It is checked as `firebase deploy` checks it and then left out of query planning, so it never serves or blocks an ordinary query; each time the file loads, a `note:` line says how many search indexes were left out. Local search execution is not supported. Under both profiles, a field with `searchConfig` beside another mode, a malformed `searchConfig`, and `searchConfig` in a `fieldOverrides` index are refused with a message that names the field. Under `strict`, an unknown key inside `searchConfig` is refused as well, as the Firestore Admin API refuses it.
+
 ## Query limits
 
 Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` the key switches only these query limits (at most 30 disjunctions, 10 `in` values, and so on): the limits on writes, transactions and indexes, and the wire shapes of the REST and WebChannel surfaces, stay production's. Under the `emulator` profile, `true` also asks for those production limits.

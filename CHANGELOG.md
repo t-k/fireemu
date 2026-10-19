@@ -17,6 +17,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Under the strict profile, a pipeline `select` alias that is not a plain identifier is now refused with `UNIMPLEMENTED` until production is observed. This includes a dotted or quoted alias, which is what the SDKs send for `select('a.b')`. Such an alias used to answer a flat `"a.b"` key. To keep answering under strict, give the field an explicit simple alias, such as `field('a.b').as('ab')`.
 - Under the emulator profile, a pipeline `select` alias is now read as a field path, as the official emulator reads it: `select('a.b')` answers `{a: {b}}`, and a quoted alias is unquoted. An invalid path, a reserved name or an alias inside another alias is refused with `INVALID_ARGUMENT`.
 
+## [0.27.1] - 2026-10-19
+
+### Fixed
+
+- A `firestore.indexes.json` with a search index (`searchConfig`, Enterprise full-text or geo search) no longer stops the daemon under either profile. The `searchConfig` is checked as `firebase deploy` checks it, the index is left out of query planning, and one note each time the file loads says how many were left out. A field with `searchConfig` beside another mode, a malformed `searchConfig`, and `searchConfig` in a field override are refused with a message that names the field; under `strict`, so is an unknown key inside `searchConfig`, which the Firestore Admin API refuses.
+
 ## [0.27.0] - 2026-10-18
 
 ### Changed
@@ -843,7 +849,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.27.1...HEAD
+[0.27.1]: https://github.com/t-k/fireemu/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/t-k/fireemu/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/t-k/fireemu/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/t-k/fireemu/compare/v0.24.0...v0.25.0

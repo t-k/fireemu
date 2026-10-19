@@ -531,3 +531,80 @@ async fn idle_realtime_connections_are_closed() {
     let (opcode, _) = client.next().await;
     assert!(opcode == 0x8 || opcode == 0xFF, "{opcode}");
 }
+
+#[tokio::test]
+async fn realtime_listens_receive_writes_from_other_connections_and_rest() {
+    let (address, database) = start(Duration::from_secs(30)).await;
+    let (mut reader, _) = Client::connect(&address, "/.ws?v=5&ns=w9").await;
+    reader.next_text().await;
+    let (mut writer, _) = Client::connect(&address, "/.ws?v=5&ns=w9").await;
+    writer.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#)
+        .await;
+    assert_eq!(
+        reader.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#
+    );
+    writer
+        .text(r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/a/b","d":1}}}"#)
+        .await;
+    assert_eq!(
+        writer.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}"#
+    );
+    assert_eq!(
+        reader.next_text().await,
+        r#"{"t":"d","d":{"b":{"p":"a/b","d":1},"a":"d"}}"#
+    );
+    exchange(&address, "PUT", "/a/c.json?ns=w9", "2").await;
+    assert_eq!(
+        reader.next_text().await,
+        r#"{"t":"d","d":{"b":{"p":"a/c","d":2},"a":"d"}}"#
+    );
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // Closing the connection ends its listens.
+    reader.send(0x8, &[0x03, 0xE8]).await;
+    assert_eq!(reader.next().await, (0x8, vec![0x03, 0xE8]));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while database.lock().unwrap().listen_count() != 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the closed connection kept its listen");
+}
+
+#[tokio::test]
+async fn a_listener_that_stops_reading_is_dropped_once_its_queue_fills() {
+    let (address, database) = start_with(ServerConfig {
+        stream_queue: 4,
+        realtime_idle: Duration::from_secs(1),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut reader, _) = Client::connect(&address, "/.ws?v=5&ns=w10").await;
+    reader.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/s","h":""}}}"#)
+        .await;
+    reader.next_text().await;
+    // Never read again: large pushes fill the socket buffers, then the queue.
+    let big = format!("\"{}\"", "x".repeat(200_000));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for i in 0.. {
+            exchange(
+                &address,
+                "PUT",
+                &format!("/s/k{}.json?ns=w10&print=silent", i % 50),
+                &big,
+            )
+            .await;
+            if database.lock().unwrap().listen_count() == 0 {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the stalled listener was never dropped");
+}

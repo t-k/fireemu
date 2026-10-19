@@ -10,6 +10,7 @@ import {
 } from "./fs-ent-pipeline/corpus.mjs";
 import {
   DATABASE,
+  DATABASES,
   SANDBOX_PROJECT,
   buildGrpcRequest,
   buildRestRequest,
@@ -18,7 +19,8 @@ import {
   guardGrpcRequest,
   guardRestRequest,
   validateCorpus,
-} from "./fs-query-index/harness.mjs";
+} from "./fs-ent-pipeline/harness.mjs";
+import * as queryHarness from "./fs-query-index/harness.mjs";
 import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
@@ -30,6 +32,28 @@ const production = (database = lane.database) =>
     database,
     target: { kind: "production", token: "t", quotaProject: SANDBOX_PROJECT },
   });
+
+test("the pipeline lane has its own copy of the request layer and the others keep theirs", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
+  assert.equal(lane.harness, "src/fs-ent-pipeline");
+  assert.equal(LANES["fs-query-index"].harness, "src/fs-query-index");
+  assert.equal(LANES["fs-data-write-list"].harness, "src/fs-query-index");
+  // The session copy is byte for byte the shared one: only the harness differs, by the named
+  // database. The shared harness has no named database at all.
+  assert.equal(await read("./fs-ent-pipeline/session.mjs"), await read("./fs-query-index/session.mjs"));
+  assert.equal(queryHarness.DATABASES, undefined);
+  assert.notEqual(DATABASES, undefined);
+  // Every recorded row is bound to the digest of the lane's own two files (no index file).
+  const { createHash } = await import("node:crypto");
+  const own = createHash("sha256")
+    .update(`${await read("./fs-ent-pipeline/harness.mjs")}\n${await read("./fs-ent-pipeline/session.mjs")}\n`)
+    .digest("hex");
+  const recorded = JSON.parse(await read("../fs-ent-pipeline-production.json"));
+  for (const [id, program] of Object.entries(recorded.programs)) {
+    assert.equal(program.harnessDigest, own, id);
+  }
+});
 
 test("the pipeline lane records into the named Enterprise database without an index file", () => {
   assert.equal(selectLane("fs-ent-pipeline"), lane);
@@ -138,7 +162,9 @@ test("a production recording addresses its lane's database, wipes and seeds incl
     ["fs-data-write-list", "(default)"],
   ]) {
     const ctx = run.productionContext({ lane: LANES[id], run: "1", token: "t" });
-    assert.equal(databaseName(ctx), `projects/${SANDBOX_PROJECT}/databases/${expected}`, id);
+    // Each lane names its database through its own request layer.
+    const name = id === "fs-ent-pipeline" ? databaseName : queryHarness.databaseName;
+    assert.equal(name(ctx), `projects/${SANDBOX_PROJECT}/databases/${expected}`, id);
     assert.equal(ctx.target.quotaProject, SANDBOX_PROJECT);
   }
   // Renormalizing a saved recording keeps its start and its lane's database.

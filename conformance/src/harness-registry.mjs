@@ -192,6 +192,13 @@ export const HARNESS_LANES = {
     extra: () => readFileSync(join(CONFORMANCE_DIR, "fs-query-index.indexes.json"), "utf8"),
     guarded: ["conformance/fs-query-index.indexes.json"],
   },
+  // FS-ENT-ORACLE: the pipeline lane's own copy of the query request layer (named database
+  // support), without an index file.
+  "fs-ent-pipeline": {
+    fixture: "fs-ent-pipeline-production.json",
+    files: ["fs-ent-pipeline/harness.mjs", "fs-ent-pipeline/session.mjs"],
+    extra: "",
+  },
   "fs-config-lifecycle": {
     fixture: "fs-config-lifecycle-production.json",
     files: [

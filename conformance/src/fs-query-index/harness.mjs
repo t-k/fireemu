@@ -12,11 +12,6 @@ import { isDeepStrictEqual } from "node:util";
 
 export const SANDBOX_PROJECT = "fireemu-oracle-query";
 export const DATABASE = "(default)";
-/**
- * The databases a lane may record into: `(default)`, and the named Enterprise database of the
- * FS-ENT-ORACLE campaign (owner ledger 1468 Q1), which only that lane creates and deletes.
- */
-export const DATABASES = new Set([DATABASE, "entpipe1"]);
 export const RECORDED_PROJECT = "demo-fs-query-index";
 export const REQUEST_CAP = 3000;
 export const PRODUCTION_ORIGIN = "https://firestore.googleapis.com";
@@ -81,9 +76,8 @@ export const GRPC_METHODS = {
  * Binds a run id, the run start time and one target (production sandbox or local fireemu).
  * Times inside the run window are the only times normalization masks.
  */
-export function createContext({ run, target, startedMs = Date.now(), database = DATABASE }) {
+export function createContext({ run, target, startedMs = Date.now() }) {
   if (!/^\d+$/.test(String(run))) throw new Error("run id must be numeric");
-  if (!DATABASES.has(database)) throw new Error(`database ${database} is not a sandbox database`);
   if (!Number.isFinite(startedMs)) throw new Error("run start must be a time");
   if (target.kind === "production") {
     if (!target.token) throw new Error("production needs an access token");
@@ -108,7 +102,6 @@ export function createContext({ run, target, startedMs = Date.now(), database = 
     run: String(run),
     startedMs,
     project: SANDBOX_PROJECT,
-    database,
     target,
     // Read-time steps ask for up to about an hour before the run, so the window starts two hours
     // early.
@@ -116,7 +109,7 @@ export function createContext({ run, target, startedMs = Date.now(), database = 
   };
 }
 
-export const databaseName = (ctx) => `projects/${ctx.project}/databases/${ctx.database}`;
+export const databaseName = (ctx) => `projects/${ctx.project}/databases/${DATABASE}`;
 export const documentsName = (ctx) => `${databaseName(ctx)}/documents`;
 
 function substitute(text, ctx) {
@@ -469,7 +462,7 @@ const NAMED_TARGETS = new Set(["update", "document"]);
 
 /**
  * Resource names a request acts on (written or deleted documents, parents) must be in the
- * lane's sandbox database; a request never carries its own transaction.
+ * sandbox `(default)` database; a request never carries its own transaction.
  */
 function assertScopedToDatabase(body, ctx) {
   const check = (key, value) => {
@@ -502,7 +495,7 @@ function assertOnlySandboxProject(value, ctx) {
 
 /**
  * The last check before a REST request leaves the process: the resolved URL must be this
- * project's sandbox database's documents resource on the target's host, and the body may only name
+ * project's `(default)` documents resource on the target's host, and the body may only name
  * this project. Only the harness itself (wipe, seed) may use it for anything but a reviewed
  * query method; the local emulator's reset endpoint is harness-only.
  */

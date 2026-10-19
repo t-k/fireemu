@@ -11,6 +11,7 @@ export const LANES = {
     fixture: "fs-query-index-production.json",
     indexes: "fs-query-index.indexes.json",
     localConfig: "fs-query-index.fireemu.json",
+    harness: "src/fs-query-index",
     sources: ["src/fs-query-index"],
   },
   "fs-data-write-list": {
@@ -20,11 +21,14 @@ export const LANES = {
     fixture: "fs-data-write-list-production.json",
     indexes: "fs-query-index.indexes.json",
     localConfig: "fs-query-index.fireemu.json",
+    harness: "src/fs-query-index",
     sources: ["src/fs-query-index", "src/fs-list"],
   },
   // FS-ENT-ORACLE O-1 (owner ledger 1468 Q1): pipeline semantics in the named Enterprise
   // database `entpipe1`, which this campaign creates and deletes in its own packet steps. No
-  // index file: Enterprise runs pipelines without indexes, and the lane never deploys any.
+  // index file: Enterprise runs pipelines without indexes, and the lane never deploys any. The
+  // lane has its own copy of the request layer (harness.mjs, session.mjs with named-database
+  // support), so the other lanes' recorded harness digest stays bound to theirs.
   "fs-ent-pipeline": {
     id: "fs-ent-pipeline",
     taskId: "FS-ENT-ORACLE",
@@ -37,6 +41,7 @@ export const LANES = {
       "production Firestore REST v1 and gRPC google.firestore.v1, Enterprise edition, Native API, database entpipe1",
     localConfig: "fs-ent-pipeline.fireemu.json",
     firebaseJson: "fs-ent-pipeline.firebase.json",
+    harness: "src/fs-ent-pipeline",
     sources: ["src/fs-query-index", "src/fs-ent-pipeline"],
   },
 };

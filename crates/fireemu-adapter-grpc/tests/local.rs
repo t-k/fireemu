@@ -11345,7 +11345,7 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
 }
 
 /// The execution time is the input snapshot's read time: every response of one answer carries
-/// the read time a RunQuery reports at the same state (with a result, after a select, and on
+/// the read time a `RunQuery` reports at the same state (with a result, after a select, and on
 /// the empty answer), and a later snapshot answers a later time.
 #[tokio::test]
 async fn execute_pipeline_execution_time_is_the_snapshot_read_time() {

@@ -1114,3 +1114,149 @@ fn push_ids_increase_across_namespaces() {
     let (_, second) = call(&mut db, "POST", "/l.json?ns=b1", "1");
     assert!(first < second, "{first} {second}");
 }
+
+#[test]
+fn priorities_need_an_existing_node() {
+    let mut db = db();
+    let missing = error("could not set priority on non-existent node");
+    assert_eq!(
+        call(&mut db, "PUT", "/missing/.priority.json?ns=u5", "3"),
+        (400, missing.clone())
+    );
+    for body in [
+        r#"{"b/.priority":3,"b/c":1}"#,
+        r#"{"b/c":1,"b/.priority":3}"#,
+    ] {
+        assert_eq!(
+            call(&mut db, "PATCH", "/.json?ns=u3", body),
+            (400, missing.clone()),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        call(&mut db, "PATCH", "/b.json?ns=u7", r#"{".priority":3}"#),
+        (400, missing)
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=u3", ""),
+        (200, "null".to_owned())
+    );
+
+    call(&mut db, "PUT", "/b.json?ns=u4", r#"{"x":1}"#);
+    assert_eq!(
+        call(
+            &mut db,
+            "PATCH",
+            "/.json?ns=u4",
+            r#"{"b/.priority":3,"b/c":1}"#
+        ),
+        (200, r#"{"b":{".priority":3,"c":1}}"#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=u4&format=export", "").1,
+        r#"{"b":{".priority":3,"c":1,"x":1}}"#
+    );
+    call(&mut db, "PUT", "/b.json?ns=u6", r#"{"x":1}"#);
+    assert_eq!(
+        call(
+            &mut db,
+            "PATCH",
+            "/.json?ns=u6",
+            r#"{"b/.priority":3,"b/x":null}"#
+        ),
+        (200, r#"{"b":{".priority":3,"x":null}}"#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=u6", ""),
+        (200, "null".to_owned())
+    );
+    let parse = error("Invalid data; couldn't parse JSON object, array, or value.");
+    for body in [
+        r#"{".priority":3}"#,
+        r#"{"a":null,".priority":1}"#,
+        r#"{"a":{".priority":1}}"#,
+    ] {
+        assert_eq!(
+            call(&mut db, "PUT", "/n.json?ns=u8", body),
+            (400, parse.clone()),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn priority_placeholders_add_to_the_stored_priority() {
+    let mut db = db();
+    call(
+        &mut db,
+        "PUT",
+        "/a.json?ns=pri",
+        r#"{".value":1,".priority":5}"#,
+    );
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/a/.priority.json?ns=pri",
+            r#"{".sv":{"increment":1}}"#
+        ),
+        (200, "6".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/a.json?ns=pri&format=export", "").1,
+        r#"{".value":1,".priority":6}"#
+    );
+}
+
+// Number forms. Ledger 1471 Q7 (integral values as integers) is in force; the official
+// emulator's forms wait for the owner's review of Q7 and are kept as ignored tests, so
+// flipping `json_text::NUMBER_FORM` (and the core's number model) shows what changes.
+
+#[test]
+fn q7_in_force_writes_integral_values_as_integers() {
+    let mut db = db();
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/p.json?ns=n1",
+            r#"{".value":1,".priority":2}"#
+        )
+        .1,
+        r#"{".value":1,".priority":2}"#
+    );
+    assert_eq!(call(&mut db, "GET", "/p/.priority.json?ns=n1", "").1, "2");
+    assert_eq!(
+        call(&mut db, "PUT", "/a.json?ns=n1", r#"{"a":1.0,"d":-0.0}"#).1,
+        r#"{"a":1,"d":0}"#
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/b.json?ns=n1", "[1.5,1e7,1234.5]").1,
+        "[1.5,10000000,1234.5]"
+    );
+}
+
+#[test]
+#[ignore = "pending the owner's review of ledger 1471 Q7: the official emulator's number forms"]
+fn pending_q7_official_emulator_number_forms() {
+    let mut db = db();
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/p.json?ns=n1",
+            r#"{".value":1,".priority":2}"#
+        )
+        .1,
+        r#"{".value":1,".priority":2.0}"#
+    );
+    assert_eq!(call(&mut db, "GET", "/p/.priority.json?ns=n1", "").1, "2.0");
+    assert_eq!(
+        call(&mut db, "PUT", "/a.json?ns=n1", r#"{"a":1.0,"d":-0.0}"#).1,
+        r#"{"a":1.0,"d":-0.0}"#
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/b.json?ns=n1", "[1.5,1e7,1234.5]").1,
+        "[1.5,1.0E7,1234.5]"
+    );
+}

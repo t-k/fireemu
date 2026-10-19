@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use fireemu_core_database::key::name_compare;
 use fireemu_core_database::node::VALUE_KEY;
 use fireemu_core_database::path::PRIORITY_KEY;
-use fireemu_core_database::{Content, Format, Json, Leaf, Node, Number};
+use fireemu_core_database::{Content, Format, Json, Leaf, Node, Number, Path, Priority, Tree};
 
 /// The layout of rendered JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +46,7 @@ pub fn output_json(node: Option<&Node>, format: Format) -> Json {
             let value = leaf_json(leaf);
             match priority {
                 None => value,
-                Some(p) => Json::object([(VALUE_KEY, value), (PRIORITY_KEY, p.to_json())]),
+                Some(p) => Json::object([(VALUE_KEY, value), (PRIORITY_KEY, priority_json(p))]),
             }
         }
         Content::Children(children) => {
@@ -66,7 +66,7 @@ pub fn output_json(node: Option<&Node>, format: Format) -> Json {
                 .map(|(k, child)| (k.clone(), output_json(Some(child), format)))
                 .collect();
             if let Some(p) = priority {
-                map.insert(PRIORITY_KEY.to_owned(), p.to_json());
+                map.insert(PRIORITY_KEY.to_owned(), priority_json(p));
             }
             Json::Object(map)
         }
@@ -97,6 +97,48 @@ fn array_length(children: &BTreeMap<String, Node>) -> Option<usize> {
     (max < 2 * children.len()).then_some(max + 1)
 }
 
+/// How numbers are written: the one switch of ledger 1471 Q7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberForm {
+    /// Q7 as ruled (provisional): an integral value is written as an integer, priorities
+    /// included. The core stores integral doubles as integers.
+    IntegralAsInteger,
+    /// The official emulator's form, pending the owner's review of Q7: priorities are
+    /// doubles (`2.0`). Writing `1.0` or `-0.0` also needs the core to keep doubles, which
+    /// waits for the same ruling.
+    JavaDouble,
+}
+
+/// The number form in force.
+pub const NUMBER_FORM: NumberForm = NumberForm::IntegralAsInteger;
+
+/// A priority as answer JSON, in the number form in force.
+fn priority_json(priority: &Priority) -> Json {
+    match (NUMBER_FORM, priority) {
+        (NumberForm::JavaDouble, Priority::Number(n)) => Json::Number(Number::Double(n.as_f64())),
+        _ => priority.to_json(),
+    }
+}
+
+/// The answer for a `<location>/.priority` path: the priority of the location, `null`
+/// when it has none.
+pub fn priority_at(tree: &Tree, path: &Path) -> Json {
+    let parent = path.parent().unwrap_or_default();
+    tree.get(&parent)
+        .and_then(|node| node.priority.as_ref())
+        .map_or(Json::Null, priority_json)
+}
+
+/// Writes a number in the number form in force.
+fn write_number(out: &mut String, number: Number) {
+    match number {
+        Number::Int(i) => {
+            let _ = write!(out, "{i}");
+        }
+        Number::Double(d) => out.push_str(&java_double(d)),
+    }
+}
+
 /// Renders JSON text.
 pub fn render(json: &Json, style: Style) -> String {
     let mut out = String::new();
@@ -108,10 +150,7 @@ fn write_json(out: &mut String, json: &Json, style: Style, objects_above: usize)
     match json {
         Json::Null => out.push_str("null"),
         Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Json::Number(Number::Int(i)) => {
-            let _ = write!(out, "{i}");
-        }
-        Json::Number(Number::Double(d)) => out.push_str(&java_double(*d)),
+        Json::Number(number) => write_number(out, *number),
         Json::String(s) => write_string(out, s),
         Json::Array(items) => write_array(out, items, style, objects_above),
         Json::Object(map) => write_object(out, map, style, objects_above),

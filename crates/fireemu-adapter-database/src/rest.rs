@@ -12,13 +12,14 @@ use fireemu_core_database::key::validate_key;
 use fireemu_core_database::node::VALUE_KEY;
 use fireemu_core_database::path::PRIORITY_KEY;
 use fireemu_core_database::push_id::PushIdGenerator;
-use fireemu_core_database::server_value::SERVER_VALUE_KEY;
+use fireemu_core_database::server_value::{resolve, stored_priority, SERVER_VALUE_KEY};
 use fireemu_core_database::{
-    Content, Format, Json, Limits, Node, Path, QueryParams, ServerValueContext, Tree,
+    Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, QueryParams,
+    ServerValueContext, Tree,
 };
 
 use crate::json_parse::parse_with_keys;
-use crate::json_text::{output_json, parse, render, Style};
+use crate::json_text::{output_json, parse, priority_at, render, Style};
 use crate::namespace::route;
 use crate::request::{self, Location, Output, Refusal};
 
@@ -363,7 +364,7 @@ impl Database {
         }
         let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
         tree.set(&call.path, &value, call.context)
-            .map_err(|_| data_refusal(body))?;
+            .map_err(|err| write_refusal(&err, || data_refusal(body)))?;
         let response = written(tree, &call.path, &call.output, call.want_etag);
         Ok(self.after_write(&call.namespace, response, &Change::Put(call.path.clone())))
     }
@@ -377,7 +378,7 @@ impl Database {
         self.namespace(&call.namespace)
             .tree
             .set(&child, &value, call.context)
-            .map_err(|_| data_refusal(body))?;
+            .map_err(|err| write_refusal(&err, || data_refusal(body)))?;
         let name = Json::object([("name", Json::String(id))]);
         let response = json_response(&name, &call.output, None);
         Ok(self.after_write(&call.namespace, response, &Change::Put(child)))
@@ -390,10 +391,12 @@ impl Database {
             .map(|entry| (entry.key.clone(), entry.value.clone()))
             .collect();
         let tree = &mut self.namespace(&call.namespace).tree;
+        // The answer echoes the request with its placeholders resolved, read before the
+        // update changes what they resolve against.
+        let echo = patch_echo(tree, &call.path, &entries, call.context);
         tree.update(&call.path, &wire, call.context)
-            .map_err(|_| Refusal::bad(PATCH_ERROR))?;
+            .map_err(|err| write_refusal(&err, || Refusal::bad(PATCH_ERROR)))?;
         let relative: Vec<Path> = entries.into_iter().map(|entry| entry.path).collect();
-        let echo = patch_echo(tree, &call.path, &relative);
         let response = json_response(&echo, &call.output, None);
         Ok(self.after_write(
             &call.namespace,
@@ -631,7 +634,7 @@ fn read(
     };
     let node = tree.get(path);
     let json = if path.is_priority() {
-        tree.get_json(path, Format::Plain)
+        priority_at(tree, path)
     } else if output.shallow {
         shallow(node, format)
     } else {
@@ -701,12 +704,21 @@ fn not_modified() -> HttpResponse {
 
 fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpResponse {
     let json = if path.is_priority() {
-        tree.get_json(path, Format::Plain)
+        priority_at(tree, path)
     } else {
         output_json(tree.get(path), Format::Export)
     };
     let tag = want_etag.then(|| etag(tree.get(path)));
     json_response(&json, output, tag)
+}
+
+/// The refusal for a write the tree did not accept: the official emulator's own text for a
+/// priority on an absent node, `otherwise` for anything else.
+fn write_refusal(err: &DatabaseError, otherwise: impl FnOnce() -> Refusal) -> Refusal {
+    if err.kind == ErrorKind::PriorityOnAbsentNode {
+        return Refusal::bad("could not set priority on non-existent node");
+    }
+    otherwise()
 }
 
 /// The refusal for data the tree did not accept: the position of the first key, in
@@ -746,12 +758,24 @@ fn patch_entries(body: &str, limits: &Limits) -> Result<Vec<PatchEntry>, Refusal
         .collect()
 }
 
-/// The answer to a `PATCH`: its entries as one nested object, with their stored values.
-fn patch_echo(tree: &Tree, base: &Path, relative: &[Path]) -> Json {
+/// The answer to a `PATCH`: its entries as one nested object, as the official emulator
+/// echoes them (the requested values with placeholders resolved, nulls kept).
+fn patch_echo(
+    tree: &Tree,
+    base: &Path,
+    entries: &[PatchEntry],
+    context: ServerValueContext,
+) -> Json {
     let mut echo = Json::Object(BTreeMap::new());
-    for path in relative {
-        let value = output_json(tree.get(&base.join(path)), Format::Export);
-        insert_at(&mut echo, path.keys(), value);
+    for entry in entries {
+        let target = base.join(&entry.path);
+        let stored = if target.is_priority() {
+            stored_priority(tree.get(&target.parent().unwrap_or_default()))
+        } else {
+            tree.get(&target).cloned()
+        };
+        let value = resolve(&entry.value, stored.as_ref(), context).unwrap_or(Json::Null);
+        insert_at(&mut echo, entry.path.keys(), value);
     }
     echo
 }
@@ -820,7 +844,7 @@ fn stream_event(
             };
             if inside_one_child {
                 let data = if path.is_priority() {
-                    tree.get_json(path, Format::Plain)
+                    priority_at(tree, path)
                 } else {
                     output_json(tree.get(path), subscription.format)
                 };

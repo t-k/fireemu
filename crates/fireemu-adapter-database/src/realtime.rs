@@ -381,7 +381,7 @@ impl Session {
         events: &mut Vec<(u64, SseEvent)>,
     ) -> Answer {
         match action {
-            "s" => Ok(Json::string("")),
+            "s" => stats(arguments),
             // The official emulator echoes the data as text.
             "echo" => Ok(match arguments.get("d") {
                 Some(Json::String(text)) => Json::String(text.clone()),
@@ -666,6 +666,30 @@ impl Session {
         };
         events.extend(db.notify(&self.namespace, &change));
         Ok(Json::string(""))
+    }
+}
+
+/// `s`: the client's counters (`c`). The official emulator answers integer or null
+/// counters, ignores other counter values, treats counters that are not an object as a bad
+/// message and drops the connection when there are none.
+fn stats(arguments: &BTreeMap<String, Json>) -> Answer {
+    match arguments.get("c") {
+        None => Err(Failure::Drop),
+        Some(Json::Object(counters)) => {
+            let counted = counters.values().all(|value| {
+                matches!(
+                    value,
+                    Json::Null | Json::Number(fireemu_core_database::Number::Int(_))
+                )
+            });
+            if counted {
+                Ok(Json::string(""))
+            } else {
+                Err(Failure::Silent)
+            }
+        }
+        Some(Json::Null) => Err(Failure::Silent),
+        Some(_) => Err(Failure::Malformed),
     }
 }
 

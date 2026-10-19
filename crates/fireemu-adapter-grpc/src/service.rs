@@ -665,19 +665,20 @@ impl Firestore for GatewayService {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
             let canonical = ast.canonical_text();
-            let compiled = crate::pipeline::compile_pipeline(request.get_ref(), &parent)
-                .map_err(|error| pipeline_status(error, &canonical))?;
-            let response = self
-                .run_query_with_caller(caller, compiled.input)
-                .await
-                .map_err(|error| pipeline_status(error, &canonical))?;
-            // Strict refuses inputs whose production result is unrecorded; the emulator
-            // profile answers them as the official emulator does, where it answers.
+            // Strict refuses shapes and inputs whose production result is unrecorded; the
+            // emulator profile answers them as the official emulator does, where it answers.
             let unrecorded = if self.gateway.production_refusals() {
                 fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
             } else {
                 fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
             };
+            let compiled =
+                crate::pipeline::compile_pipeline(request.get_ref(), &parent, unrecorded)
+                    .map_err(|error| pipeline_status(error, &canonical))?;
+            let response = self
+                .run_query_with_caller(caller, compiled.input)
+                .await
+                .map_err(|error| pipeline_status(error, &canonical))?;
             return Ok(Response::new(Box::pin(PipelineResponseStream {
                 inner: Some(response.into_inner()),
                 cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(

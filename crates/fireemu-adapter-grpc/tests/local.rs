@@ -7060,6 +7060,131 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
     }
 }
 
+/// A select alias is a field path, as the official emulator (firebase-tools 15.28.2,
+/// Enterprise) treats it: `select('profile.score')` answers `{profile: {score}}`. Production
+/// is unobserved, so strict refuses dotted and quoted aliases; both profiles refuse what the
+/// official emulator refuses (an invalid path, `__name__`, an alias inside another).
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_select_aliases_are_field_paths() {
+    let map = |fields: &[(&str, pb::Value)]| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        })),
+    };
+    let stages = |aliases: Vec<(&str, pb::Value)>| {
+        vec![
+            pipeline_stage("collection", s("alias")),
+            pipeline_select_map(aliases),
+        ]
+    };
+    let nested = || {
+        stages(vec![
+            ("x.y", pipeline_field("top")),
+            ("m.s", pipeline_field("profile.score")),
+            ("m.r", pipeline_field("profile.rank")),
+            ("`q.r`", pipeline_field("top")),
+            ("plain", pipeline_field("top")),
+        ])
+    };
+    let invalid = [
+        (
+            "invalid path",
+            stages(vec![("a..b", pipeline_field("top"))]),
+        ),
+        (
+            "document name",
+            stages(vec![("__name__", pipeline_field("top"))]),
+        ),
+        (
+            "alias inside another",
+            stages(vec![
+                ("m", pipeline_field("top")),
+                ("m.r", pipeline_field("profile.rank")),
+            ]),
+        ),
+        (
+            "same path twice",
+            stages(vec![
+                ("a", pipeline_field("top")),
+                ("`a`", pipeline_field("top")),
+            ]),
+        ),
+    ];
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "alias/a",
+                    &[
+                        ("profile", map(&[("score", i(7)), ("rank", i(2))])),
+                        ("top", s("t")),
+                    ],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        if policy == IndexValidationPolicy::Production {
+            for aliases in [
+                vec![("x.y", pipeline_field("top"))],
+                vec![("`q.r`", pipeline_field("top"))],
+            ] {
+                let err = pipeline_error(&mut client, stages(aliases)).await;
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+                assert_eq!(
+                    err.metadata().get("fireemu-code").unwrap(),
+                    "FS_PIPE_UNSUPPORTED_STAGE"
+                );
+            }
+        } else {
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(nested()))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert_eq!(
+                docs[0].fields,
+                [
+                    ("x".to_owned(), map(&[("y", s("t"))])),
+                    ("m".to_owned(), map(&[("s", i(7)), ("r", i(2))])),
+                    ("q.r".to_owned(), s("t")),
+                    ("plain".to_owned(), s("t")),
+                ]
+                .into_iter()
+                .collect()
+            );
+        }
+        for (label, refused) in invalid.clone() {
+            let err = pipeline_error(&mut client, refused).await;
+            assert_eq!(
+                err.code(),
+                tonic::Code::InvalidArgument,
+                "{policy:?} {label}: {err}"
+            );
+            assert_eq!(
+                err.metadata().get("fireemu-code").unwrap(),
+                "FS_PIPE_INVALID",
+                "{label}"
+            );
+        }
+        handle.abort();
+    }
+}
+
 #[tokio::test]
 async fn execute_pipeline_where_equal_pushes_filter_before_limit() {
     let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;

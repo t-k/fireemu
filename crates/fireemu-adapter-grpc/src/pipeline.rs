@@ -11,7 +11,7 @@
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
-use fireemu_core_firestore::pipeline_exec::{self, Expr, ExprError, Placement, Stage};
+use fireemu_core_firestore::pipeline_exec::{self, Expr, ExprError, Placement, Stage, Unrecorded};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
@@ -425,9 +425,12 @@ pub struct CompiledExecution {
 /// an optional `offset` and an optional `limit`, in that order. Operands are field
 /// references (nested paths included) and the table's value functions (`document_id`,
 /// `collection_id`, `parent`). Every other stage, function or arrangement is refused.
+/// `unrecorded` decides whether shapes with unrecorded production behavior (dotted or quoted
+/// select aliases) are refused or answered as the official emulator answers them.
 pub fn compile_pipeline(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
+    unrecorded: Unrecorded,
 ) -> Result<CompiledExecution, Status> {
     let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
     let mut stages = Vec::new();
@@ -462,7 +465,7 @@ pub fn compile_pipeline(
                     ));
                 }
                 seen_select = true;
-                stages.push(Stage::Select(decode_select(stage)?));
+                stages.push(Stage::Select(decode_select(stage, unrecorded)?));
             }
             "offset" => {
                 if seen_offset {
@@ -647,8 +650,15 @@ fn decode_condition(stage: &pb::pipeline::Stage) -> Result<Expr, Status> {
     Expr::call(def.name, vec![left, right], Placement::Condition).map_err(expr_status)
 }
 
-/// Decodes `select({alias: operand, ...})`.
-fn decode_select(stage: &pb::pipeline::Stage) -> Result<Vec<(String, Expr)>, Status> {
+/// Decodes `select({alias: operand, ...})`. An alias is a field path, as the official
+/// emulator treats it: an invalid path, `__name__`, a repeated path and an alias inside
+/// another are refused as it refuses them. A dotted or quoted alias nests or unquotes the
+/// output key there; production is unobserved, so it is refused unless `unrecorded` follows
+/// the official emulator.
+fn decode_select(
+    stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
+) -> Result<Vec<(FieldPath, Expr)>, Status> {
     let Some(pb::value::ValueType::MapValue(map)) =
         stage.args.first().and_then(|v| v.value_type.as_ref())
     else {
@@ -661,15 +671,44 @@ fn decode_select(stage: &pb::pipeline::Stage) -> Result<Vec<(String, Expr)>, Sta
                 "select expressions are unsupported locally",
             ));
         }
-        aliases.push((alias.clone(), decode_operand(value, Position::Stage)?));
+        let path = FieldPath::parse(alias).map_err(|e| {
+            Status::invalid_argument(format!("select alias {alias:?} is not a field path: {e}"))
+        })?;
+        if path.is_document_name() {
+            return Err(Status::invalid_argument(
+                "select alias __name__ is reserved",
+            ));
+        }
+        aliases.push((alias, path, decode_operand(value, Position::Stage)?));
     }
     if aliases.is_empty() {
         return Err(Status::invalid_argument(
             "select requires a non-empty alias map",
         ));
     }
-    aliases.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(aliases)
+    aliases.sort_by(|a, b| a.1.cmp(&b.1));
+    for pair in aliases.windows(2) {
+        if pair[0].1.is_prefix_of(&pair[1].1) {
+            return Err(Status::invalid_argument(format!(
+                "select aliases {:?} and {:?} set a field and itself or one of its children",
+                pair[0].0, pair[1].0
+            )));
+        }
+    }
+    if unrecorded == Unrecorded::Refuse {
+        if let Some((alias, _, _)) = aliases
+            .iter()
+            .find(|(alias, path, _)| path.segments() != [alias.as_str()])
+        {
+            return Err(Status::unimplemented(format!(
+                "select alias {alias:?} names a nested or quoted field path; its output shape is not observed locally"
+            )));
+        }
+    }
+    Ok(aliases
+        .into_iter()
+        .map(|(_, path, expr)| (path, expr))
+        .collect())
 }
 
 /// The executor's output row as a pipeline result document: fields only, without a name

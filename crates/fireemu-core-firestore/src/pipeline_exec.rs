@@ -341,8 +341,10 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
 pub enum Stage {
     /// Keeps rows whose condition is `true`.
     Where(Expr),
-    /// Replaces the fields by the aliases' values; an absent value leaves its alias out.
-    Select(Vec<(String, Expr)>),
+    /// Replaces the fields by the aliases' values. An alias is a field path, so a dotted
+    /// alias nests its value; an absent value leaves its alias out. The aliases must not
+    /// repeat or contain one another (the caller checks).
+    Select(Vec<(FieldPath, Expr)>),
     /// Drops the first rows.
     Offset(u64),
     /// Keeps at most this many rows.
@@ -411,9 +413,7 @@ impl Cursor {
                     let mut fields = BTreeMap::new();
                     for (alias, expr) in aliases {
                         match expr.eval_in(&row, self.unrecorded) {
-                            Eval::Value(value) => {
-                                fields.insert(alias.clone(), value);
-                            }
+                            Eval::Value(value) => set_path(&mut fields, alias, value),
                             Eval::Absent => {}
                             Eval::Error(error) => return Err(error),
                         }
@@ -436,6 +436,27 @@ impl Cursor {
         }
         Ok(Some(row.fields))
     }
+}
+
+/// Sets `value` at `path`, creating the maps on its way (a non-map on the way is replaced).
+fn set_path(fields: &mut BTreeMap<String, Value>, path: &FieldPath, value: Value) {
+    let Some((last, parents)) = path.segments().split_last() else {
+        return;
+    };
+    let mut map = fields;
+    for segment in parents {
+        let entry = map
+            .entry(segment.clone())
+            .or_insert_with(|| Value::Map(BTreeMap::new()));
+        if !matches!(entry, Value::Map(_)) {
+            *entry = Value::Map(BTreeMap::new());
+        }
+        let Value::Map(inner) = entry else {
+            unreachable!("replaced by a map above")
+        };
+        map = inner;
+    }
+    map.insert(last.clone(), value);
 }
 
 /// The field paths a scan must read for these stages, or `None` when every field can reach

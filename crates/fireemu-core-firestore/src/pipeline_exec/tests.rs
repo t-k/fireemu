@@ -36,6 +36,10 @@ fn condition(name: &str, args: Vec<Expr>) -> Expr {
     Expr::call(name, args, Placement::Condition).unwrap()
 }
 
+fn alias(path: &str) -> FieldPath {
+    FieldPath::parse(path).unwrap()
+}
+
 fn s(v: &str) -> Value {
     Value::String(v.to_owned())
 }
@@ -328,17 +332,14 @@ fn select_projects_aliases_and_omits_absent_values() {
     )];
     let out = execute(
         vec![Stage::Select(vec![
-            ("nested".to_owned(), field("a.b")),
-            ("gone".to_owned(), field("a.zzz")),
+            (alias("nested"), field("a.b")),
+            (alias("gone"), field("a.zzz")),
+            (alias("id"), call("document_id", vec![field("__name__")])),
             (
-                "id".to_owned(),
-                call("document_id", vec![field("__name__")]),
-            ),
-            (
-                "coll".to_owned(),
+                alias("coll"),
                 call("collection_id", vec![field("__name__")]),
             ),
-            ("up".to_owned(), call("parent", vec![field("__name__")])),
+            (alias("up"), call("parent", vec![field("__name__")])),
         ])],
         input.clone(),
     )
@@ -356,7 +357,7 @@ fn select_projects_aliases_and_omits_absent_values() {
     assert_eq!(out, vec![expected]);
     assert!(execute(
         vec![Stage::Select(vec![(
-            "up".to_owned(),
+            alias("up"),
             call("parent", vec![field("__name__")])
         )])],
         vec![row("c/x", &[])]
@@ -493,7 +494,7 @@ proptest! {
             .collect();
         let cond = Expr::call("equal", vec![field("f"), Expr::Constant(literal.clone())], Placement::Condition).unwrap();
         let out = execute(
-            vec![Stage::Where(cond), Stage::Select(vec![("copy".to_owned(), field("f")), ("id".to_owned(), call("document_id", vec![field("__name__")]))])],
+            vec![Stage::Where(cond), Stage::Select(vec![(alias("copy"), field("f")), (alias("id"), call("document_id", vec![field("__name__")]))])],
             input.clone(),
         )
         .unwrap();
@@ -544,14 +545,11 @@ fn referenced_fields_cover_every_stage_once_a_select_narrows_the_row() {
             vec![field("w.x"), Expr::Constant(Value::Integer(1))],
         )),
         Stage::Select(vec![
-            ("one".to_owned(), field("a.b")),
-            ("two".to_owned(), field("a")),
-            ("three".to_owned(), field("w.x")),
-            (
-                "id".to_owned(),
-                call("document_id", vec![field("__name__")]),
-            ),
-            ("ref".to_owned(), call("collection_id", vec![field("r")])),
+            (alias("one"), field("a.b")),
+            (alias("two"), field("a")),
+            (alias("three"), field("w.x")),
+            (alias("id"), call("document_id", vec![field("__name__")])),
+            (alias("ref"), call("collection_id", vec![field("r")])),
         ]),
         Stage::Offset(1),
     ];
@@ -561,12 +559,12 @@ fn referenced_fields_cover_every_stage_once_a_select_narrows_the_row() {
     );
     // Only document functions: the scan needs no field, so it reads names only.
     let names_only = [Stage::Select(vec![(
-        "id".to_owned(),
+        alias("id"),
         call("document_id", vec![field("__name__")]),
     )])];
     assert_eq!(referenced_fields(&names_only), Some(paths(&["__name__"])));
     let constant = [Stage::Select(vec![(
-        "c".to_owned(),
+        alias("c"),
         call("document_id", vec![Expr::Constant(Value::Null)]),
     )])];
     assert_eq!(referenced_fields(&constant), Some(paths(&["__name__"])));
@@ -714,7 +712,7 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
             ],
         )),
         Stage::Select(vec![(
-            "id".to_owned(),
+            alias("id"),
             call("document_id", vec![field("missing")]),
         )]),
     ];
@@ -726,4 +724,50 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
     .unwrap();
     assert_eq!(out, vec![[("id".to_owned(), Value::Null)].into()]);
     assert!(execute(stages, vec![r]).is_err());
+}
+
+/// A select alias is a field path: a dotted alias nests its value, as the official emulator
+/// answers `select('profile.score')` with `{profile: {score}}`. An absent value creates no
+/// map on its way.
+#[test]
+fn select_aliases_are_field_paths() {
+    let map = |entries: &[(&str, Value)]| {
+        Value::Map(
+            entries
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        )
+    };
+    let input = vec![row(
+        "c/x",
+        &[
+            (
+                "profile",
+                map(&[("score", Value::Integer(7)), ("rank", Value::Integer(2))]),
+            ),
+            ("top", s("t")),
+        ],
+    )];
+    let out = execute(
+        vec![Stage::Select(vec![
+            (alias("x.y"), field("top")),
+            (alias("m.s"), field("profile.score")),
+            (alias("m.r"), field("profile.rank")),
+            (alias("`q.r`"), field("top")),
+            (alias("gone.deep"), field("missing")),
+        ])],
+        input,
+    )
+    .unwrap();
+    let expected: BTreeMap<String, Value> = [
+        ("x".to_owned(), map(&[("y", s("t"))])),
+        (
+            "m".to_owned(),
+            map(&[("s", Value::Integer(7)), ("r", Value::Integer(2))]),
+        ),
+        ("q.r".to_owned(), s("t")),
+    ]
+    .into();
+    assert_eq!(out, vec![expected]);
 }

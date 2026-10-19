@@ -722,3 +722,28 @@ fn plain_listens_receive_a_write_before_windows() {
         ]
     );
 }
+
+#[test]
+fn clearing_namespaces_empties_them_and_tells_their_listeners() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    rest(&mut db, "PUT", "/a.json?ns=demo-default-rtdb", "1");
+    rest(&mut db, "PUT", "/a.json?ns=other", "2");
+    let mut s = open(&mut db, "demo-default-rtdb");
+    send(&mut db, &mut s, &request(1, "q", r#"{"p":"/a","h":""}"#));
+    let id = s.client();
+    let woken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&woken);
+    db.set_waker(std::sync::Arc::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    db.clear_namespaces_where(|ns| fireemu_adapter_database::namespace::project_of(ns) == "demo");
+    assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(db.drain_pushes(), vec![(id, push("d", "a", "null", None))]);
+    assert!(db
+        .tree("demo-default-rtdb")
+        .is_none_or(|t| t.root().is_none()));
+    assert!(db.tree("other").is_some_and(|t| t.root().is_some()));
+    // Nothing matched: nothing to wake for.
+    db.clear_namespaces_where(|_| false);
+    assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

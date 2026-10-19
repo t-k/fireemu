@@ -163,6 +163,15 @@ struct Shared {
     config: ServerConfig,
 }
 
+/// Aborts a task when dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Serves `database` on `listener` until the task is dropped.
 pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config: ServerConfig) {
     let shared = Arc::new(Shared {
@@ -171,6 +180,32 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
         listeners: Mutex::new(BTreeMap::new()),
         long_polls: long_polling::Connections::default(),
         config,
+    });
+    // Messages caused outside a request (a session reset) are delivered as soon as the
+    // database wakes this task.
+    let wake = Arc::new(tokio::sync::Notify::new());
+    {
+        let wake = Arc::clone(&wake);
+        shared
+            .database
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_waker(Arc::new(move || wake.notify_one()));
+    }
+    // The task ends with this server (the guard aborts it when `serve` is dropped).
+    let _flusher = AbortOnDrop({
+        let shared = Arc::clone(&shared);
+        tokio::spawn(async move {
+            loop {
+                wake.notified().await;
+                let mut database = shared
+                    .database
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let events = database.drain_events();
+                deliver(&shared, &mut database, events);
+            }
+        })
     });
     loop {
         let Ok((socket, _)) = listener.accept().await else {

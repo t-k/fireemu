@@ -311,3 +311,12 @@ fn out_of_range_numbers_parse_as_infinity_strings() {
     // An underflow is an ordinary zero.
     assert_eq!(parse("1e-400").unwrap(), Json::Number(Number::Int(0)));
 }
+
+#[test]
+fn a_namespace_belongs_to_the_project_it_names() {
+    use fireemu_adapter_database::namespace::project_of;
+    assert_eq!(project_of("demo-default-rtdb"), "demo");
+    assert_eq!(project_of("demo"), "demo");
+    assert_eq!(project_of("demo-other"), "demo-other");
+    assert_eq!(project_of("-default-rtdb"), "-default-rtdb");
+}

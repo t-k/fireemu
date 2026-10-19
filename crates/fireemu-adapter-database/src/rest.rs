@@ -248,6 +248,24 @@ pub struct Database {
     errors: u64,
     /// The `SplitMix64` state realtime session ids are drawn from.
     session_rng: u64,
+    /// Stream events caused outside a request (a reset), not yet delivered.
+    events: Vec<(u64, SseEvent)>,
+    /// Called when pushes or events wait outside a request, so the server delivers them.
+    waker: Waker,
+}
+
+/// The server's callback for messages that wait outside a request.
+#[derive(Clone, Default)]
+struct Waker(Option<std::sync::Arc<dyn Fn() + Send + Sync>>);
+
+impl std::fmt::Debug for Waker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "Waker(set)"
+        } else {
+            "Waker(none)"
+        })
+    }
 }
 
 impl Database {
@@ -266,6 +284,8 @@ impl Database {
             clients: 0,
             errors: 0,
             session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
+            events: Vec::new(),
+            waker: Waker::default(),
         }
     }
 
@@ -678,6 +698,43 @@ impl Database {
         self.listens.retain(|_, listen| {
             !(listen.client == client && listen.path == *path && listen.tag == tag)
         });
+    }
+
+    /// Sets what to call when messages wait outside a request (the server delivers them).
+    pub fn set_waker(&mut self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.waker = Waker(Some(waker));
+    }
+
+    /// Empties every namespace `cleared` accepts, as a session reset does: their streams and
+    /// listens see the data go, through the waker.
+    pub fn clear_namespaces_where(&mut self, cleared: impl Fn(&str) -> bool) {
+        let names: Vec<String> = self
+            .namespaces
+            .keys()
+            .filter(|name| cleared(name))
+            .cloned()
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        for name in names {
+            let limits = self.options.limits;
+            self.namespace(&name).tree = Tree::new(limits);
+            let change = Change::Put {
+                path: Path::root(),
+                effective: true,
+            };
+            let events = self.notify(&name, &change);
+            self.events.extend(events);
+        }
+        if let Some(waker) = &self.waker.0 {
+            waker();
+        }
+    }
+
+    /// Takes the stream events caused outside a request, in order.
+    pub fn drain_events(&mut self) -> Vec<(u64, SseEvent)> {
+        std::mem::take(&mut self.events)
     }
 
     /// Takes the queued data messages of every realtime connection, in order.

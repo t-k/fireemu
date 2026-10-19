@@ -741,3 +741,24 @@ async fn a_client_that_pings_without_reading_is_dropped_after_the_write_deadline
     .await
     .expect("the stalled client was never dropped");
 }
+
+#[tokio::test]
+async fn a_reset_outside_any_request_reaches_listeners_at_once() {
+    let (address, database) = start(Duration::from_secs(30)).await;
+    exchange(&address, "PUT", "/a.json?ns=w15", "1").await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w15").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#)
+        .await;
+    client.next_text().await;
+    client.next_text().await;
+    database
+        .lock()
+        .unwrap()
+        .clear_namespaces_where(|ns| ns == "w15");
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"d","d":{"b":{"p":"a","d":null},"a":"d"}}"#
+    );
+}

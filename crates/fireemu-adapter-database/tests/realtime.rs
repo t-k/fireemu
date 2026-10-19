@@ -623,3 +623,37 @@ fn auth_tokens_need_a_subject_and_an_issue_time() {
         )]
     );
 }
+
+mod properties {
+    use super::*;
+    use fireemu_adapter_database::realtime::{split_frames, MAX_FRAME_CHARS};
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Any message survives being split into frames and reassembled by a session, and
+        /// only messages longer than the frame limit are split.
+        #[test]
+        fn split_messages_reassemble(text in "[a-z\u{e9}\u{1F600}]{0,40000}") {
+            let message = request(1, "echo", &format!(r#"{{"d":"{text}"}}"#));
+            let frames = split_frames(message.clone());
+            let chars = message.chars().count();
+            if chars <= MAX_FRAME_CHARS {
+                prop_assert_eq!(frames.len(), 1);
+            } else {
+                prop_assert_eq!(frames[0].parse::<usize>().unwrap(), frames.len() - 1);
+                prop_assert!(frames[1..].iter().all(|f| f.chars().count() <= MAX_FRAME_CHARS));
+                prop_assert_eq!(frames[1..].concat(), message.clone());
+            }
+            let mut db = Database::new(RestOptions::default(), 1);
+            let (mut s, _) = open(&mut db, "/.ws?v=5&ns=p1");
+            let mut replies = Vec::new();
+            for frame in &frames {
+                replies.extend(send(&mut db, &mut s, frame));
+            }
+            let joined = if replies.len() == 1 { replies[0].clone() } else { replies[1..].concat() };
+            prop_assert_eq!(joined, reply(1, "ok", &format!("\"{text}\"")));
+        }
+    }
+}

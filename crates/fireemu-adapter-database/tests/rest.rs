@@ -1260,3 +1260,210 @@ fn pending_q7_official_emulator_number_forms() {
         "[1.5,1.0E7,1234.5]"
     );
 }
+
+// Round 3 (review 2026-10-19-rtdb-core-r2-rest-review.md); expected answers are the official
+// emulator's unless a test says otherwise.
+
+#[test]
+fn numbers_beyond_the_double_range_are_stored_as_infinity_strings() {
+    let mut db = db();
+    let huge = format!("1{}", "0".repeat(400));
+    assert_eq!(
+        call(&mut db, "PUT", "/big.json?ns=r3", &huge),
+        (200, r#""Infinity""#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/big.json?ns=r3", ""),
+        (200, r#""Infinity""#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/big.json?ns=r3", &format!("-{huge}")),
+        (200, r#""-Infinity""#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/big.json?ns=r3", "1e400"),
+        (200, r#""Infinity""#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/big.json?ns=r3", r#"{"a":-1e400}"#),
+        (200, r#"{"a":"-Infinity"}"#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=r3", ""),
+        (200, r#"{"big":{"a":"-Infinity"}}"#.to_owned())
+    );
+}
+
+#[test]
+fn download_names_lose_quotes_and_line_breaks() {
+    let mut db = db();
+    let quoted = send(
+        &mut db,
+        "GET",
+        "/x.json?ns=r3&download=a%22%3B%20x=%22y",
+        &[],
+        "",
+    );
+    assert_eq!(
+        header(&quoted, "Content-Disposition"),
+        Some("attachment; filename=\"a; x=y\"")
+    );
+    let broken = send(&mut db, "GET", "/x.json?ns=r3&download=a%0d%0ab", &[], "");
+    assert_eq!(
+        header(&broken, "Content-Disposition"),
+        Some("attachment; filename=\"ab\"")
+    );
+}
+
+#[test]
+fn jsonp_answers_are_not_sniffed() {
+    // Not observed on the official emulator (it sends no such header); harmless to clients.
+    let mut db = db();
+    let response = send(&mut db, "GET", "/x.json?ns=r3&callback=cb", &[], "");
+    assert_eq!(header(&response, "X-Content-Type-Options"), Some("nosniff"));
+}
+
+#[test]
+fn if_none_match_is_refused_on_delete_patch_and_post() {
+    let mut db = db();
+    call(&mut db, "PUT", "/z.json?ns=r5", "1");
+    let refused = error(
+        "The 'if-none-match' header is not supported with PUT, POST, PATCH or DELETE requests",
+    );
+    for (method, body) in [("DELETE", ""), ("PATCH", r#"{"a":1}"#), ("POST", "1")] {
+        let response = send(
+            &mut db,
+            method,
+            "/z.json?ns=r5",
+            &[("if-none-match", "other")],
+            body,
+        );
+        assert_eq!(
+            (response.status, String::from_utf8(response.body).unwrap()),
+            (400, refused.clone()),
+            "{method}"
+        );
+    }
+    assert_eq!(
+        call(&mut db, "GET", "/z.json?ns=r5", ""),
+        (200, "1".to_owned())
+    );
+}
+
+#[test]
+fn a_priority_path_has_the_priority_leaf_etag() {
+    let mut db = db();
+    call(
+        &mut db,
+        "PUT",
+        "/pp.json?ns=r3",
+        r#"{".value":1,".priority":3}"#,
+    );
+    let response = send(
+        &mut db,
+        "GET",
+        "/pp/.priority.json?ns=r3",
+        &[("X-Firebase-ETag", "true")],
+        "",
+    );
+    assert_eq!(
+        header(&response, "ETag"),
+        Some("3tYODYzGXwaGnXNech4jb4T9las=")
+    );
+}
+
+#[test]
+fn large_bodies_parse_in_linear_time() {
+    // The review measured 1 s for 40 000 keys with the quadratic key positions; 200 000 keys
+    // must stay well within a few seconds even in a debug build.
+    let mut db = db();
+    let body = format!(
+        "{{{}}}",
+        (0..200_000)
+            .map(|i| format!("\"k{i}\":{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(
+        send(
+            &mut db,
+            "PUT",
+            "/many.json?ns=perf",
+            &[("print", "silent")],
+            &body
+        )
+        .status,
+        200
+    );
+    let refused = format!("{{\"bad.key\":1,{}}}", &body[1..]);
+    let response = send(&mut db, "PUT", "/many.json?ns=perf", &[], &refused);
+    assert_eq!(response.status, 400);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn long_bound_parameters_parse_in_linear_time() {
+    let mut db = query_db();
+    // An unterminated string with many commas: every comma is a candidate split.
+    let value = format!("%22{}", "a,".repeat(30_000));
+    let started = std::time::Instant::now();
+    let (status, _) = call(
+        &mut db,
+        "GET",
+        &format!("/d.json?ns=q1&orderBy=\"$key\"&startAt={value}"),
+        "",
+    );
+    assert_eq!(status, 400);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_priority_on_a_node_the_update_empties_is_dropped() {
+    // The official emulator answers 200 (its echo lists `c` first) and stores nothing.
+    let mut db = db();
+    call(&mut db, "PUT", "/b.json?ns=u18", r#"{"c":1}"#);
+    assert_eq!(
+        call(
+            &mut db,
+            "PATCH",
+            "/.json?ns=u18",
+            r#"{"b/c":null,"b/.priority":1}"#
+        ),
+        (200, r#"{"b":{".priority":1,"c":null}}"#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=u18&format=export", ""),
+        (200, "null".to_owned())
+    );
+}
+
+#[test]
+fn bodies_are_parsed_before_the_lock_when_there_is_one() {
+    use fireemu_adapter_database::rest::parse_body;
+    assert!(parse_body(&request("PUT", "/a.json", &[], "1")).is_some());
+    assert!(parse_body(&request("PUT", "/a.json", &[], "")).is_none());
+    assert!(parse_body(&HttpRequest {
+        method: "PUT".to_owned(),
+        target: "/a.json".to_owned(),
+        headers: Vec::new(),
+        body: vec![0xff],
+    })
+    .is_none());
+    // A body parsed beforehand is the one written.
+    let mut db = db();
+    let put = request("PUT", "/a.json?ns=pb", &[], "5");
+    let parsed = parse_body(&put);
+    match db.handle_parsed(&put, parsed, NOW) {
+        Handled::Response { response, .. } => assert_eq!(response.body, b"5"),
+        Handled::Stream { .. } => panic!("no stream expected"),
+    }
+}

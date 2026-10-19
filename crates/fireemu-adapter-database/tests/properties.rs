@@ -215,3 +215,44 @@ fn malformed_escapes_stay_as_they_are() {
     assert_eq!(percent_decode("%zz%41"), "%zzA");
     assert_eq!(percent_decode("%41%"), "A%");
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn java_double_never_panics(bits in any::<u64>()) {
+        let text = java_double(f64::from_bits(bits));
+        prop_assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn parsed_numbers_are_finite(digits in "-?[0-9]{1,500}(\\.[0-9]{1,5})?([eE][+-]?[0-9]{1,4})?") {
+        if let Ok(Json::Number(number)) = parse(&digits) {
+            prop_assert!(number.as_f64().is_finite());
+        }
+    }
+
+    #[test]
+    fn handle_never_panics_on_arbitrary_text(
+        target in "/[ -~]{0,40}",
+        body in "[ -~\\n\u{e9}]{0,80}",
+        method in prop::sample::select(vec!["GET", "PUT", "POST", "PATCH", "DELETE"]),
+    ) {
+        let mut db = fireemu_adapter_database::rest::Database::new(
+            fireemu_adapter_database::rest::RestOptions::default(), 1);
+        let request = fireemu_adapter_database::rest::HttpRequest {
+            method: method.to_owned(),
+            target: target.clone(),
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        };
+        let _ = db.handle(&request, 1);
+        let read = fireemu_adapter_database::rest::HttpRequest {
+            method: "GET".to_owned(),
+            target: "/.json?print=pretty".to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let _ = db.handle(&read, 2);
+    }
+}

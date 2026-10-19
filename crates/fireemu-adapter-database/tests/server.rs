@@ -315,3 +315,110 @@ async fn unmasked_frames_close_the_connection_with_a_protocol_error() {
     client.stream.write_all(&[0x81, 0x01, b'a']).await.unwrap();
     assert_eq!(client.next().await, (0x8, vec![0x03, 0xEA]));
 }
+
+async fn start_with(config: ServerConfig) -> (String, Arc<Mutex<Database>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 3)));
+    tokio::spawn(serve(listener, Arc::clone(&database), config));
+    (address, database)
+}
+
+/// Reads until the server closes the connection; panics if it stays open past `limit`.
+async fn read_until_closed(stream: &mut TcpStream, limit: Duration) -> String {
+    let mut seen = Vec::new();
+    let mut buffer = [0u8; 1024];
+    tokio::time::timeout(limit, async {
+        loop {
+            match stream.read(&mut buffer).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => seen.extend_from_slice(&buffer[..n]),
+            }
+        }
+    })
+    .await
+    .expect("the server kept a stalled connection open");
+    String::from_utf8_lossy(&seen).into_owned()
+}
+
+#[tokio::test]
+async fn stalled_headers_and_bodies_are_cut_off() {
+    let (address, _) = start_with(ServerConfig {
+        header_timeout: Duration::from_millis(300),
+        body_timeout: Duration::from_millis(300),
+        ..ServerConfig::default()
+    })
+    .await;
+    let mut stalled_head = TcpStream::connect(&address).await.unwrap();
+    stalled_head
+        .write_all(b"GET /a.json?ns=t1 HT")
+        .await
+        .unwrap();
+    read_until_closed(&mut stalled_head, Duration::from_secs(5)).await;
+
+    let mut stalled_body = TcpStream::connect(&address).await.unwrap();
+    stalled_body
+        .write_all(b"PUT /a.json?ns=t1 HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n12")
+        .await
+        .unwrap();
+    let answer = read_until_closed(&mut stalled_body, Duration::from_secs(5)).await;
+    assert!(
+        answer.is_empty() || answer.starts_with("HTTP/1.1 408"),
+        "{answer}"
+    );
+}
+
+#[tokio::test]
+async fn a_stream_that_stops_reading_is_closed_once_its_queue_fills() {
+    let (address, database) = start_with(ServerConfig {
+        stream_queue: 4,
+        ..ServerConfig::default()
+    })
+    .await;
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET /s.json?ns=q HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    read_until(&mut stream, "event: put").await;
+    // Never read again: large events fill the socket buffers, then the queue.
+    let big = format!("\"{}\"", "x".repeat(200_000));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for i in 0.. {
+            exchange(
+                &address,
+                "PUT",
+                &format!("/s/k{}.json?ns=q&print=silent", i % 50),
+                &big,
+            )
+            .await;
+            if database.lock().unwrap().subscription_count() == 0 {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the stalled stream was never closed");
+}
+
+#[tokio::test]
+async fn a_conditional_header_that_is_not_ascii_never_matches() {
+    let (address, database) = start(Duration::from_secs(30)).await;
+    exchange(&address, "PUT", "/a.json?ns=t1", "1").await;
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    let mut request = b"PUT /a.json?ns=t1 HTTP/1.1\r\nHost: x\r\nIf-Match: \xe9\r\nContent-Length: 1\r\nConnection: close\r\n\r\n2".to_vec();
+    stream.write_all(&request).await.unwrap();
+    request.clear();
+    let answer = read_until_closed(&mut stream, Duration::from_secs(5)).await;
+    assert!(answer.starts_with("HTTP/1.1 412"), "{answer}");
+    let stored = database.lock().unwrap().tree("t1").unwrap().get_json(
+        &fireemu_core_database::Path::from_keys(["a"]),
+        fireemu_core_database::Format::Plain,
+    );
+    assert_eq!(stored, fireemu_core_database::Json::int(1));
+}

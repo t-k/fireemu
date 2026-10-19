@@ -2,8 +2,9 @@
 //!
 //! Requests are handled one at a time under the database lock, and the events a write
 //! causes are queued to their streams before the lock is released, so every stream sees
-//! changes in commit order. A stream whose client went away is closed the next time an
-//! event or a keep-alive cannot be queued to it.
+//! changes in commit order. Bodies are parsed before the lock is taken. A stream whose
+//! client went away, or stopped reading until its queue filled, is closed the next time an
+//! event or a keep-alive cannot be queued to it. Request heads and bodies have deadlines.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -16,15 +17,17 @@ use hyper::body::{Frame, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 
 use crate::realtime::{Opened, Session};
-use crate::rest::{refusal_response, Database, Handled, HttpRequest, HttpResponse, SseEvent};
+use crate::rest::{
+    parse_body, refusal_response, Database, Handled, HttpRequest, HttpResponse, SseEvent,
+};
 use crate::target_escape::TargetEscaper;
 use crate::websocket::{
     accept_key, decode, encode, Assembler, CloseCode, Decoded, Message, Opcode,
@@ -40,6 +43,12 @@ pub struct ServerConfig {
     pub keep_alive: Duration,
     /// The largest request body read (production's REST limit is 256 MB).
     pub max_body_bytes: usize,
+    /// How long a client may take to send a request head.
+    pub header_timeout: Duration,
+    /// How long a client may take to send a request body.
+    pub body_timeout: Duration,
+    /// How many events a stream may have waiting before it is closed as too slow.
+    pub stream_queue: usize,
     /// The server time.
     pub clock: Clock,
 }
@@ -49,6 +58,9 @@ impl Default for ServerConfig {
         Self {
             keep_alive: Duration::from_secs(30),
             max_body_bytes: 256 * 1024 * 1024,
+            header_timeout: Duration::from_secs(30),
+            body_timeout: Duration::from_secs(120),
+            stream_queue: 1024,
             clock: Arc::new(|| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -59,7 +71,7 @@ impl Default for ServerConfig {
 }
 
 type Body = BoxBody<Bytes, Infallible>;
-type Streams = Arc<Mutex<BTreeMap<u64, mpsc::UnboundedSender<SseEvent>>>>;
+type Streams = Arc<Mutex<BTreeMap<u64, mpsc::Sender<SseEvent>>>>;
 
 struct Shared {
     database: Arc<Mutex<Database>>,
@@ -76,9 +88,12 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
     });
     loop {
         let Ok((socket, _)) = listener.accept().await else {
+            // Out of file descriptors and the like: back off instead of spinning.
+            tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         };
         let shared = Arc::clone(&shared);
+        let shared_header_timeout = shared.config.header_timeout;
         tokio::spawn(async move {
             let service = service_fn(move |request| {
                 let shared = Arc::clone(&shared);
@@ -86,6 +101,8 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
             });
             // A connection error concerns that client only.
             let _ = http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(shared_header_timeout)
                 .serve_connection(TokioIo::new(TargetEscaper::new(socket)), service)
                 .with_upgrades()
                 .await;
@@ -98,10 +115,11 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Bo
         return upgrade(shared, request);
     }
     let (parts, body) = request.into_parts();
-    let Ok(collected) = Limited::new(body, shared.config.max_body_bytes)
-        .collect()
-        .await
-    else {
+    let collecting = Limited::new(body, shared.config.max_body_bytes).collect();
+    let Ok(collected) = tokio::time::timeout(shared.config.body_timeout, collecting).await else {
+        return plain(408, "Request timeout.");
+    };
+    let Ok(collected) = collected else {
         return plain(413, "Request body too large.");
     };
     let request = HttpRequest {
@@ -113,18 +131,25 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Bo
         headers: parts
             .headers
             .iter()
-            .filter_map(|(name, value)| {
-                Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+            // A value that is not visible ASCII is kept with replacement characters, so a
+            // condition such as If-Match fails closed instead of disappearing.
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_owned(),
+                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                )
             })
             .collect(),
-        body: collected.to_bytes().to_vec(),
+        body: collected.to_bytes().into(),
     };
+    // Parsing can take long for a large body; it does not need the database.
+    let parsed = parse_body(&request);
     let now = (shared.config.clock)();
     let mut database = shared
         .database
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    match database.handle(&request, now) {
+    match database.handle_parsed(&request, parsed, now) {
         Handled::Response { response, events } => {
             deliver(shared, &mut database, events);
             full(response)
@@ -134,9 +159,9 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Bo
             response,
             initial,
         } => {
-            let (sender, receiver) = mpsc::unbounded_channel();
-            // The receiver is alive, so the first event is queued.
-            let _ = sender.send(initial);
+            let (sender, receiver) = mpsc::channel(shared.config.stream_queue.max(1));
+            // The queue is empty, so the first event fits.
+            let _ = sender.try_send(initial);
             shared
                 .streams
                 .lock()
@@ -158,7 +183,7 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
     for (id, event) in events {
         let delivered = streams
             .get(&id)
-            .is_some_and(|sender| sender.send(event).is_ok());
+            .is_some_and(|sender| sender.try_send(event).is_ok());
         if !delivered {
             streams.remove(&id);
             database.unsubscribe(id);
@@ -166,13 +191,13 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
     }
 }
 
-fn spawn_keep_alive(shared: Arc<Shared>, id: u64, sender: mpsc::UnboundedSender<SseEvent>) {
+fn spawn_keep_alive(shared: Arc<Shared>, id: u64, sender: mpsc::Sender<SseEvent>) {
     tokio::spawn(async move {
         let mut ticks = tokio::time::interval(shared.config.keep_alive);
         ticks.tick().await;
         loop {
             ticks.tick().await;
-            if sender.send(SseEvent::keep_alive()).is_err() {
+            if sender.try_send(SseEvent::keep_alive()).is_err() {
                 let mut database = shared
                     .database
                     .lock()
@@ -204,8 +229,8 @@ fn full(response: HttpResponse) -> Response<Body> {
     with_headers(response.status, response.headers, body)
 }
 
-fn streaming(head: HttpResponse, receiver: mpsc::UnboundedReceiver<SseEvent>) -> Response<Body> {
-    let frames = UnboundedReceiverStream::new(receiver)
+fn streaming(head: HttpResponse, receiver: mpsc::Receiver<SseEvent>) -> Response<Body> {
+    let frames = ReceiverStream::new(receiver)
         .map(|event| Ok::<_, Infallible>(Frame::data(Bytes::from(event.to_text()))));
     with_headers(head.status, head.headers, StreamBody::new(frames).boxed())
 }

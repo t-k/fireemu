@@ -28,7 +28,7 @@ pub use crate::json_parse::ParseError;
 /// correctly rounded double of their text (and integral doubles integers, see
 /// [`Number::from_f64`]).
 pub fn parse(text: &str) -> Result<Json, ParseError> {
-    crate::json_parse::parse_with_keys(text).map(|(json, _)| json)
+    crate::json_parse::parse(text)
 }
 
 /// The answer JSON for a node (`null` when absent), with dense integer-keyed children as
@@ -266,6 +266,13 @@ fn write_object(
 /// the same double, in plain notation for magnitudes in [10^-3, 10^7) and as `d.dddE±n`
 /// otherwise, always with a digit after the point.
 pub fn java_double(value: f64) -> String {
+    // The core holds only finite numbers; the text for anything else is Java's.
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned();
+    }
     if value == 0.0 {
         return if value.is_sign_negative() {
             "-0.0"

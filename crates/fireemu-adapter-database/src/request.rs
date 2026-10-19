@@ -310,15 +310,15 @@ fn bound_value(text: &str, key_order: bool) -> Result<(Json, Option<String>), Re
     Ok((value, key))
 }
 
-/// `value,"key"`: the first comma after which both halves parse.
+/// `value,"key"`: a JSON value, a comma and a JSON string key.
 fn split_bound(text: &str) -> Option<(Json, Option<String>)> {
-    text.match_indices(',').find_map(|(at, _)| {
-        let value = parse(&text[..at]).ok()?;
-        match parse(&text[at + 1..]).ok()? {
-            Json::String(key) => Some((value, Some(key))),
-            _ => None,
-        }
-    })
+    // One pass: the value ends where its grammar ends, then a comma and a JSON string.
+    let (value, end) = crate::json_parse::parse_prefix(text).ok()?;
+    let rest = text[end..].trim_start().strip_prefix(',')?;
+    match parse(rest).ok()? {
+        Json::String(key) => Some((value, Some(key))),
+        _ => None,
+    }
 }
 
 /// The `.indexOn` entry a query needs, if it needs one: a child path or `.value`.

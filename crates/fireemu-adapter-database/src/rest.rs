@@ -206,6 +206,19 @@ pub(crate) enum Change {
     },
 }
 
+impl Change {
+    /// Whether an effective part of the write lies at, above or below `location`.
+    pub(crate) fn touches(&self, location: &Path) -> bool {
+        let related = |path: &Path| location.contains(path) || path.contains(location);
+        match self {
+            Change::Put { path, effective } => *effective && related(path),
+            Change::Patch { base, entries } => entries
+                .iter()
+                .any(|entry| entry.effective && related(&base.join(&entry.path))),
+        }
+    }
+}
+
 /// One entry of a multipath update.
 pub(crate) struct Patched {
     /// The entry's path, relative to the base.
@@ -583,7 +596,9 @@ impl Database {
             events.push((*id, event));
         }
         for listen in self.listens.values_mut() {
-            if listen.namespace != namespace {
+            // A write that touches neither the location nor anything above it sends nothing;
+            // its view is not rebuilt either.
+            if listen.namespace != namespace || !change.touches(&listen.path) {
                 continue;
             }
             let fresh = listen.view(&ns.tree);
@@ -1205,5 +1220,52 @@ fn stream_event(
             }
         }
         _ => put_event(&Path::root(), fresh),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::realtime::Opened;
+
+    #[test]
+    fn unrelated_writes_rebuild_no_view() {
+        let mut db = Database::new(RestOptions::default(), 1);
+        let big: BTreeMap<String, Json> =
+            (0..50).map(|i| (format!("k{i}"), Json::int(i))).collect();
+        db.tree_mut("u")
+            .set(
+                &Path::from_keys(["big"]),
+                &Json::Object(big),
+                ServerValueContext { now_millis: 0 },
+            )
+            .unwrap();
+        let Ok(Opened::Session(mut session, _)) = db.open_realtime("/.ws?v=5&ns=u", Some("h"), 0)
+        else {
+            panic!("no session")
+        };
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/big","h":""}}}"#,
+            0,
+        );
+        let before = crate::listen::views_built();
+        for i in 0..10 {
+            session.receive(
+                &mut db,
+                &format!(
+                    r#"{{"t":"d","d":{{"r":{},"a":"p","b":{{"p":"/other","d":{i}}}}}}}"#,
+                    i + 2
+                ),
+                0,
+            );
+        }
+        assert_eq!(crate::listen::views_built(), before);
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":20,"a":"p","b":{"p":"/big/k1","d":7}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
     }
 }

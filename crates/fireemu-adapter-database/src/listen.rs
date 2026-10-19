@@ -64,6 +64,8 @@ impl Listen {
 
     /// The data the listen currently shows.
     pub fn view(&self, tree: &Tree) -> Json {
+        #[cfg(test)]
+        VIEWS.with(|views| views.set(views.get() + 1));
         match self.window_children(tree) {
             None if self.path.is_priority() => priority_at(tree, &self.path),
             None => wire_json(tree.get(&self.path)),
@@ -461,4 +463,15 @@ fn frame_text(action: &str, path: &Path, data: &str, tag: Option<i64>) -> String
         render(&Json::String(path.keys().join("/")), Style::Compact),
         render(&Json::string(action), Style::Compact),
     )
+}
+
+#[cfg(test)]
+thread_local! {
+    static VIEWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many views this thread has built (tests only).
+#[cfg(test)]
+pub(crate) fn views_built() -> usize {
+    VIEWS.with(std::cell::Cell::get)
 }

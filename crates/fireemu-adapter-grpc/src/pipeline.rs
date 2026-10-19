@@ -437,6 +437,7 @@ pub fn compile_pipeline(
     let mut last_rank = 0u8;
     let (mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
         (false, false, false, false);
+    let mut pushdown = None;
     for stage in pipeline.stages.iter().skip(1) {
         let rank = match stage.name.as_str() {
             "where" | "select" => 1,
@@ -456,7 +457,9 @@ pub fn compile_pipeline(
                     return Err(Status::unimplemented("duplicate or misplaced where stage"));
                 }
                 seen_where = true;
-                stages.push(Stage::Where(decode_condition(stage)?));
+                let (condition, filter) = decode_condition(stage)?;
+                pushdown = filter;
+                stages.push(Stage::Where(condition));
             }
             "select" => {
                 if seen_select {
@@ -520,7 +523,7 @@ pub fn compile_pipeline(
                 .collect(),
         });
     Ok(CompiledExecution {
-        input: collection_query(query_parent, collection_id, None, projection, 0, None),
+        input: collection_query(query_parent, collection_id, pushdown, projection, 0, None),
         stages,
     })
 }
@@ -595,8 +598,11 @@ fn decode_operand(value: &pb::Value, position: Position) -> Result<Expr, Status>
     }
 }
 
-/// Decodes `where(equal(operand, scalar literal))`.
-fn decode_condition(stage: &pb::pipeline::Stage) -> Result<Expr, Status> {
+/// Decodes `where(equal(operand, scalar literal))`. A field operand also gives the same
+/// filter the `RunQuery` lowering sends, for the scan to apply before it copies documents.
+fn decode_condition(
+    stage: &pb::pipeline::Stage,
+) -> Result<(Expr, Option<pb::structured_query::Filter>), Status> {
     let Some(pb::value::ValueType::FunctionValue(function)) =
         stage.args.first().and_then(|v| v.value_type.as_ref())
     else {
@@ -611,10 +617,12 @@ fn decode_condition(stage: &pb::pipeline::Stage) -> Result<Expr, Status> {
             "where expression is unsupported locally",
         ));
     };
+    // `equal` is the table's only condition and takes two arguments; the wording is the
+    // finite subset's.
     if function.args.len() != def.arity || !function.options.is_empty() {
         return Err(Status::invalid_argument(format!(
-            "{} requires exactly {} arguments and no options",
-            def.name, def.arity
+            "{} requires exactly two arguments and no options",
+            def.name
         )));
     }
     let left = match function.args[0].value_type.as_ref() {
@@ -647,7 +655,13 @@ fn decode_condition(stage: &pb::pipeline::Stage) -> Result<Expr, Status> {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?,
         ),
     };
-    Expr::call(def.name, vec![left, right], Placement::Condition).map_err(expr_status)
+    let pushdown = match &left {
+        Expr::Field(path) => Some(equal_filter(path.canonical(), &function.args[1])),
+        Expr::Constant(_) | Expr::Call { .. } => None,
+    };
+    let condition =
+        Expr::call(def.name, vec![left, right], Placement::Condition).map_err(expr_status)?;
+    Ok((condition, pushdown))
 }
 
 /// Decodes `select({alias: operand, ...})`. An alias is a field path, as the official
@@ -666,6 +680,13 @@ fn decode_select(
     };
     let mut aliases = Vec::with_capacity(map.fields.len());
     for (alias, value) in &map.fields {
+        // Strict answers only aliases whose output key cannot depend on how production
+        // reads an alias; every other alias, invalid ones included, is unobserved.
+        if unrecorded == Unrecorded::Refuse && !is_plain_alias(alias) {
+            return Err(Status::unimplemented(format!(
+                "select alias {alias:?} is not a plain identifier; its output shape is not observed locally"
+            )));
+        }
         if value.value_type.is_none() {
             return Err(Status::unimplemented(
                 "select expressions are unsupported locally",
@@ -674,10 +695,14 @@ fn decode_select(
         let path = FieldPath::parse(alias).map_err(|e| {
             Status::invalid_argument(format!("select alias {alias:?} is not a field path: {e}"))
         })?;
-        if path.is_document_name() {
-            return Err(Status::invalid_argument(
-                "select alias __name__ is reserved",
-            ));
+        if path
+            .segments()
+            .iter()
+            .any(|segment| is_reserved_name(segment))
+        {
+            return Err(Status::invalid_argument(format!(
+                "select alias {alias:?} uses a reserved field name"
+            )));
         }
         aliases.push((alias, path, decode_operand(value, Position::Stage)?));
     }
@@ -695,20 +720,26 @@ fn decode_select(
             )));
         }
     }
-    if unrecorded == Unrecorded::Refuse {
-        if let Some((alias, _, _)) = aliases
-            .iter()
-            .find(|(alias, path, _)| path.segments() != [alias.as_str()])
-        {
-            return Err(Status::unimplemented(format!(
-                "select alias {alias:?} names a nested or quoted field path; its output shape is not observed locally"
-            )));
-        }
-    }
     Ok(aliases
         .into_iter()
         .map(|(_, path, expr)| (path, expr))
         .collect())
+}
+
+/// A name like `__x__`, which Firestore reserves.
+fn is_reserved_name(segment: &str) -> bool {
+    segment.len() >= 4 && segment.starts_with("__") && segment.ends_with("__")
+}
+
+/// An alias that is one unquoted identifier (`[A-Za-z_][A-Za-z0-9_]*`) and not reserved:
+/// its output key is the alias itself whether production reads aliases as keys or as paths.
+fn is_plain_alias(alias: &str) -> bool {
+    let mut chars = alias.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !is_reserved_name(alias)
 }
 
 /// The executor's output row as a pipeline result document: fields only, without a name
@@ -787,11 +818,28 @@ fn decode_equal_filter(
     let Some(literal) = function.args[1].value_type.as_ref() else {
         return Err(Status::invalid_argument("where literal is missing"));
     };
-    let field_ref = pb::structured_query::FieldReference {
-        field_path: field.clone(),
-    };
-    let filter_type = match literal {
-        pb::value::ValueType::NullValue(_) => {
+    if matches!(
+        literal,
+        pb::value::ValueType::ArrayValue(_)
+            | pb::value::ValueType::MapValue(_)
+            | pb::value::ValueType::FieldReferenceValue(_)
+            | pb::value::ValueType::VariableReferenceValue(_)
+            | pb::value::ValueType::FunctionValue(_)
+            | pb::value::ValueType::PipelineValue(_)
+    ) {
+        return Err(Status::unimplemented(
+            "where literal is unsupported locally",
+        ));
+    }
+    Ok(equal_filter(field.clone(), &function.args[1]))
+}
+
+/// The `RunQuery` filter equivalent to `equal(field, literal)` for a scalar literal: null
+/// and NaN become the unary `IS_NULL` / `IS_NAN`, anything else a field equality.
+fn equal_filter(field_path: String, value: &pb::Value) -> pb::structured_query::Filter {
+    let field_ref = pb::structured_query::FieldReference { field_path };
+    let filter_type = match &value.value_type {
+        Some(pb::value::ValueType::NullValue(_)) => {
             pb::structured_query::filter::FilterType::UnaryFilter(
                 pb::structured_query::UnaryFilter {
                     op: pb::structured_query::unary_filter::Operator::IsNull as i32,
@@ -801,7 +849,7 @@ fn decode_equal_filter(
                 },
             )
         }
-        pb::value::ValueType::DoubleValue(value) if value.is_nan() => {
+        Some(pb::value::ValueType::DoubleValue(double)) if double.is_nan() => {
             pb::structured_query::filter::FilterType::UnaryFilter(
                 pb::structured_query::UnaryFilter {
                     op: pb::structured_query::unary_filter::Operator::IsNan as i32,
@@ -811,27 +859,17 @@ fn decode_equal_filter(
                 },
             )
         }
-        pb::value::ValueType::ArrayValue(_)
-        | pb::value::ValueType::MapValue(_)
-        | pb::value::ValueType::FieldReferenceValue(_)
-        | pb::value::ValueType::VariableReferenceValue(_)
-        | pb::value::ValueType::FunctionValue(_)
-        | pb::value::ValueType::PipelineValue(_) => {
-            return Err(Status::unimplemented(
-                "where literal is unsupported locally",
-            ));
-        }
         _ => pb::structured_query::filter::FilterType::FieldFilter(
             pb::structured_query::FieldFilter {
                 field: Some(field_ref),
                 op: pb::structured_query::field_filter::Operator::Equal as i32,
-                value: Some(function.args[1].clone()),
+                value: Some(value.clone()),
             },
         ),
     };
-    Ok(pb::structured_query::Filter {
+    pb::structured_query::Filter {
         filter_type: Some(filter_type),
-    })
+    }
 }
 
 /// A wire value as a validation argument. A nested pipeline is typed but its stages are

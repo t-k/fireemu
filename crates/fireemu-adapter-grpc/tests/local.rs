@@ -6905,6 +6905,14 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
             unsupported,
         ),
         (
+            "equal with one argument",
+            vec![pipeline_stage(
+                "where",
+                pipeline_function("equal", vec![pipeline_field("name")]),
+            )],
+            invalid,
+        ),
+        (
             "document_id without arguments",
             vec![pipeline_select_map(vec![(
                 "id",
@@ -6942,6 +6950,12 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
             .join(" | ");
         let err = pipeline_error(&mut client, stages).await;
         assert_eq!(err.code(), code, "{label}: {err}");
+        if label == "equal with one argument" {
+            assert_eq!(
+                err.message(),
+                "equal requires exactly two arguments and no options"
+            );
+        }
         assert_eq!(
             err.metadata()
                 .get("fireemu-code")
@@ -7062,8 +7076,9 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
 
 /// A select alias is a field path, as the official emulator (firebase-tools 15.28.2,
 /// Enterprise) treats it: `select('profile.score')` answers `{profile: {score}}`. Production
-/// is unobserved, so strict refuses dotted and quoted aliases; both profiles refuse what the
-/// official emulator refuses (an invalid path, `__name__`, an alias inside another).
+/// is unobserved, so strict refuses every alias that is not a plain identifier (UNIMPLEMENTED,
+/// before any other alias check); the emulator profile refuses what the official emulator
+/// refuses (an invalid path, a reserved name, an alias inside another) as `INVALID_ARGUMENT`.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_select_aliases_are_field_paths() {
@@ -7113,6 +7128,19 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                 ("`a`", pipeline_field("top")),
             ]),
         ),
+        (
+            "hyphen",
+            stages(vec![("total-count", pipeline_field("top"))]),
+        ),
+        ("non-ASCII", stages(vec![("名前", pipeline_field("top"))])),
+        (
+            "leading digit",
+            stages(vec![("1st", pipeline_field("top"))]),
+        ),
+        (
+            "reserved-looking",
+            stages(vec![("__x__", pipeline_field("top"))]),
+        ),
     ];
     for policy in [
         IndexValidationPolicy::Production,
@@ -7134,7 +7162,8 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             })
             .await
             .unwrap();
-        if policy == IndexValidationPolicy::Production {
+        let strict = policy == IndexValidationPolicy::Production;
+        if strict {
             for aliases in [
                 vec![("x.y", pipeline_field("top"))],
                 vec![("`q.r`", pipeline_field("top"))],
@@ -7146,6 +7175,23 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                     "FS_PIPE_UNSUPPORTED_STAGE"
                 );
             }
+            // A plain identifier, `_` included, still answers under strict.
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(stages(vec![(
+                        "_plain1",
+                        pipeline_field("top"),
+                    )])))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert_eq!(
+                docs[0].fields,
+                [("_plain1".to_owned(), s("t"))].into_iter().collect()
+            );
         } else {
             let docs = drain_pipeline(
                 client
@@ -7170,14 +7216,15 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         }
         for (label, refused) in invalid.clone() {
             let err = pipeline_error(&mut client, refused).await;
-            assert_eq!(
-                err.code(),
-                tonic::Code::InvalidArgument,
-                "{policy:?} {label}: {err}"
-            );
+            let (code, fireemu_code) = if strict {
+                (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
+            } else {
+                (tonic::Code::InvalidArgument, "FS_PIPE_INVALID")
+            };
+            assert_eq!(err.code(), code, "{policy:?} {label}: {err}");
             assert_eq!(
                 err.metadata().get("fireemu-code").unwrap(),
-                "FS_PIPE_INVALID",
+                fireemu_code,
                 "{label}"
             );
         }

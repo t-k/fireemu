@@ -10,7 +10,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
-- Enterprise pipelines run locally on a new pipeline executor. Besides top-level fields, `where(equal(...))` and `select` accept nested field paths (`a.b`) and `documentId`, `collectionId` and `parent` of a document reference. Inputs whose production result is unrecorded, such as the parent of a top-level document or the document ID of a missing field, are refused with `UNIMPLEMENTED` under the strict profile; the emulator profile answers them as the official emulator does (the documents root reference, null). Select aliases are field paths, as in the official emulator: under the emulator profile `select('profile.score')` answers `{profile: {score}}` instead of a flat `profile.score` key; strict refuses dotted and quoted aliases until production is observed, and both profiles refuse an invalid path, `__name__`, or an alias inside another. Every other function stays refused.
+- Enterprise pipelines run locally on a new pipeline executor. Besides top-level fields, `where(equal(...))` and `select` accept nested field paths (`a.b`) and `documentId`, `collectionId` and `parent` of a document reference. Inputs whose production result is unrecorded, such as the parent of a top-level document or the document ID of a missing field, are refused with `UNIMPLEMENTED` under the strict profile; the emulator profile answers them as the official emulator does (the documents root reference, null). A refusal found while streaming may follow results already sent. Every other function stays refused.
+
+### Changed
+
+- Under the strict profile, a pipeline `select` alias that is not a plain identifier is now refused with `UNIMPLEMENTED` until production is observed. This includes a dotted or quoted alias, which is what the SDKs send for `select('a.b')`. Such an alias used to answer a flat `"a.b"` key. To keep answering under strict, give the field an explicit simple alias, such as `field('a.b').as('ab')`.
+- Under the emulator profile, a pipeline `select` alias is now read as a field path, as the official emulator reads it: `select('a.b')` answers `{a: {b}}`, and a quoted alias is unquoted. An invalid path, a reserved name or an alias inside another alias is refused with `INVALID_ARGUMENT`.
 
 ## [0.27.0] - 2026-10-18
 

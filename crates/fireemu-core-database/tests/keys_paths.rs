@@ -16,7 +16,7 @@ fn keys_refuse_the_documented_characters_and_the_empty_key() {
     for bad in [
         "", "a.b", "a$", "#", "[x", "x]", "a/b", "\u{0}", "a\u{1f}", "\u{7f}",
     ] {
-        let err = validate_key(bad, &limits).unwrap_err();
+        let err = validate_key(bad).unwrap_err();
         assert_eq!(err.kind, ErrorKind::InvalidKey, "{bad:?}");
     }
     for good in [
@@ -28,20 +28,27 @@ fn keys_refuse_the_documented_characters_and_the_empty_key() {
         "emoji\u{1F600}",
         "a-b_c:d",
     ] {
-        validate_key(good, &limits).unwrap();
+        validate_key(good).unwrap();
     }
 }
 
 #[test]
-fn keys_are_limited_to_768_utf8_bytes() {
+fn paths_are_limited_to_768_utf8_bytes_with_separators() {
+    // The official emulator refuses a 769-byte path ("Path specified exceeds the maximum
+    // length that can be written (768 bytes).") and counts the separators, as the SDKs do.
     let limits = Limits::default();
-    validate_key(&"a".repeat(768), &limits).unwrap();
-    let err = validate_key(&"a".repeat(769), &limits).unwrap_err();
-    assert_eq!(err.kind, ErrorKind::KeyTooLong);
+    Path::parse(&"a".repeat(768), &limits).unwrap();
+    let err = Path::parse(&"a".repeat(769), &limits).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooLong);
+    let split = format!("{}/{}", "a".repeat(383), "b".repeat(384));
+    assert_eq!(Path::parse(&split, &limits).unwrap().byte_len(), 768);
+    let err = Path::parse(&format!("{split}c"), &limits).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooLong);
     // 256 three-byte characters are 768 bytes; one more is too long.
-    validate_key(&"あ".repeat(256), &limits).unwrap();
-    let err = validate_key(&"あ".repeat(257), &limits).unwrap_err();
-    assert_eq!(err.kind, ErrorKind::KeyTooLong);
+    Path::parse(&"あ".repeat(256), &limits).unwrap();
+    let err = Path::parse(&"あ".repeat(257), &limits).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooLong);
+    assert_eq!(Path::root().byte_len(), 0);
 }
 
 #[test]
@@ -118,14 +125,14 @@ fn path_builders() {
 #[test]
 fn production_limits_are_the_documented_values() {
     assert_eq!(Limits::PRODUCTION.max_depth, 32);
-    assert_eq!(Limits::PRODUCTION.max_key_bytes, 768);
+    assert_eq!(Limits::PRODUCTION.max_path_bytes, 768);
     assert_eq!(Limits::PRODUCTION.max_string_bytes, 10_485_760);
     assert_eq!(Limits::default(), Limits::PRODUCTION);
 }
 
 #[test]
 fn errors_display_their_message() {
-    let err = validate_key("", &Limits::default()).unwrap_err();
+    let err = validate_key("").unwrap_err();
     assert_eq!(err.to_string(), err.message);
     assert!(!err.message.is_empty());
 }

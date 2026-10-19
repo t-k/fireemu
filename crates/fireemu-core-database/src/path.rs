@@ -47,9 +47,11 @@ impl Path {
                     format!("path {path:?} uses {key:?} where only a key may stand"),
                 ));
             }
-            validate_key(key, limits)?;
+            validate_key(key)?;
         }
-        Ok(Self { keys })
+        let parsed = Self { keys };
+        check_path_bytes(parsed.byte_len(), limits)?;
+        Ok(parsed)
     }
 
     /// The path of `keys`, without validation (for paths built from validated keys).
@@ -67,6 +69,11 @@ impl Path {
     /// The number of keys.
     pub fn depth(&self) -> usize {
         self.keys.len()
+    }
+
+    /// The UTF-8 length of the keys joined by `/`.
+    pub fn byte_len(&self) -> usize {
+        self.keys.iter().map(String::len).sum::<usize>() + self.keys.len().saturating_sub(1)
     }
 
     /// Whether this is the root.
@@ -129,4 +136,18 @@ impl fmt::Display for Path {
         }
         Ok(())
     }
+}
+
+/// Refuses a path of `bytes` bytes when it is longer than the limit.
+pub(crate) fn check_path_bytes(bytes: usize, limits: &Limits) -> Result<()> {
+    if bytes > limits.max_path_bytes {
+        return Err(DatabaseError::new(
+            ErrorKind::PathTooLong,
+            format!(
+                "the path is {bytes} bytes long; the limit is {} bytes",
+                limits.max_path_bytes
+            ),
+        ));
+    }
+    Ok(())
 }

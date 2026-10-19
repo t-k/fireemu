@@ -1,7 +1,8 @@
 //! Keys: validation and the key order.
 //!
 //! A key is a non-empty string without `.`, `$`, `#`, `[`, `]`, `/` and the ASCII control
-//! characters U+0000 to U+001F and U+007F, at most [`Limits::max_key_bytes`] bytes long.
+//! characters U+0000 to U+001F and U+007F. Its length counts towards the path length
+//! ([`crate::Limits::max_path_bytes`]).
 //!
 //! Keys are ordered as the SDKs and the server order them (`nameCompare` in
 //! `@firebase/database`): keys that parse as 32-bit integers come first, in numeric order
@@ -12,10 +13,9 @@
 use std::cmp::Ordering;
 
 use crate::error::{DatabaseError, ErrorKind, Result};
-use crate::limits::Limits;
 
 /// Checks that `key` may name a child.
-pub fn validate_key(key: &str, limits: &Limits) -> Result<()> {
+pub fn validate_key(key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(DatabaseError::new(
             ErrorKind::InvalidKey,
@@ -27,16 +27,6 @@ pub fn validate_key(key: &str, limits: &Limits) -> Result<()> {
             ErrorKind::InvalidKey,
             format!(
                 "key {key:?} contains {bad:?}; keys may not contain \".\", \"#\", \"$\", \"/\", \"[\", \"]\" or ASCII control characters"
-            ),
-        ));
-    }
-    if key.len() > limits.max_key_bytes {
-        return Err(DatabaseError::new(
-            ErrorKind::KeyTooLong,
-            format!(
-                "a key is {} bytes long; the limit is {} bytes",
-                key.len(),
-                limits.max_key_bytes
             ),
         ));
     }

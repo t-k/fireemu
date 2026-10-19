@@ -115,7 +115,7 @@ impl Tree {
             return Ok(Write::Priority(path.parent().unwrap_or_default(), priority));
         }
         let resolved = resolve(value, self.get(path), context)?;
-        let node = Node::from_json(&resolved, path.depth(), &self.limits)?;
+        let node = Node::from_json(&resolved, path, &self.limits)?;
         Ok(Write::Value(path.clone(), node))
     }
 

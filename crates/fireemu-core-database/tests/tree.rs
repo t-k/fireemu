@@ -175,6 +175,22 @@ fn depth_counts_keys_from_the_root_to_the_deepest_value() {
 }
 
 #[test]
+fn written_keys_count_towards_the_path_length() {
+    let mut tree = Tree::new(Limits::default());
+    // "/x" plus a separator plus the key: 1 + 1 + 766 = 768 bytes.
+    tree.set(&p("/x"), &j(json!({ "k".repeat(766): 1 })), NOW)
+        .unwrap();
+    let err = tree
+        .set(&p("/x"), &j(json!({ "k".repeat(767): 1 })), NOW)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooLong);
+    let err = tree
+        .set(&p("/x"), &j(json!({"a": { "k".repeat(765): 1 }})), NOW)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooLong);
+}
+
+#[test]
 fn strings_are_limited_in_bytes() {
     let limits = Limits {
         max_string_bytes: 4,

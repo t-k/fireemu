@@ -169,7 +169,10 @@ fn pretty_output_follows_the_server_layout() {
         "[ 1, [ 2, 3 ] ]"
     );
     assert_eq!(
-        render(&Json::Object(Default::default()), Style::Pretty),
+        render(
+            &Json::Object(std::collections::BTreeMap::default()),
+            Style::Pretty
+        ),
         "{ }"
     );
     assert_eq!(render(&Json::Array(vec![]), Style::Pretty), "[ ]");

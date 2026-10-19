@@ -1,5 +1,25 @@
-//! The REST API.
-use fireemu_core_database::{Limits, Path, Tree};
+//! The REST API: `GET`, `PUT`, `POST`, `PATCH` and `DELETE` on `.json` URLs, `ETag`s and
+//! `if-match`, the output options, queries, and event streams (`Accept: text/event-stream`).
+//!
+//! Every answer and refusal follows what the official emulator (firebase-database-emulator
+//! v4.11.2, the jar firebase-tools 15.28.2 runs) answers to the same request; the lane's
+//! exploration logs hold those answers. Production has not been observed yet.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use fireemu_core_database::hash::etag;
+use fireemu_core_database::key::validate_key;
+use fireemu_core_database::node::VALUE_KEY;
+use fireemu_core_database::path::PRIORITY_KEY;
+use fireemu_core_database::push_id::PushIdGenerator;
+use fireemu_core_database::server_value::SERVER_VALUE_KEY;
+use fireemu_core_database::{
+    Content, Format, Json, Limits, Node, Path, QueryParams, ServerValueContext, Tree,
+};
+
+use crate::json_text::{output_json, parse, render, Style};
+use crate::namespace::route;
+use crate::request::{self, Location, Output, Refusal};
 
 /// An HTTP request as the REST layer sees it.
 #[derive(Debug, Clone, Default)]
@@ -12,6 +32,15 @@ pub struct HttpRequest {
     pub headers: Vec<(String, String)>,
     /// The body.
     pub body: Vec<u8>,
+}
+
+impl HttpRequest {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 /// An HTTP response.
@@ -32,6 +61,21 @@ pub struct SseEvent {
     pub event: String,
     /// The data line.
     pub data: String,
+}
+
+impl SseEvent {
+    /// The `keep-alive` event the server sends while nothing changes.
+    pub fn keep_alive() -> Self {
+        Self {
+            event: "keep-alive".to_owned(),
+            data: "null".to_owned(),
+        }
+    }
+
+    /// The event as stream text.
+    pub fn to_text(&self) -> String {
+        format!("event: {}\ndata: {}\n\n", self.event, self.data)
+    }
 }
 
 /// What a request produced.
@@ -61,14 +105,14 @@ pub enum RulesMode {
     /// Everything is allowed (emulator and strict, ledger 1471 Q4).
     #[default]
     AllowAll,
-    /// Everything but the owner credential is denied (productionExact).
+    /// Everything but the owner credential is denied (productionExact, ledger 1471 Q4).
     DenyAll,
 }
 
 /// Options of the REST layer.
 #[derive(Debug, Clone)]
 pub struct RestOptions {
-    /// The namespace of requests that name none.
+    /// The namespace of requests that name none (`fake-server` in the official emulator).
     pub default_namespace: String,
     /// Authorization without rules.
     pub rules: RulesMode,
@@ -86,32 +130,704 @@ impl Default for RestOptions {
     }
 }
 
+/// The credential of the local administrator (firebase-tools sends `Bearer owner`).
+const OWNER: &str = "owner";
+
+const PARSE_ERROR: &str = "Invalid data; couldn't parse JSON object, array, or value.";
+const PATCH_ERROR: &str =
+    "Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?";
+const ALLOWED_METHODS: &str = "OPTIONS,GET,POST,PUT,DELETE,PATCH";
+
+#[derive(Debug)]
+struct Namespace {
+    tree: Tree,
+    push_ids: PushIdGenerator,
+}
+
+/// An open event stream.
+#[derive(Debug)]
+struct Subscription {
+    namespace: String,
+    path: Path,
+    query: Option<QueryParams>,
+    format: Format,
+    /// The view last sent.
+    last: Json,
+}
+
+/// A checked request, ready to execute.
+struct Call<'a> {
+    namespace: String,
+    path: Path,
+    output: Output,
+    want_etag: bool,
+    if_match: Option<&'a str>,
+    context: ServerValueContext,
+}
+
+/// One entry of a `PATCH` body.
+struct PatchEntry {
+    key: String,
+    path: Path,
+    value: Json,
+}
+
+/// What a write changed, for the event streams.
+enum Change {
+    /// A value was replaced at a path.
+    Put(Path),
+    /// A multipath update at a base path, with the relative paths of its entries.
+    Patch(Path, Vec<Path>),
+}
+
 /// Every namespace of one emulator.
 #[derive(Debug)]
-pub struct Database;
+pub struct Database {
+    options: RestOptions,
+    seed: u64,
+    namespaces: BTreeMap<String, Namespace>,
+    indexes: BTreeMap<String, BTreeMap<Path, BTreeSet<String>>>,
+    subscriptions: BTreeMap<u64, Subscription>,
+    next_subscription: u64,
+}
 
 impl Database {
     /// An empty database; push ids draw their randomness from `seed`.
     pub fn new(options: RestOptions, seed: u64) -> Self {
-        let _ = (options, seed);
-        todo!()
+        Self {
+            options,
+            seed,
+            namespaces: BTreeMap::new(),
+            indexes: BTreeMap::new(),
+            subscriptions: BTreeMap::new(),
+            next_subscription: 1,
+        }
     }
 
-    /// The tree of `namespace`, if it was ever written.
+    /// The tree of `namespace`, if it was ever used.
     pub fn tree(&self, namespace: &str) -> Option<&Tree> {
-        let _ = namespace;
-        todo!()
+        self.namespaces.get(namespace).map(|ns| &ns.tree)
     }
 
-    /// Declares the index `.indexOn: spec` at `path` of `namespace`.
+    /// Declares the index `.indexOn: spec` at `path` of `namespace` (a child path, or
+    /// `.value`). The rules (RTDB-03) will declare them; tests declare them directly.
     pub fn declare_index(&mut self, namespace: &str, path: &Path, spec: &str) {
-        let _ = (namespace, path, spec);
-        todo!()
+        self.indexes
+            .entry(namespace.to_owned())
+            .or_default()
+            .entry(path.clone())
+            .or_default()
+            .insert(spec.to_owned());
+    }
+
+    /// Closes an event stream.
+    pub fn unsubscribe(&mut self, id: u64) {
+        self.subscriptions.remove(&id);
+    }
+
+    /// The number of open event streams.
+    pub fn subscription_count(&self) -> usize {
+        self.subscriptions.len()
     }
 
     /// Handles one request at the server time `now_millis`.
     pub fn handle(&mut self, request: &HttpRequest, now_millis: i64) -> Handled {
-        let _ = (request, now_millis);
-        todo!()
+        match self.dispatch(request, now_millis) {
+            Ok(handled) => handled,
+            Err(refusal) => Handled::Response {
+                response: refusal_response(&refusal),
+                events: Vec::new(),
+            },
+        }
+    }
+
+    fn dispatch(&mut self, request: &HttpRequest, now_millis: i64) -> Result<Handled, Refusal> {
+        let method = request
+            .header("X-HTTP-Method-Override")
+            .unwrap_or(&request.method)
+            .to_ascii_uppercase();
+        let (raw_path, params) = request::split_target(&request.target);
+        let namespace = route(
+            params.get("ns").map(String::as_str),
+            request.header("Host"),
+            &self.options.default_namespace,
+        )
+        .map_err(|_| Refusal::new(403, "Invalid Firebase database name"))?;
+        if method == "OPTIONS" {
+            return Ok(respond(options_response()));
+        }
+        if !matches!(method.as_str(), "GET" | "PUT" | "POST" | "PATCH" | "DELETE") {
+            return Err(Refusal::new(405, "Unsupported request type"));
+        }
+        let writing = method != "GET";
+        let path = match request::location(raw_path, writing, &self.options.limits)? {
+            Location::Data(path) => path,
+            Location::Settings => return Err(Refusal::new(403, "Permission denied.")),
+        };
+        let if_match = request.header("if-match");
+        if if_match.is_some() && matches!(method.as_str(), "GET" | "PATCH" | "POST") {
+            return Err(Refusal::bad(
+                "The 'if-match' header is not supported with GET, PATCH or POST requests",
+            ));
+        }
+        let output = request::output(&params)?;
+        if writing && request::has_query(&params) {
+            return Err(Refusal::bad(
+                "Querying related parameters not supported on this request type",
+            ));
+        }
+        let query = if writing {
+            None
+        } else {
+            request::query(&params, output.shallow)?
+        };
+        if let Some(query) = &query {
+            self.check_index(&namespace, &path, query)?;
+        }
+        if self.options.rules == RulesMode::DenyAll && credential(request, &params) != Some(OWNER) {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
+        let want_etag = request
+            .header("X-Firebase-ETag")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let streaming = request
+            .header("Accept")
+            .is_some_and(|v| v.contains("text/event-stream"));
+        if method == "GET" && streaming {
+            return Ok(self.subscribe(namespace, path, query, &output));
+        }
+        let call = Call {
+            namespace,
+            path,
+            output,
+            want_etag,
+            if_match,
+            context: ServerValueContext { now_millis },
+        };
+        match method.as_str() {
+            "GET" => {
+                let tree = &self.namespace(&call.namespace).tree;
+                Ok(respond(read(
+                    tree,
+                    &call.path,
+                    query.as_ref(),
+                    &call.output,
+                    call.want_etag,
+                )))
+            }
+            "PUT" => self.put(&call, &body_text(request)?),
+            "DELETE" => self.put(&call, "null"),
+            "POST" => self.post(&call, &body_text(request)?),
+            _ => self.patch(&call, &body_text(request)?),
+        }
+    }
+
+    fn put(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
+        let tree = &mut self.namespace(&call.namespace).tree;
+        if let Some(expected) = call.if_match {
+            let current = tree.get(&call.path);
+            if etag(current) != expected {
+                return Ok(respond(precondition_failed(current, &call.output)));
+            }
+        }
+        let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
+        tree.set(&call.path, &value, call.context)
+            .map_err(|_| data_refusal(body, &value))?;
+        let response = written(tree, &call.path, &call.output, call.want_etag);
+        Ok(self.after_write(&call.namespace, response, &Change::Put(call.path.clone())))
+    }
+
+    fn post(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
+        let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
+        let ns = self.namespace(&call.namespace);
+        let id = ns
+            .push_ids
+            .next(u64::try_from(call.context.now_millis).unwrap_or(0));
+        let child = call.path.child(&id);
+        ns.tree
+            .set(&child, &value, call.context)
+            .map_err(|_| data_refusal(body, &value))?;
+        let name = Json::object([("name", Json::String(id))]);
+        let response = json_response(&name, &call.output, None);
+        Ok(self.after_write(&call.namespace, response, &Change::Put(child)))
+    }
+
+    fn patch(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
+        let entries = patch_entries(body, &self.options.limits)?;
+        let wire: Vec<(String, Json)> = entries
+            .iter()
+            .map(|entry| (entry.key.clone(), entry.value.clone()))
+            .collect();
+        let tree = &mut self.namespace(&call.namespace).tree;
+        tree.update(&call.path, &wire, call.context)
+            .map_err(|_| Refusal::bad(PATCH_ERROR))?;
+        let relative: Vec<Path> = entries.into_iter().map(|entry| entry.path).collect();
+        let echo = patch_echo(tree, &call.path, &relative);
+        let response = json_response(&echo, &call.output, None);
+        Ok(self.after_write(
+            &call.namespace,
+            response,
+            &Change::Patch(call.path.clone(), relative),
+        ))
+    }
+
+    fn namespace(&mut self, name: &str) -> &mut Namespace {
+        let seed = self.seed ^ fnv1a(name);
+        let limits = self.options.limits;
+        self.namespaces
+            .entry(name.to_owned())
+            .or_insert_with(|| Namespace {
+                tree: Tree::new(limits),
+                push_ids: PushIdGenerator::new(seed),
+            })
+    }
+
+    fn check_index(
+        &self,
+        namespace: &str,
+        path: &Path,
+        query: &QueryParams,
+    ) -> Result<(), Refusal> {
+        let Some(spec) = request::required_index(&query.order_by) else {
+            return Ok(());
+        };
+        let declared = self
+            .indexes
+            .get(namespace)
+            .and_then(|by_path| by_path.get(path))
+            .is_some_and(|specs| specs.contains(&spec));
+        if declared {
+            return Ok(());
+        }
+        Err(Refusal::bad(format!(
+            "Index not defined, add \".indexOn\": \"{spec}\", for path \"{path}\", to the rules"
+        )))
+    }
+
+    fn subscribe(
+        &mut self,
+        namespace: String,
+        path: Path,
+        query: Option<QueryParams>,
+        output: &Output,
+    ) -> Handled {
+        let format = if output.export {
+            Format::Export
+        } else {
+            Format::Plain
+        };
+        let tree = &self.namespace(&namespace).tree;
+        let view = view(tree, &path, query.as_ref(), format);
+        let initial = put_event(&Path::root(), &view);
+        let id = self.next_subscription;
+        self.next_subscription += 1;
+        self.subscriptions.insert(
+            id,
+            Subscription {
+                namespace,
+                path,
+                query,
+                format,
+                last: view,
+            },
+        );
+        let response = HttpResponse {
+            status: 200,
+            headers: vec![
+                header("Content-Type", "text/event-stream; charset=utf-8"),
+                header("Cache-Control", "no-cache"),
+                header("Access-Control-Allow-Origin", "*"),
+            ],
+            body: Vec::new(),
+        };
+        Handled::Stream {
+            id,
+            response,
+            initial,
+        }
+    }
+
+    fn after_write(&mut self, namespace: &str, response: HttpResponse, change: &Change) -> Handled {
+        let Some(ns) = self.namespaces.get(namespace) else {
+            return respond(response);
+        };
+        let mut events = Vec::new();
+        for (id, subscription) in &mut self.subscriptions {
+            if subscription.namespace != namespace {
+                continue;
+            }
+            let fresh = view(
+                &ns.tree,
+                &subscription.path,
+                subscription.query.as_ref(),
+                subscription.format,
+            );
+            if fresh == subscription.last {
+                continue;
+            }
+            let event = stream_event(&ns.tree, subscription, change, &fresh);
+            subscription.last = fresh;
+            events.push((*id, event));
+        }
+        Handled::Response { response, events }
+    }
+}
+
+fn respond(response: HttpResponse) -> Handled {
+    Handled::Response {
+        response,
+        events: Vec::new(),
+    }
+}
+
+/// The token of a request: `auth`, `access_token` or an `Authorization: Bearer` header.
+fn credential<'a>(
+    request: &'a HttpRequest,
+    params: &'a BTreeMap<String, String>,
+) -> Option<&'a str> {
+    params
+        .get("auth")
+        .or_else(|| params.get("access_token"))
+        .map(String::as_str)
+        .or_else(|| {
+            request
+                .header("Authorization")
+                .and_then(|v| v.strip_prefix("Bearer "))
+        })
+}
+
+fn fnv1a(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+fn body_text(request: &HttpRequest) -> Result<String, Refusal> {
+    if request.body.is_empty() {
+        return Err(Refusal::bad("No data supplied."));
+    }
+    String::from_utf8(request.body.clone()).map_err(|_| Refusal::bad(PARSE_ERROR))
+}
+
+fn header(name: &str, value: &str) -> (String, String) {
+    (name.to_owned(), value.to_owned())
+}
+
+fn json_headers() -> Vec<(String, String)> {
+    vec![
+        header("Content-Type", "application/json; charset=utf-8"),
+        header("Access-Control-Allow-Origin", "*"),
+        header("Cache-Control", "no-cache"),
+    ]
+}
+
+fn refusal_response(refusal: &Refusal) -> HttpResponse {
+    if refusal.plain {
+        return HttpResponse {
+            status: refusal.status,
+            headers: vec![
+                header("Content-Type", "text/plain"),
+                header("Access-Control-Allow-Origin", "*"),
+            ],
+            body: refusal.message.clone().into_bytes(),
+        };
+    }
+    let body = Json::object([("error", Json::String(refusal.message.clone()))]);
+    HttpResponse {
+        status: refusal.status,
+        headers: json_headers(),
+        body: render(&body, Style::Pretty).into_bytes(),
+    }
+}
+
+fn options_response() -> HttpResponse {
+    HttpResponse {
+        status: 200,
+        headers: vec![
+            header("Allow", ALLOWED_METHODS),
+            header("Access-Control-Allow-Methods", ALLOWED_METHODS),
+            header("Access-Control-Allow-Origin", "*"),
+        ],
+        body: Vec::new(),
+    }
+}
+
+/// A JSON answer with the output options applied; `etag` adds the `ETag` header.
+fn json_response(json: &Json, output: &Output, etag: Option<String>) -> HttpResponse {
+    let mut headers = json_headers();
+    let mut body = render(json, output.style);
+    if let Some(callback) = &output.callback {
+        headers[0] = header("Content-Type", "application/javascript; charset=utf-8");
+        body = format!("/**/ {callback}({body});");
+    } else if let Some(name) = &output.download {
+        headers[0] = header("Content-Type", "application/octet-stream; charset=utf-8");
+        headers.push(header(
+            "Content-Disposition",
+            &format!("attachment; filename=\"{name}\""),
+        ));
+    }
+    if let Some(etag) = etag {
+        headers.push(header("Access-Control-Expose-Headers", "ETag"));
+        headers.push(header("ETag", &etag));
+    }
+    if output.silent {
+        return HttpResponse {
+            status: 204,
+            headers,
+            body: Vec::new(),
+        };
+    }
+    HttpResponse {
+        status: 200,
+        headers,
+        body: body.into_bytes(),
+    }
+}
+
+fn read(
+    tree: &Tree,
+    path: &Path,
+    query: Option<&QueryParams>,
+    output: &Output,
+    want_etag: bool,
+) -> HttpResponse {
+    let format = if output.export {
+        Format::Export
+    } else {
+        Format::Plain
+    };
+    let node = tree.get(path);
+    let json = if path.is_priority() {
+        tree.get_json(path, Format::Plain)
+    } else if output.shallow {
+        shallow(node, format)
+    } else {
+        view(tree, path, query, format)
+    };
+    json_response(&json, output, want_etag.then(|| etag(node)))
+}
+
+/// The `shallow=true` answer; the export format adds `.priority: true`.
+fn shallow(node: Option<&Node>, format: Format) -> Json {
+    let Some(node) = node else {
+        return Json::Null;
+    };
+    match (node.shallow(), format, &node.priority) {
+        (Json::Object(mut map), Format::Export, Some(_)) => {
+            map.insert(PRIORITY_KEY.to_owned(), Json::Bool(true));
+            Json::Object(map)
+        }
+        (json, _, _) => json,
+    }
+}
+
+/// The answer for a location, or the children a query selects there.
+fn view(tree: &Tree, path: &Path, query: Option<&QueryParams>, format: Format) -> Json {
+    let node = tree.get(path);
+    let (
+        Some(query),
+        Some(Node {
+            content: Content::Children(_),
+            ..
+        }),
+    ) = (query, node)
+    else {
+        return output_json(node, format);
+    };
+    let selected: BTreeMap<String, Node> = query
+        .run(node)
+        .into_iter()
+        .map(|(key, child)| (key.to_owned(), child.clone()))
+        .collect();
+    if selected.is_empty() {
+        return Json::Object(BTreeMap::new());
+    }
+    let view = Node {
+        content: Content::Children(selected),
+        priority: None,
+    };
+    output_json(Some(&view), format)
+}
+
+fn precondition_failed(current: Option<&Node>, output: &Output) -> HttpResponse {
+    let plain = Output {
+        silent: false,
+        ..output.clone()
+    };
+    let mut response = json_response(
+        &output_json(current, Format::Plain),
+        &plain,
+        Some(etag(current)),
+    );
+    response.status = 412;
+    response
+}
+
+fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpResponse {
+    let json = if path.is_priority() {
+        tree.get_json(path, Format::Plain)
+    } else {
+        output_json(tree.get(path), Format::Export)
+    };
+    let tag = want_etag.then(|| etag(tree.get(path)));
+    json_response(&json, output, tag)
+}
+
+/// The refusal for data the tree did not accept: the position of the first key with a
+/// forbidden character when there is one, the generic parse error otherwise.
+fn data_refusal(body: &str, value: &Json) -> Refusal {
+    let mut keys = BTreeSet::new();
+    invalid_keys(value, &mut keys);
+    let position = keys.iter().filter_map(|key| key_position(body, key)).min();
+    match position {
+        Some((line, column)) => Refusal::bad(format!(
+            "Invalid data; couldn't parse key beginning at {line}:{column}. Key value can't be empty or contain $ # [ ] / or ."
+        )),
+        None => Refusal::bad(PARSE_ERROR),
+    }
+}
+
+fn invalid_keys(value: &Json, keys: &mut BTreeSet<String>) {
+    match value {
+        Json::Object(map) => {
+            for (key, child) in map {
+                let special = matches!(key.as_str(), PRIORITY_KEY | VALUE_KEY | SERVER_VALUE_KEY);
+                if !key.is_empty() && !special && validate_key(key).is_err() {
+                    keys.insert(key.clone());
+                }
+                invalid_keys(child, keys);
+            }
+        }
+        Json::Array(items) => items.iter().for_each(|item| invalid_keys(item, keys)),
+        _ => {}
+    }
+}
+
+/// The 1-based line and column of the first place `key` is written as an object key.
+fn key_position(body: &str, key: &str) -> Option<(usize, usize)> {
+    let token = serde_json::to_string(key).ok()?;
+    body.match_indices(&token).find_map(|(at, _)| {
+        let rest = body[at + token.len()..].trim_start();
+        if !rest.starts_with(':') {
+            return None;
+        }
+        let before = &body[..at];
+        let line = before.matches('\n').count() + 1;
+        let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+        Some((line, body[line_start..at].chars().count() + 1))
+    })
+}
+
+/// The entries of a `PATCH` body.
+fn patch_entries(body: &str, limits: &Limits) -> Result<Vec<PatchEntry>, Refusal> {
+    let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
+    let Json::Object(map) = value else {
+        return Err(Refusal::bad(PATCH_ERROR));
+    };
+    map.into_iter()
+        .map(|(key, value)| {
+            let path = Path::parse(&key, limits).map_err(|_| Refusal::bad(PATCH_ERROR))?;
+            if path.is_root() || path.is_info() {
+                return Err(Refusal::bad(PATCH_ERROR));
+            }
+            Ok(PatchEntry { key, path, value })
+        })
+        .collect()
+}
+
+/// The answer to a `PATCH`: its entries as one nested object, with their stored values.
+fn patch_echo(tree: &Tree, base: &Path, relative: &[Path]) -> Json {
+    let mut echo = Json::Object(BTreeMap::new());
+    for path in relative {
+        let value = output_json(tree.get(&base.join(path)), Format::Export);
+        insert_at(&mut echo, path.keys(), value);
+    }
+    echo
+}
+
+fn insert_at(target: &mut Json, keys: &[String], value: Json) {
+    let Json::Object(map) = target else {
+        return;
+    };
+    match keys {
+        [] => {}
+        [last] => {
+            map.insert(last.clone(), value);
+        }
+        [first, rest @ ..] => {
+            let child = map
+                .entry(first.clone())
+                .or_insert_with(|| Json::Object(BTreeMap::new()));
+            insert_at(child, rest, value);
+        }
+    }
+}
+
+fn put_event(relative: &Path, data: &Json) -> SseEvent {
+    SseEvent {
+        event: "put".to_owned(),
+        data: event_data(relative, data),
+    }
+}
+
+/// `{"path":...,"data":...}`, in that order as the server writes it.
+fn event_data(relative: &Path, data: &Json) -> String {
+    format!(
+        "{{\"path\":{},\"data\":{}}}",
+        render(&Json::String(relative.to_string()), Style::Compact),
+        render(data, Style::Compact)
+    )
+}
+
+/// The path of `inner` relative to `outer`, which contains it.
+fn relative_to(outer: &Path, inner: &Path) -> Path {
+    Path::from_keys(inner.keys()[outer.depth()..].iter().cloned())
+}
+
+/// The event a stream receives for a change that altered its view: the changed location
+/// when it lies inside the streamed location, the whole view otherwise. A query stream gets
+/// the changed location only while the change stays inside one child it already shows.
+fn stream_event(
+    tree: &Tree,
+    subscription: &Subscription,
+    change: &Change,
+    fresh: &Json,
+) -> SseEvent {
+    let location = &subscription.path;
+    match change {
+        Change::Put(path) if location.contains(path) && location != path => {
+            let relative = relative_to(location, path);
+            let inside_one_child = match (&subscription.query, &subscription.last, fresh) {
+                (None, _, _) => true,
+                (Some(_), Json::Object(before), Json::Object(after)) => {
+                    let first = &relative.keys()[0];
+                    before.contains_key(first)
+                        && after.contains_key(first)
+                        && before.keys().eq(after.keys())
+                }
+                (Some(_), _, _) => false,
+            };
+            if inside_one_child {
+                let data = if path.is_priority() {
+                    tree.get_json(path, Format::Plain)
+                } else {
+                    output_json(tree.get(path), subscription.format)
+                };
+                return put_event(&relative, &data);
+            }
+            put_event(&Path::root(), fresh)
+        }
+        Change::Patch(base, entries) if subscription.query.is_none() && location.contains(base) => {
+            let mut data = BTreeMap::new();
+            for entry in entries {
+                let value = output_json(tree.get(&base.join(entry)), subscription.format);
+                data.insert(entry.keys().join("/"), value);
+            }
+            SseEvent {
+                event: "patch".to_owned(),
+                data: event_data(&relative_to(location, base), &Json::Object(data)),
+            }
+        }
+        _ => put_event(&Path::root(), fresh),
     }
 }

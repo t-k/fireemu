@@ -7,4 +7,5 @@
 
 pub mod json_text;
 pub mod namespace;
+pub mod request;
 pub mod rest;

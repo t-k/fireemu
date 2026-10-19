@@ -2,6 +2,7 @@
 //! other connections and REST, segments, and the answers for unknown connections. Expected
 //! texts are the official emulator's (firebase-database-emulator v4.11.2).
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -106,11 +107,13 @@ impl Lp {
             self.id, self.pw, self.serial, self.ns
         );
         for (i, message) in messages.iter().enumerate() {
-            target.push_str(&format!(
+            write!(
+                target,
                 "&seg{i}={}&ts{i}=1&d{i}={}",
                 self.segment,
                 b64(message)
-            ));
+            )
+            .unwrap();
             self.segment += 1;
         }
         target

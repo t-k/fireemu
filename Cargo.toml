@@ -12,6 +12,7 @@ members = [
     "crates/fireemu-core-storage",
     "crates/fireemu-core-functions",
     "crates/fireemu-core-pubsub",
+    "crates/fireemu-core-database",
     "crates/fireemu-core-export",
     "crates/fireemu-export-publication",
     "crates/fireemu-fd-acl",

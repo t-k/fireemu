@@ -801,6 +801,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fireemu-core-database"
+version = "0.27.1"
+dependencies = [
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "fireemu-core-events"
 version = "0.27.1"
 dependencies = [

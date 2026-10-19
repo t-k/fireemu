@@ -68,6 +68,8 @@ pub struct Session {
     limit: usize,
     /// The members of the merge being answered, in the order they were sent.
     merge_order: Vec<String>,
+    /// The host the client connected to, named in a reset.
+    host: String,
 }
 
 /// A received frame, reassembled and parsed without the database.
@@ -140,6 +142,7 @@ impl Database {
             pending: None,
             limit: self.options().realtime_message_bytes,
             merge_order: Vec::new(),
+            host: host.unwrap_or_default().to_owned(),
         };
         Ok(Opened::Session(
             session,
@@ -201,6 +204,10 @@ enum Failure {
     Silent,
     /// The connection is dropped.
     Drop,
+    /// An internal error answer and a reset to this host, then the connection is dropped.
+    InternalReset,
+    /// These frames, then the connection is dropped.
+    DropAfter(Vec<String>),
 }
 
 type Answer = Result<Json, Failure>;
@@ -268,9 +275,13 @@ impl Session {
         let replies = match replies {
             Ok(replies) => replies,
             Err(Failure::Silent | Failure::Status(..)) => Vec::new(),
-            Err(Failure::Drop) => {
+            Err(Failure::Drop | Failure::InternalReset) => {
                 received.drop_connection = true;
                 Vec::new()
+            }
+            Err(Failure::DropAfter(frames)) => {
+                received.drop_connection = true;
+                frames
             }
             Err(Failure::Malformed) => vec![self.connection_error(db)],
         };
@@ -365,6 +376,14 @@ impl Session {
                     Err(Failure::Status(status, message)) => {
                         Ok(vec![response(r, status, &Json::String(message))])
                     }
+                    Err(Failure::InternalReset) => Err(Failure::DropAfter(vec![
+                        response(
+                            r,
+                            "internal_error",
+                            &Json::string("An internal error occurred"),
+                        ),
+                        control("r", &Json::String(self.host.clone())),
+                    ])),
                     Err(other) => Err(other),
                 }
             }
@@ -425,7 +444,7 @@ impl Session {
             }
             "n" => {
                 let path = location(arguments, false, db)?;
-                db.remove_listen(self.client, &path, listen_tag(arguments));
+                db.remove_listen(self.client, &path, listen_tag(arguments)?);
                 Ok(Json::string(""))
             }
             _ => Err(Failure::Malformed),
@@ -531,7 +550,7 @@ impl Session {
     /// order needs an undeclared index is followed whole, untagged, with a warning.
     fn listen(&mut self, db: &mut Database, arguments: &BTreeMap<String, Json>) -> Answer {
         let path = location(arguments, false, db)?;
-        let tag = listen_tag(arguments);
+        let tag = listen_tag(arguments)?;
         let query = match arguments.get("q") {
             Some(Json::Object(q)) => wire_query(q)?,
             _ => None,
@@ -726,11 +745,19 @@ fn merge_order(message: &str) -> Vec<String> {
     order
 }
 
-/// The tag `t` of a query listen.
-fn listen_tag(arguments: &BTreeMap<String, Json>) -> Option<u64> {
+/// The tag `t` of a query listen: a 32-bit integer, negative ones included. The official
+/// emulator stops answering the connection for any other tag, and answers a null one with
+/// an internal error and a reset.
+fn listen_tag(arguments: &BTreeMap<String, Json>) -> Result<Option<i64>, Failure> {
     match arguments.get("t") {
-        Some(Json::Number(fireemu_core_database::Number::Int(tag))) => u64::try_from(*tag).ok(),
-        _ => None,
+        None => Ok(None),
+        Some(Json::Number(fireemu_core_database::Number::Int(tag)))
+            if i32::try_from(*tag).is_ok() =>
+        {
+            Ok(Some(*tag))
+        }
+        Some(Json::Null) => Err(Failure::InternalReset),
+        Some(_) => Err(Failure::Drop),
     }
 }
 
@@ -802,8 +829,12 @@ fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure
     query.start = wire_bound(q, "sp", "sn", "sin", true)?;
     query.end = wire_bound(q, "ep", "en", "ein", false)?;
     if let Some(limit) = q.get("l") {
-        let Json::Number(fireemu_core_database::Number::Int(limit)) = limit else {
-            return Err(invalid("Invalid query limit"));
+        let limit = match limit {
+            Json::Number(fireemu_core_database::Number::Int(limit)) => limit,
+            // The official emulator answers a limit written as a double (even 2.0) with a
+            // connection error.
+            Json::Number(_) => return Err(Failure::Malformed),
+            _ => return Err(invalid("Invalid query limit")),
         };
         let limit = u32::try_from(*limit)
             .ok()

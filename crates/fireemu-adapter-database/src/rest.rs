@@ -652,7 +652,7 @@ impl Database {
     }
 
     /// Removes the client's listen at `path` registered under `tag`.
-    pub(crate) fn remove_listen(&mut self, client: u64, path: &Path, tag: Option<u64>) {
+    pub(crate) fn remove_listen(&mut self, client: u64, path: &Path, tag: Option<i64>) {
         self.listens.retain(|_, listen| {
             !(listen.client == client && listen.path == *path && listen.tag == tag)
         });

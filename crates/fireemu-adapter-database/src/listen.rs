@@ -47,9 +47,9 @@ pub(crate) struct Listen {
     /// The listened location.
     pub path: Path,
     /// The tag the client registered it under (`None` for a plain listen).
-    pub tag: Option<u64>,
+    pub tag: Option<i64>,
     /// The query and its tag, for a tagged query served as a window.
-    pub window: Option<(QueryParams, u64)>,
+    pub window: Option<(QueryParams, i64)>,
     /// What the client was last sent.
     pub last: Json,
 }
@@ -103,7 +103,7 @@ impl Listen {
         }
     }
 
-    fn tag(&self) -> Option<u64> {
+    fn tag(&self) -> Option<i64> {
         self.window.as_ref().map(|(_, tag)| *tag)
     }
 
@@ -427,7 +427,7 @@ fn window_diff(
 }
 
 /// One message with `entries` as its data in their order, or none when there are none.
-fn message(action: &str, path: &Path, entries: &[(String, Json)], tag: Option<u64>) -> Vec<String> {
+fn message(action: &str, path: &Path, entries: &[(String, Json)], tag: Option<i64>) -> Vec<String> {
     if entries.is_empty() {
         return Vec::new();
     }
@@ -450,11 +450,11 @@ fn message(action: &str, path: &Path, entries: &[(String, Json)], tag: Option<u6
 }
 
 /// A pushed data message.
-pub(crate) fn frame(action: &str, path: &Path, data: &Json, tag: Option<u64>) -> String {
+pub(crate) fn frame(action: &str, path: &Path, data: &Json, tag: Option<i64>) -> String {
     frame_text(action, path, &render(data, Style::Compact), tag)
 }
 
-fn frame_text(action: &str, path: &Path, data: &str, tag: Option<u64>) -> String {
+fn frame_text(action: &str, path: &Path, data: &str, tag: Option<i64>) -> String {
     let tag = tag.map(|t| format!(",\"t\":{t}")).unwrap_or_default();
     format!(
         "{{\"t\":\"d\",\"d\":{{\"b\":{{\"p\":{},\"d\":{data}{tag}}},\"a\":{}}}}}",

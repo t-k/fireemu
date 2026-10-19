@@ -479,6 +479,8 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                             return;
                         }
                         if received.drop_connection {
+                            // Frames to send before dropping (a reset), if any.
+                            let _ = send_within(socket, &received.replies, idle).await;
                             let _ = socket.shutdown().await;
                             return;
                         }

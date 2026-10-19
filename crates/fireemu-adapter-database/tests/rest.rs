@@ -1425,3 +1425,23 @@ fn long_bound_parameters_parse_in_linear_time() {
         started.elapsed()
     );
 }
+
+#[test]
+fn a_priority_on_a_node_the_update_empties_is_dropped() {
+    // The official emulator answers 200 (its echo lists `c` first) and stores nothing.
+    let mut db = db();
+    call(&mut db, "PUT", "/b.json?ns=u18", r#"{"c":1}"#);
+    assert_eq!(
+        call(
+            &mut db,
+            "PATCH",
+            "/.json?ns=u18",
+            r#"{"b/c":null,"b/.priority":1}"#
+        ),
+        (200, r#"{"b":{".priority":1,"c":null}}"#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=u18&format=export", ""),
+        (200, "null".to_owned())
+    );
+}

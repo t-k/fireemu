@@ -696,3 +696,29 @@ fn entries_below_children_the_client_lacks_arrive_whole() {
         (("B", r#"{"r":6,"a":"p","b":{"p":"/w/0/x","d":4}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/0","d":{"x":4},"t":2},"a":"d"}}"#]),
     ]);
 }
+
+#[test]
+fn plain_listens_receive_a_write_before_windows() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    rest(&mut db, "PUT", "/s.json?ns=l16", r#"{"a":1,"b":2,"c":3}"#);
+    let mut s = open(&mut db, "l16");
+    send(
+        &mut db,
+        &mut s,
+        &request(
+            1,
+            "q",
+            r#"{"p":"/s","q":{"i":".key","l":2,"vf":"r"},"t":2,"h":""}"#,
+        ),
+    );
+    send(&mut db, &mut s, &request(2, "q", r#"{"p":"/s","h":""}"#));
+    let id = s.client();
+    rest(&mut db, "DELETE", "/s/c.json?ns=l16", "");
+    assert_eq!(
+        db.drain_pushes(),
+        vec![
+            (id, push("d", "s/c", "null", None)),
+            (id, push("m", "s", r#"{"a":1,"c":null}"#, Some(2))),
+        ]
+    );
+}

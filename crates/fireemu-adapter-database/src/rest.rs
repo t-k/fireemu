@@ -595,7 +595,14 @@ impl Database {
             subscription.last = fresh;
             events.push((*id, event));
         }
-        for listen in self.listens.values_mut() {
+        // Plain listens go first: an SDK holding the whole location (a query served without
+        // its index) then sees each write there before the windows built from it, as the
+        // official emulator's order gives it in the cases observed.
+        let (plain, windows): (Vec<&mut Listen>, Vec<&mut Listen>) = self
+            .listens
+            .values_mut()
+            .partition(|listen| listen.window.is_none());
+        for listen in plain.into_iter().chain(windows) {
             // A write that touches neither the location nor anything above it sends nothing;
             // its view is not rebuilt either.
             if listen.namespace != namespace || !change.touches(&listen.path) {

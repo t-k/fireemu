@@ -226,7 +226,7 @@ pub fn expression_from_json(v: &Value, parent_depth: u32) -> Result<pb::Value, J
     })
 }
 
-/// `ExecutePipelineResponse` → JSON. A result is a document's fields only, as gRPC answers.
+/// `ExecutePipelineResponse` → JSON, with the same result documents as gRPC.
 #[must_use]
 pub fn response_to_json(response: &pb::ExecutePipelineResponse) -> Value {
     let mut out = json!({});

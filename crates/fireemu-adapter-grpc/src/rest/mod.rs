@@ -1581,6 +1581,11 @@ impl RestState {
             .local
             .run_query(&compiled.input, &*guard)
             .map_err(refuse)?;
+        // Without a select a result is the source document itself; every element carries the
+        // input snapshot's read time as its execution time.
+        let whole_documents =
+            fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages).is_none();
+        let execution_time = responses.iter().find_map(|r| r.read_time);
         let mut cursor =
             fireemu_core_firestore::pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
         let mut out = Vec::new();
@@ -1593,16 +1598,27 @@ impl RestState {
                 .push(row)
                 .map_err(|error| refuse(Status::unimplemented(error.to_string())))?;
             if let Some(fields) = fields {
+                let result = if whole_documents {
+                    document.clone()
+                } else {
+                    crate::pipeline::result_document(&fields)
+                };
                 out.push(pipeline_json::response_to_json(
                     &pb::ExecutePipelineResponse {
-                        results: vec![crate::pipeline::result_document(&fields)],
+                        results: vec![result],
+                        execution_time,
                         ..Default::default()
                     },
                 ));
             }
         }
         if out.is_empty() {
-            out.push(json!({}));
+            out.push(pipeline_json::response_to_json(
+                &pb::ExecutePipelineResponse {
+                    execution_time,
+                    ..Default::default()
+                },
+            ));
         }
         Ok(ok(Value::Array(out)))
     }

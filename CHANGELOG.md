@@ -15,6 +15,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
+- Pipeline results without a `select` are now the source documents, with their name, create time and update time, under both profiles, so `PipelineResult.ref`, `id`, `createTime` and `updateTime` work in the SDKs. Every response also carries an execution time (the read time of the pipeline's snapshot). Results after a `select` are still fields only.
 - Under the strict profile, a pipeline `select` alias that is not a plain identifier is now refused with `UNIMPLEMENTED` until production is observed. This includes a dotted or quoted alias, which is what the SDKs send for `select('a.b')`. Such an alias used to answer a flat `"a.b"` key. To keep answering under strict, give the field an explicit simple alias, such as `field('a.b').as('ab')`.
 - Under the emulator profile, a pipeline `select` alias is now read as a field path, as the official emulator reads it: `select('a.b')` answers `{a: {b}}`, and a quoted alias is unquoted. An invalid path, a reserved name or an alias inside another alias is refused with `INVALID_ARGUMENT`.
 

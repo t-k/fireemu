@@ -6206,11 +6206,9 @@ async fn drain_pipeline(
             response.results.len() <= 1,
             "one document per wire response"
         );
-        for doc in &response.results {
-            assert!(doc.name.is_empty());
-            assert!(doc.create_time.is_none());
-            assert!(doc.update_time.is_none());
-        }
+        // Every response carries the snapshot's execution time; which results are whole
+        // documents is pinned by execute_pipeline_results_carry_document_metadata_without_select.
+        assert!(response.execution_time.is_some());
         documents.extend(response.results);
         received += 1;
     }
@@ -7445,10 +7443,9 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     };
     structured.pipeline.as_mut().unwrap().stages[0].args[0] = s("/empty-scale");
     let mut stream = client.execute_pipeline(empty).await.unwrap().into_inner();
-    assert_eq!(
-        stream.message().await.unwrap(),
-        Some(pb::ExecutePipelineResponse::default())
-    );
+    let response = stream.message().await.unwrap().unwrap();
+    assert!(response.results.is_empty() && response.transaction.is_empty());
+    assert!(response.execution_time.is_some());
     assert!(stream.message().await.unwrap().is_none());
     handle.abort();
 }

@@ -6911,6 +6911,17 @@ fn enterprise_state(strict: bool, rules: Option<&str>) -> RestState {
     state_with_gateway(gateway, rules, TokenAcceptance::Verified).0
 }
 
+/// A successful pipeline answer with each element's `executionTime` checked and left out.
+fn without_execution_time(status: u16, mut body: Value) -> (u16, Value) {
+    if status == 200 {
+        for element in body.as_array_mut().into_iter().flatten() {
+            assert!(element["executionTime"].is_string(), "{element}");
+            element.as_object_mut().unwrap().remove("executionTime");
+        }
+    }
+    (status, body)
+}
+
 fn pipeline_body(stages: &Value) -> Value {
     json!({
         "database": "projects/demo-app/databases/(default)",
@@ -6948,12 +6959,13 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
         let s = enterprise_state(strict, None);
         seed_nest(&s);
         let run = |stages: Value| {
-            call(
+            let (status, body) = call(
                 &s,
                 "POST",
                 &format!("{DOCS}:executePipeline"),
                 pipeline_body(&stages),
-            )
+            );
+            without_execution_time(status, body)
         };
         let (status, body) = run(json!([
             {"name": "collection", "options": {}, "args": [{"referenceValue": "/nest"}]},
@@ -7006,7 +7018,10 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
     for strict in [true, false] {
         let s = enterprise_state(strict, None);
         seed_nest(&s);
-        let run = |body: Value| call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
+        let run = |body: Value| {
+            let (status, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
+            without_execution_time(status, body)
+        };
         let collection = json!({"name": "collection", "args": [{"referenceValue": "/nest"}]});
         for (label, body, status, name) in [
             (

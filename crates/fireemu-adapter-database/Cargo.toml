@@ -1,0 +1,26 @@
+[package]
+name = "fireemu-adapter-database"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Realtime Database REST and streaming (SSE) transport over the database core"
+
+[dependencies]
+fireemu-core-database = { path = "../fireemu-core-database" }
+serde_json.workspace = true
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+tokio-stream = "0.1"
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time", "io-util"] }
+
+[lints]
+workspace = true

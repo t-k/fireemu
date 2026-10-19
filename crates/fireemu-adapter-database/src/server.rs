@@ -333,7 +333,7 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                 };
                 let written = match message {
                     Message::Text(text) => {
-                        let replies = {
+                        let (replies, drop_connection) = {
                             let now = (shared.config.clock)();
                             let mut database = shared
                                 .database
@@ -341,8 +341,12 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                                 .unwrap_or_else(PoisonError::into_inner);
                             let received = session.receive(&mut database, &text, now);
                             deliver(shared, &mut database, received.events);
-                            received.replies
+                            (received.replies, received.drop_connection)
                         };
+                        if drop_connection {
+                            let _ = socket.shutdown().await;
+                            return;
+                        }
                         send_text(&mut socket, &replies).await
                     }
                     Message::Ping(payload) => {

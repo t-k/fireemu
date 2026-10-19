@@ -212,3 +212,48 @@ proptest! {
         prop_assert_eq!(bytes[1] & 0x80, 0, "server frames are not masked");
     }
 }
+
+#[test]
+fn boundary_lengths_are_accepted() {
+    let ping = client_frame(true, 0x9, &[1; 125], [0; 4]);
+    assert!(matches!(decode(&ping, LIMIT).unwrap(), Decoded::Frame(..)));
+    let exact = client_frame(true, 0x1, b"abcd", [0; 4]);
+    assert!(matches!(decode(&exact, 4).unwrap(), Decoded::Frame(..)));
+    let empty = client_frame(true, 0x1, b"", [5; 4]);
+    assert_eq!(
+        decode(&empty, LIMIT).unwrap(),
+        Decoded::Frame(
+            Frame {
+                fin: true,
+                opcode: Opcode::Text,
+                payload: Vec::new(),
+            },
+            6
+        )
+    );
+    let frame = |fin, opcode, payload: &[u8]| Frame {
+        fin,
+        opcode,
+        payload: payload.to_vec(),
+    };
+    let mut assembler = Assembler::new(3);
+    assert_eq!(
+        assembler.push(frame(true, Opcode::Text, b"abc")).unwrap(),
+        Some(Message::Text("abc".to_owned()))
+    );
+    assert_eq!(
+        assembler.push(frame(true, Opcode::Text, b"abcde")),
+        Err(ProtocolError::TooBig)
+    );
+    let mut assembler = Assembler::new(3);
+    assert_eq!(
+        assembler.push(frame(false, Opcode::Text, b"ab")).unwrap(),
+        None
+    );
+    assert_eq!(
+        assembler
+            .push(frame(true, Opcode::Continuation, b"c"))
+            .unwrap(),
+        Some(Message::Text("abc".to_owned()))
+    );
+}

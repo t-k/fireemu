@@ -379,4 +379,18 @@ mod tests {
             proptest::prop_assert_eq!(escaped(&pieces), expected);
         }
     }
+
+    #[test]
+    fn a_chunked_body_that_looks_like_a_request_stays_a_body() {
+        let body = b"GET /\"z\" HTTP/1.1\r\n\r\n";
+        let mut input = b"POST /a HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        input.extend_from_slice(format!("{:x};name=v\r\n", body.len()).as_bytes());
+        input.extend_from_slice(body);
+        input.extend_from_slice(b"\r\n0\r\n\r\nGET /\"w\" HTTP/1.1\r\n\r\n");
+        let mut expected = input.clone();
+        let tail = expected.len() - b"GET /\"w\" HTTP/1.1\r\n\r\n".len();
+        expected.truncate(tail);
+        expected.extend_from_slice(b"GET /%22w%22 HTTP/1.1\r\n\r\n");
+        assert_eq!(escaped(&[&input]), expected);
+    }
 }

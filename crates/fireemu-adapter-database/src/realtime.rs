@@ -70,6 +70,9 @@ pub struct Received {
     pub replies: Vec<String>,
     /// Events for open REST event streams.
     pub events: Vec<(u64, SseEvent)>,
+    /// Whether to drop the connection without a close frame, as the official emulator does
+    /// for a request it cannot handle at all.
+    pub drop_connection: bool,
 }
 
 impl Database {
@@ -171,6 +174,10 @@ enum Failure {
     Status(&'static str, String),
     /// A connection error control message (`t: "e"`).
     Malformed,
+    /// No answer at all.
+    Silent,
+    /// The connection is dropped.
+    Drop,
 }
 
 type Answer = Result<Json, Failure>;
@@ -180,11 +187,6 @@ fn invalid(message: impl Into<String>) -> Failure {
 }
 
 impl Session {
-    /// The namespace the session addresses.
-    pub fn namespace(&self) -> &str {
-        &self.namespace
-    }
-
     /// Takes one received text frame.
     pub fn receive(&mut self, db: &mut Database, frame: &str, now_millis: i64) -> Received {
         let Some(message) = self.reassemble(frame) else {
@@ -197,7 +199,15 @@ impl Session {
             }
             _ => Err(Failure::Malformed),
         };
-        let replies = replies.unwrap_or_else(|_| vec![self.connection_error(db)]);
+        let replies = match replies {
+            Ok(replies) => replies,
+            Err(Failure::Silent | Failure::Status(..)) => Vec::new(),
+            Err(Failure::Drop) => {
+                received.drop_connection = true;
+                Vec::new()
+            }
+            Err(Failure::Malformed) => vec![self.connection_error(db)],
+        };
         received.replies = replies.into_iter().flat_map(split_frames).collect();
         received
     }
@@ -277,7 +287,7 @@ impl Session {
                     Err(Failure::Status(status, message)) => {
                         Ok(vec![response(r, status, &Json::String(message))])
                     }
-                    Err(Failure::Malformed) => Err(Failure::Malformed),
+                    Err(other) => Err(other),
                 }
             }
             _ => Err(Failure::Malformed),
@@ -298,8 +308,10 @@ impl Session {
             "auth" => self.authenticate(arguments),
             "gauth" => {
                 self.identity = match arguments.get("cred") {
+                    // The official emulator does not answer a gauth without a credential.
+                    None => return Err(Failure::Silent),
                     Some(Json::String(cred)) if cred == OWNER => Identity::Owner,
-                    _ => Identity::Credential,
+                    Some(_) => Identity::Credential,
                 };
                 let expires = context.now_millis / 1000 + 3600;
                 Ok(Json::object([
@@ -311,13 +323,7 @@ impl Session {
                 self.identity = Identity::Anonymous;
                 Ok(Json::string("unauthenticated"))
             }
-            "appcheck" => match arguments.get("token") {
-                Some(Json::String(token)) if jwt_claims(token).is_some() => Ok(Json::string("")),
-                _ => Err(Failure::Status(
-                    "invalid_token",
-                    "Could not parse token.".to_owned(),
-                )),
-            },
+            "appcheck" => app_check(arguments),
             "g" => {
                 self.authorize(db)?;
                 self.get(db, arguments)
@@ -407,9 +413,13 @@ impl Session {
         let tree = db.tree_mut(&self.namespace);
         let node = tree.get(&path);
         let selected = match (&query, node) {
-            (Some(query), Some(node))
-                if matches!(node.content, fireemu_core_database::Content::Children(_)) =>
+            // The official emulator answers a query on a leaf with null.
+            (Some(_), Some(node))
+                if matches!(node.content, fireemu_core_database::Content::Leaf(_)) =>
             {
+                Json::Null
+            }
+            (Some(query), Some(node)) => {
                 let children: BTreeMap<String, Json> = query
                     .run(Some(node))
                     .into_iter()
@@ -432,10 +442,11 @@ impl Session {
         let path = location(arguments, true, db)?;
         let value = arguments.get("d").cloned().unwrap_or(Json::Null);
         let tree = db.tree_mut(&self.namespace);
-        let compare = match arguments.get("h") {
-            Some(Json::String(hash)) => Some(hash.clone()),
-            _ => None,
-        };
+        // A hash that is not a string never matches, as the official emulator answers.
+        let compare = arguments.get("h").map(|hash| match hash {
+            Json::String(hash) => hash.clone(),
+            other => render(other, Style::Compact),
+        });
         if let Some(hash) = &compare {
             if node_hash(tree.get(&path)) != *hash {
                 return Err(Failure::Status(
@@ -503,11 +514,15 @@ fn location(
     writing: bool,
     db: &mut Database,
 ) -> Result<Path, Failure> {
+    // The official emulator drops the connection for a request without a path, and reads
+    // a numeric path as its text.
     let text = match arguments.get("p") {
-        Some(Json::String(text)) => text.as_str(),
-        None => "",
+        Some(Json::String(text)) => text.clone(),
+        Some(number @ Json::Number(_)) => render(number, Style::Compact),
+        None => return Err(Failure::Drop),
         _ => return Err(Failure::Malformed),
     };
+    let text = text.as_str();
     let limits = db.options().limits;
     let path = Path::parse(text, &limits).map_err(|err| match err.kind {
         ErrorKind::PathTooLong => invalid(format!(
@@ -610,18 +625,48 @@ fn wire_bound(
 /// The claims of a token shaped as a JWT (three base64url parts, the second a JSON
 /// object), unverified.
 fn jwt_claims(token: &str) -> Option<Json> {
-    let mut parts = token.split('.');
-    let (Some(_), Some(payload), Some(_), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return None;
-    };
-    let bytes = base64url_decode(payload)?;
-    let text = String::from_utf8(bytes).ok()?;
-    match parse_with_keys(&text) {
-        Ok((claims @ Json::Object(_), _)) => Some(claims),
+    match jwt_part(token, 1)? {
+        claims @ Json::Object(_) => Some(claims),
         _ => None,
     }
+}
+
+/// The JSON of part `index` of a three-part token.
+fn jwt_part(token: &str, index: usize) -> Option<Json> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let bytes = base64url_decode(parts[index])?;
+    let text = String::from_utf8(bytes).ok()?;
+    parse_with_keys(&text).ok().map(|(json, _)| json)
+}
+
+/// `appcheck`: the official emulator refuses what is not a JWT and unsigned (`alg: none`)
+/// tokens, and accepts others. Verifying them against the App Check emulator's keys belongs
+/// to RTDB-05.
+fn app_check(arguments: &BTreeMap<String, Json>) -> Answer {
+    let token = match arguments.get("token") {
+        Some(Json::String(token)) => token.as_str(),
+        _ => "",
+    };
+    if jwt_claims(token).is_none() {
+        return Err(Failure::Status(
+            "invalid_token",
+            "Could not parse token.".to_owned(),
+        ));
+    }
+    let algorithm = match jwt_part(token, 0) {
+        Some(Json::Object(header)) => header.get("alg").cloned(),
+        _ => None,
+    };
+    if algorithm == Some(Json::string("none")) {
+        return Err(Failure::Status(
+            "invalid_token",
+            "Unsupported jwt algorithm: none".to_owned(),
+        ));
+    }
+    Ok(Json::string(""))
 }
 
 fn base64url_decode(text: &str) -> Option<Vec<u8>> {

@@ -8,6 +8,8 @@ use fireemu_adapter_database::realtime::{Opened, Session};
 use fireemu_adapter_database::rest::{Database, RestOptions, RulesMode};
 
 const NOW: i64 = 1_792_412_750_466;
+/// The first session id of a database seeded with 1.
+const PINNED_SESSION_ID: &str = "rWHi3m9zEB1MxPtFkoXJ7WZXMKo2A2mC";
 
 fn open(db: &mut Database, target: &str) -> (Session, Vec<String>) {
     match db.open_realtime(target, Some("127.0.0.1:9000"), NOW) {
@@ -38,6 +40,8 @@ fn the_handshake_names_the_time_version_host_and_session() {
     assert!(frames[0].starts_with(&prefix), "{}", frames[0]);
     let session_id = frames[0][prefix.len()..].trim_end_matches(r#""}}}"#);
     assert_eq!(session_id.len(), 32);
+    // Session ids come from the database seed, so the seed reproduces them.
+    assert_eq!(session_id, PINNED_SESSION_ID);
     assert!(session_id.bytes().all(|b| b.is_ascii_alphanumeric()));
     let (_, again) = open(&mut db, "/.ws?v=5&ns=w1");
     assert_ne!(
@@ -656,4 +660,191 @@ mod properties {
             prop_assert_eq!(joined, reply(1, "ok", &format!("\"{text}\"")));
         }
     }
+}
+
+#[test]
+fn edge_messages_follow_the_official_emulator() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=mx");
+    let error = |id: u64| {
+        format!(
+            r#"{{"t":"c","d":{{"t":"e","d":"ClientId[1]:ErrorId[{id}]: Error on incoming message"}}}}"#
+        )
+    };
+    // An unknown message type is a connection error.
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            r#"{"t":"x","d":{"r":8,"a":"g","b":{"p":"/leaf"}}}"#
+        ),
+        vec![error(1)]
+    );
+    // gauth without a credential is not answered.
+    assert!(send(&mut db, &mut s, &request(9, "gauth", "{}")).is_empty());
+    // A non-string path is read as its text; a non-string hash never matches.
+    assert_eq!(
+        send(&mut db, &mut s, &request(11, "g", r#"{"p":5}"#)),
+        vec![reply(11, "ok", "null")]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(12, "p", r#"{"p":"/x","d":1,"h":5}"#)
+        ),
+        vec![reply(
+            12,
+            "datastale",
+            r#""Transaction ETag does not match""#
+        )]
+    );
+    // A query on a leaf answers null.
+    send(&mut db, &mut s, &request(3, "p", r#"{"p":"/leaf","d":5}"#));
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(4, "g", r#"{"p":"/leaf","q":{"i":".key","l":1,"vf":"l"}}"#)
+        ),
+        vec![reply(4, "ok", "null")]
+    );
+    let long = "a".repeat(769);
+    let too_long = reply(
+        7,
+        "invalid_parameters",
+        r#""Path specified exceeds the maximum length that can be written (768 bytes).""#,
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(7, "g", &format!(r#"{{"p":"/{long}"}}"#))
+        ),
+        vec![too_long]
+    );
+    // Depth 32 is writable; 33 is not.
+    let deep = (0..32)
+        .map(|i| format!("k{i}"))
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(13, "p", &format!(r#"{{"p":"/{deep}","d":1}}"#))
+        ),
+        vec![reply(13, "ok", r#""""#)]
+    );
+    // A long all-digit frame is a message, not a frame count.
+    assert_eq!(send(&mut db, &mut s, "1234567"), vec![error(2)]);
+    // A keepalive does not open a split message.
+    assert!(send(&mut db, &mut s, "0").is_empty());
+    assert!(send(&mut db, &mut s, "2").is_empty());
+    assert!(send(&mut db, &mut s, r#"{"t":"d","d":{"r":14,"a":"echo","#).is_empty());
+    assert_eq!(
+        send(&mut db, &mut s, r#""b":{"d":1}}}"#),
+        vec![reply(14, "ok", "1")]
+    );
+}
+
+#[test]
+fn a_get_without_a_path_drops_the_connection() {
+    // The official emulator drops the connection (1006) for a get without `p`.
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=mx");
+    let received = s.receive(&mut db, &request(5, "g", "{}"), NOW);
+    assert!(received.replies.is_empty());
+    assert!(received.drop_connection);
+}
+
+#[test]
+fn the_sign_in_provider_and_session_ids_are_reported() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, frames) = open(&mut db, "/.ws?v=5&ns=mx");
+    assert!(frames[0].contains(PINNED_SESSION_ID), "{}", frames[0]);
+    // A payload whose base64url text holds '-' and '_' (from "~~~" and "???").
+    let jwt = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ-fn4_Pz8iLCJpYXQiOjEsImZpcmViYXNlIjp7InNpZ25faW5fcHJvdmlkZXIiOiJwYXNzd29yZCJ9fQ.";
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(1, "auth", &format!(r#"{{"cred":"{jwt}"}}"#))
+        ),
+        vec![reply(
+            1,
+            "ok",
+            r#"{"auth":{"provider":"password","token":{"firebase":{"sign_in_provider":"password"},"iat":1,"sub":"~~~???"},"uid":"~~~???"},"expires":null}"#
+        )]
+    );
+    let unsigned = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4IiwiaWF0IjoxfQ.";
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(2, "appcheck", &format!(r#"{{"token":"{unsigned}"}}"#))
+        ),
+        vec![reply(
+            2,
+            "invalid_token",
+            r#""Unsupported jwt algorithm: none""#
+        )]
+    );
+}
+
+#[test]
+fn deny_all_accepts_only_the_owner_credential() {
+    let options = RestOptions {
+        rules: RulesMode::DenyAll,
+        ..RestOptions::default()
+    };
+    let mut db = Database::new(options, 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=w9");
+    send(
+        &mut db,
+        &mut s,
+        &request(1, "gauth", r#"{"cred":"not-owner"}"#),
+    );
+    assert_eq!(
+        send(&mut db, &mut s, &request(2, "g", r#"{"p":"/a"}"#)),
+        vec![reply(2, "permission_denied", r#""Permission denied""#)]
+    );
+}
+
+#[test]
+fn named_bounds_and_view_sides() {
+    // Not observed on the official emulator; the SDK's encodings over a declared index.
+    let mut db = Database::new(RestOptions::default(), 1);
+    db.declare_index("w10", &fireemu_core_database::Path::from_keys(["d"]), "h");
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=w10");
+    let mut go = |frame: &str| send(&mut db, &mut s, frame);
+    go(&request(
+        1,
+        "p",
+        r#"{"p":"/d","d":{"B":{"h":2},"a":{"h":1},"c":{"h":2},"e":{"h":3}}}"#,
+    ));
+    assert_eq!(
+        go(&request(
+            2,
+            "g",
+            r#"{"p":"/d","q":{"i":"h","sp":2,"sn":"c"}}"#
+        )),
+        vec![reply(2, "ok", r#"{"c":{"h":2},"e":{"h":3}}"#)]
+    );
+    assert_eq!(
+        go(&request(
+            3,
+            "g",
+            r#"{"p":"/d","q":{"i":"h","ep":2,"en":"[MIN_NAME]","ein":false}}"#
+        )),
+        vec![reply(3, "ok", r#"{"a":{"h":1}}"#)]
+    );
+    assert_eq!(
+        go(&request(
+            4,
+            "g",
+            r#"{"p":"/d","q":{"i":"h","l":2,"vf":"l"}}"#
+        )),
+        vec![reply(4, "ok", r#"{"B":{"h":2},"a":{"h":1}}"#)]
+    );
 }

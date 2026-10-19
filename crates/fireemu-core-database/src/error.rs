@@ -26,6 +26,8 @@ pub enum ErrorKind {
     InvalidServerValue,
     /// Two paths of one multipath update overlap.
     OverlappingUpdate,
+    /// A priority write names a location that holds nothing.
+    PriorityOnAbsentNode,
     /// The location is read-only (`.info`).
     ReadOnlyPath,
     /// Query parameters that cannot be combined with the chosen order.

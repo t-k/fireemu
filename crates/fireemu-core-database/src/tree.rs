@@ -7,7 +7,7 @@ use crate::json::Json;
 use crate::limits::Limits;
 use crate::node::{Content, Format, Node, Priority};
 use crate::path::Path;
-use crate::server_value::{resolve, ServerValueContext};
+use crate::server_value::{resolve, stored_priority, ServerValueContext};
 
 /// One checked write, ready to apply.
 enum Write {
@@ -95,7 +95,12 @@ impl Tree {
             .zip(entries)
             .map(|(path, (_, value))| self.prepare(path, value, context))
             .collect::<Result<Vec<_>>>()?;
-        for write in writes {
+        // Priorities go last, after the values at their level, as the SDK's
+        // `applySubtreeWrite` orders them; a node the update empties keeps no priority.
+        let (priorities, values): (Vec<Write>, Vec<Write>) = writes
+            .into_iter()
+            .partition(|write| matches!(write, Write::Priority(..)));
+        for write in values.into_iter().chain(priorities) {
             self.apply(write);
         }
         Ok(())
@@ -110,9 +115,16 @@ impl Tree {
             ));
         }
         if path.is_priority() {
-            let resolved = resolve(value, None, context)?;
+            let parent = path.parent().unwrap_or_default();
+            let Some(node) = self.get(&parent) else {
+                return Err(DatabaseError::new(
+                    ErrorKind::PriorityOnAbsentNode,
+                    "could not set priority on non-existent node",
+                ));
+            };
+            let resolved = resolve(value, stored_priority(Some(node)).as_ref(), context)?;
             let priority = Priority::from_json(&resolved)?;
-            return Ok(Write::Priority(path.parent().unwrap_or_default(), priority));
+            return Ok(Write::Priority(parent, priority));
         }
         let resolved = resolve(value, self.get(path), context)?;
         let node = Node::from_json(&resolved, path, &self.limits)?;

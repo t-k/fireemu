@@ -50,24 +50,34 @@ pub fn resolve(json: &Json, existing: Option<&Node>, context: ServerValueContext
             None => value,
             Some(priority) => Json::object([
                 (VALUE_KEY, value),
-                (PRIORITY_KEY, resolve(priority, None, context)?),
+                (
+                    PRIORITY_KEY,
+                    resolve(priority, stored_priority(existing).as_ref(), context)?,
+                ),
             ]),
         });
     }
     let resolved = map
         .iter()
         .map(|(key, value)| {
-            // `.value` stands for the location itself. No stored node has a `.priority`
-            // child, so a priority placeholder always starts from nothing.
-            let existing_child = if key == VALUE_KEY {
-                existing
-            } else {
-                child(existing, key)
+            // `.value` stands for the location itself and `.priority` for its stored
+            // priority, as the SDK's `resolveDeferredValue` reads them.
+            let resolved = match key.as_str() {
+                VALUE_KEY => resolve(value, existing, context)?,
+                PRIORITY_KEY => resolve(value, stored_priority(existing).as_ref(), context)?,
+                _ => resolve(value, child(existing, key), context)?,
             };
-            Ok((key.clone(), resolve(value, existing_child, context)?))
+            Ok((key.clone(), resolved))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     Ok(Json::Object(resolved))
+}
+
+/// The stored priority of `node` as a leaf, the base a priority placeholder resolves
+/// against.
+pub fn stored_priority(node: Option<&Node>) -> Option<Node> {
+    let priority = node?.priority.as_ref()?;
+    Some(Node::leaf(priority.as_leaf()))
 }
 
 fn child<'a>(node: Option<&'a Node>, key: &str) -> Option<&'a Node> {

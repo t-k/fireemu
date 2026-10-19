@@ -58,6 +58,39 @@ test("the pipeline lane has its own copy of the request layer and the others kee
   }
 });
 
+test("run.mjs digests the pipeline lane's own request layer: the digest its rows were recorded under", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { readFile } = await import("node:fs/promises");
+  const digestOf = async (laneId) => {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const r = await import(${JSON.stringify(new URL("./fs-query-index/run.mjs", import.meta.url).href)}); console.log(await r.harnessDigest());`,
+      ],
+      { env: { ...process.env, FIREEMU_SANDBOX_LANE: laneId } },
+    );
+    return stdout.trim();
+  };
+  const recorded = JSON.parse(
+    await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  );
+  const ent = await digestOf("fs-ent-pipeline");
+  for (const [id, program] of Object.entries(recorded.programs)) {
+    assert.equal(program.harnessDigest, ent, id);
+  }
+  // The query lanes digest the shared request layer, which is not the pipeline lane's.
+  const query = JSON.parse(
+    await readFile(new URL("../fs-query-index-production.json", import.meta.url), "utf8"),
+  );
+  const queryDigests = new Set(Object.values(query.programs).map((p) => p.harnessDigest));
+  const shared = await digestOf("fs-query-index");
+  assert.notEqual(shared, ent);
+  assert.ok(queryDigests.has(shared), [...queryDigests].join(", "));
+});
+
 test("the pipeline lane records into the named Enterprise database without an index file", () => {
   assert.equal(selectLane("fs-ent-pipeline"), lane);
   assert.equal(lane.database, "entpipe1");

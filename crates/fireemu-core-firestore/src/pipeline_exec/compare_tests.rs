@@ -734,14 +734,16 @@ fn classic_keeps(op: &str, stored: &[Option<Value>], literal: &Value) -> Option<
     .canonicalize()
     .ok()?;
     let kept = state.run_query(&query, None).ok()?;
-    Some(
-        kept.iter()
-            .map(|document| match document.fields["k"] {
-                Value::Integer(k) => k,
-                ref other => panic!("{other:?}"),
-            })
-            .collect(),
-    )
+    // A range query orders by its field first; the documents kept are what is compared.
+    let mut kept: Vec<i64> = kept
+        .iter()
+        .map(|document| match document.fields["k"] {
+            Value::Integer(k) => k,
+            ref other => panic!("{other:?}"),
+        })
+        .collect();
+    kept.sort_unstable();
+    Some(kept)
 }
 
 /// The mirror of a comparison (`literal op field` is `field mirror(op) literal`).

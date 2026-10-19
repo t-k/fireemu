@@ -1549,4 +1549,14 @@ fn a_write_answers_what_was_written_even_when_it_keeps_the_stored_form() {
         call(&mut db, "PUT", "/p/.priority.json?ns=t11", "5"),
         (200, "5".to_owned())
     );
+    // An equal priority keeps the stored double, on a node with children too.
+    call(&mut db, "PUT", "/o.json?ns=t11", r#"{"k":1,".priority":5}"#);
+    assert_eq!(
+        call(&mut db, "PUT", "/o/.priority.json?ns=t11", "5"),
+        (200, "5".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/o/.priority.json?ns=t11", ""),
+        (200, "5.0".to_owned())
+    );
 }

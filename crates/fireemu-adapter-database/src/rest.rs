@@ -1289,5 +1289,12 @@ mod tests {
             0,
         );
         assert_eq!(crate::listen::views_built(), before + 1);
+        // A write of what is stored changes nothing, so it rebuilds nothing either.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":21,"a":"p","b":{"p":"/big/k1","d":7.0}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
     }
 }

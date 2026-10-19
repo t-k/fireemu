@@ -683,3 +683,61 @@ async fn a_client_that_stops_reading_is_dropped_after_the_write_deadline() {
     .await
     .expect("the stalled client was never dropped");
 }
+
+#[tokio::test]
+async fn a_null_tag_is_answered_and_reset_before_the_connection_drops() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w13").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":null,"h":""}}}"#)
+        .await;
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"internal_error","d":"An internal error occurred"}}}"#
+    );
+    assert_eq!(
+        client.next_text().await,
+        format!(r#"{{"t":"c","d":{{"t":"r","d":"{address}"}}}}"#)
+    );
+    assert_eq!(client.next().await.0, 0xFF);
+}
+
+#[tokio::test]
+async fn a_client_that_pings_without_reading_is_dropped_after_the_write_deadline() {
+    let (address, database) = start_with(ServerConfig {
+        realtime_idle: Duration::from_millis(500),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w14").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#)
+        .await;
+    client.next_text().await;
+    let payload = [7u8; 125];
+    let mask = [1u8, 2, 3, 4];
+    let mut ping = vec![0x89, 0x80 | 0x7D];
+    ping.extend_from_slice(&mask);
+    ping.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    let batch: Vec<u8> = ping
+        .iter()
+        .copied()
+        .cycle()
+        .take(ping.len() * 200)
+        .collect();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            // Writing may block or fail once the server stops reading; that is expected.
+            let _ =
+                tokio::time::timeout(Duration::from_millis(100), client.stream.write_all(&batch))
+                    .await;
+            if database.lock().unwrap().listen_count() == 0 {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the stalled client was never dropped");
+}

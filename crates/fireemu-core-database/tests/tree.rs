@@ -555,8 +555,12 @@ fn priorities_inside_data_are_doubles_and_written_ones_keep_their_type() {
     let mut tree =
         tree_with(json!({"a": {".value": 1, ".priority": 2}, "b": {"x": 1, ".priority": 3}}));
     let priority = |tree: &Tree, path: &str| tree.get(&p(path)).unwrap().priority.clone();
-    assert!(matches!(priority(&tree, "/a"), Some(Priority::Number(Number::Double(d))) if d == 2.0));
-    assert!(matches!(priority(&tree, "/b"), Some(Priority::Number(Number::Double(d))) if d == 3.0));
+    assert!(
+        matches!(priority(&tree, "/a"), Some(Priority::Number(Number::Double(d))) if d.to_bits() == 2.0f64.to_bits())
+    );
+    assert!(
+        matches!(priority(&tree, "/b"), Some(Priority::Number(Number::Double(d))) if d.to_bits() == 3.0f64.to_bits())
+    );
     tree.set(&p("/a/.priority"), &j(json!(5)), NOW).unwrap();
     assert!(matches!(
         priority(&tree, "/a"),

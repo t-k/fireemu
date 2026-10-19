@@ -12,7 +12,6 @@ use support::p;
 
 #[test]
 fn keys_refuse_the_documented_characters_and_the_empty_key() {
-    let limits = Limits::default();
     for bad in [
         "", "a.b", "a$", "#", "[x", "x]", "a/b", "\u{0}", "a\u{1f}", "\u{7f}",
     ] {

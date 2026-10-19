@@ -24,6 +24,8 @@ const REQUEST_KEYS: &[&str] = &[
     "newTransaction",
     "readTime",
     "autoCommitTransaction",
+    // Accepted and ignored: request tags change nothing local.
+    "requestOptions",
 ];
 
 /// JSON → `ExecutePipelineRequest`. `database` is the URL-bound database; a body

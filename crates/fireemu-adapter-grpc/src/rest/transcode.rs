@@ -534,6 +534,11 @@ static EXECUTE_PIPELINE: Schema = Schema {
             "auto_commit_transaction",
             Kind::Bool,
         ),
+        f(
+            "requestOptions",
+            "request_options",
+            Kind::Message(&REQUEST_OPTIONS),
+        ),
     ],
 };
 static PARTITION_QUERY: Schema = Schema {

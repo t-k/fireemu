@@ -66,6 +66,8 @@ assert.deepEqual(
 );
 assert.deepEqual(await rows(source().select("name").offset(1).limit(1)), [{ name: "b" }]);
 assert.deepEqual(await rows(pipeline(db).collection("pipeline-lite-empty")), []);
+// The Lite SDK's executionTime getter throws when the answer lacks it, empty answers included.
+assert.ok((await execute(pipeline(db).collection("pipeline-lite-empty"))).executionTime);
 // Without a select a result is the source document: reference, ID and times, and the
 // snapshot carries the execution time.
 const whole = await execute(source().where(field("name").equal("a")));

@@ -7128,30 +7128,124 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
     assert_eq!(status, 200, "{body}");
     // On Standard only strict has the route (production's refusal); the emulator profile keeps
     // its plain 404.
-    let (status, _) = call(
+    let (status, body) = call(
         &state_with_profile(true),
         "POST",
         &format!("{DOCS}:executePipeline"),
         pipeline_body(&collection),
     );
-    assert_eq!(status, 400);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["status"],
+        "FAILED_PRECONDITION"
+    );
+    let not_found = json!({"fireemuText": "Not Found\n"});
     let (status, body) = call(
         &state_with_profile(false),
         "POST",
         &format!("{DOCS}:executePipeline"),
         pipeline_body(&collection),
     );
-    assert_eq!(status, 404, "{body}");
-    // The route is the database's documents root only.
-    for path in ["nest:executePipeline", "nest/a:executePipeline"] {
-        let (status, _) = call(
-            &enterprise_state(true, None),
-            "POST",
-            &format!("{DOCS}/{path}"),
-            pipeline_body(&collection),
-        );
-        assert!(status == 404 || status == 400, "{path}: {status}");
+    assert_eq!((status, body), (404, not_found.clone()));
+    // The route is the database's documents root only, on either profile.
+    for strict in [true, false] {
+        for path in ["nest:executePipeline", "nest/a:executePipeline"] {
+            let (status, body) = call(
+                &enterprise_state(strict, None),
+                "POST",
+                &format!("{DOCS}/{path}"),
+                pipeline_body(&collection),
+            );
+            assert_eq!(
+                (status, body),
+                (404, not_found.clone()),
+                "strict={strict} {path}"
+            );
+        }
     }
+}
+
+/// The strict transcoder accepts every field of the request message (camelCase or the proto
+/// names), so each body reaches validation or compilation and none answers `Unknown name`;
+/// `requestOptions` is accepted and ignored on both profiles.
+#[test]
+fn rest_execute_pipeline_transcodes_every_request_field() {
+    let collection = json!([{"name": "collection", "args": [{"referenceValue": "/nest"}]}]);
+    let pipeline = json!({"pipeline": {"stages": collection}});
+    let cases = [
+        (
+            "transaction",
+            json!({"structuredPipeline": pipeline, "transaction": "AQI="}),
+            501,
+        ),
+        (
+            "newTransaction",
+            json!({"structuredPipeline": pipeline, "newTransaction": {"readOnly": {}}}),
+            501,
+        ),
+        (
+            "autoCommitTransaction alone",
+            json!({"structuredPipeline": pipeline, "autoCommitTransaction": true}),
+            400,
+        ),
+        (
+            "autoCommitTransaction with newTransaction",
+            json!({"structuredPipeline": pipeline, "newTransaction": {"readWrite": {}}, "autoCommitTransaction": true}),
+            501,
+        ),
+        (
+            "requestOptions",
+            json!({"structuredPipeline": pipeline, "requestOptions": {"requestTags": ["t"]}}),
+            200,
+        ),
+    ];
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        for (label, body, status) in cases.clone() {
+            let (got, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
+            assert_eq!(got, status, "strict={strict} {label}: {body}");
+            assert!(
+                !body.to_string().contains("Unknown name"),
+                "strict={strict} {label}: {body}"
+            );
+        }
+    }
+    // The proto field names are accepted by the strict transcoder.
+    let s = enterprise_state(true, None);
+    seed_nest(&s);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({"structured_pipeline": pipeline, "auto_commit_transaction": false, "request_options": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body.as_array().map(Vec::len), Some(2), "{body}");
+}
+
+/// Under Security Rules a pipeline runs for the owner only: the owner gets results, a
+/// signed-in user with a valid body gets 403 and nothing else.
+#[test]
+fn rest_execute_pipeline_runs_for_the_owner_under_rules() {
+    let s = enterprise_state(
+        true,
+        Some("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }"),
+    );
+    seed_nest(&s);
+    let body =
+        pipeline_body(&json!([{"name": "collection", "args": [{"referenceValue": "/nest"}]}]));
+    let (status, owner) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body.clone());
+    assert_eq!(status, 200, "{owner}");
+    assert_eq!(owner.as_array().map(Vec::len), Some(2));
+    let (status, denied) = call_as(&s, "POST", &format!("{DOCS}:executePipeline"), body, None);
+    assert_eq!(status, 403, "{denied}");
+    assert_eq!(denied.as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        stream_error(&denied)["error"]["status"],
+        "PERMISSION_DENIED"
+    );
 }
 
 /// Over REST too, a result without a select is the whole source document, and every element

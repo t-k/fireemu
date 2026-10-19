@@ -67,9 +67,11 @@ struct Position {
 /// How a node is rendered as JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    /// Values only, as a plain REST `GET` returns them.
+    /// Values only, as the SDK's `val()` and a plain REST `GET` give them: children whose
+    /// keys are dense array indexes become an array.
     Plain,
-    /// `format=export`: priorities as `.priority`, prioritized leaves as `.value`.
+    /// `format=export`: priorities as `.priority`, prioritized leaves as `.value`, and
+    /// index-keyed children kept as objects (the SDK's `exportVal()`).
     Export,
 }
 
@@ -168,11 +170,13 @@ impl Node {
     }
 
     fn build(json: &Json, at: Position, limits: &Limits) -> Result<Option<Self>> {
-        if matches!(json, Json::Null) {
-            return Ok(None);
-        }
+        // A null is held to the depth limit too: the official emulator refuses a delete
+        // below depth 32 like any other write there.
         if at.depth > limits.max_depth {
             return Err(too_deep(limits));
+        }
+        if matches!(json, Json::Null) {
+            return Ok(None);
         }
         match json {
             Json::Null => Ok(None),
@@ -224,7 +228,11 @@ impl Node {
                     "an object with \".value\" may hold only \".priority\" besides it",
                 ));
             }
-            return Ok(Self::build(value, at, limits)?.map(|node| node.with_priority(priority)));
+            let node = Self::build(value, at, limits)?;
+            if node.is_none() && priority.is_some() {
+                return Err(priority_without_value());
+            }
+            return Ok(node.map(|node| node.with_priority(priority)));
         }
         let entries = map
             .iter()
@@ -247,14 +255,15 @@ impl Node {
                 depth: at.depth + 1,
                 bytes: at.bytes + separator + key.len(),
             };
-            if !matches!(value, Json::Null) {
-                check_path_bytes(child_at.bytes, limits)?;
-            }
+            check_path_bytes(child_at.bytes, limits)?;
             if let Some(child) = Self::build(value, child_at, limits)? {
                 children.insert(key, child);
             }
         }
         if children.is_empty() {
+            if priority.is_some() {
+                return Err(priority_without_value());
+            }
             return Ok(None);
         }
         Ok(Some(Self {
@@ -282,6 +291,28 @@ impl Node {
                 (VALUE_KEY, leaf.to_json()),
                 (PRIORITY_KEY, priority.to_json()),
             ]),
+            (Content::Children(children), None) if format == Format::Plain => {
+                match array_length(children) {
+                    Some(length) => {
+                        let mut items = vec![Json::Null; length];
+                        for (key, child) in children {
+                            // `array_length` checked that every key is an index below `length`.
+                            if let Some(slot) =
+                                key.parse::<usize>().ok().and_then(|i| items.get_mut(i))
+                            {
+                                *slot = child.to_json(format);
+                            }
+                        }
+                        Json::Array(items)
+                    }
+                    None => Json::Object(
+                        children
+                            .iter()
+                            .map(|(k, child)| (k.clone(), child.to_json(format)))
+                            .collect(),
+                    ),
+                }
+            }
             (Content::Children(children), priority) => {
                 let mut map: BTreeMap<String, Json> = children
                     .iter()
@@ -345,4 +376,31 @@ pub(crate) fn too_deep(limits: &Limits) -> DatabaseError {
             limits.max_depth
         ),
     )
+}
+
+/// The error for a priority given to an empty value, which the official emulator refuses
+/// ("couldn't parse") where the SDK would store nothing.
+fn priority_without_value() -> DatabaseError {
+    DatabaseError::new(
+        ErrorKind::InvalidData,
+        "a priority needs a value; the data describes nothing",
+    )
+}
+
+/// The array length index-keyed children render as in the plain format, if they do: every
+/// key matches `0|[1-9][0-9]*` and the largest is below twice the number of children (the
+/// SDK's `ChildrenNode.val()` rule).
+pub fn array_length(children: &BTreeMap<String, Node>) -> Option<usize> {
+    let mut max = 0usize;
+    for key in children.keys() {
+        let canonical = key == "0"
+            || (!key.is_empty()
+                && !key.starts_with('0')
+                && key.bytes().all(|b| b.is_ascii_digit()));
+        if !canonical {
+            return None;
+        }
+        max = max.max(key.parse().ok()?);
+    }
+    (max < 2 * children.len()).then_some(max + 1)
 }

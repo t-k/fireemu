@@ -25,7 +25,28 @@ use support::NOW;
 // ---------------------------------------------------------------------------------------
 
 fn key() -> impl Strategy<Value = String> {
-    prop::sample::select(vec!["a", "b", "c", "1", "2", "10", "-1", "z9"]).prop_map(str::to_owned)
+    // Leading zeros, `-0`, the 32-bit edges and non-BMP keys reach the tree and the
+    // queries, so `name_compare` and the array rule are exercised inside them.
+    prop::sample::select(vec![
+        "a",
+        "b",
+        "c",
+        "0",
+        "1",
+        "2",
+        "10",
+        "-1",
+        "z9",
+        "00",
+        "01",
+        "-0",
+        "2147483647",
+        "2147483648",
+        "-2147483648",
+        "\u{1F600}",
+        "\u{FF61}",
+    ])
+    .prop_map(str::to_owned)
 }
 
 fn path() -> impl Strategy<Value = Vec<String>> {
@@ -134,7 +155,8 @@ fn model_set(model: &mut Model, at: &[String], json: &Json) {
 fn flatten_tree(tree: &Tree) -> Model {
     let mut out = Model::new();
     if let Some(root) = tree.root() {
-        flatten_json(&root.to_json(Format::Plain), &[], &mut out);
+        // The model holds no priorities, so the export is the stored tree without arrays.
+        flatten_json(&root.to_json(Format::Export), &[], &mut out);
     }
     out
 }
@@ -194,15 +216,64 @@ proptest! {
     }
 
     #[test]
-    fn plain_reads_equal_exports_without_priorities(v in prioritized_value()) {
+    fn plain_reads_are_the_sdk_val_of_the_export(v in prioritized_value()) {
         let mut tree = Tree::new(Limits::default());
         tree.set(&Path::root(), &v, NOW).unwrap();
+        let plain = tree.get_json(&Path::root(), Format::Plain);
+        prop_assert_eq!(&plain, &sdk_val(&tree.get_json(&Path::root(), Format::Export)));
+        // Writing a plain read back stores the same values without priorities.
         let mut stripped = Tree::new(Limits::default());
-        stripped.set(&Path::root(), &tree.get_json(&Path::root(), Format::Plain), NOW).unwrap();
-        prop_assert_eq!(
-            stripped.get_json(&Path::root(), Format::Export),
-            tree.get_json(&Path::root(), Format::Plain)
-        );
+        stripped.set(&Path::root(), &plain, NOW).unwrap();
+        prop_assert_eq!(stripped.get_json(&Path::root(), Format::Plain), plain);
+        let exported = stripped.get_json(&Path::root(), Format::Export);
+        let text = format!("{exported:?}");
+        prop_assert!(!text.contains(".priority"), "{}", text);
+    }
+}
+
+/// `val()` of `@firebase/database` applied to an export: priorities and `.value` wrappers
+/// dropped, and an object whose keys all match `0|[1-9][0-9]*` with the largest below
+/// twice the count read as an array.
+fn sdk_val(export: &Json) -> Json {
+    match export {
+        Json::Object(map) => {
+            if let Some(value) = map.get(".value") {
+                return sdk_val(value);
+            }
+            let children: BTreeMap<&String, Json> = map
+                .iter()
+                .filter(|(k, _)| k.as_str() != ".priority")
+                .map(|(k, v)| (k, sdk_val(v)))
+                .collect();
+            let indexes: Option<Vec<usize>> = children
+                .keys()
+                .map(|k| {
+                    let canonical = k.as_str() == "0"
+                        || (!k.starts_with('0') && k.chars().all(|c| c.is_ascii_digit()));
+                    if canonical {
+                        k.parse().ok()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            match indexes {
+                Some(indexes)
+                    if indexes
+                        .iter()
+                        .max()
+                        .is_some_and(|max| *max < 2 * indexes.len()) =>
+                {
+                    let mut items = vec![Json::Null; indexes.iter().max().unwrap() + 1];
+                    for (index, value) in indexes.into_iter().zip(children.into_values()) {
+                        items[index] = value;
+                    }
+                    Json::Array(items)
+                }
+                _ => Json::Object(children.into_iter().map(|(k, v)| (k.clone(), v)).collect()),
+            }
+        }
+        other => other.clone(),
     }
 }
 
@@ -496,5 +567,139 @@ proptest! {
         let n = n as usize;
         prop_assert_eq!(&first[..], &all[..n.min(all.len())]);
         prop_assert_eq!(&last[..], &all[all.len().saturating_sub(n)..]);
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Priorities and server values
+// ---------------------------------------------------------------------------------------
+
+fn small_key() -> impl Strategy<Value = String> {
+    prop::sample::select(vec!["a", "b", "0", "1"]).prop_map(str::to_owned)
+}
+
+/// One update entry: a value at a relative path, or a priority (possibly a placeholder) on
+/// a relative path.
+fn entry() -> impl Strategy<Value = (Vec<String>, bool, Json)> {
+    let value = prop_oneof![
+        3 => leaf(),
+        1 => Just(Json::Null),
+        1 => (-3i64..4).prop_map(|d| Json::object([(".sv", Json::object([("increment", Json::int(d))]))])),
+    ];
+    let priority = prop_oneof![
+        Just(Json::Null),
+        (-3i64..4).prop_map(Json::int),
+        (-3i64..4)
+            .prop_map(|d| Json::object([(".sv", Json::object([("increment", Json::int(d))]))])),
+    ];
+    prop_oneof![
+        (prop::collection::vec(small_key(), 1..3), value).prop_map(|(p, v)| (p, false, v)),
+        (prop::collection::vec(small_key(), 1..3), priority).prop_map(|(p, v)| (p, true, v)),
+    ]
+}
+
+fn wire_path(keys: &[String], priority: bool) -> String {
+    let mut path = keys.join("/");
+    if priority {
+        path.push_str("/.priority");
+    }
+    path
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    /// A multipath update equals its value writes one by one followed by its priority
+    /// writes, with every placeholder resolved against the tree before the update, and it
+    /// is refused as a whole when a priority names a node absent before the update.
+    #[test]
+    fn update_is_values_then_priorities(
+        initial in prioritized_value(),
+        entries in prop::collection::vec(entry(), 0..5),
+    ) {
+        let mut tree = Tree::new(Limits::default());
+        tree.set(&Path::root(), &initial, NOW).unwrap();
+        // Keep entries that overlap no earlier one, as the API demands.
+        let mut kept: Vec<(Vec<String>, bool, Json)> = Vec::new();
+        for (keys, priority, value) in entries {
+            let mut full = keys.clone();
+            if priority {
+                full.push(".priority".to_owned());
+            }
+            let overlaps = kept.iter().any(|(k, p, _)| {
+                let mut other = k.clone();
+                if *p {
+                    other.push(".priority".to_owned());
+                }
+                other.starts_with(&full) || full.starts_with(&other)
+            });
+            if !overlaps {
+                kept.push((keys, priority, value));
+            }
+        }
+        let before = tree.clone();
+        let wire: Vec<(String, Json)> = kept
+            .iter()
+            .map(|(keys, priority, value)| (wire_path(keys, *priority), value.clone()))
+            .collect();
+        let result = tree.update(&Path::root(), &wire, NOW);
+
+        let absent_priority_target = kept
+            .iter()
+            .any(|(keys, priority, _)| *priority && before.get(&Path::from_keys(keys.clone())).is_none());
+        if absent_priority_target {
+            prop_assert!(result.is_err());
+            prop_assert_eq!(&tree, &before);
+            return Ok(());
+        }
+        // Resolve every placeholder against the tree before the update, then apply.
+        let mut expected = before.clone();
+        let resolved: Vec<(Vec<String>, bool, Json)> = kept
+            .iter()
+            .map(|(keys, priority, value)| {
+                let node = before.get(&Path::from_keys(keys.clone()));
+                let base = if *priority {
+                    fireemu_core_database::server_value::stored_priority(node)
+                } else {
+                    node.cloned()
+                };
+                let json = fireemu_core_database::server_value::resolve(value, base.as_ref(), NOW);
+                (keys.clone(), *priority, json.unwrap_or(Json::Null))
+            })
+            .collect();
+        let mut failed = false;
+        for (keys, _, value) in resolved.iter().filter(|(_, p, _)| !*p) {
+            failed |= expected.set(&Path::from_keys(keys.clone()), value, NOW).is_err();
+        }
+        for (keys, _, value) in resolved.iter().filter(|(_, p, _)| *p) {
+            let path = Path::from_keys(keys.clone());
+            if expected.get(&path).is_some() {
+                failed |= expected.set(&path.child(".priority"), value, NOW).is_err();
+            }
+        }
+        if failed {
+            prop_assert!(result.is_err());
+            prop_assert_eq!(&tree, &before);
+        } else {
+            prop_assert!(result.is_ok(), "{:?}", result);
+            prop_assert_eq!(&tree, &expected);
+        }
+    }
+
+    /// Increments add up: any sequence of increments on a number gives the start plus the
+    /// sum, in integer arithmetic while it fits.
+    #[test]
+    fn increments_add_up(start in -1000i64..1000, deltas in prop::collection::vec(-50i64..50, 0..10)) {
+        let mut tree = Tree::new(Limits::default());
+        let at = Path::from_keys(["n"]);
+        tree.set(&at, &Json::int(start), NOW).unwrap();
+        for delta in &deltas {
+            let inc = Json::object([(".sv", Json::object([("increment", Json::int(*delta))]))]);
+            tree.set(&at, &inc, NOW).unwrap();
+        }
+        prop_assert_eq!(
+            tree.get_json(&at, Format::Plain),
+            Json::int(start + deltas.iter().sum::<i64>())
+        );
     }
 }

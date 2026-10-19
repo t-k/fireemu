@@ -48,9 +48,15 @@ fn plain_reads_render_dense_index_keys_as_arrays() {
     // key a canonical index and the largest below twice the count.
     let read = |value: serde_json::Value| plain(&tree_with(json!({ "l": value })), "/l");
     assert_eq!(read(json!(["a", null, "c"])), json!(["a", null, "c"]));
-    assert_eq!(read(json!({"0": "a", "3": "b"})), json!(["a", null, null, "b"]));
+    assert_eq!(
+        read(json!({"0": "a", "3": "b"})),
+        json!(["a", null, null, "b"])
+    );
     assert_eq!(read(json!({"1": "x"})), json!([null, "x"]));
-    assert_eq!(read(json!({"0": "a", "4": "b"})), json!({"0": "a", "4": "b"}));
+    assert_eq!(
+        read(json!({"0": "a", "4": "b"})),
+        json!({"0": "a", "4": "b"})
+    );
     assert_eq!(read(json!({"0": "a", "x": 1})), json!({"0": "a", "x": 1}));
     assert_eq!(read(json!({"00": 1})), json!({"00": 1}));
     assert_eq!(read(json!({"2": "x"})), json!({"2": "x"}));
@@ -120,11 +126,19 @@ fn a_priority_placeholder_resolves_against_the_stored_priority() {
     let inc = j(json!({".sv": {"increment": 1}}));
     tree.set(&p("/a/.priority"), &inc, NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!({".value": 1, ".priority": 6}));
-    tree.set(&p("/a"), &j(json!({".value": 2, ".priority": {".sv": {"increment": 1}}})), NOW)
-        .unwrap();
+    tree.set(
+        &p("/a"),
+        &j(json!({".value": 2, ".priority": {".sv": {"increment": 1}}})),
+        NOW,
+    )
+    .unwrap();
     assert_eq!(export(&tree, "/a"), json!({".value": 2, ".priority": 7}));
-    tree.set(&p("/b"), &j(json!({"x": 1, ".priority": {".sv": {"increment": 2}}})), NOW)
-        .unwrap();
+    tree.set(
+        &p("/b"),
+        &j(json!({"x": 1, ".priority": {".sv": {"increment": 2}}})),
+        NOW,
+    )
+    .unwrap();
     assert_eq!(export(&tree, "/b"), json!({"x": 1, ".priority": 2}));
 }
 
@@ -146,13 +160,21 @@ fn update_priorities_need_a_node_that_exists_before_the_update() {
         assert_eq!(export(&tree, "/"), json!({"keep": 1}));
     }
     tree.set(&p("/b"), &j(json!({"x": 1})), NOW).unwrap();
-    tree.update(&Path::root(), &entries(&[("b/.priority", json!(3)), ("b/c", json!(1))]), NOW)
-        .unwrap();
+    tree.update(
+        &Path::root(),
+        &entries(&[("b/.priority", json!(3)), ("b/c", json!(1))]),
+        NOW,
+    )
+    .unwrap();
     assert_eq!(export(&tree, "/b"), json!({"c": 1, "x": 1, ".priority": 3}));
     // The priority is applied after the values, so a node the update empties is gone.
     tree.set(&p("/d"), &j(json!({"x": 1})), NOW).unwrap();
-    tree.update(&Path::root(), &entries(&[("d/.priority", json!(3)), ("d/x", json!(null))]), NOW)
-        .unwrap();
+    tree.update(
+        &Path::root(),
+        &entries(&[("d/.priority", json!(3)), ("d/x", json!(null))]),
+        NOW,
+    )
+    .unwrap();
     assert_eq!(export(&tree, "/d"), json!(null));
 }
 
@@ -178,11 +200,18 @@ fn a_priority_on_an_empty_value_is_refused() {
 #[test]
 fn deletes_are_held_to_the_depth_and_path_limits() {
     let mut tree = Tree::new(Limits::default());
-    let deep = (0..33).map(|i| format!("k{i}")).collect::<Vec<_>>().join("/");
+    let deep = (0..33)
+        .map(|i| format!("k{i}"))
+        .collect::<Vec<_>>()
+        .join("/");
     let err = tree.set(&p(&deep), &Json::Null, NOW).unwrap_err();
     assert_eq!(err.kind, ErrorKind::PathTooDeep);
     let err = tree
-        .set(&p("/x"), &j(json!({ "k".repeat(400): { "k".repeat(400): null } })), NOW)
+        .set(
+            &p("/x"),
+            &j(json!({ "k".repeat(400): { "k".repeat(400): null } })),
+            NOW,
+        )
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::PathTooLong);
 }
@@ -232,11 +261,13 @@ fn invalid_priorities_and_value_shapes_are_refused() {
         let err = tree.set(&p("/x"), &j(value.clone()), NOW).unwrap_err();
         assert_eq!(err.kind, kind, "{value}");
     }
+    assert!(tree.root().is_none());
+    tree.set(&p("/x"), &j(json!(1)), NOW).unwrap();
     let err = tree
         .set(&p("/x/.priority"), &j(json!(true)), NOW)
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidPriority);
-    assert!(tree.root().is_none());
+    assert_eq!(export(&tree, "/x"), json!(1));
 }
 
 #[test]

@@ -204,9 +204,10 @@ fn a_tagged_query_follows_its_window() {
     // A deletion inside the window: the child that enters and the one that left.
     rest(&mut db, "DELETE", "/s/a.json?ns=l4", "");
     let id = s.client();
+    // What entered goes before what was deleted, as the official emulator orders them.
     assert_eq!(
         db.drain_pushes(),
-        vec![(id, push("m", "s", r#"{"a":null,"c":3}"#, Some(7)))]
+        vec![(id, push("m", "s", r#"{"c":3,"a":null}"#, Some(7)))]
     );
     // A change inside the window, with another child outside it.
     rest(&mut db, "PATCH", "/s.json?ns=l4", r#"{"b":20,"y":1}"#);
@@ -303,4 +304,182 @@ fn other_connections_receive_pushes_and_closing_ends_their_listens() {
     db.close_realtime(reader.client());
     rest(&mut db, "PUT", "/a/d.json?ns=l6", "3");
     assert!(db.drain_pushes().is_empty());
+}
+
+/// One step of a recorded exchange: who acts (`A` and `B` are realtime connections, `REST`
+/// a request written `METHOD path body`) and every frame `A` received for it, in order.
+type Step = ((&'static str, &'static str), &'static [&'static str]);
+
+/// Replays steps recorded against the official emulator and compares what `A` receives.
+fn replay(ns: &str, steps: &[Step]) {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let mut a = open(&mut db, ns);
+    let mut b = open(&mut db, ns);
+    for (index, ((who, text), expected)) in steps.iter().enumerate() {
+        let mut got = match *who {
+            "A" => send(&mut db, &mut a, &format!(r#"{{"t":"d","d":{text}}}"#)),
+            "B" => {
+                send(&mut db, &mut b, &format!(r#"{{"t":"d","d":{text}}}"#));
+                Vec::new()
+            }
+            _ => {
+                let mut parts = text.splitn(3, ' ');
+                let (method, path, body) = (
+                    parts.next().unwrap(),
+                    parts.next().unwrap(),
+                    parts.next().unwrap_or(""),
+                );
+                rest(
+                    &mut db,
+                    method,
+                    &format!("{path}?ns={ns}&print=silent"),
+                    body,
+                );
+                Vec::new()
+            }
+        };
+        got.extend(
+            db.drain_pushes()
+                .into_iter()
+                .filter(|(client, _)| *client == a.client())
+                .map(|(_, frame)| frame),
+        );
+        assert_eq!(got, *expected, "step {index}: {who} {text}");
+    }
+}
+
+/// Writes at, above and below plain listens: a write that changes nothing pushes nothing
+/// unless it writes null, and a write at or above a listen pushes its value even when that
+/// value did not change.
+#[test]
+#[rustfmt::skip]
+fn plain_listens_follow_writes_as_the_official_emulator_pushes_them() {
+    replay("r1", &[
+        (("REST", r#"PUT /m.json {"y":1,"z":{"h":6}}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/m/x","h":""}}"#), &[r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/m/z/h","h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"m/z/h","d":6},"a":"d"}}"#, r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"p","b":{"p":"/m/y","d":2}}"#), &[]),
+        (("B", r#"{"r":2,"a":"p","b":{"p":"/m","d":{"y":3,"z":{"h":6}}}}"#), &[r#"{"t":"d","d":{"b":{"p":"m/x","d":null},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"m/z/h","d":6},"a":"d"}}"#]),
+        (("B", r#"{"r":3,"a":"p","b":{"p":"/m/x/deep","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"m/x/deep","d":null},"a":"d"}}"#]),
+        (("B", r#"{"r":4,"a":"m","b":{"p":"/m","d":{"y":4}}}"#), &[]),
+        (("B", r#"{"r":5,"a":"m","b":{"p":"/","d":{"m/y":5}}}"#), &[]),
+        (("B", r#"{"r":6,"a":"p","b":{"p":"/m/x","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"m/x","d":null},"a":"d"}}"#]),
+        (("B", r#"{"r":7,"a":"p","b":{"p":"/","d":{"m":{"y":3,"z":{"h":6}}}}}"#), &[r#"{"t":"d","d":{"b":{"p":"m/x","d":null},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"m/z/h","d":6},"a":"d"}}"#]),
+        (("B", r#"{"r":8,"a":"m","b":{"p":"/m","d":{"x":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"m/x","d":null},"a":"d"}}"#]),
+        (("B", r#"{"r":9,"a":"m","b":{"p":"/m","d":{"z":{"h":6}}}}"#), &[]),
+        (("B", r#"{"r":10,"a":"m","b":{"p":"/m","d":{"z/h":6,"y":9}}}"#), &[]),
+        (("A", r#"{"r":3,"a":"n","b":{"p":"/m/x"}}"#), &[r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":""}}}"#]),
+        (("A", r#"{"r":4,"a":"q","b":{"p":"/m","h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"m","d":{"y":9,"z":{"h":6}}},"a":"d"}}"#, r#"{"t":"d","d":{"r":4,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":5,"a":"q","b":{"p":"/m/z","h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"m/z","d":{"h":6}},"a":"d"}}"#, r#"{"t":"d","d":{"r":5,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":6,"a":"n","b":{"p":"/m"}}"#), &[r#"{"t":"d","d":{"r":6,"b":{"s":"ok","d":""}}}"#]),
+        (("B", r#"{"r":11,"a":"p","b":{"p":"/m/q","d":1}}"#), &[]),
+    ]);
+}
+
+/// Merges: entries that change nothing are left out unless they write null, entries keep
+/// the order they were sent in, priorities and server values count once resolved.
+#[test]
+#[rustfmt::skip]
+fn merges_push_their_effective_entries_in_request_order() {
+    replay("r2", &[
+        (("REST", r#"PUT /s.json {"a":1,"b":2,"c":{"d":3}}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/s","h":"x"}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"a":1,"b":2,"c":{"d":3}}},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/s/c/d","h":"x"}}"#), &[r#"{"t":"d","d":{"b":{"p":"s/c/d","d":3},"a":"d"}}"#, r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"m","b":{"p":"/s","d":{"a":1,"b":20}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"b":20}},"a":"m"}}"#]),
+        (("B", r#"{"r":2,"a":"m","b":{"p":"/s","d":{"x":null,"y":2,"a":1}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"x":null,"y":2}},"a":"m"}}"#]),
+        (("B", r#"{"r":3,"a":"m","b":{"p":"/s","d":{"y":null,"x":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"y":null,"x":null}},"a":"m"}}"#]),
+        (("B", r#"{"r":4,"a":"m","b":{"p":"/","d":{"s/a":1,"s/b":21}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"b":21}},"a":"m"}}"#]),
+        (("B", r#"{"r":5,"a":"m","b":{"p":"/","d":{"s/c":{"d":3},"t":1}}}"#), &[]),
+        (("B", r#"{"r":6,"a":"m","b":{"p":"/s","d":{"c/d":4,"c/e":5}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"c/d":4,"c/e":5}},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"s/c/d","d":4},"a":"d"}}"#]),
+        (("B", r#"{"r":7,"a":"m","b":{"p":"/s/c","d":{"d":4,"e":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s/c","d":{"e":null}},"a":"m"}}"#]),
+        (("B", r#"{"r":8,"a":"m","b":{"p":"/s/c/d","d":{"z":1}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s/c/d","d":{"z":1}},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"s/c/d","d":{"z":1}},"a":"m"}}"#]),
+        (("B", r#"{"r":9,"a":"p","b":{"p":"/s/c","d":{"d":{"z":1}}}}"#), &[]),
+        (("B", r#"{"r":10,"a":"p","b":{"p":"/s/c/d/z","d":1}}"#), &[]),
+        (("B", r#"{"r":11,"a":"p","b":{"p":"/s/c/d/.priority","d":1}}"#), &[r#"{"t":"d","d":{"b":{"p":"s/c/d/.priority","d":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"s/c/d/.priority","d":1},"a":"d"}}"#]),
+        (("B", r#"{"r":12,"a":"p","b":{"p":"/s/c/d/.priority","d":1}}"#), &[]),
+        (("B", r#"{"r":13,"a":"p","b":{"p":"/s/b","d":{".sv":"timestamp"}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s/b","d":1792417166902},"a":"d"}}"#]),
+        (("B", r#"{"r":14,"a":"p","b":{"p":"/s/b","d":{".sv":{"increment":0}}}}"#), &[]),
+        (("B", r#"{"r":15,"a":"m","b":{"p":"/s","d":{"b":{".sv":{"increment":0}}}}}"#), &[]),
+        (("B", r#"{"r":16,"a":"p","b":{"p":"/s/c/d","d":{"z":1},"h":"wrong"}}"#), &[]),
+        (("B", r#"{"r":17,"a":"p","b":{"p":"/s/c/q","d":{".priority":2}}}"#), &[]),
+        (("B", r#"{"r":18,"a":"p","b":{"p":"/s/a","d":1}}"#), &[]),
+    ]);
+}
+
+/// Tagged windows: a write at or above the location sends the window; a write inside it
+/// sends what entered, changed or was deleted (entries first, deletions last).
+#[test]
+#[rustfmt::skip]
+fn tagged_windows_follow_writes_as_the_official_emulator_pushes_them() {
+    replay("r3", &[
+        (("REST", r#"PUT /w.json {"a":1,"b":2,"c":3,"d":4}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":2},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/w","q":{"i":".key","sp":"b","ep":"c"},"t":3,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":2,"c":3},"t":3},"a":"d"}}"#, r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"p","b":{"p":"/w/b","d":2}}"#), &[]),
+        (("B", r#"{"r":2,"a":"p","b":{"p":"/w/b","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":3,"b":null},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w/b","d":null,"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":3,"a":"p","b":{"p":"/w/b","d":2}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":2,"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w/b","d":2,"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":4,"a":"m","b":{"p":"/w","d":{"b":5}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":5},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"b":5},"t":3},"a":"m"}}"#]),
+        (("B", r#"{"r":5,"a":"m","b":{"p":"/w","d":{"b":6,"a":7}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":7,"b":6},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"b":6},"t":3},"a":"m"}}"#]),
+        (("B", r#"{"r":6,"a":"m","b":{"p":"/w","d":{"a":null,"c":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"d":4,"a":null},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"c":null},"t":3},"a":"m"}}"#]),
+        (("B", r#"{"r":7,"a":"m","b":{"p":"/w","d":{"a":1,"c":3}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":3,"a":1},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"c":3},"t":3},"a":"m"}}"#]),
+        (("B", r#"{"r":8,"a":"p","b":{"p":"/w/z","d":null}}"#), &[]),
+        (("B", r#"{"r":9,"a":"p","b":{"p":"/w/b/x","d":1}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b/x","d":1,"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w/b/x","d":1,"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":10,"a":"p","b":{"p":"/w/b/x","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":3,"b":null},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w/b/x","d":null,"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":11,"a":"p","b":{"p":"/w","d":{"a":1,"b":6,"c":3,"d":4}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":6},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"b":6,"c":3},"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":12,"a":"p","b":{"p":"/w","d":{"a":1,"b":6,"c":30,"d":4}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":6},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"b":6,"c":30},"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":13,"a":"p","b":{"p":"/","d":{"w":{"a":1,"b":6,"c":31,"d":4}}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":6},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"b":6,"c":31},"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":14,"a":"m","b":{"p":"/","d":{"w/a":2,"w/c":32}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/a","d":2,"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"c":32},"t":3},"a":"m"}}"#]),
+        (("B", r#"{"r":15,"a":"m","b":{"p":"/","d":{"w":{"b":1}}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":1},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"b":1},"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":16,"a":"p","b":{"p":"/w","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":null,"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{},"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":17,"a":"p","b":{"p":"/w","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":null,"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{},"t":3},"a":"d"}}"#]),
+        (("B", r#"{"r":18,"a":"p","b":{"p":"/w/a","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/a","d":null,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":19,"a":"p","b":{"p":"/w/c","d":1}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/c","d":1,"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w/c","d":1,"t":3},"a":"d"}}"#]),
+        (("A", r#"{"r":3,"a":"q","b":{"p":"/w","q":{"i":".key","sp":"x"},"t":4,"h":""}}"#), &[r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":4,"a":"q","b":{"p":"/w","q":{"i":".key","l":1,"vf":"r"},"t":5,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":1},"t":5},"a":"d"}}"#, r#"{"t":"d","d":{"r":4,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":5,"a":"q","b":{"p":"/w/c","q":{"i":".key","l":1,"vf":"r"},"t":6,"h":""}}"#), &[r#"{"t":"d","d":{"r":5,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":6,"a":"q","b":{"p":"/nothing","q":{"i":".key","l":1,"vf":"r"},"t":7,"h":""}}"#), &[r#"{"t":"d","d":{"r":6,"b":{"s":"ok","d":{}}}}"#]),
+    ]);
+}
+
+/// REST writes reach realtime listens the same way, a `PATCH` with its members in sent order.
+#[test]
+#[rustfmt::skip]
+fn rest_writes_push_like_realtime_writes() {
+    replay("r4", &[
+        (("REST", r#"PUT /s.json {"a":1,"b":2,"c":3}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/s","q":{"i":".key","l":2,"vf":"l"},"t":7,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"a":1,"b":2},"t":7},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("REST", r"PUT /s/z.json 9"), &[]),
+        (("REST", r"DELETE /s/a.json "), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"c":3,"a":null},"t":7},"a":"m"}}"#]),
+        (("REST", r#"PATCH /s.json {"b":20,"y":1}"#), &[r#"{"t":"d","d":{"b":{"p":"s/b","d":20,"t":7},"a":"d"}}"#]),
+        (("REST", r"PUT /s/0.json 0"), &[r#"{"t":"d","d":{"b":{"p":"s/0","d":0,"t":7},"a":"d"}}"#]),
+        (("A", r#"{"r":2,"a":"n","b":{"p":"/s","q":{"i":".key","l":2,"vf":"l"},"t":7}}"#), &[r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":""}}}"#]),
+        (("REST", r"PUT /s/0.json 1"), &[]),
+        (("A", r#"{"r":3,"a":"q","b":{"p":"/s","h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"0":1,"b":20,"c":3,"y":1,"z":9}},"a":"d"}}"#, r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":{}}}}"#]),
+        (("REST", r#"PATCH /s.json {"y":null,"b":21,"a":5}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"y":null,"b":21,"a":5}},"a":"m"}}"#]),
+        (("REST", r#"PATCH /s.json {"y":null,"b":21}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"y":null}},"a":"m"}}"#]),
+    ]);
+}
+
+/// Merges into a limit window: entries that all touch the window arrive as sent, last
+/// first, with the children that entered; otherwise only what changed in the window.
+#[test]
+#[rustfmt::skip]
+fn merges_into_a_limit_window_follow_the_official_emulator() {
+    replay("r5", &[
+        (("REST", r#"PUT /w.json {"a":1,"b":2,"c":3,"d":4}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":2},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"m","b":{"p":"/w","d":{"a":5,"b":6}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":6,"a":5},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":2,"a":"m","b":{"p":"/w/b","d":{"x":1,"y":2}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":{"x":1,"y":2},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":3,"a":"m","b":{"p":"/w","d":{"b/x":3}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b/x":3},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":4,"a":"m","b":{"p":"/w","d":{"b/y":4,"z":1}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":{"x":3,"y":4},"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":5,"a":"m","b":{"p":"/w","d":{"z":2,"b/y":5}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":{"x":3,"y":5},"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":6,"a":"m","b":{"p":"/w","d":{"0":0,"z":3}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/0","d":0,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":7,"a":"m","b":{"p":"/w","d":{"0":null,"z":4}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":{"x":3,"y":5},"0":null},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":8,"a":"m","b":{"p":"/w","d":{"0":0,"1":1}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"1":1,"0":0},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":9,"a":"m","b":{"p":"/w","d":{"0":null,"1":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":{"x":3,"y":5},"a":5,"1":null,"0":null},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":10,"a":"m","b":{"p":"/","d":{"w/a":9,"w/z":5}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/a","d":9,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":11,"a":"m","b":{"p":"/","d":{"w/z":6,"w/a":10}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/a","d":10,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":12,"a":"m","b":{"p":"/w/b","d":{"x":7}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":{"x":7},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":13,"a":"m","b":{"p":"/w","d":{"0":12,"a":11}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":11,"0":12},"t":1},"a":"m"}}"#]),
+    ]);
 }

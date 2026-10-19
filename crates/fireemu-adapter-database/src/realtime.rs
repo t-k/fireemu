@@ -12,7 +12,7 @@
 //! [`crate::listen`]. `onDisconnect` comes with RTDB-02. Every answer follows the official
 //! emulator (firebase-database-emulator v4.11.2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_database::hash::node_hash;
 use fireemu_core_database::{
@@ -24,7 +24,7 @@ use crate::json_text::{render, wire_json, Style};
 use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Refusal};
-use crate::rest::{Change, Database, RulesMode, SseEvent};
+use crate::rest::{Change, Database, Patched, RulesMode, SseEvent};
 use crate::websocket::CloseCode;
 
 /// The protocol version this server speaks.
@@ -66,6 +66,8 @@ pub struct Session {
     pending: Option<(usize, String)>,
     /// The longest message, split frames joined.
     limit: usize,
+    /// The members of the merge being answered, in the order they were sent.
+    merge_order: Vec<String>,
 }
 
 /// A received frame, reassembled and parsed without the database.
@@ -74,8 +76,8 @@ pub struct Prepared(Ready);
 
 #[derive(Debug)]
 enum Ready {
-    /// A whole message, parsed (or not JSON).
-    Message(Result<Json, crate::json_parse::ParseError>),
+    /// A whole message, parsed (or not JSON), and for a merge its members in sent order.
+    Message(Result<Json, crate::json_parse::ParseError>, Vec<String>),
     /// The connection must close with this code.
     Close(CloseCode),
 }
@@ -137,6 +139,7 @@ impl Database {
             identity: Identity::Anonymous,
             pending: None,
             limit: self.options().realtime_message_bytes,
+            merge_order: Vec::new(),
         };
         Ok(Opened::Session(
             session,
@@ -226,7 +229,15 @@ impl Session {
         match self.reassemble(frame) {
             Err(code) => Some(Prepared(Ready::Close(code))),
             Ok(None) => None,
-            Ok(Some(message)) => Some(Prepared(Ready::Message(crate::json_parse::parse(&message)))),
+            Ok(Some(message)) => {
+                let parsed = crate::json_parse::parse(&message);
+                let order = if is_merge(&parsed) {
+                    merge_order(&message)
+                } else {
+                    Vec::new()
+                };
+                Some(Prepared(Ready::Message(parsed, order)))
+            }
         }
     }
 
@@ -243,7 +254,10 @@ impl Session {
                 received.close = Some(code);
                 return received;
             }
-            Ready::Message(parsed) => parsed,
+            Ready::Message(parsed, order) => {
+                self.merge_order = order;
+                parsed
+            }
         };
         let replies = match parsed {
             Ok(Json::Object(envelope)) => {
@@ -561,6 +575,9 @@ impl Session {
     ) -> Answer {
         let path = location(arguments, true, db)?;
         let value = arguments.get("d").cloned().unwrap_or(Json::Null);
+        let paths = [path];
+        let before = db.before_write(&self.namespace, &paths);
+        let [path] = paths;
         let tree = db.tree_mut(&self.namespace);
         // A hash that is not a string never matches, as the official emulator answers.
         let compare = arguments.get("h").map(|hash| match hash {
@@ -583,7 +600,8 @@ impl Session {
         } else {
             Json::string("")
         };
-        events.extend(db.notify(&self.namespace, &Change::Put(path)));
+        let effective = db.effective(&self.namespace, std::slice::from_ref(&path), before)[0];
+        events.extend(db.notify(&self.namespace, &Change::Put { path, effective }));
         Ok(data)
     }
 
@@ -599,8 +617,20 @@ impl Session {
             return Err(Failure::Malformed);
         };
         let limits = *db.tree_mut(&self.namespace).limits();
+        // The entries in the order they were sent; any the order missed follow in key order.
+        let sent: Vec<&String> = {
+            let mut seen = BTreeSet::new();
+            let order = std::mem::take(&mut self.merge_order);
+            let mut sent: Vec<&String> = order
+                .iter()
+                .filter_map(|key| entries.get_key_value(key).map(|(key, _)| key))
+                .filter(|key| seen.insert(*key))
+                .collect();
+            sent.extend(entries.keys().filter(|key| !seen.contains(key)));
+            sent
+        };
         let mut relative = Vec::with_capacity(entries.len());
-        for key in entries.keys() {
+        for key in sent {
             let parsed = Path::parse(key, &limits).map_err(|_| Failure::Malformed)?;
             relative.push((key.clone(), parsed));
         }
@@ -619,13 +649,54 @@ impl Session {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let absolute: Vec<Path> = relative.iter().map(|(_, p)| path.join(p)).collect();
+        let before = db.before_write(&self.namespace, &absolute);
         db.tree_mut(&self.namespace)
             .update(&path, &wire, context)
             .map_err(|err| write_failure(&err))?;
-        let change = Change::Patch(path, relative.into_iter().map(|(_, p)| p).collect());
+        let effective = db.effective(&self.namespace, &absolute, before);
+        let entries = relative
+            .into_iter()
+            .zip(effective)
+            .map(|((_, path), effective)| Patched { path, effective })
+            .collect();
+        let change = Change::Patch {
+            base: path,
+            entries,
+        };
         events.extend(db.notify(&self.namespace, &change));
         Ok(Json::string(""))
     }
+}
+
+/// Whether a parsed message is a merge (`m`), whose member order is worth reading.
+fn is_merge(parsed: &Result<Json, crate::json_parse::ParseError>) -> bool {
+    let Ok(Json::Object(envelope)) = parsed else {
+        return false;
+    };
+    let Some(Json::Object(body)) = envelope.get("d") else {
+        return false;
+    };
+    matches!(body.get("a"), Some(Json::String(action)) if action == "m")
+}
+
+/// The members of a merge's data (`d.b.d`), in the order they were sent: the official
+/// emulator pushes a merge's entries in that order.
+fn merge_order(message: &str) -> Vec<String> {
+    let Ok((_, keys)) = parse_with_keys(message) else {
+        return Vec::new();
+    };
+    let mut order = Vec::new();
+    let mut inside = false;
+    for at in keys {
+        match at.depth {
+            0 | 1 => inside = false,
+            2 => inside = at.key == "d",
+            3 if inside => order.push(at.key),
+            _ => {}
+        }
+    }
+    order
 }
 
 /// The tag `t` of a query listen.

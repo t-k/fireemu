@@ -122,6 +122,16 @@ fn array_length(children: &BTreeMap<String, Node>) -> Option<usize> {
     (max < 2 * children.len()).then_some(max + 1)
 }
 
+/// The realtime protocol's value at `path`: the node's, or the priority for a
+/// `<location>/.priority` path.
+pub fn value_at(tree: &Tree, path: &Path) -> Json {
+    if path.is_priority() {
+        priority_at(tree, path)
+    } else {
+        wire_json(tree.get(path))
+    }
+}
+
 /// A priority as answer JSON. Numbers keep the type the core stored (ledger 1475): a
 /// `.priority` member is a double, a priority written to `<location>/.priority` keeps its
 /// parsed type, as the official emulator answers.

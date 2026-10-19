@@ -19,7 +19,7 @@ use fireemu_core_database::{
 };
 
 use crate::json_parse::parse_with_keys;
-use crate::json_text::{output_json, parse, priority_at, render, ParseError, Style};
+use crate::json_text::{output_json, parse, priority_at, render, value_at, ParseError, Style};
 use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Location, Output, Refusal};
@@ -186,12 +186,30 @@ struct PatchEntry {
     value: Json,
 }
 
-/// What a write changed, for the event streams.
+/// What a write changed, for the event streams and the realtime listens.
 pub(crate) enum Change {
     /// A value was replaced at a path.
-    Put(Path),
-    /// A multipath update at a base path, with the relative paths of its entries.
-    Patch(Path, Vec<Path>),
+    Put {
+        /// The written path.
+        path: Path,
+        /// Whether the write counts for the realtime listens (see [`Database::effective`]).
+        effective: bool,
+    },
+    /// A multipath update at a base path, its entries in the order they were sent.
+    Patch {
+        /// The base path.
+        base: Path,
+        /// The entries.
+        entries: Vec<Patched>,
+    },
+}
+
+/// One entry of a multipath update.
+pub(crate) struct Patched {
+    /// The entry's path, relative to the base.
+    pub path: Path,
+    /// Whether the entry counts for the realtime listens.
+    pub effective: bool,
 }
 
 /// Every namespace of one emulator.
@@ -377,6 +395,7 @@ impl Database {
                 Body {
                     text: "null",
                     json: Ok(Json::Null),
+                    order: Vec::new(),
                 },
             ),
             "POST" => self.post(&call, body(request, parsed)?),
@@ -385,6 +404,8 @@ impl Database {
     }
 
     fn put(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
+        let written_paths = [call.path.clone()];
+        let before = self.before_write(&call.namespace, &written_paths);
         let tree = &mut self.namespace(&call.namespace).tree;
         let current = tree.get(&call.path);
         let current_tag = tag_at(tree, &call.path);
@@ -401,7 +422,9 @@ impl Database {
         tree.set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
         let response = written(tree, &call.path, &call.output, call.want_etag);
-        Ok(self.after_write(&call.namespace, response, &Change::Put(call.path.clone())))
+        let [path] = written_paths;
+        let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
+        Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
     }
 
     fn post(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
@@ -416,11 +439,18 @@ impl Database {
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
         let name = Json::object([("name", Json::String(id))]);
         let response = json_response(&name, &call.output, None);
-        Ok(self.after_write(&call.namespace, response, &Change::Put(child)))
+        // A new child: the write always changes something.
+        let change = Change::Put {
+            path: child,
+            effective: true,
+        };
+        Ok(self.after_write(&call.namespace, response, &change))
     }
 
     fn patch(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
-        let entries = patch_entries(body.json, &self.options.limits)?;
+        let entries = patch_entries(body.json, &body.order, &self.options.limits)?;
+        let absolute: Vec<Path> = entries.iter().map(|e| call.path.join(&e.path)).collect();
+        let before = self.before_write(&call.namespace, &absolute);
         let wire: Vec<(String, Json)> = entries
             .iter()
             .map(|entry| (entry.key.clone(), entry.value.clone()))
@@ -431,13 +461,21 @@ impl Database {
         let echo = patch_echo(tree, &call.path, &entries, call.context);
         tree.update(&call.path, &wire, call.context)
             .map_err(|err| write_refusal(&err, || Refusal::bad(PATCH_ERROR)))?;
-        let relative: Vec<Path> = entries.into_iter().map(|entry| entry.path).collect();
+        let effective = self.effective(&call.namespace, &absolute, before);
+        let entries = entries
+            .into_iter()
+            .zip(effective)
+            .map(|(entry, effective)| Patched {
+                path: entry.path,
+                effective,
+            })
+            .collect();
         let response = json_response(&echo, &call.output, None);
-        Ok(self.after_write(
-            &call.namespace,
-            response,
-            &Change::Patch(call.path.clone(), relative),
-        ))
+        let change = Change::Patch {
+            base: call.path.clone(),
+            entries,
+        };
+        Ok(self.after_write(&call.namespace, response, &change))
     }
 
     fn namespace(&mut self, name: &str) -> &mut Namespace {
@@ -547,15 +585,54 @@ impl Database {
                 continue;
             }
             let fresh = listen.view(&ns.tree);
-            if fresh == listen.last {
-                continue;
-            }
             let frames = listen.changes(&ns.tree, change, &fresh);
             listen.last = fresh;
             self.pushes
                 .extend(frames.into_iter().map(|frame| (listen.client, frame)));
         }
         events
+    }
+
+    /// What `paths` hold before a write, so that [`Database::effective`] can tell afterwards
+    /// which of them the write changed; `None`, saving the copies, when no realtime
+    /// connection listens to `namespace`.
+    pub(crate) fn before_write(&self, namespace: &str, paths: &[Path]) -> Option<Vec<Json>> {
+        if !self
+            .listens
+            .values()
+            .any(|listen| listen.namespace == namespace)
+        {
+            return None;
+        }
+        let tree = self.namespaces.get(namespace).map(|ns| &ns.tree);
+        Some(
+            paths
+                .iter()
+                .map(|path| tree.map_or(Json::Null, |tree| value_at(tree, path)))
+                .collect(),
+        )
+    }
+
+    /// Which writes to `paths` count for the realtime listens: the official emulator
+    /// notifies a write of null always, and any other write only when it changed the value
+    /// (numbers compare by value, so 1.0 rewrites 1 without effect).
+    pub(crate) fn effective(
+        &self,
+        namespace: &str,
+        paths: &[Path],
+        before: Option<Vec<Json>>,
+    ) -> Vec<bool> {
+        let (Some(before), Some(ns)) = (before, self.namespaces.get(namespace)) else {
+            return vec![true; paths.len()];
+        };
+        paths
+            .iter()
+            .zip(before)
+            .map(|(path, old)| {
+                let new = value_at(&ns.tree, path);
+                new == Json::Null || new != old
+            })
+            .collect()
     }
 
     /// Adds a realtime listen, replacing the client's listen with the same location and
@@ -705,19 +782,47 @@ fn credential<'a>(
 #[derive(Debug)]
 pub struct ParsedBody {
     json: Result<Json, ParseError>,
+    /// The members of an object body in the order they were sent.
+    order: Vec<String>,
 }
 
 /// Parses the body of `request`, if it has a UTF-8 one. Call it before taking the database
 /// lock and pass the result to [`Database::handle_parsed`].
 pub fn parse_body(request: &HttpRequest) -> Option<ParsedBody> {
     let text = std::str::from_utf8(&request.body).ok()?;
-    (!text.is_empty()).then(|| ParsedBody { json: parse(text) })
+    (!text.is_empty()).then(|| parse_ordered(text))
+}
+
+/// Parses a body and, for an object, notes the order of its members: a `PATCH` notifies
+/// its entries in that order.
+fn parse_ordered(text: &str) -> ParsedBody {
+    if !text.trim_start().starts_with('{') {
+        return ParsedBody {
+            json: parse(text),
+            order: Vec::new(),
+        };
+    }
+    match parse_with_keys(text) {
+        Ok((json, keys)) => ParsedBody {
+            json: Ok(json),
+            order: keys
+                .into_iter()
+                .filter(|at| at.depth == 0)
+                .map(|at| at.key)
+                .collect(),
+        },
+        Err(err) => ParsedBody {
+            json: Err(err),
+            order: Vec::new(),
+        },
+    }
 }
 
 /// A write body: its text, for refusal positions, and its parsed value.
 struct Body<'a> {
     text: &'a str,
     json: Result<Json, ParseError>,
+    order: Vec<String>,
 }
 
 fn body(request: &HttpRequest, parsed: Option<ParsedBody>) -> Result<Body<'_>, Refusal> {
@@ -725,8 +830,12 @@ fn body(request: &HttpRequest, parsed: Option<ParsedBody>) -> Result<Body<'_>, R
         return Err(Refusal::bad("No data supplied."));
     }
     let text = std::str::from_utf8(&request.body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
-    let json = parsed.map_or_else(|| parse(text), |parsed| parsed.json);
-    Ok(Body { text, json })
+    let parsed = parsed.unwrap_or_else(|| parse_ordered(text));
+    Ok(Body {
+        text,
+        json: parsed.json,
+        order: parsed.order,
+    })
 }
 
 fn header(name: &str, value: &str) -> (String, String) {
@@ -955,13 +1064,22 @@ fn data_refusal(body: &str) -> Refusal {
 /// The entries of a `PATCH` body.
 fn patch_entries(
     body: Result<Json, ParseError>,
+    order: &[String],
     limits: &Limits,
 ) -> Result<Vec<PatchEntry>, Refusal> {
     let value = body.map_err(|_| Refusal::bad(PARSE_ERROR))?;
-    let Json::Object(map) = value else {
+    let Json::Object(mut map) = value else {
         return Err(Refusal::bad(PATCH_ERROR));
     };
-    map.into_iter()
+    // The members in the order they were sent (a repeated key at its first place).
+    let mut sent: Vec<(String, Json)> = Vec::with_capacity(map.len());
+    for key in order {
+        if let Some(value) = map.remove(key) {
+            sent.push((key.clone(), value));
+        }
+    }
+    sent.extend(map);
+    sent.into_iter()
         .map(|(key, value)| {
             let path = Path::parse(&key, limits).map_err(|_| Refusal::bad(PATCH_ERROR))?;
             if path.is_root() || path.is_info() {
@@ -1044,7 +1162,7 @@ fn stream_event(
 ) -> SseEvent {
     let location = &subscription.path;
     match change {
-        Change::Put(path) if location.contains(path) && location != path => {
+        Change::Put { path, .. } if location.contains(path) && location != path => {
             let relative = relative_to(location, path);
             let inside_one_child = match (&subscription.query, &subscription.last, fresh) {
                 (None, _, _) => true,
@@ -1066,9 +1184,11 @@ fn stream_event(
             }
             put_event(&Path::root(), fresh)
         }
-        Change::Patch(base, entries) if subscription.query.is_none() && location.contains(base) => {
+        Change::Patch { base, entries }
+            if subscription.query.is_none() && location.contains(base) =>
+        {
             let mut data = BTreeMap::new();
-            for entry in entries {
+            for entry in entries.iter().map(|entry| &entry.path) {
                 let target = base.join(entry);
                 let value = if target.is_priority() {
                     priority_at(tree, &target)

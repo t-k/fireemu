@@ -120,6 +120,8 @@ pub struct RestOptions {
     pub rules: RulesMode,
     /// Write limits.
     pub limits: Limits,
+    /// The longest realtime message, split frames joined (the SDKs' 16 MB write limit).
+    pub realtime_message_bytes: usize,
 }
 
 impl Default for RestOptions {
@@ -128,6 +130,7 @@ impl Default for RestOptions {
             default_namespace: "fake-server".to_owned(),
             rules: RulesMode::AllowAll,
             limits: Limits::default(),
+            realtime_message_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -536,6 +539,11 @@ impl Database {
     /// The tree of `namespace`, created empty on first use.
     pub(crate) fn tree_mut(&mut self, namespace: &str) -> &mut Tree {
         &mut self.namespace(namespace).tree
+    }
+
+    /// The longest realtime message.
+    pub fn realtime_message_bytes(&self) -> usize {
+        self.options.realtime_message_bytes
     }
 
     /// The options in force.

@@ -49,6 +49,9 @@ pub struct ServerConfig {
     pub body_timeout: Duration,
     /// How many events a stream may have waiting before it is closed as too slow.
     pub stream_queue: usize,
+    /// How long a realtime connection may stay silent (the SDKs send a keepalive every
+    /// 45 s).
+    pub realtime_idle: Duration,
     /// The server time.
     pub clock: Clock,
 }
@@ -61,6 +64,7 @@ impl Default for ServerConfig {
             header_timeout: Duration::from_secs(30),
             body_timeout: Duration::from_secs(120),
             stream_queue: 1024,
+            realtime_idle: Duration::from_secs(120),
             clock: Arc::new(|| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -246,31 +250,35 @@ fn header<'a>(request: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
     request.headers().get(name).and_then(|v| v.to_str().ok())
 }
 
+/// A WebSocket upgrade of `/.ws`; the official emulator upgrades no other path.
 fn is_websocket_upgrade(request: &Request<Incoming>) -> bool {
     request.method() == hyper::Method::GET
+        && request.uri().path() == "/.ws"
         && header(request, "upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
 }
 
 /// Answers a WebSocket upgrade: a refusal before the upgrade, or 101 and a task that
 /// serves the realtime protocol on the upgraded connection.
 fn upgrade(shared: &Arc<Shared>, mut request: Request<Incoming>) -> Response<Body> {
+    // The official emulator upgrades whatever Sec-WebSocket-Version is named; only the
+    // key is needed to answer.
     let Some(key) = header(&request, "sec-websocket-key").map(str::to_owned) else {
         return plain(400, "Missing Sec-WebSocket-Key.");
     };
-    if header(&request, "sec-websocket-version") != Some("13") {
-        return plain(400, "Unsupported Sec-WebSocket-Version.");
-    }
     let target = request.uri().path_and_query().map_or_else(
         || request.uri().path().to_owned(),
         |pq| pq.as_str().to_owned(),
     );
     let host = header(&request, "host").map(str::to_owned);
     let now = (shared.config.clock)();
-    let opened = shared
-        .database
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .open_realtime(&target, host.as_deref(), now);
+    let (opened, limit) = {
+        let mut database = shared
+            .database
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let limit = database.realtime_message_bytes();
+        (database.open_realtime(&target, host.as_deref(), now), limit)
+    };
     let opened = match opened {
         Ok(opened) => opened,
         Err(refusal) => return full(refusal_response(&refusal)),
@@ -279,7 +287,7 @@ fn upgrade(shared: &Arc<Shared>, mut request: Request<Incoming>) -> Response<Bod
     let shared = Arc::clone(shared);
     tokio::spawn(async move {
         if let Ok(upgraded) = on_upgrade.await {
-            serve_realtime(&shared, TokioIo::new(upgraded), opened).await;
+            serve_realtime(&shared, TokioIo::new(upgraded), opened, limit).await;
         }
     });
     Response::builder()
@@ -316,6 +324,7 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     shared: &Arc<Shared>,
     mut socket: S,
     opened: Opened,
+    limit: usize,
 ) {
     let mut session: Session = match opened {
         Opened::Shutdown(frames) => {
@@ -332,7 +341,6 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
             session
         }
     };
-    let limit = shared.config.max_body_bytes;
     let mut assembler = Assembler::new(limit);
     let mut buffer: Vec<u8> = Vec::new();
     let mut chunk = vec![0u8; 16 * 1024];
@@ -342,10 +350,20 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                 send_close(&mut socket, error.close_code()).await;
                 return;
             }
-            Ok(Decoded::Incomplete) => match socket.read(&mut chunk).await {
-                Ok(0) | Err(_) => return,
-                Ok(n) => buffer.extend_from_slice(&chunk[..n]),
-            },
+            // The SDKs send a keepalive every 45 s, so a connection silent for longer than the
+            // idle time is gone.
+            Ok(Decoded::Incomplete) => {
+                match tokio::time::timeout(shared.config.realtime_idle, socket.read(&mut chunk))
+                    .await
+                {
+                    Ok(Ok(0) | Err(_)) => return,
+                    Ok(Ok(n)) => buffer.extend_from_slice(&chunk[..n]),
+                    Err(_) => {
+                        send_close(&mut socket, CloseCode::Normal).await;
+                        return;
+                    }
+                }
+            }
             Ok(Decoded::Frame(frame, used)) => {
                 buffer.drain(..used);
                 let message = match assembler.push(frame) {
@@ -358,21 +376,30 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
                 };
                 let written = match message {
                     Message::Text(text) => {
-                        let (replies, drop_connection) = {
+                        // Reassembly and parsing happen before the lock is taken.
+                        let Some(prepared) = session.prepare(&text) else {
+                            continue;
+                        };
+                        let received = {
                             let now = (shared.config.clock)();
                             let mut database = shared
                                 .database
                                 .lock()
                                 .unwrap_or_else(PoisonError::into_inner);
-                            let received = session.receive(&mut database, &text, now);
-                            deliver(shared, &mut database, received.events);
-                            (received.replies, received.drop_connection)
+                            let mut received =
+                                session.dispatch_prepared(&mut database, prepared, now);
+                            deliver(shared, &mut database, std::mem::take(&mut received.events));
+                            received
                         };
-                        if drop_connection {
+                        if let Some(code) = received.close {
+                            send_close(&mut socket, code).await;
+                            return;
+                        }
+                        if received.drop_connection {
                             let _ = socket.shutdown().await;
                             return;
                         }
-                        send_text(&mut socket, &replies).await
+                        send_text(&mut socket, &received.replies).await
                     }
                     Message::Ping(payload) => {
                         socket.write_all(&encode(Opcode::Pong, &payload)).await

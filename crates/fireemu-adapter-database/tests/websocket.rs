@@ -257,3 +257,40 @@ fn boundary_lengths_are_accepted() {
         Some(Message::Text("abc".to_owned()))
     );
 }
+
+#[test]
+fn close_payloads_follow_rfc_6455() {
+    let close = |payload: &[u8]| {
+        Assembler::new(LIMIT).push(Frame {
+            fin: true,
+            opcode: Opcode::Close,
+            payload: payload.to_vec(),
+        })
+    };
+    assert_eq!(close(&[]), Ok(Some(Message::Close(None))));
+    assert_eq!(close(&[0x03]), Err(ProtocolError::BadClose));
+    for code in [1000u16, 1001, 1002, 1003, 1007, 1011, 1014, 3000, 4999] {
+        assert_eq!(
+            close(&code.to_be_bytes()),
+            Ok(Some(Message::Close(Some(code)))),
+            "{code}"
+        );
+    }
+    for code in [0u16, 999, 1004, 1005, 1006, 1015, 1016, 2999, 5000] {
+        assert_eq!(
+            close(&code.to_be_bytes()),
+            Err(ProtocolError::BadClose),
+            "{code}"
+        );
+    }
+    assert_eq!(
+        close(&[0x03, 0xE8, b'o', b'k']),
+        Ok(Some(Message::Close(Some(1000))))
+    );
+    assert_eq!(close(&[0x03, 0xE8, 0xff]), Err(ProtocolError::InvalidUtf8));
+    assert_eq!(ProtocolError::BadClose.close_code(), CloseCode::Protocol);
+    assert_eq!(CloseCode::Normal.code(), 1000);
+    assert_eq!(CloseCode::Protocol.code(), 1002);
+    assert_eq!(CloseCode::InvalidData.code(), 1007);
+    assert_eq!(CloseCode::TooBig.code(), 1009);
+}

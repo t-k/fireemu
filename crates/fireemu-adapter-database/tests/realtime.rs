@@ -848,3 +848,108 @@ fn named_bounds_and_view_sides() {
         vec![reply(4, "ok", r#"{"B":{"h":2},"a":{"h":1}}"#)]
     );
 }
+
+#[test]
+fn numbers_beyond_the_double_range_never_panic() {
+    // The official emulator stores and reads back the string "Infinity"; its echo returns
+    // the integer's digits, which this server answers as "Infinity" (echo is a diagnostic).
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=wr2");
+    let huge = format!("1{}", "0".repeat(400));
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(2, "p", &format!(r#"{{"p":"/n","d":{huge}}}"#))
+        ),
+        vec![reply(2, "ok", r#""""#)]
+    );
+    assert_eq!(
+        send(&mut db, &mut s, &request(3, "g", r#"{"p":"/n"}"#)),
+        vec![reply(3, "ok", r#""Infinity""#)]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(4, "p", r#"{"p":"/n","d":1,"h":1e400}"#)
+        ),
+        vec![reply(
+            4,
+            "datastale",
+            r#""Transaction ETag does not match""#
+        )]
+    );
+    assert_eq!(
+        send(&mut db, &mut s, &request(5, "echo", r#"{"d":1e400}"#)),
+        vec![reply(5, "ok", r#""Infinity""#)]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(1, "echo", &format!(r#"{{"d":{huge}}}"#))
+        ),
+        vec![reply(1, "ok", r#""Infinity""#)]
+    );
+}
+
+#[test]
+fn split_messages_are_capped_at_the_realtime_limit() {
+    // Not observed on the official emulator: a split message longer than the realtime
+    // message limit closes the connection with 1009 as soon as it crosses the limit.
+    let options = RestOptions {
+        realtime_message_bytes: 100,
+        ..RestOptions::default()
+    };
+    let mut db = Database::new(options, 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=cap");
+    assert!(s.receive(&mut db, "999999", NOW).close.is_none());
+    assert!(s.receive(&mut db, &"x".repeat(60), NOW).close.is_none());
+    let received = s.receive(&mut db, &"x".repeat(60), NOW);
+    assert_eq!(
+        received.close,
+        Some(fireemu_adapter_database::websocket::CloseCode::TooBig)
+    );
+}
+
+#[test]
+fn messages_are_prepared_without_the_database() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=prep");
+    // Reassembly and parsing need no database; only dispatch does.
+    assert!(s.prepare("2").is_none());
+    assert!(s.prepare(r#"{"t":"d","d":{"r":1,"a":"echo","#).is_none());
+    let prepared = s.prepare(r#""b":{"d":"x"}}}"#).unwrap();
+    assert_eq!(
+        s.dispatch_prepared(&mut db, prepared, NOW).replies,
+        vec![reply(1, "ok", r#""x""#)]
+    );
+}
+
+#[test]
+fn large_messages_parse_in_linear_time() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=big");
+    let data = format!(
+        "{{{}}}",
+        (0..100_000)
+            .map(|i| format!("\"k{i}\":{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            &request(1, "p", &format!(r#"{{"p":"/m","d":{data}}}"#))
+        ),
+        vec![reply(1, "ok", r#""""#)]
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+}

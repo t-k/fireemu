@@ -23,6 +23,7 @@ use crate::json_text::{render, wire_json, Style};
 use crate::namespace::route;
 use crate::request::{self, Refusal};
 use crate::rest::{Change, Database, RulesMode, SseEvent};
+use crate::websocket::CloseCode;
 
 /// The protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "5";
@@ -61,6 +62,20 @@ pub struct Session {
     identity: Identity,
     /// Frames still expected for a split message, and what arrived so far.
     pending: Option<(usize, String)>,
+    /// The longest message, split frames joined.
+    limit: usize,
+}
+
+/// A received frame, reassembled and parsed without the database.
+#[derive(Debug)]
+pub struct Prepared(Ready);
+
+#[derive(Debug)]
+enum Ready {
+    /// A whole message, parsed (or not JSON).
+    Message(Result<Json, crate::json_parse::ParseError>),
+    /// The connection must close with this code.
+    Close(CloseCode),
 }
 
 /// What one received frame produced.
@@ -73,6 +88,8 @@ pub struct Received {
     /// Whether to drop the connection without a close frame, as the official emulator does
     /// for a request it cannot handle at all.
     pub drop_connection: bool,
+    /// A close code to end the connection with.
+    pub close: Option<CloseCode>,
 }
 
 impl Database {
@@ -117,6 +134,7 @@ impl Database {
             client,
             identity: Identity::Anonymous,
             pending: None,
+            limit: self.options().realtime_message_bytes,
         };
         Ok(Opened::Session(
             session,
@@ -189,11 +207,38 @@ fn invalid(message: impl Into<String>) -> Failure {
 impl Session {
     /// Takes one received text frame.
     pub fn receive(&mut self, db: &mut Database, frame: &str, now_millis: i64) -> Received {
-        let Some(message) = self.reassemble(frame) else {
-            return Received::default();
-        };
+        match self.prepare(frame) {
+            Some(prepared) => self.dispatch_prepared(db, prepared, now_millis),
+            None => Received::default(),
+        }
+    }
+
+    /// Reassembles and parses a received text frame; `None` while a split message is still
+    /// incomplete. It needs no database, so it runs before the database lock is taken.
+    pub fn prepare(&mut self, frame: &str) -> Option<Prepared> {
+        match self.reassemble(frame) {
+            Err(code) => Some(Prepared(Ready::Close(code))),
+            Ok(None) => None,
+            Ok(Some(message)) => Some(Prepared(Ready::Message(crate::json_parse::parse(&message)))),
+        }
+    }
+
+    /// Answers a prepared message.
+    pub fn dispatch_prepared(
+        &mut self,
+        db: &mut Database,
+        prepared: Prepared,
+        now_millis: i64,
+    ) -> Received {
         let mut received = Received::default();
-        let replies = match parse_with_keys(&message).map(|(json, _)| json) {
+        let parsed = match prepared.0 {
+            Ready::Close(code) => {
+                received.close = Some(code);
+                return received;
+            }
+            Ready::Message(parsed) => parsed,
+        };
+        let replies = match parsed {
             Ok(Json::Object(envelope)) => {
                 self.dispatch(db, &envelope, now_millis, &mut received.events)
             }
@@ -212,14 +257,19 @@ impl Session {
         received
     }
 
-    fn reassemble(&mut self, frame: &str) -> Option<String> {
+    /// Joins split frames; a split message longer than the limit closes the connection
+    /// (1009) as soon as it crosses it.
+    fn reassemble(&mut self, frame: &str) -> Result<Option<String>, CloseCode> {
         if let Some((remaining, mut joined)) = self.pending.take() {
+            if joined.len() + frame.len() > self.limit {
+                return Err(CloseCode::TooBig);
+            }
             joined.push_str(frame);
             if remaining > 1 {
                 self.pending = Some((remaining - 1, joined));
-                return None;
+                return Ok(None);
             }
-            return Some(joined);
+            return Ok(Some(joined));
         }
         // A short all-digit frame is a frame count; "0" is the SDK's keepalive.
         if frame.len() <= 6 && !frame.is_empty() && frame.bytes().all(|b| b.is_ascii_digit()) {
@@ -227,10 +277,10 @@ impl Session {
                 if count > 0 {
                     self.pending = Some((count, String::new()));
                 }
-                return None;
+                return Ok(None);
             }
         }
-        Some(frame.to_owned())
+        Ok(Some(frame.to_owned()))
     }
 
     fn connection_error(&self, db: &mut Database) -> String {

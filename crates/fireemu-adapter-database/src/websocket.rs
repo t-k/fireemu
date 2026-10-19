@@ -95,8 +95,10 @@ pub enum ProtocolError {
     UnexpectedContinuation,
     /// A new data frame while a fragmented message is open.
     ExpectedContinuation,
-    /// A text message that is not UTF-8.
+    /// A text message, or a close reason, that is not UTF-8.
     InvalidUtf8,
+    /// A close frame with a one-byte payload or a code no endpoint may send.
+    BadClose,
 }
 
 /// The close status codes this server sends.
@@ -175,7 +177,8 @@ pub fn decode(buffer: &[u8], max_payload: usize) -> Result<Decoded, ProtocolErro
     };
     let mask = [mask[0], mask[1], mask[2], mask[3]];
     at += 4;
-    let Some(masked) = buffer.get(at..at + length) else {
+    let end = at.checked_add(length).ok_or(ProtocolError::TooBig)?;
+    let Some(masked) = buffer.get(at..end) else {
         return Ok(Decoded::Incomplete);
     };
     let payload = masked
@@ -189,7 +192,7 @@ pub fn decode(buffer: &[u8], max_payload: usize) -> Result<Decoded, ProtocolErro
             opcode,
             payload,
         },
-        at + length,
+        end,
     ))
 }
 
@@ -248,11 +251,7 @@ impl Assembler {
         match frame.opcode {
             Opcode::Ping => return Ok(Some(Message::Ping(frame.payload))),
             Opcode::Pong => return Ok(Some(Message::Pong)),
-            Opcode::Close => {
-                let code = (frame.payload.len() >= 2)
-                    .then(|| u16::from_be_bytes([frame.payload[0], frame.payload[1]]));
-                return Ok(Some(Message::Close(code)));
-            }
+            Opcode::Close => return close_message(&frame.payload).map(Some),
             Opcode::Continuation => {
                 let Some((_, buffer)) = self.open.as_mut() else {
                     return Err(ProtocolError::UnexpectedContinuation);
@@ -284,5 +283,23 @@ impl Assembler {
         String::from_utf8(payload)
             .map(|text| Some(Message::Text(text)))
             .map_err(|_| ProtocolError::InvalidUtf8)
+    }
+}
+
+/// Reads a close payload (RFC 6455 sections 5.5.1 and 7.4): empty, or a code an endpoint
+/// may send followed by a UTF-8 reason.
+fn close_message(payload: &[u8]) -> Result<Message, ProtocolError> {
+    match payload {
+        [] => Ok(Message::Close(None)),
+        [_] => Err(ProtocolError::BadClose),
+        [high, low, reason @ ..] => {
+            let code = u16::from_be_bytes([*high, *low]);
+            let sendable = matches!(code, 1000..=1003 | 1007..=1014 | 3000..=4999);
+            if !sendable {
+                return Err(ProtocolError::BadClose);
+            }
+            std::str::from_utf8(reason).map_err(|_| ProtocolError::InvalidUtf8)?;
+            Ok(Message::Close(Some(code)))
+        }
     }
 }

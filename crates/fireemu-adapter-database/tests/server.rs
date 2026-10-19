@@ -165,9 +165,13 @@ struct Client {
 
 impl Client {
     async fn connect(address: &str, target: &str) -> (Self, String) {
+        Self::connect_with(address, target, "13").await
+    }
+
+    async fn connect_with(address: &str, target: &str, version: &str) -> (Self, String) {
         let mut stream = TcpStream::connect(address).await.unwrap();
         let request = format!(
-            "GET {target} HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            "GET {target} HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: {version}\r\n\r\n"
         );
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut head = Vec::new();
@@ -198,6 +202,15 @@ impl Client {
             frame.push(0x80 | 0x7E);
             frame.extend_from_slice(&u16::try_from(payload.len()).unwrap().to_be_bytes());
         }
+        frame.extend_from_slice(&mask);
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        self.stream.write_all(&frame).await.unwrap();
+    }
+
+    async fn send_frame(&mut self, fin: bool, opcode: u8, payload: &[u8]) {
+        let mask = [7u8, 1, 2, 3];
+        let mut frame = vec![(u8::from(fin) << 7) | opcode];
+        frame.push(0x80 | u8::try_from(payload.len()).unwrap());
         frame.extend_from_slice(&mask);
         frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
         self.stream.write_all(&frame).await.unwrap();
@@ -317,9 +330,13 @@ async fn unmasked_frames_close_the_connection_with_a_protocol_error() {
 }
 
 async fn start_with(config: ServerConfig) -> (String, Arc<Mutex<Database>>) {
+    start_full(config, RestOptions::default()).await
+}
+
+async fn start_full(config: ServerConfig, options: RestOptions) -> (String, Arc<Mutex<Database>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap().to_string();
-    let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 3)));
+    let database = Arc::new(Mutex::new(Database::new(options, 3)));
     tokio::spawn(serve(listener, Arc::clone(&database), config));
     (address, database)
 }
@@ -421,4 +438,96 @@ async fn a_conditional_header_that_is_not_ascii_never_matches() {
         fireemu_core_database::Format::Plain,
     );
     assert_eq!(stored, fireemu_core_database::Json::int(1));
+}
+
+// WebSocket round 2 (review 2026-10-19-rtdb-ws-review.md).
+
+#[tokio::test]
+async fn upgrades_follow_the_official_emulator_on_paths_and_versions() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    // The official emulator upgrades whatever Sec-WebSocket-Version the client names.
+    let (mut client, head) = Client::connect_with(&address, "/.ws?v=5&ns=w1", "8").await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert!(client
+        .next_text()
+        .await
+        .starts_with(r#"{"t":"c","d":{"t":"h""#));
+    // It does not upgrade other paths.
+    let (_, other) = Client::connect(&address, "/anything.json?v=5&ns=w1").await;
+    assert!(!other.starts_with("HTTP/1.1 101"), "{other}");
+}
+
+#[tokio::test]
+async fn websocket_control_and_data_frames_over_a_socket() {
+    let (address, _) = start_full(
+        ServerConfig::default(),
+        RestOptions {
+            realtime_message_bytes: 64,
+            ..RestOptions::default()
+        },
+    )
+    .await;
+    // A fragmented message with a ping between its fragments.
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w1").await;
+    client.next_text().await;
+    let message = br#"{"t":"d","d":{"r":1,"a":"echo","b":{"d":"x"}}}"#;
+    client.send_frame(false, 0x1, &message[..10]).await;
+    client.send_frame(true, 0x9, b"p").await;
+    client.send_frame(true, 0x0, &message[10..]).await;
+    assert_eq!(client.next().await, (0xA, b"p".to_vec()));
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":"x"}}}"#
+    );
+    // A message over the realtime limit closes with 1009.
+    client.text(&"x".repeat(65)).await;
+    assert_eq!(client.next().await, (0x8, 1009u16.to_be_bytes().to_vec()));
+
+    // Text that is not UTF-8 closes with 1007.
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w1").await;
+    client.next_text().await;
+    client.send(0x1, &[0xff, 0xfe]).await;
+    assert_eq!(client.next().await, (0x8, 1007u16.to_be_bytes().to_vec()));
+}
+
+#[tokio::test]
+async fn close_codes_are_checked_before_they_are_echoed() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    for (payload, answer) in [
+        (vec![0x03], 1002u16),
+        (1005u16.to_be_bytes().to_vec(), 1002),
+        (999u16.to_be_bytes().to_vec(), 1002),
+        (5000u16.to_be_bytes().to_vec(), 1002),
+        ([0x03, 0xE8, 0xff].to_vec(), 1007),
+        (3000u16.to_be_bytes().to_vec(), 3000),
+        (1000u16.to_be_bytes().to_vec(), 1000),
+    ] {
+        let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w1").await;
+        client.next_text().await;
+        client.send(0x8, &payload).await;
+        assert_eq!(
+            client.next().await,
+            (0x8, answer.to_be_bytes().to_vec()),
+            "{payload:?}"
+        );
+    }
+    // An empty close is answered with an empty close.
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w1").await;
+    client.next_text().await;
+    client.send(0x8, &[]).await;
+    assert_eq!(client.next().await, (0x8, Vec::new()));
+}
+
+#[tokio::test]
+async fn idle_realtime_connections_are_closed() {
+    let (address, _) = start_with(ServerConfig {
+        realtime_idle: Duration::from_millis(300),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w1").await;
+    client.next_text().await;
+    // Nothing is sent; the server ends the connection after the idle time.
+    let (opcode, _) = client.next().await;
+    assert!(opcode == 0x8 || opcode == 0xFF, "{opcode}");
 }

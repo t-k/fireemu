@@ -45,9 +45,13 @@ enum State {
 /// What the headers of the current request said about its body.
 #[derive(Debug, Clone, Copy, Default)]
 struct Framing {
-    length: u64,
+    length: Option<u64>,
     chunked: bool,
     upgrade: bool,
+    /// Headers this escaper may read differently from hyper (a repeated or listed
+    /// `Content-Length`, a coding list not ending in `chunked`): the rest of the connection
+    /// then passes through unescaped and hyper alone decides.
+    ambiguous: bool,
 }
 
 /// A connection whose request targets are escaped.
@@ -164,19 +168,42 @@ impl<S> TargetEscaper<S> {
         let text = line(text);
         if text.is_empty() {
             return match self.framing {
-                Framing { upgrade: true, .. } => State::Passthrough,
+                Framing { upgrade: true, .. }
+                | Framing {
+                    ambiguous: true, ..
+                } => State::Passthrough,
                 Framing { chunked: true, .. } => State::ChunkSize(Vec::new()),
-                Framing { length: 0, .. } => State::Method,
-                Framing { length, .. } => State::Body(length),
+                Framing {
+                    length: None | Some(0),
+                    ..
+                } => State::Method,
+                Framing {
+                    length: Some(length),
+                    ..
+                } => State::Body(length),
             };
         }
         let text = String::from_utf8_lossy(text);
         if let Some((name, value)) = text.split_once(':') {
             let value = value.trim();
             match name.trim().to_ascii_lowercase().as_str() {
-                "content-length" => self.framing.length = value.parse().unwrap_or(0),
+                "content-length" => {
+                    let digits = !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
+                    match (
+                        self.framing.length,
+                        digits.then(|| value.parse().ok()).flatten(),
+                    ) {
+                        (None, Some(length)) => self.framing.length = Some(length),
+                        _ => self.framing.ambiguous = true,
+                    }
+                }
                 "transfer-encoding" => {
-                    self.framing.chunked = value.to_ascii_lowercase().contains("chunked");
+                    let last = value.rsplit(',').next().unwrap_or_default().trim();
+                    if last.eq_ignore_ascii_case("chunked") {
+                        self.framing.chunked = true;
+                    } else {
+                        self.framing.ambiguous = true;
+                    }
                 }
                 "upgrade" => self.framing.upgrade = true,
                 _ => {}
@@ -394,5 +421,34 @@ mod tests {
         expected.truncate(tail);
         expected.extend_from_slice(b"GET /%22w%22 HTTP/1.1\r\n\r\n");
         assert_eq!(escaped(&[&input]), expected);
+    }
+
+    #[test]
+    fn ambiguous_framing_hands_the_connection_to_hyper_unescaped() {
+        for header in [
+            "Content-Length: 5, 5",
+            "Content-Length: +5",
+            "Content-Length: 5\r\nContent-Length: 5",
+            "Transfer-Encoding: chunked, gzip",
+        ] {
+            let input = format!(
+                "PUT /a\"b HTTP/1.1\r\n{header}\r\n\r\na \"b\"\r\nGET /\"c\" HTTP/1.1\r\n\r\n"
+            );
+            let expected = format!(
+                "PUT /a%22b HTTP/1.1\r\n{header}\r\n\r\na \"b\"\r\nGET /\"c\" HTTP/1.1\r\n\r\n"
+            );
+            assert_eq!(
+                String::from_utf8(escaped(&[input.as_bytes()])).unwrap(),
+                expected,
+                "{header}"
+            );
+        }
+        // A last coding of chunked is chunked framing, as hyper reads it.
+        let input = "PUT /a HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\n\r\n3\r\na \"\r\n0\r\n\r\nGET /\"c\" HTTP/1.1\r\n\r\n";
+        let expected = "PUT /a HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\n\r\n3\r\na \"\r\n0\r\n\r\nGET /%22c%22 HTTP/1.1\r\n\r\n";
+        assert_eq!(
+            String::from_utf8(escaped(&[input.as_bytes()])).unwrap(),
+            expected
+        );
     }
 }

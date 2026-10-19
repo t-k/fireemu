@@ -1,13 +1,16 @@
 //! A `firestore.indexes.json` with a search index (`searchConfig`), as a production project
 //! with Enterprise text or geo search has, starts `fireemu up --firebase-json` under both
 //! profiles: the search index is checked, left out of query planning and reported in one note.
-//! A malformed `searchConfig` still stops the daemon with a message that names the field.
+//! A malformed `searchConfig` still stops the daemon with a message that names the field, and a
+//! named database's ordinary query gets the same missing-index answer with or without a search
+//! index in its file.
 
 mod scratch;
 
 use scratch::Scratch;
 
-use std::io::{BufRead as _, BufReader};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -30,17 +33,29 @@ const MALFORMED_SEARCH_CONFIG: &str = r#"{"indexes": [
      {"indexType": "NGRAM", "matchType": "MATCH_GLOBALLY"}]}}}]}
 ], "fieldOverrides": []}"#;
 
+/// A `firebase.json` whose default database reads the index file.
+const DEFAULT_DATABASE: &str = r#"{"firestore": {"indexes": "firestore.indexes.json"}}"#;
+
+/// A `firebase.json` whose named database `staging` reads the index file.
+const NAMED_DATABASE: &str = r#"{"firestore": [{"database": "(default)"}, {"database": "staging", "indexes": "firestore.indexes.json"}]}"#;
+
 /// `fireemu up --config fireemu.json --firebase-json firebase.json`, where `firebase.json` names
 /// the index file the way a Firebase project does.
 fn command(name: &str, profile: &str, indexes: &str) -> (Command, Scratch) {
+    command_with(name, profile, indexes, DEFAULT_DATABASE, 0)
+}
+
+fn command_with(
+    name: &str,
+    profile: &str,
+    indexes: &str,
+    firebase: &str,
+    hub_port: u16,
+) -> (Command, Scratch) {
     let dir = Scratch::new("search-indexes", name);
     std::fs::write(dir.join("firestore.indexes.json"), indexes).unwrap();
     let firebase_json = dir.join("firebase.json");
-    std::fs::write(
-        &firebase_json,
-        r#"{"firestore": {"indexes": "firestore.indexes.json"}}"#,
-    )
-    .unwrap();
+    std::fs::write(&firebase_json, firebase).unwrap();
     let config = dir.join("fireemu.json");
     std::fs::write(
         &config,
@@ -60,7 +75,8 @@ fn command(name: &str, profile: &str, indexes: &str) -> (Command, Scratch) {
             "--storage-port",
             "0",
         ])
-        .args(["--logging-port", "0", "--ui-port", "0", "--hub-port", "0"])
+        .args(["--logging-port", "0", "--ui-port", "0", "--hub-port"])
+        .arg(hub_port.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -188,4 +204,104 @@ fn a_malformed_search_config_stops_the_daemon_under_both_profiles() {
             "{profile}: {stderr}"
         );
     }
+}
+
+fn free_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
+fn http_as_owner(port: u16, method: &str, path: &str, body: &str) -> (u16, serde_json::Value) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the daemon accepts");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer owner\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    stream.flush().unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).unwrap();
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0);
+    (status, serde_json::from_str(body).unwrap_or_default())
+}
+
+/// The ordinary composite index of both files, and a search index whose fields, read as
+/// ordinary ascending fields, would serve the query below.
+const NAMED_WITH_SEARCH: &str = r#"{"indexes": [
+  {"collectionGroup": "posts", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "ASCENDING"}]},
+  {"collectionGroup": "posts", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "body", "searchConfig": {"textSpec": {"indexSpecs": [
+     {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}]}
+], "fieldOverrides": []}"#;
+
+const NAMED_WITHOUT_SEARCH: &str = r#"{"indexes": [
+  {"collectionGroup": "posts", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "ASCENDING"}]}
+], "fieldOverrides": []}"#;
+
+/// Starts a strict daemon whose `staging` database reads `indexes`, and answers its startup
+/// notes about search indexes and the answer to `where a == 1 order by body` on `staging`.
+fn staging_query(name: &str, indexes: &str) -> (Vec<String>, u16, serde_json::Value) {
+    let hub_port = free_port();
+    let (mut command, _dir) = command_with(name, "strict", indexes, NAMED_DATABASE, hub_port);
+    let mut child = Running(command.spawn().unwrap());
+    let rx = lines(&mut child.0);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (mut started, mut notes) = (false, Vec::new());
+    while !started {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(Line::Out(line)) => started = line.contains("control API:"),
+            Ok(Line::Err(line)) => {
+                if line.contains("searchConfig") {
+                    notes.push(line);
+                }
+            }
+            Err(error) => panic!("{name}: the daemon did not start ({error})"),
+        }
+    }
+    let (status, emulators) = http_as_owner(hub_port, "GET", "/emulators", "");
+    assert_eq!(status, 200, "{emulators}");
+    let port = u16::try_from(emulators["firestore"]["port"].as_u64().unwrap()).unwrap();
+    let query = serde_json::json!({"structuredQuery": {
+        "from": [{"collectionId": "posts"}],
+        "where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+        "orderBy": [{"field": {"fieldPath": "body"}, "direction": "ASCENDING"}],
+    }});
+    let (status, body) = http_as_owner(
+        port,
+        "POST",
+        &format!("/v1/projects/{PROJECT}/databases/staging/documents:runQuery"),
+        &query.to_string(),
+    );
+    (notes, status, body)
+}
+
+#[test]
+fn a_named_databases_search_index_is_noted_and_leaves_its_missing_index_answer_alone() {
+    let (notes, status, with_search) = staging_query("named-with", NAMED_WITH_SEARCH);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("1 search index "), "{}", notes[0]);
+    assert_eq!(status, 400, "{with_search}");
+    assert!(
+        with_search.to_string().contains("FAILED_PRECONDITION"),
+        "{with_search}"
+    );
+    let (notes, plain_status, without_search) =
+        staging_query("named-without", NAMED_WITHOUT_SEARCH);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!((status, with_search), (plain_status, without_search));
 }

@@ -650,7 +650,7 @@
     ],
     "notes": [
       "Enterprise edition only",
-      "a search index (searchConfig) in firestore.indexes.json is checked as firebase deploy checks it and loads under both profiles, but it does not reach the text index catalog and never takes part in query planning; one startup note per file says how many were left out"
+      "a search index (searchConfig) in firestore.indexes.json is checked as firebase deploy checks it (strict also refuses unknown keys inside searchConfig, as the Admin API does) and loads under both profiles and either edition, but it does not reach the text index catalog and never takes part in query planning; one note each time the file loads says how many were left out"
     ],
     "precision": "strict-validation-only",
     "status": "implemented",

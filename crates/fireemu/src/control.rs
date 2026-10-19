@@ -94,19 +94,32 @@ const INDEX_FIELD_MODES: [&str; 4] = ["order", "arrayConfig", "searchConfig", "v
 
 /// Checks a `searchConfig` the way firebase-tools `validateIndex` does (each `textSpec` entry
 /// names a known `indexType` and `matchType`, `geoJsonIndexingDisabled` is a boolean), and the
-/// object shapes of the Admin API `IndexField.SearchConfig` message.
-fn check_search_config(path: &str, config: &Value) -> Result<(), String> {
+/// object shapes of the Admin API `IndexField.SearchConfig` message. Under strict, each level
+/// also holds only the keys that message defines: `upgradeOldSpec` sends `searchConfig`
+/// verbatim, and the Admin REST API refuses an unknown field name.
+fn check_search_config(path: &str, config: &Value, checks: IndexFileChecks) -> Result<(), String> {
     let refuse = |what: &str| Err(format!("index field {path}: searchConfig{what}"));
-    if !config.is_object() {
+    let closed = |object: &serde_json::Map<String, Value>, at: &str, known: &[&str]| match object
+        .keys()
+        .find(|key| !known.contains(&key.as_str()))
+    {
+        Some(key) if checks == IndexFileChecks::Deploy => Err(format!(
+            "index field {path}: {at} has an unknown key {key:?}"
+        )),
+        _ => Ok(()),
+    };
+    let Some(object) = config.as_object() else {
         return refuse(" must be an object");
-    }
+    };
+    closed(object, "searchConfig", &["textSpec", "geoSpec"])?;
     match config.get("textSpec") {
         None | Some(Value::Null) => {}
         Some(Value::Object(text)) => {
             let Some(specs) = text.get("indexSpecs").and_then(Value::as_array) else {
                 return refuse(".textSpec.indexSpecs must be an array");
             };
-            for spec in specs {
+            closed(text, "searchConfig.textSpec", &["indexSpecs"])?;
+            for (at, spec) in specs.iter().enumerate() {
                 if !matches!(
                     spec.get("indexType").and_then(Value::as_str),
                     Some("TOKENIZED" | "TEXT_INDEX_TYPE_UNSPECIFIED")
@@ -118,6 +131,13 @@ fn check_search_config(path: &str, config: &Value) -> Result<(), String> {
                     Some("MATCH_GLOBALLY" | "TEXT_MATCH_TYPE_UNSPECIFIED")
                 ) {
                     return refuse(".textSpec.indexSpecs[].matchType must be MATCH_GLOBALLY or TEXT_MATCH_TYPE_UNSPECIFIED");
+                }
+                if let Some(spec) = spec.as_object() {
+                    closed(
+                        spec,
+                        &format!("searchConfig.textSpec.indexSpecs[{at}]"),
+                        &["indexType", "matchType"],
+                    )?;
                 }
             }
         }
@@ -132,6 +152,7 @@ fn check_search_config(path: &str, config: &Value) -> Result<(), String> {
             {
                 return refuse(".geoSpec.geoJsonIndexingDisabled must be a boolean");
             }
+            closed(geo, "searchConfig.geoSpec", &["geoJsonIndexingDisabled"])?;
         }
         Some(_) => return refuse(".geoSpec must be an object"),
     }
@@ -141,7 +162,7 @@ fn check_search_config(path: &str, config: &Value) -> Result<(), String> {
 /// One field of a composite index entry, in the current or the older (`mode`) format. A search
 /// field (`searchConfig`) is checked and answers `None`: fireemu neither plans nor executes text
 /// or geo search from this file.
-fn parse_index_field(f: &Value) -> Result<Option<IndexField>, String> {
+fn parse_index_field(f: &Value, checks: IndexFileChecks) -> Result<Option<IndexField>, String> {
     let path = f
         .get("fieldPath")
         .and_then(Value::as_str)
@@ -154,7 +175,7 @@ fn parse_index_field(f: &Value) -> Result<Option<IndexField>, String> {
         if modes != 1 {
             return Err(one_index_field_mode(path));
         }
-        check_search_config(path, config)?;
+        check_search_config(path, config, checks)?;
         FieldPath::parse(path).map_err(|e| e.to_string())?;
         return Ok(None);
     }
@@ -269,7 +290,7 @@ pub fn parse_indexes_with_notes(
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .map(parse_index_field)
+            .map(|field| parse_index_field(field, checks))
             .collect::<Result<Vec<_>, _>>()?;
         // A search index serves only search queries, so it never satisfies or changes an
         // ordinary query's index requirement. The 200-entry cap above still counts it.
@@ -348,29 +369,31 @@ pub fn parse_ttl_policies(path: &str, text: &str) -> Result<TtlCatalog, String> 
     Ok(catalog)
 }
 
-/// Loads `firestore.indexes.json` as a whole: the query-planning indexes and the time-to-live
-/// policies the same file declares, from one read of the file.
+/// Loads `firestore.indexes.json` as a whole at start: the query-planning indexes and the
+/// time-to-live policies the same file declares, from one read of the file. The file's notes
+/// are printed here.
 pub fn load_index_file(
     path: &str,
     checks: IndexFileChecks,
 ) -> Result<(IndexSet, TtlCatalog), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    parse_index_file(path, &text, checks)
-}
-
-/// Parses one generation of `firestore.indexes.json`, both halves or neither: a file whose
-/// indexes are valid but whose TTL declaration is not is refused as a whole.
-pub fn parse_index_file(
-    path: &str,
-    text: &str,
-    checks: IndexFileChecks,
-) -> Result<(IndexSet, TtlCatalog), String> {
-    let (indexes, notes) = parse_indexes_with_notes(path, text, checks)?;
-    let ttl_policies = parse_ttl_policies(path, text)?;
+    let (indexes, ttl_policies, notes) = parse_index_file(path, &text, checks)?;
     for note in notes {
         eprintln!("note: {note}");
     }
     Ok((indexes, ttl_policies))
+}
+
+/// Parses one generation of `firestore.indexes.json`, both halves or neither: a file whose
+/// indexes are valid but whose TTL declaration is not is refused as a whole. The notes are the
+/// caller's to print once the generation is in force.
+pub fn parse_index_file(
+    path: &str,
+    text: &str,
+    checks: IndexFileChecks,
+) -> Result<(IndexSet, TtlCatalog, Vec<String>), String> {
+    let (indexes, notes) = parse_indexes_with_notes(path, text, checks)?;
+    Ok((indexes, parse_ttl_policies(path, text)?, notes))
 }
 
 /// A field override's `ttl`. `firebase deploy` refuses one that is not a boolean.
@@ -433,8 +456,9 @@ fn parse_field_overrides(
                     "COLLECTION_GROUP" => IndexQueryScope::CollectionGroup,
                     scope => return Err(format!("unsupported queryScope {scope}")),
                 };
-                // A search index is a composite index; `firebase deploy` accepts only `order`
-                // or `arrayConfig` here.
+                // A search index is a composite index. `firebase deploy` drops a `searchConfig`
+                // here when `order` or `arrayConfig` is present and refuses the override
+                // otherwise; fireemu refuses it in both cases.
                 if index
                     .get("searchConfig")
                     .is_some_and(|config| !config.is_null())
@@ -887,7 +911,7 @@ mod tests {
             {"collectionGroup": "s", "fieldPath": "t", "ttl": true, "indexes": []}]})
         .to_string();
         assert!(parse_index_file("f", &ttl, IndexFileChecks::Deploy).is_err());
-        let (set, catalog) = parse_index_file("f", &ttl, IndexFileChecks::Emulator).unwrap();
+        let (set, catalog, _) = parse_index_file("f", &ttl, IndexFileChecks::Emulator).unwrap();
         assert_eq!(set.composites().len(), 1);
         assert_eq!(catalog.iter().count(), 1);
     }
@@ -1266,8 +1290,12 @@ mod tests {
         }
     }
 
-    /// `IndexField` is a oneof: a field with `searchConfig` and another mode is refused.
-    /// The v1beta1 `mode` is not a mode of its own: `upgradeOldSpec` prefers `searchConfig`.
+    /// `IndexField` is a oneof: a field with `searchConfig` and another mode is refused under both
+    /// profiles. `firebase deploy` does not refuse it: `upgradeOldSpec` keeps one mode per field
+    /// (`order`, then `arrayConfig`, `vectorConfig`, `searchConfig`) before `validateIndex` runs,
+    /// so deploy drops the others. fireemu keeps the oneof refusal, as it does for `order` with
+    /// `arrayConfig` (issue `index-field-mode-precedence-differs-from-deploy.md`). The v1beta1
+    /// `mode` comes last in that order, so `searchConfig` wins over it.
     #[test]
     fn search_config_beside_another_mode_is_refused() {
         for other in [
@@ -1298,9 +1326,11 @@ mod tests {
         assert!(set.composites().is_empty() && notes.len() == 1);
     }
 
-    /// firebase-tools `validateField` accepts only `order` or `arrayConfig` in a field override,
-    /// and a search index is a composite index, so `searchConfig` in an override is refused under
-    /// both profiles, with a message that says where it belongs.
+    /// A search index is a composite index, so `searchConfig` in a field override is refused
+    /// under both profiles, with a message that says where it belongs. Without `order` or
+    /// `arrayConfig` deploy refuses the override too (`validateField`); with one of them deploy
+    /// accepts it and drops `searchConfig` (`patchField` sends neither), which fireemu does not
+    /// follow (issue `index-field-mode-precedence-differs-from-deploy.md`).
     #[test]
     fn a_search_config_field_override_is_refused_under_both_profiles() {
         let file = json!({"indexes": [], "fieldOverrides": [{
@@ -1316,6 +1346,78 @@ mod tests {
         );
         let error = deploy(&file).unwrap_err();
         assert!(error.contains("exactly one of"), "{error}");
+    }
+
+    /// `upgradeOldSpec` copies `searchConfig` verbatim into `indexes.create`, and the Admin REST
+    /// API refuses an unknown JSON field name with 400 ("Unknown name"), so strict refuses an
+    /// unknown key at every level of a `searchConfig`. The emulator profile loads it.
+    #[test]
+    fn unknown_search_config_keys_are_refused_under_strict_only() {
+        for (config, at) in [
+            (
+                json!({"textSpec": {"indexSpecs": []}, "foo": 1}),
+                "searchConfig",
+            ),
+            (
+                json!({"textSpec": {"indexSpecs": [], "foo": 1}}),
+                "searchConfig.textSpec",
+            ),
+            (
+                json!({"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY", "foo": 1}]}}),
+                "searchConfig.textSpec.indexSpecs[0]",
+            ),
+            (
+                json!({"geoSpec": {"geoJsonIndexingDisabled": true, "foo": 1}}),
+                "searchConfig.geoSpec",
+            ),
+        ] {
+            let file = json!({"indexes": [entry(&json!([{"fieldPath": "body", "searchConfig": config}]))]});
+            let error = deploy(&file).unwrap_err();
+            assert!(
+                error.contains(&format!(
+                    "index field body: {at} has an unknown key \"foo\""
+                )),
+                "{config}: {error}"
+            );
+            assert!(
+                parse_indexes("f", &file.to_string(), IndexFileChecks::Emulator).is_ok(),
+                "{config}"
+            );
+        }
+    }
+
+    /// The note is the file's, not the daemon's: every load of a file with a search index
+    /// (the start, each hot reload, each database that names the file) carries it again.
+    #[test]
+    fn the_search_note_comes_with_each_load_of_the_file() {
+        let file = json!({"indexes": [entry(&json!([search("body")]))]}).to_string();
+        let first = parse_index_file("f", &file, IndexFileChecks::Deploy)
+            .unwrap()
+            .2;
+        let second = parse_index_file("f", &file, IndexFileChecks::Deploy)
+            .unwrap()
+            .2;
+        assert_eq!(first.len(), 1);
+        assert_eq!(first, second);
+        let plain = json!({"indexes": [entry_ok()]}).to_string();
+        assert!(parse_index_file("f", &plain, IndexFileChecks::Deploy)
+            .unwrap()
+            .2
+            .is_empty());
+    }
+
+    /// The skipped search index still needs a collection group production can hold.
+    #[test]
+    fn a_search_index_with_an_invalid_collection_group_is_refused() {
+        for group in ["a/b", "__x__"] {
+            let file = json!({"indexes": [{"collectionGroup": group, "queryScope": "COLLECTION_GROUP", "fields": [search("body")]}]});
+            for checks in both_checks() {
+                assert!(
+                    parse_indexes("f", &file.to_string(), checks).is_err(),
+                    "{group} {checks:?}"
+                );
+            }
+        }
     }
 
     fn mode_value(key: &str) -> Value {
@@ -1373,6 +1475,32 @@ mod tests {
             for checks in both_checks() {
                 proptest::prop_assert_eq!(parse_indexes("f", &file.to_string(), checks).is_ok(), known);
             }
+        }
+
+        /// An extra key at any level of a well-formed `searchConfig` is refused under strict
+        /// unless it is one the Admin API message defines, and always loads under emulator.
+        #[test]
+        fn search_config_keys_are_closed_under_strict(
+            level in 0usize..4,
+            key in proptest::sample::select(vec!["foo", "textSpec", "geoSpec", "indexSpecs", "indexType", "matchType", "geoJsonIndexingDisabled", "TextSpec"]),
+        ) {
+            let mut config = json!({
+                "textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]},
+                "geoSpec": {"geoJsonIndexingDisabled": false},
+            });
+            let (target, known): (&mut Value, &[&str]) = match level {
+                0 => (&mut config, &["textSpec", "geoSpec"]),
+                1 => (&mut config["textSpec"], &["indexSpecs"]),
+                2 => (&mut config["textSpec"]["indexSpecs"][0], &["indexType", "matchType"]),
+                _ => (&mut config["geoSpec"], &["geoJsonIndexingDisabled"]),
+            };
+            if known.contains(&key) {
+                return Ok(());
+            }
+            target[key] = json!(1);
+            let file = json!({"indexes": [entry(&json!([{"fieldPath": "body", "searchConfig": config}]))]});
+            proptest::prop_assert!(deploy(&file).is_err());
+            proptest::prop_assert!(parse_indexes("f", &file.to_string(), IndexFileChecks::Emulator).is_ok());
         }
 
         /// Differential: inserting search indexes anywhere in a file changes neither the planning

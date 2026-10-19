@@ -904,6 +904,10 @@ fn split_messages_are_capped_at_the_realtime_limit() {
     };
     let mut db = Database::new(options, 1);
     let (mut s, _) = open(&mut db, "/.ws?v=5&ns=cap");
+    // Exactly the limit is accepted.
+    assert!(s.receive(&mut db, "2", NOW).close.is_none());
+    assert!(s.receive(&mut db, &"x".repeat(50), NOW).close.is_none());
+    assert_eq!(s.receive(&mut db, &"y".repeat(50), NOW).replies.len(), 1);
     assert!(s.receive(&mut db, "999999", NOW).close.is_none());
     assert!(s.receive(&mut db, &"x".repeat(60), NOW).close.is_none());
     let received = s.receive(&mut db, &"x".repeat(60), NOW);

@@ -431,11 +431,12 @@ mod tests {
             "Content-Length: 5\r\nContent-Length: 5",
             "Transfer-Encoding: chunked, gzip",
         ] {
-            let input = format!(
-                "PUT /a\"b HTTP/1.1\r\n{header}\r\n\r\na \"b\"\r\nGET /\"c\" HTTP/1.1\r\n\r\n"
-            );
+            // A five-byte body followed at once by the next request: read as framed, the
+            // next request's target would be escaped.
+            let input =
+                format!("PUT /a\"b HTTP/1.1\r\n{header}\r\n\r\na \"b\"GET /\"c\" HTTP/1.1\r\n\r\n");
             let expected = format!(
-                "PUT /a%22b HTTP/1.1\r\n{header}\r\n\r\na \"b\"\r\nGET /\"c\" HTTP/1.1\r\n\r\n"
+                "PUT /a%22b HTTP/1.1\r\n{header}\r\n\r\na \"b\"GET /\"c\" HTTP/1.1\r\n\r\n"
             );
             assert_eq!(
                 String::from_utf8(escaped(&[input.as_bytes()])).unwrap(),

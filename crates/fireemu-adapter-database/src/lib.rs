@@ -8,6 +8,7 @@
 pub mod json_parse;
 pub mod json_text;
 mod listen;
+pub mod long_poll;
 pub mod namespace;
 pub mod realtime;
 pub mod request;

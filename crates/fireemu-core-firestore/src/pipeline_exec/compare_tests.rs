@@ -455,3 +455,16 @@ proptest! {
         }
     }
 }
+
+/// A comparison's refusal names the comparison.
+#[test]
+fn comparison_refusals_name_the_function() {
+    let r = row(vec![("n".to_owned(), Value::Null)]);
+    for op in OPS {
+        let got = call(op, vec![field("x"), field("n")]).eval_in(&r, Unrecorded::Refuse);
+        assert!(
+            matches!(got, Eval::Error(EvalError::Unobserved { function, .. }) if function == op),
+            "{op}: {got:?}"
+        );
+    }
+}

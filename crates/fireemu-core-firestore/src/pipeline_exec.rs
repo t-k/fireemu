@@ -9,10 +9,12 @@
 //! 3. Rows ([`Row`]) are documents read at one fixed read version; reading them is the
 //!    caller's job, so the executor never sees two versions of the database.
 //!
-//! Only shapes whose behavior is already pinned by the finite local subset evaluate to
-//! values. Anything whose production behavior is unrecorded (a function applied to an
-//! absent or mistyped input, the parent of a top-level document, a non-boolean condition)
-//! evaluates to [`EvalError::Unobserved`], and the caller refuses the pipeline.
+//! Under the strict profile only shapes whose behavior is already pinned evaluate to values:
+//! [`check_recorded_shapes`] refuses, before any row is read, the shapes classic queries
+//! cannot express, and anything whose production behavior is unrecorded (a function applied
+//! to an absent or mistyped input, the parent of a top-level document, a comparison across
+//! kinds) evaluates to [`EvalError::Unobserved`], and the caller refuses the pipeline. The
+//! emulator profile answers as the official emulator does instead.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;

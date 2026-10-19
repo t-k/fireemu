@@ -80,7 +80,32 @@ assert.ok(whole.executionTime, "executionTime");
 const projected = await execute(source().select("name").limit(1));
 assert.equal(projected.results[0].ref, undefined);
 assert.ok(projected.executionTime, "executionTime after select");
-await assert.rejects(rows(source().where(field("profile.score").greaterThan(1))), (error) => {
+// A field compared with a literal, as a where condition and as a select value.
+assert.deepEqual(
+  await rows(
+    source()
+      .where(field("profile.score").greaterThan(7))
+      .select(field("profile.score").lessThanOrEqual(8).as("le")),
+  ),
+  [{ le: true }],
+);
+// Shapes classic queries cannot express or decide differently: strict refuses them until
+// production is observed; the emulator profile answers as the official emulator does.
+const unrecorded = [
+  [source().where(field("name").lessThan(1)).select("name"), []],
+  [
+    source().where(field("profile.score").equal(field("profile.score"))).select("name"),
+    [{ name: "a" }, { name: "b" }],
+  ],
+];
+for (const [p, official] of unrecorded) {
+  if (profile === "strict") {
+    await assert.rejects(rows(p), (error) => error.code === "unimplemented");
+  } else {
+    assert.deepEqual(await rows(p), official);
+  }
+}
+await assert.rejects(rows(source().where(field("name").regexMatch("a"))), (error) => {
   assert.equal(error.code, "unimplemented");
   return true;
 });

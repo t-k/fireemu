@@ -423,12 +423,12 @@ pub struct CompiledExecution {
 }
 
 /// Compiles the finite local Enterprise subset for the core executor: collection input,
-/// then an optional single `where(equal(operand, scalar literal))`, an optional `select`,
-/// an optional `offset` and an optional `limit`, in that order. Operands are field
-/// references (nested paths included) and the table's value functions (`document_id`,
-/// `collection_id`, `parent`). Every other stage, function or arrangement is refused.
-/// `unrecorded` decides whether shapes with unrecorded production behavior (dotted or quoted
-/// select aliases) are refused or answered as the official emulator answers them.
+/// then an optional single `where(comparison)`, an optional `select`, an optional `offset`
+/// and an optional `limit`, in that order. Operands are field references (nested paths
+/// included), literals and the table's functions. Every other stage, function or arrangement
+/// is refused. `unrecorded` decides whether shapes with unrecorded production behavior
+/// (dotted or quoted select aliases, comparisons classic queries cannot express) are refused
+/// or answered as the official emulator answers them.
 pub fn compile_pipeline(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,

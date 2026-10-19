@@ -14,6 +14,7 @@
     "smoke:g3-pending-switch": "node pending-switch.mjs",
     "smoke:lite": "node lite.mjs",
     "smoke:pipeline-lite": "node pipeline-lite.mjs",
+    "smoke:pipeline-admin": "node pipeline-admin.mjs",
     "smoke:storage": "node storage.mjs",
     "smoke:storage-appcheck-admin": "node storage-appcheck-admin.mjs",
     "smoke:storage-targets": "node storage-targets.mjs",

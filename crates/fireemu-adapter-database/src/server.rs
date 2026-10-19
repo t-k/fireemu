@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -51,8 +52,12 @@ pub struct ServerConfig {
     pub header_timeout: Duration,
     /// How long a client may take to send a request body.
     pub body_timeout: Duration,
-    /// How many events a stream may have waiting before it is closed as too slow.
+    /// How many events a stream, or messages a realtime connection, may have waiting before
+    /// it is closed as too slow.
     pub stream_queue: usize,
+    /// How many bytes of messages a realtime connection may have waiting before it is
+    /// closed as too slow (a whole-location value can be large).
+    pub stream_queue_bytes: usize,
     /// How long a realtime connection may stay silent (the SDKs send a keepalive every
     /// 45 s).
     pub realtime_idle: Duration,
@@ -68,6 +73,7 @@ impl Default for ServerConfig {
             header_timeout: Duration::from_secs(30),
             body_timeout: Duration::from_secs(120),
             stream_queue: 1024,
+            stream_queue_bytes: 64 * 1024 * 1024,
             realtime_idle: Duration::from_secs(120),
             clock: Arc::new(|| {
                 SystemTime::now()
@@ -80,8 +86,66 @@ impl Default for ServerConfig {
 
 type Body = BoxBody<Bytes, Infallible>;
 type Streams = Arc<Mutex<BTreeMap<u64, mpsc::Sender<SseEvent>>>>;
-/// The push queue of each realtime connection; every entry is one message's frames.
-type Listeners = Mutex<BTreeMap<u64, mpsc::Sender<Vec<String>>>>;
+/// The push queue of each realtime connection.
+type Listeners = Mutex<BTreeMap<u64, PushQueue>>;
+
+/// The sending side of a connection's push queue; every entry is one message's frames. It
+/// is bounded in messages (`stream_queue`) and in bytes (`stream_queue_bytes`).
+struct PushQueue {
+    sender: mpsc::Sender<Vec<String>>,
+    bytes: Arc<AtomicUsize>,
+}
+
+/// The receiving side of a connection's push queue.
+pub(crate) struct Pushes {
+    receiver: mpsc::Receiver<Vec<String>>,
+    bytes: Arc<AtomicUsize>,
+}
+
+fn push_queue(messages: usize) -> (PushQueue, Pushes) {
+    let (sender, receiver) = mpsc::channel(messages.max(1));
+    let bytes = Arc::new(AtomicUsize::new(0));
+    (
+        PushQueue {
+            sender,
+            bytes: Arc::clone(&bytes),
+        },
+        Pushes { receiver, bytes },
+    )
+}
+
+fn frame_bytes(frames: &[String]) -> usize {
+    frames.iter().map(String::len).sum()
+}
+
+impl PushQueue {
+    /// Queues a message; `false` when the queue is full in messages or in bytes.
+    fn offer(&self, frames: Vec<String>, budget: usize) -> bool {
+        let size = frame_bytes(&frames);
+        let before = self.bytes.fetch_add(size, AtomicOrdering::SeqCst);
+        if before.saturating_add(size) > budget || self.sender.try_send(frames).is_err() {
+            self.bytes.fetch_sub(size, AtomicOrdering::SeqCst);
+            return false;
+        }
+        true
+    }
+}
+
+impl Pushes {
+    async fn recv(&mut self) -> Option<Vec<String>> {
+        let frames = self.receiver.recv().await?;
+        self.bytes
+            .fetch_sub(frame_bytes(&frames), AtomicOrdering::SeqCst);
+        Some(frames)
+    }
+
+    fn try_recv(&mut self) -> Option<Vec<String>> {
+        let frames = self.receiver.try_recv().ok()?;
+        self.bytes
+            .fetch_sub(frame_bytes(&frames), AtomicOrdering::SeqCst);
+        Some(frames)
+    }
+}
 
 struct Shared {
     database: Arc<Mutex<Database>>,
@@ -211,9 +275,9 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     for (client, message) in pushes {
-        let delivered = listeners
-            .get(&client)
-            .is_some_and(|sender| sender.try_send(split_frames(message)).is_ok());
+        let delivered = listeners.get(&client).is_some_and(|queue| {
+            queue.offer(split_frames(message), shared.config.stream_queue_bytes)
+        });
         if !delivered {
             listeners.remove(&client);
             database.close_realtime(client);
@@ -368,12 +432,12 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         }
     };
     let client = session.client();
-    let (sender, mut pushes) = mpsc::channel(shared.config.stream_queue.max(1));
+    let (queue, mut pushes) = push_queue(shared.config.stream_queue);
     shared
         .listeners
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .insert(client, sender);
+        .insert(client, queue);
     run_realtime(shared, &mut socket, session, &mut pushes, limit).await;
     // The database lock first, in the order `deliver` takes them.
     let mut database = shared
@@ -394,7 +458,7 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
 fn answer_text(
     shared: &Shared,
     session: &mut Session,
-    pushes: &mut mpsc::Receiver<Vec<String>>,
+    pushes: &mut Pushes,
     prepared: Prepared,
 ) -> Received {
     let now = (shared.config.clock)();
@@ -403,7 +467,7 @@ fn answer_text(
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     let mut earlier = Vec::new();
-    while let Ok(frames) = pushes.try_recv() {
+    while let Some(frames) = pushes.try_recv() {
         earlier.extend(frames);
     }
     let mut received = session.dispatch_prepared(&mut database, prepared, now);
@@ -431,7 +495,7 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     shared: &Arc<Shared>,
     socket: &mut S,
     mut session: Session,
-    pushes: &mut mpsc::Receiver<Vec<String>>,
+    pushes: &mut Pushes,
     limit: usize,
 ) {
     let idle = shared.config.realtime_idle;
@@ -539,7 +603,7 @@ mod tests {
         }
     }
 
-    fn connect(shared: &Shared) -> (Session, mpsc::Receiver<Vec<String>>) {
+    fn connect(shared: &Shared) -> (Session, Pushes) {
         let opened = shared
             .database
             .lock()
@@ -549,19 +613,19 @@ mod tests {
         let Opened::Session(session, _) = opened else {
             panic!("no session")
         };
-        let (sender, receiver) = mpsc::channel(16);
+        let (queue, pushes) = push_queue(16);
         shared
             .listeners
             .lock()
             .unwrap()
-            .insert(session.client(), sender);
-        (session, receiver)
+            .insert(session.client(), queue);
+        (session, pushes)
     }
 
     fn send(
         shared: &Shared,
         session: &mut Session,
-        pushes: &mut mpsc::Receiver<Vec<String>>,
+        pushes: &mut Pushes,
         frame: &str,
     ) -> Vec<String> {
         let prepared = session.prepare(frame).unwrap();
@@ -599,7 +663,7 @@ mod tests {
                 r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":""}}}"#.to_owned(),
             ]
         );
-        assert!(a_pushes.try_recv().is_err());
+        assert!(a_pushes.try_recv().is_none());
     }
 
     #[test]

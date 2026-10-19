@@ -609,3 +609,24 @@ async fn a_listener_that_stops_reading_is_dropped_once_its_queue_fills() {
     .await
     .expect("the stalled listener was never dropped");
 }
+
+#[tokio::test]
+async fn a_listener_whose_waiting_messages_pass_the_byte_budget_is_dropped() {
+    let (address, database) = start_with(ServerConfig {
+        stream_queue_bytes: 10_000,
+        realtime_idle: Duration::from_secs(120),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut reader, _) = Client::connect(&address, "/.ws?v=5&ns=w11").await;
+    reader.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/s","h":""}}}"#)
+        .await;
+    reader.next_text().await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // One message larger than the budget: the queue is far from full in messages.
+    let big = format!("\"{}\"", "x".repeat(20_000));
+    exchange(&address, "PUT", "/s.json?ns=w11&print=silent", &big).await;
+    assert_eq!(database.lock().unwrap().listen_count(), 0);
+}

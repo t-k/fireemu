@@ -23,6 +23,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt as _;
 
 use crate::rest::{Database, Handled, HttpRequest, HttpResponse, SseEvent};
+use crate::target_escape::TargetEscaper;
 
 /// The server time in milliseconds since the epoch.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -78,9 +79,11 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
                 let shared = Arc::clone(&shared);
                 async move { Ok::<_, Infallible>(answer(&shared, request).await) }
             });
-            // A connection error concerns that client only.
+            // One request per connection, so only its request line needs escaping. A
+            // connection error concerns that client only.
             let _ = http1::Builder::new()
-                .serve_connection(TokioIo::new(socket), service)
+                .keep_alive(false)
+                .serve_connection(TokioIo::new(TargetEscaper::new(socket)), service)
                 .await;
         });
     }

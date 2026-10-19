@@ -71,6 +71,36 @@ async fn plain_requests_round_trip() {
 }
 
 #[tokio::test]
+async fn raw_quotes_and_braces_in_the_query_are_accepted() {
+    // curl and the Firebase documentation send `orderBy="$key"` unencoded; the official
+    // emulator accepts it, so the server must not refuse the request line.
+    let (address, _) = start(Duration::from_secs(30)).await;
+    exchange(&address, "PUT", "/d.json?ns=q1", r#"{"a":1,"b":2}"#).await;
+    let get = exchange(
+        &address,
+        "GET",
+        "/d.json?ns=q1&orderBy=\"$key\"&startAt=\"b\"",
+        "",
+    )
+    .await;
+    assert!(get.starts_with("HTTP/1.1 200"), "{get}");
+    assert!(get.ends_with(r#"{"b":2}"#), "{get}");
+    let braces = exchange(
+        &address,
+        "GET",
+        "/d.json?ns=q1&orderBy=\"$priority\"&startAt={}",
+        "",
+    )
+    .await;
+    assert!(braces.ends_with(r#"{"a":1,"b":2}"#), "{braces}");
+    // A quote is an ordinary key character; angle brackets pass in the query too.
+    let quoted_path = exchange(&address, "PUT", "/\"q\".json?ns=q2&x=<>", "1").await;
+    assert!(quoted_path.starts_with("HTTP/1.1 200"), "{quoted_path}");
+    let read = exchange(&address, "GET", "/.json?ns=q2", "").await;
+    assert!(read.ends_with(r#"{"\"q\"":1}"#), "{read}");
+}
+
+#[tokio::test]
 async fn streams_deliver_changes_and_keep_alives_and_close_with_the_client() {
     let (address, database) = start(Duration::from_millis(100)).await;
     exchange(&address, "PUT", "/s.json?ns=e1", r#"{"a":1}"#).await;

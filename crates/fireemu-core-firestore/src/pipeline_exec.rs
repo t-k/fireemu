@@ -21,7 +21,7 @@ use std::fmt;
 use crate::field_path::FieldPath;
 use crate::path::DocumentPath;
 use crate::store::get_field;
-use crate::value::Value;
+use crate::value::{Value, ValueKind};
 
 /// A document read at the pipeline's read version.
 #[derive(Debug, Clone, PartialEq)]
@@ -80,24 +80,47 @@ pub enum Unrecorded {
     OfficialEmulator,
 }
 
-/// Where a function may appear.
+/// Where an expression stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
-    /// Only as the whole condition of a `where` stage.
+    /// The whole condition of a `where` stage: only a function that returns a boolean.
     Condition,
-    /// Anywhere a value is expected (select aliases, function arguments, conditions).
+    /// Anywhere a value is expected (select aliases, function arguments).
     Value,
+}
+
+/// How many arguments a function takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arity {
+    /// Exactly this many.
+    Exact(usize),
+    /// Any number.
+    Any,
+    /// Key and value pairs (an even number).
+    Pairs,
+}
+
+/// What a function sees besides its arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Context {
+    /// What inputs with unrecorded production behavior give.
+    pub unrecorded: Unrecorded,
+    /// Whether the call is the whole condition of a `where` stage (its arguments are not).
+    pub condition: bool,
 }
 
 /// One entry of the static function table.
 pub struct Function {
     /// Wire name (`equal`, `document_id`, ...).
     pub name: &'static str,
-    /// Exact number of arguments.
-    pub arity: usize,
-    /// Where the function may appear.
+    /// Number of arguments.
+    pub arity: Arity,
+    /// Where the function may appear: every table function may stand where a value is
+    /// expected.
     pub placement: Placement,
-    eval: fn(&[Eval], Unrecorded) -> Eval,
+    /// Whether the function returns a boolean, so that it may be a whole `where` condition.
+    pub returns_boolean: bool,
+    eval: fn(&[Eval], Context) -> Eval,
 }
 
 impl fmt::Debug for Function {
@@ -106,6 +129,7 @@ impl fmt::Debug for Function {
             .field("name", &self.name)
             .field("arity", &self.arity)
             .field("placement", &self.placement)
+            .field("returns_boolean", &self.returns_boolean)
             .finish_non_exhaustive()
     }
 }
@@ -116,32 +140,65 @@ impl PartialEq for Function {
     }
 }
 
+/// A comparison of the table.
+const fn comparison(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> Function {
+    Function {
+        name,
+        arity: Arity::Exact(2),
+        placement: Placement::Value,
+        returns_boolean: true,
+        eval,
+    }
+}
+
+/// A function of one document reference.
+const fn document_function(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> Function {
+    Function {
+        name,
+        arity: Arity::Exact(1),
+        placement: Placement::Value,
+        returns_boolean: false,
+        eval,
+    }
+}
+
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
+    comparison("equal", |args, cx| {
+        eval_comparison(Comparison::Equal, args, cx)
+    }),
+    comparison("not_equal", |args, cx| {
+        eval_comparison(Comparison::NotEqual, args, cx)
+    }),
+    comparison("less_than", |args, cx| {
+        eval_comparison(Comparison::Less, args, cx)
+    }),
+    comparison("less_than_or_equal", |args, cx| {
+        eval_comparison(Comparison::LessOrEqual, args, cx)
+    }),
+    comparison("greater_than", |args, cx| {
+        eval_comparison(Comparison::Greater, args, cx)
+    }),
+    comparison("greater_than_or_equal", |args, cx| {
+        eval_comparison(Comparison::GreaterOrEqual, args, cx)
+    }),
     Function {
-        name: "equal",
-        arity: 2,
-        placement: Placement::Condition,
-        eval: eval_equal,
-    },
-    Function {
-        name: "document_id",
-        arity: 1,
+        name: "array",
+        arity: Arity::Any,
         placement: Placement::Value,
-        eval: eval_document_id,
+        returns_boolean: false,
+        eval: eval_array,
     },
     Function {
-        name: "collection_id",
-        arity: 1,
+        name: "map",
+        arity: Arity::Pairs,
         placement: Placement::Value,
-        eval: eval_collection_id,
+        returns_boolean: false,
+        eval: eval_map,
     },
-    Function {
-        name: "parent",
-        arity: 1,
-        placement: Placement::Value,
-        eval: eval_parent,
-    },
+    document_function("document_id", eval_document_id),
+    document_function("collection_id", eval_collection_id),
+    document_function("parent", eval_parent),
 ];
 
 /// Looks a function up in the static table.
@@ -194,15 +251,24 @@ impl Expr {
                 "function {name:?} is unsupported locally"
             )));
         };
-        if function.placement == Placement::Condition && placement != Placement::Condition {
+        if placement == Placement::Condition && !function.returns_boolean {
             return Err(ExprError::Unsupported(format!(
                 "function {name:?} is unsupported in this position locally"
             )));
         }
-        if args.len() != function.arity {
+        let fits = match function.arity {
+            Arity::Exact(n) => args.len() == n,
+            Arity::Any => true,
+            Arity::Pairs => args.len() % 2 == 0,
+        };
+        if !fits {
+            let expected = match function.arity {
+                Arity::Exact(n) => format!("{n} argument(s)"),
+                Arity::Any => "any number of arguments".to_owned(),
+                Arity::Pairs => "key and value pairs".to_owned(),
+            };
             return Err(ExprError::Invalid(format!(
-                "function {name:?} takes {} argument(s), got {}",
-                function.arity,
+                "function {name:?} takes {expected}, got {} argument(s)",
                 args.len()
             )));
         }
@@ -228,6 +294,28 @@ impl Expr {
     /// unrecorded production behavior give.
     #[must_use]
     pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
+        self.eval_at(
+            row,
+            Context {
+                unrecorded,
+                condition: false,
+            },
+        )
+    }
+
+    /// Evaluates the expression as the whole condition of a `where` stage.
+    #[must_use]
+    pub fn eval_condition_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
+        self.eval_at(
+            row,
+            Context {
+                unrecorded,
+                condition: true,
+            },
+        )
+    }
+
+    fn eval_at(&self, row: &Row, cx: Context) -> Eval {
         match self {
             Self::Field(path) if path.is_document_name() => {
                 Eval::Value(Value::Reference(row.path.resource_name()))
@@ -239,9 +327,9 @@ impl Expr {
             Self::Call { function, args } => {
                 let args: Vec<Eval> = args
                     .iter()
-                    .map(|arg| arg.eval_in(row, unrecorded))
+                    .map(|arg| arg.eval_in(row, cx.unrecorded))
                     .collect();
-                (function.eval)(&args, unrecorded)
+                (function.eval)(&args, cx)
             }
         }
     }
@@ -254,16 +342,146 @@ fn first_error(args: &[Eval]) -> Option<Eval> {
         .cloned()
 }
 
-/// `equal(a, b)`: an error wins, then an absent operand makes the result absent (a `where`
-/// drops the row, as the finite subset always did for a missing field).
-fn eval_equal(args: &[Eval], _: Unrecorded) -> Eval {
+/// The six comparisons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Comparison {
+    Equal,
+    NotEqual,
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
+}
+
+impl Comparison {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Equal => "equal",
+            Self::NotEqual => "not_equal",
+            Self::Less => "less_than",
+            Self::LessOrEqual => "less_than_or_equal",
+            Self::Greater => "greater_than",
+            Self::GreaterOrEqual => "greater_than_or_equal",
+        }
+    }
+
+    /// The answer for two operands whose order is `order` (`None`: incomparable).
+    fn holds(self, order: Option<Ordering>) -> bool {
+        match self {
+            Self::Equal => order == Some(Ordering::Equal),
+            Self::NotEqual => order != Some(Ordering::Equal),
+            Self::Less => order == Some(Ordering::Less),
+            Self::LessOrEqual => matches!(order, Some(Ordering::Less | Ordering::Equal)),
+            Self::Greater => order == Some(Ordering::Greater),
+            Self::GreaterOrEqual => matches!(order, Some(Ordering::Greater | Ordering::Equal)),
+        }
+    }
+}
+
+/// The order the official emulator compares two operands in: two absent operands are equal,
+/// one absent operand or operands of different kinds (NaN being a kind of its own) are
+/// incomparable, and values of one kind follow the canonical order (arrays and maps compare
+/// element by element in the total order).
+fn official_order(a: &Eval, b: &Eval) -> Option<Ordering> {
+    match (a, b) {
+        (Eval::Absent, Eval::Absent) => Some(Ordering::Equal),
+        (Eval::Value(a), Eval::Value(b)) if a.kind() == b.kind() => Some(a.canonical_cmp(b)),
+        _ => None,
+    }
+}
+
+/// A comparison. The emulator profile answers what the official emulator answers. Strict
+/// answers only what classic queries decide the same way: present operands, and null or NaN
+/// only in an equality (classic `IS_NULL` / `IS_NAN`). One absent operand at the top of a
+/// `where` drops the row, as a classic filter on a missing field does (except `not_equal`,
+/// which the official emulator keeps and classic `!=` drops); any other absence is unobserved.
+fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    match args {
-        [Eval::Value(a), Eval::Value(b)] => Eval::Value(Value::Boolean(values_equal(a, b))),
-        _ => Eval::Absent,
+    let [a, b] = args else {
+        unreachable!("the table checks the arity");
+    };
+    let answer = Eval::Value(Value::Boolean(op.holds(official_order(a, b))));
+    if cx.unrecorded == Unrecorded::OfficialEmulator {
+        return answer;
     }
+    let unobserved = |reason| {
+        Eval::Error(EvalError::Unobserved {
+            function: op.name(),
+            reason,
+        })
+    };
+    match (a, b) {
+        (Eval::Value(a), Eval::Value(b)) => {
+            let special = |v: &Value| matches!(v.kind(), ValueKind::Null | ValueKind::Nan);
+            if op != Comparison::Equal && (special(a) || special(b)) {
+                unobserved("an operand is null or NaN")
+            } else {
+                answer
+            }
+        }
+        (Eval::Absent, Eval::Value(_)) | (Eval::Value(_), Eval::Absent)
+            if cx.condition && op != Comparison::NotEqual =>
+        {
+            Eval::Absent
+        }
+        _ => unobserved("an operand is absent"),
+    }
+}
+
+/// `array(...)`: the elements in order. The official emulator writes null for an absent
+/// element; strict refuses one.
+fn eval_array(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        match (arg, cx.unrecorded) {
+            (Eval::Value(value), _) => values.push(value.clone()),
+            (_, Unrecorded::OfficialEmulator) => values.push(Value::Null),
+            (_, Unrecorded::Refuse) => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "array",
+                    reason: "an element is absent",
+                })
+            }
+        }
+    }
+    Eval::Value(Value::Array(values))
+}
+
+/// `map(key, value, ...)`: the official emulator leaves out a key whose value is absent;
+/// strict refuses one, and a repeated key. A key that is not a string is unrecorded.
+fn eval_map(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let unobserved = |reason| {
+        Eval::Error(EvalError::Unobserved {
+            function: "map",
+            reason,
+        })
+    };
+    let mut fields = BTreeMap::new();
+    for pair in args.chunks(2) {
+        let [Eval::Value(Value::String(key)), value] = pair else {
+            return unobserved("a key is not a string");
+        };
+        match (value, cx.unrecorded) {
+            (Eval::Value(value), _) => {
+                if fields.insert(key.clone(), value.clone()).is_some()
+                    && cx.unrecorded == Unrecorded::Refuse
+                {
+                    return unobserved("a key repeats");
+                }
+            }
+            (_, Unrecorded::OfficialEmulator) => {}
+            (_, Unrecorded::Refuse) => return unobserved("a value is absent"),
+        }
+    }
+    Eval::Value(Value::Map(fields))
 }
 
 /// The document a reference argument names. Anything else (absent, another type, a name
@@ -289,15 +507,15 @@ fn document_argument(
     }
 }
 
-fn eval_document_id(args: &[Eval], unrecorded: Unrecorded) -> Eval {
-    match document_argument("document_id", args, unrecorded) {
+fn eval_document_id(args: &[Eval], cx: Context) -> Eval {
+    match document_argument("document_id", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.document_id().as_str().to_owned())),
         Err(e) => e,
     }
 }
 
-fn eval_collection_id(args: &[Eval], unrecorded: Unrecorded) -> Eval {
-    match document_argument("collection_id", args, unrecorded) {
+fn eval_collection_id(args: &[Eval], cx: Context) -> Eval {
+    match document_argument("collection_id", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.collection_id().as_str().to_owned())),
         Err(e) => e,
     }
@@ -305,7 +523,8 @@ fn eval_collection_id(args: &[Eval], unrecorded: Unrecorded) -> Eval {
 
 /// The parent document; for a top-level document the official emulator answers the
 /// database's documents root as a reference.
-fn eval_parent(args: &[Eval], unrecorded: Unrecorded) -> Eval {
+fn eval_parent(args: &[Eval], cx: Context) -> Eval {
+    let unrecorded = cx.unrecorded;
     match document_argument("parent", args, unrecorded) {
         Ok(path) => match (path.parent_document(), unrecorded) {
             (Some(parent), _) => Eval::Value(Value::Reference(parent.resource_name())),
@@ -398,7 +617,8 @@ impl Cursor {
     pub fn push(&mut self, mut row: Row) -> Result<Option<BTreeMap<String, Value>>, EvalError> {
         for (stage, remaining) in self.stages.iter().zip(self.counters.iter_mut()) {
             match stage {
-                Stage::Where(condition) => match condition.eval_in(&row, self.unrecorded) {
+                Stage::Where(condition) => match condition.eval_condition_in(&row, self.unrecorded)
+                {
                     Eval::Value(Value::Boolean(true)) => {}
                     Eval::Value(Value::Boolean(false)) | Eval::Absent => return Ok(None),
                     Eval::Value(_) => {
@@ -524,3 +744,9 @@ pub fn execute_in(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod compare_tests;
+
+#[cfg(test)]
+mod official_compare;

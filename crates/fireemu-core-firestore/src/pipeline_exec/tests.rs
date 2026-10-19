@@ -49,20 +49,35 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
-fn table_lists_exactly_the_px0_functions() {
+fn table_lists_exactly_the_px1a_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();
-    assert_eq!(names, ["equal", "document_id", "collection_id", "parent"]);
-    assert_eq!(function("equal").unwrap().arity, 2);
-    assert_eq!(function("equal").unwrap().placement, Placement::Condition);
+    assert_eq!(
+        names,
+        [
+            "equal",
+            "not_equal",
+            "less_than",
+            "less_than_or_equal",
+            "greater_than",
+            "greater_than_or_equal",
+            "array",
+            "map",
+            "document_id",
+            "collection_id",
+            "parent"
+        ]
+    );
+    assert_eq!(function("equal").unwrap().arity, Arity::Exact(2));
+    assert_eq!(function("equal").unwrap().placement, Placement::Value);
     for name in ["document_id", "collection_id", "parent"] {
-        assert_eq!(function(name).unwrap().arity, 1, "{name}");
+        assert_eq!(function(name).unwrap().arity, Arity::Exact(1), "{name}");
         assert_eq!(
             function(name).unwrap().placement,
             Placement::Value,
             "{name}"
         );
     }
-    for name in ["eq", "less_than", "abs", "and", "", "Equal"] {
+    for name in ["eq", "between", "abs", "and", "", "Equal"] {
         assert!(function(name).is_none(), "{name}");
     }
 }
@@ -77,14 +92,17 @@ fn call_refuses_unknown_misplaced_and_misarity_functions() {
         Expr::call("abs", vec![field("a")], Placement::Condition),
         Err(ExprError::Unsupported(_))
     ));
-    // A condition-only function is refused where a value is expected.
+    // A comparison stands anywhere; a value function is no whole where condition.
+    assert!(Expr::call(
+        "equal",
+        vec![field("a"), Expr::Constant(Value::Integer(1))],
+        Placement::Value
+    )
+    .is_ok());
     assert!(matches!(
-        Expr::call("equal", vec![field("a"), Expr::Constant(Value::Integer(1))], Placement::Value),
-        Err(ExprError::Unsupported(m)) if m.contains("equal")
+        Expr::call("document_id", vec![field("__name__")], Placement::Condition),
+        Err(ExprError::Unsupported(m)) if m.contains("document_id")
     ));
-    // A value function is accepted as a condition position too (its result is then checked
-    // at run time), but not with the wrong arity.
-    assert!(Expr::call("document_id", vec![field("__name__")], Placement::Condition).is_ok());
     for (name, args) in [
         ("equal", vec![]),
         ("equal", vec![field("a")]),
@@ -92,9 +110,8 @@ fn call_refuses_unknown_misplaced_and_misarity_functions() {
         ("document_id", vec![]),
         ("parent", vec![field("a"), field("b")]),
     ] {
-        let placement = function(name).unwrap().placement;
         assert!(
-            matches!(Expr::call(name, args.clone(), placement), Err(ExprError::Invalid(m)) if m.contains(name)),
+            matches!(Expr::call(name, args.clone(), Placement::Value), Err(ExprError::Invalid(m)) if m.contains(name)),
             "{name}/{}",
             args.len()
         );
@@ -240,8 +257,12 @@ fn equal_is_three_valued() {
         eq(field("n"), k(Value::Double(f64::NAN))),
         Eval::Value(Value::Boolean(false))
     );
-    assert_eq!(eq(field("missing"), k(Value::Integer(7))), Eval::Absent);
-    assert_eq!(eq(k(Value::Integer(7)), field("missing")), Eval::Absent);
+    // An absent operand drops the row at the top of a where; elsewhere strict refuses it.
+    let top =
+        |a: Expr, b: Expr| condition("equal", vec![a, b]).eval_condition_in(&r, Unrecorded::Refuse);
+    assert_eq!(top(field("missing"), k(Value::Integer(7))), Eval::Absent);
+    assert_eq!(top(k(Value::Integer(7)), field("missing")), Eval::Absent);
+    assert!(unobserved(&eq(field("missing"), k(Value::Integer(7)))));
     // An error wins over absent and values, on either side.
     let error = call("parent", vec![field("__name__")]);
     assert!(unobserved(&eq(error.clone(), k(Value::Integer(7)))));
@@ -308,7 +329,7 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
         })
     ));
     // A non-boolean condition is unrecorded.
-    let value = call("document_id", vec![field("__name__")]);
+    let value = Expr::Constant(Value::Integer(1));
     assert!(matches!(
         execute(vec![Stage::Where(value)], input),
         Err(EvalError::Unobserved {
@@ -456,7 +477,7 @@ proptest! {
         let r = row("c/x", &fields);
         let got = Expr::call("equal", vec![field("f"), Expr::Constant(literal.clone())], Placement::Condition)
             .unwrap()
-            .eval(&r);
+            .eval_condition_in(&r, Unrecorded::Refuse);
         match stored {
             None => prop_assert_eq!(got, Eval::Absent),
             Some(v) => prop_assert_eq!(got, Eval::Value(Value::Boolean(values_equal(&v, &literal)))),
@@ -590,7 +611,9 @@ fn errors_and_functions_describe_themselves() {
     );
     let debug = format!("{:?}", function("document_id").unwrap());
     assert!(
-        debug.contains("\"document_id\"") && debug.contains("arity: 1") && debug.contains("Value"),
+        debug.contains("\"document_id\"")
+            && debug.contains("arity: Exact(1)")
+            && debug.contains("Value"),
         "{debug}"
     );
     // Calls compare by function and arguments.

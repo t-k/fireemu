@@ -11,6 +11,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Added
 
 - Enterprise pipelines run locally on a new pipeline executor. Besides top-level fields, `where(equal(...))` and `select` accept nested field paths (`a.b`) and `documentId`, `collectionId` and `parent` of a document reference. Inputs whose production result is unrecorded, such as the parent of a top-level document or the document ID of a missing field, are refused with `UNIMPLEMENTED` under the strict profile; the emulator profile answers them as the official emulator does (the documents root reference, null). A refusal found while streaming may follow results already sent. Every other function stays refused.
+- The REST `:executePipeline` route executes the same pipeline subset on an Enterprise database under both profiles, so the Web SDK's `firebase/firestore/lite/pipelines` works against fireemu. Results arrive as one JSON array element each; a refusal answers the error alone, without partial results.
 
 ### Changed
 

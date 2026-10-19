@@ -1033,7 +1033,9 @@ impl tokio_stream::Stream for AggregationResponseStream {
     }
 }
 
-fn pipeline_status(mut error: Status, canonical: &str) -> Status {
+/// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
+/// the REST route).
+pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
     if let Ok(value) = canonical.parse() {
         error.metadata_mut().insert("fireemu-pipeline", value);
     }

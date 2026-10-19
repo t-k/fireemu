@@ -34,12 +34,27 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { scanFixture } from "./fixture-scan.mjs";
-import {
+import { LANES, selectLane } from "./lanes.mjs";
+
+const execFileAsync = promisify(execFile);
+const LANE = selectLane();
+/** Each lane's request layer (harness.mjs); its harness digest binds that directory's two files. */
+const HARNESSES = Object.fromEntries(
+  await Promise.all(
+    [...new Set(Object.values(LANES).map((lane) => lane.harness))].map(async (dir) => [
+      dir,
+      await import(pathToFileURL(join(CONFORMANCE_DIR, dir, "harness.mjs")).href),
+    ]),
+  ),
+);
+const HARNESS_DIR = join(CONFORMANCE_DIR, LANE.harness);
+const {
   DATABASE,
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
@@ -50,12 +65,8 @@ import {
   normalizeStep,
   sameRecording,
   validateCorpus,
-} from "./harness.mjs";
-import { selectLane } from "./lanes.mjs";
-import { runCorpus } from "./session.mjs";
-
-const execFileAsync = promisify(execFile);
-const LANE = selectLane();
+} = HARNESSES[LANE.harness];
+const { runCorpus } = await import(pathToFileURL(join(HARNESS_DIR, "session.mjs")).href);
 const { PROGRAMS } = await import(LANE.corpus);
 // A lane without approved divergences compares every row strictly.
 const { approvedDivergence, crossRowChecks } = LANE.divergences
@@ -93,9 +104,7 @@ export const programDigest = (program) => sha256(JSON.stringify(program));
 /** Normalization and request semantics a saved row depends on; a change makes it stale. */
 export async function harnessDigest() {
   const sources = await Promise.all(
-    ["harness.mjs", "session.mjs"].map((file) =>
-      readFile(join(CONFORMANCE_DIR, "src/fs-query-index", file), "utf8"),
-    ),
+    ["harness.mjs", "session.mjs"].map((file) => readFile(join(HARNESS_DIR, file), "utf8")),
   );
   const indexes = INDEXES ? await readFile(INDEXES, "utf8") : "";
   return sha256(`${sources.join("\n")}\n${indexes}`);
@@ -416,6 +425,7 @@ export async function preflightNamedDatabase(
  * the lane's, which the guards then enforce on every request, wipes and seeds included.
  */
 export function productionContext({ lane = LANE, run, startedMs, token, projectNumber }) {
+  const { DATABASE, SANDBOX_PROJECT, createContext, databaseName } = HARNESSES[lane.harness];
   const database = lane.database ?? DATABASE;
   const ctx = createContext({
     database,

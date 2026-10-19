@@ -81,6 +81,31 @@ fn leaf_json(leaf: &Leaf) -> Json {
     }
 }
 
+/// The realtime protocol's JSON for a node: the export form without array conversion
+/// (the official emulator answers `{"0":"a","1":"b"}` there), `null` when absent.
+pub fn wire_json(node: Option<&Node>) -> Json {
+    let Some(node) = node else {
+        return Json::Null;
+    };
+    let value = match &node.content {
+        Content::Leaf(leaf) => leaf_json(leaf),
+        Content::Children(children) => Json::Object(
+            children
+                .iter()
+                .map(|(k, child)| (k.clone(), wire_json(Some(child))))
+                .collect(),
+        ),
+    };
+    match (&node.priority, value) {
+        (None, value) => value,
+        (Some(p), Json::Object(mut map)) => {
+            map.insert(PRIORITY_KEY.to_owned(), priority_json(p));
+            Json::Object(map)
+        }
+        (Some(p), leaf) => Json::object([(VALUE_KEY, leaf), (PRIORITY_KEY, priority_json(p))]),
+    }
+}
+
 /// The array length children render as: every key is a canonical index (`0` or a digit
 /// string without a leading zero) and the largest is below twice the number of children,
 /// the rule of the SDK's `val()`.

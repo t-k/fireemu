@@ -183,7 +183,7 @@ struct PatchEntry {
 }
 
 /// What a write changed, for the event streams.
-enum Change {
+pub(crate) enum Change {
     /// A value was replaced at a path.
     Put(Path),
     /// A multipath update at a base path, with the relative paths of its entries.
@@ -200,6 +200,12 @@ pub struct Database {
     indexes: BTreeMap<String, BTreeMap<Path, BTreeSet<String>>>,
     subscriptions: BTreeMap<u64, Subscription>,
     next_subscription: u64,
+    /// Realtime connections opened so far.
+    clients: u64,
+    /// Connection errors reported so far.
+    errors: u64,
+    /// The `SplitMix64` state realtime session ids are drawn from.
+    session_rng: u64,
 }
 
 impl Database {
@@ -212,6 +218,9 @@ impl Database {
             indexes: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             next_subscription: 1,
+            clients: 0,
+            errors: 0,
+            session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
         }
     }
 
@@ -480,8 +489,14 @@ impl Database {
     }
 
     fn after_write(&mut self, namespace: &str, response: HttpResponse, change: &Change) -> Handled {
+        let events = self.notify(namespace, change);
+        Handled::Response { response, events }
+    }
+
+    /// The events a change in `namespace` causes on the open streams.
+    pub(crate) fn notify(&mut self, namespace: &str, change: &Change) -> Vec<(u64, SseEvent)> {
         let Some(ns) = self.namespaces.get(namespace) else {
-            return respond(response);
+            return Vec::new();
         };
         let mut events = Vec::new();
         for (id, subscription) in &mut self.subscriptions {
@@ -501,7 +516,53 @@ impl Database {
             subscription.last = fresh;
             events.push((*id, event));
         }
-        Handled::Response { response, events }
+        events
+    }
+
+    /// The tree of `namespace`, created empty on first use.
+    pub(crate) fn tree_mut(&mut self, namespace: &str) -> &mut Tree {
+        &mut self.namespace(namespace).tree
+    }
+
+    /// The options in force.
+    pub(crate) fn options(&self) -> &RestOptions {
+        &self.options
+    }
+
+    /// The refusal for a query whose order needs an index that is not declared.
+    pub(crate) fn index_refusal(
+        &self,
+        namespace: &str,
+        path: &Path,
+        query: &QueryParams,
+    ) -> Option<String> {
+        self.check_index(namespace, path, query)
+            .err()
+            .map(|refusal| refusal.message)
+    }
+
+    /// The next realtime client number and session id.
+    pub(crate) fn next_client(&mut self) -> (u64, String) {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        self.clients += 1;
+        let id = (0..32)
+            .map(|_| {
+                self.session_rng = self.session_rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.session_rng;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^= z >> 31;
+                // 62 letters and digits; the modulo bias is irrelevant for a session id.
+                char::from(ALPHABET[usize::try_from(z % 62).unwrap_or(0)])
+            })
+            .collect();
+        (self.clients, id)
+    }
+
+    /// The next number of a connection error, counted across connections.
+    pub(crate) fn next_error(&mut self) -> u64 {
+        self.errors += 1;
+        self.errors
     }
 }
 

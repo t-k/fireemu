@@ -8,6 +8,7 @@
 pub mod json_parse;
 pub mod json_text;
 pub mod namespace;
+pub mod realtime;
 pub mod request;
 pub mod rest;
 pub mod server;

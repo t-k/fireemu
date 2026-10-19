@@ -123,3 +123,136 @@ test("a request built for the named database is refused in (default) and the rev
   const grpcNamed = buildGrpcRequest(grpcStep, production(), new Map());
   assert.throws(() => guardGrpcRequest(grpcNamed, production(DATABASE)), /outside the sandbox/);
 });
+
+// --- run.mjs: recording context, preflight and fixture for the pipeline lane ---
+
+const run = await import("./fs-query-index/run.mjs");
+const { mkdtemp, readFile: readText, rm: remove } = await import("node:fs/promises");
+const { tmpdir } = await import("node:os");
+const { join: joinPath } = await import("node:path");
+
+test("a production recording addresses its lane's database, wipes and seeds included", () => {
+  for (const [id, expected] of [
+    ["fs-ent-pipeline", "entpipe1"],
+    ["fs-query-index", "(default)"],
+    ["fs-data-write-list", "(default)"],
+  ]) {
+    const ctx = run.productionContext({ lane: LANES[id], run: "1", token: "t" });
+    assert.equal(databaseName(ctx), `projects/${SANDBOX_PROJECT}/databases/${expected}`, id);
+    assert.equal(ctx.target.quotaProject, SANDBOX_PROJECT);
+  }
+  // Renormalizing a saved recording keeps its start and its lane's database.
+  const ctx = run.productionContext({
+    lane: lane,
+    run: "7",
+    startedMs: 123,
+    token: "renormalize",
+  });
+  assert.equal(ctx.startedMs, 123);
+  assert.equal(ctx.database, "entpipe1");
+});
+
+const enterprise = {
+  databaseEdition: "ENTERPRISE",
+  firestoreDataAccessMode: "DATA_ACCESS_MODE_ENABLED",
+  type: "FIRESTORE_NATIVE",
+};
+
+test("the named-database preflight checks edition, data access, type and emptiness", async () => {
+  const calls = [];
+  const get = async (path) => {
+    calls.push(path);
+    return { ...enterprise };
+  };
+  const empty = async (_token, database) => {
+    calls.push(`documents:${database}`);
+    return [];
+  };
+  await run.preflightNamedDatabase("t", { lane, get, documents: empty });
+  assert.deepEqual(calls, [`projects/${SANDBOX_PROJECT}/databases/entpipe1`, "documents:entpipe1"]);
+  for (const [key, bad] of [
+    ["databaseEdition", "STANDARD"],
+    ["firestoreDataAccessMode", "DATA_ACCESS_MODE_DISABLED"],
+    ["firestoreDataAccessMode", undefined],
+    ["type", "DATASTORE_MODE"],
+  ]) {
+    await assert.rejects(
+      run.preflightNamedDatabase("t", {
+        lane,
+        get: async () => ({ ...enterprise, [key]: bad }),
+        documents: empty,
+      }),
+      new RegExp(key),
+    );
+  }
+  await assert.rejects(
+    run.preflightNamedDatabase("t", {
+      lane,
+      get: async () => ({ ...enterprise }),
+      documents: async () => [`projects/${SANDBOX_PROJECT}/databases/entpipe1/documents/c/d`],
+    }),
+    /not empty/,
+  );
+});
+
+test("the emptiness read queries the named database and gives up on a hung read", async () => {
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, init });
+    return { ok: true, json: async () => [{ readTime: "x" }] };
+  };
+  assert.deepEqual(await run.databaseDocuments("t", "entpipe1", fetchImpl), []);
+  assert.equal(
+    seen[0].url,
+    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/entpipe1/documents:runQuery`,
+  );
+  assert.ok(seen[0].init.signal instanceof AbortSignal);
+  assert.equal(seen[0].init.headers["x-goog-user-project"], SANDBOX_PROJECT);
+});
+
+test("the pipeline lane's fixture names its target, has no index file and passes the secret scan", async () => {
+  const dir = await mkdtemp(joinPath(tmpdir(), "fs-ent-pipeline-fixture-"));
+  try {
+    const programs = PROGRAMS.slice(0, 2);
+    const recording = (marker) => ({
+      results: Object.fromEntries(
+        programs.map((p) => [
+          p.id,
+          {
+            steps: Object.fromEntries(
+              p.steps.map((s) => [s.id, { status: 200, body: [{ marker }] }]),
+            ),
+          },
+        ]),
+      ),
+    });
+    const fixturePath = joinPath(dir, "fixture.json");
+    const differing = await run.writeFixture({
+      programs,
+      recordings: [recording("a"), recording("a")],
+      meta: { harness: "h", startedAt: "2026-10-20T00:00:00Z", sha: "s" },
+      secrets: ["fireemu-oracle-query", "123456789012"],
+      lane,
+      fixturePath,
+    });
+    const fixture = JSON.parse(await readText(fixturePath, "utf8"));
+    assert.equal(fixture.recordedAgainst.target, lane.target);
+    assert.equal("indexes" in fixture.recordedAgainst, false);
+    assert.deepEqual(Object.keys(fixture.programs), programs.map((p) => p.id).toSorted());
+    assert.equal(fixture.programs[programs[0].id].second, undefined);
+    assert.ok(differing !== undefined);
+    // A recording that leaks the project id is refused before anything is written.
+    await assert.rejects(
+      run.writeFixture({
+        programs,
+        recordings: [recording(`projects/fireemu-oracle-query`), recording("a")],
+        meta: { harness: "h", startedAt: "2026-10-20T00:00:00Z", sha: "s" },
+        secrets: ["fireemu-oracle-query"],
+        lane,
+        fixturePath: joinPath(dir, "leak.json"),
+      }),
+    );
+  } finally {
+    await remove(dir, { recursive: true, force: true });
+  }
+});

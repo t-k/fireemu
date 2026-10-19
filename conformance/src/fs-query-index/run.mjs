@@ -44,6 +44,7 @@ import {
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
   createContext,
+  databaseName,
   diffRecordings,
   isTransient,
   normalizeStep,
@@ -68,6 +69,8 @@ const LOCAL_CONFIG = join(CONFORMANCE_DIR, LANE.localConfig);
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", LANE.id);
 const TASK_ID = LANE.taskId;
 const ADMIN_ORIGIN = "https://firestore.googleapis.com/v1";
+/** Every preflight read gives up after this long, so a hung read never holds the locks. */
+const PREFLIGHT_TIMEOUT_MS = 30_000;
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 export function selectPrograms(
@@ -190,12 +193,13 @@ async function accessToken() {
   return stdout.trim();
 }
 
-async function adminGet(path, token) {
-  const response = await fetch(`${ADMIN_ORIGIN}/${path}`, {
+async function adminGet(path, token, fetchImpl = fetch) {
+  const response = await fetchImpl(`${ADMIN_ORIGIN}/${path}`, {
     headers: {
       authorization: `Bearer ${token}`,
       "x-goog-user-project": SANDBOX_PROJECT,
     },
+    signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(`GET ${path}: HTTP ${response.status}`);
@@ -310,11 +314,12 @@ async function verifyIndexes() {
  * database around every program, so it records only into an empty one: a document there is
  * another lane's, or a failed run's, and must not be deleted unseen.
  */
-async function databaseDocuments(token) {
-  const response = await fetch(
-    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/${DATABASE_ID}/documents:runQuery`,
+export async function databaseDocuments(token, database = DATABASE_ID, fetchImpl = fetch) {
+  const response = await fetchImpl(
+    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/${database}/documents:runQuery`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
       headers: {
         authorization: `Bearer ${token}`,
         "x-goog-user-project": SANDBOX_PROJECT,
@@ -363,34 +368,59 @@ async function preflight(token) {
 }
 
 /**
- * The checks before a recording into a lane's named database (read-only): it exists in the
- * lane's edition and is empty. The lane creates and deletes it in its own packet steps.
+ * The configuration a lane's named database must have: its edition, Firestore API data
+ * access (off by default on Enterprise, which would refuse every request of the corpus) and
+ * the native type.
  */
-async function preflightNamedDatabase(token) {
-  const database = await adminGet(`projects/${SANDBOX_PROJECT}/databases/${DATABASE_ID}`, token);
-  if (database.databaseEdition !== LANE.edition)
+export function checkNamedDatabase(database, lane = LANE) {
+  const wanted = {
+    databaseEdition: lane.edition,
+    firestoreDataAccessMode: "DATA_ACCESS_MODE_ENABLED",
+    type: "FIRESTORE_NATIVE",
+  };
+  for (const [key, value] of Object.entries(wanted)) {
+    if (database[key] !== value)
+      throw new Error(
+        `database ${lane.database}: ${key} is ${database[key]}, the lane needs ${value}`,
+      );
+  }
+}
+
+/**
+ * The checks before a recording into a lane's named database (read-only): it exists with the
+ * lane's configuration and is empty. The lane creates and deletes it in its own packet steps.
+ */
+export async function preflightNamedDatabase(
+  token,
+  { lane = LANE, get = adminGet, documents = databaseDocuments } = {},
+) {
+  const database = await get(`projects/${SANDBOX_PROJECT}/databases/${lane.database}`, token);
+  checkNamedDatabase(database, lane);
+  const found = await documents(token, lane.database);
+  if (found.length) {
     throw new Error(
-      `database ${DATABASE_ID} is ${database.databaseEdition}, the lane records into ${LANE.edition}`,
-    );
-  const documents = await databaseDocuments(token);
-  if (documents.length) {
-    throw new Error(
-      `the sandbox ${DATABASE_ID} database is not empty (${documents[0]}); record only into an empty database`,
+      `the sandbox ${lane.database} database is not empty (${found[0]}); record only into an empty database`,
     );
   }
   console.log(
     JSON.stringify(
-      { preflight: "ok", database: DATABASE_ID, edition: database.databaseEdition },
+      { preflight: "ok", database: lane.database, edition: database.databaseEdition },
       null,
       2,
     ),
   );
 }
 
-async function recordOnce(programs, run, token, projectNumber) {
+/**
+ * The context of a production recording (or of renormalizing one) for a lane: its database is
+ * the lane's, which the guards then enforce on every request, wipes and seeds included.
+ */
+export function productionContext({ lane = LANE, run, startedMs, token, projectNumber }) {
+  const database = lane.database ?? DATABASE;
   const ctx = createContext({
-    database: DATABASE_ID,
+    database,
     run,
+    ...(startedMs === undefined ? {} : { startedMs }),
     target: {
       kind: "production",
       token,
@@ -398,6 +428,13 @@ async function recordOnce(programs, run, token, projectNumber) {
       projectNumber,
     },
   });
+  if (!databaseName(ctx).endsWith(`/databases/${database}`))
+    throw new Error(`a ${lane.id} recording must address ${database}`);
+  return ctx;
+}
+
+async function recordOnce(programs, run, token, projectNumber) {
+  const ctx = productionContext({ run, token, projectNumber });
   return runCorpus(programs, ctx, {
     ...ceilings(programs),
     log: (line) => console.log(line),
@@ -409,17 +446,24 @@ async function recordOnce(programs, run, token, projectNumber) {
  * refusal here (for example by the secret scan) never loses a production run: the recordings
  * are saved privately first and `rebuild-fixture` can retry from them.
  */
-async function writeFixture({ programs, recordings, meta, secrets }) {
+export async function writeFixture({
+  programs,
+  recordings,
+  meta,
+  secrets,
+  lane = LANE,
+  fixturePath = FIXTURE,
+}) {
   const [first, second] = recordings;
-  const fixture = existsSync(FIXTURE)
-    ? JSON.parse(await readFile(FIXTURE, "utf8"))
+  const fixture = existsSync(fixturePath)
+    ? JSON.parse(await readFile(fixturePath, "utf8"))
     : { version: 1, recordedAgainst: {}, programs: {} };
   fixture.recordedAgainst = {
     target:
-      LANE.target ??
+      lane.target ??
       "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
     project: RECORDED_PROJECT,
-    ...(LANE.indexes ? { indexes: `conformance/${LANE.indexes}` } : {}),
+    ...(lane.indexes ? { indexes: `conformance/${lane.indexes}` } : {}),
     note: `Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as ${RECORDED_PROJECT} in every lane. Missing-index links keep their encoded index with the project id replaced. \`second\` holds the other recording of rows that differed.`,
   };
   for (const program of programs) {
@@ -443,7 +487,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   );
   const text = `${JSON.stringify(fixture, null, 2)}\n`;
   scanFixture(text, secrets);
-  await writeFile(FIXTURE, text);
+  await writeFile(fixturePath, text);
   return diffRecordings(first.results, second.results);
 }
 
@@ -598,16 +642,11 @@ export function estimatedUsd(programs, recordings) {
  * production observation. Steps without a raw answer (an unresolved dependency) keep their row.
  */
 export function renormalize(recording, programs) {
-  const ctx = createContext({
-    database: DATABASE_ID,
+  const ctx = productionContext({
     run: recording.context.run,
     startedMs: recording.context.startedMs,
-    target: {
-      kind: "production",
-      token: "renormalize",
-      quotaProject: SANDBOX_PROJECT,
-      projectNumber: process.env.FIREEMU_SANDBOX_PROJECT_NUMBER,
-    },
+    token: "renormalize",
+    projectNumber: process.env.FIREEMU_SANDBOX_PROJECT_NUMBER,
   });
   const results = {};
   for (const program of programs) {

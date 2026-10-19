@@ -679,8 +679,13 @@ impl Firestore for GatewayService {
                 .run_query_with_caller(caller, compiled.input)
                 .await
                 .map_err(|error| pipeline_status(error, &canonical))?;
+            let whole_documents =
+                fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages)
+                    .is_none();
             return Ok(Response::new(Box::pin(PipelineResponseStream {
                 inner: Some(response.into_inner()),
+                whole_documents,
+                read_time: None,
                 cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(
                     compiled.stages,
                     unrecorded,
@@ -1033,7 +1038,9 @@ impl tokio_stream::Stream for AggregationResponseStream {
     }
 }
 
-fn pipeline_status(mut error: Status, canonical: &str) -> Status {
+/// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
+/// the REST route).
+pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
     if let Ok(value) = canonical.parse() {
         error.metadata_mut().insert("fireemu-pipeline", value);
     }
@@ -1057,8 +1064,22 @@ fn pipeline_status(mut error: Status, canonical: &str) -> Status {
 struct PipelineResponseStream {
     inner: Option<BoxStream<pb::RunQueryResponse>>,
     cursor: fireemu_core_firestore::pipeline_exec::Cursor,
+    /// Without a select a result is the source document itself (name and times included).
+    whole_documents: bool,
+    /// The input snapshot's read time, sent as every response's execution time.
+    read_time: Option<prost_types::Timestamp>,
     canonical: String,
     emitted: bool,
+}
+
+impl PipelineResponseStream {
+    /// The answer of a pipeline with no result.
+    fn empty_response(&self) -> pb::ExecutePipelineResponse {
+        pb::ExecutePipelineResponse {
+            execution_time: self.read_time,
+            ..Default::default()
+        }
+    }
 }
 
 impl tokio_stream::Stream for PipelineResponseStream {
@@ -1083,19 +1104,18 @@ impl tokio_stream::Stream for PipelineResponseStream {
                 }
                 Poll::Ready(None) => {
                     this.inner = None;
-                    return Poll::Ready(
-                        (!this.emitted).then(|| Ok(pb::ExecutePipelineResponse::default())),
-                    );
+                    return Poll::Ready((!this.emitted).then(|| Ok(this.empty_response())));
                 }
                 Poll::Ready(Some(Ok(response))) => {
+                    if response.read_time.is_some() {
+                        this.read_time = response.read_time;
+                    }
                     let Some(document) = response.document else {
                         continue;
                     };
                     if this.cursor.is_exhausted() {
                         this.inner = None;
-                        return Poll::Ready(
-                            (!this.emitted).then(|| Ok(pb::ExecutePipelineResponse::default())),
-                        );
+                        return Poll::Ready((!this.emitted).then(|| Ok(this.empty_response())));
                     }
                     let output = crate::pipeline::document_row(&document).and_then(|row| {
                         this.cursor
@@ -1114,8 +1134,14 @@ impl tokio_stream::Stream for PipelineResponseStream {
                     if this.cursor.is_exhausted() {
                         this.inner = None;
                     }
+                    let result = if this.whole_documents {
+                        document
+                    } else {
+                        crate::pipeline::result_document(&fields)
+                    };
                     return Poll::Ready(Some(Ok(pb::ExecutePipelineResponse {
-                        results: vec![crate::pipeline::result_document(&fields)],
+                        results: vec![result],
+                        execution_time: this.read_time,
                         ..Default::default()
                     })));
                 }
@@ -1769,6 +1795,8 @@ mod tests {
         let mut stream = PipelineResponseStream {
             inner: Some(Box::pin(source)),
             cursor: Cursor::new(vec![Stage::Limit(3)]),
+            whole_documents: false,
+            read_time: None,
             canonical: "collection(items)".to_owned(),
             emitted: false,
         };
@@ -1783,6 +1811,8 @@ mod tests {
                 pb::RunQueryResponse::default(),
             )]))),
             cursor: Cursor::new(Vec::new()),
+            whole_documents: false,
+            read_time: None,
             canonical: "collection(items)".to_owned(),
             emitted: false,
         };
@@ -1796,6 +1826,8 @@ mod tests {
                 "fixture error",
             ))]))),
             cursor: Cursor::new(Vec::new()),
+            whole_documents: false,
+            read_time: None,
             canonical: "collection(items)".to_owned(),
             emitted: false,
         };

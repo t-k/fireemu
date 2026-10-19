@@ -250,6 +250,37 @@ async fn executor(service: &GatewayService, request: pb::ExecutePipelineRequest)
     out
 }
 
+/// The executor's whole result documents and whether every response carried an execution time.
+async fn executor_documents(
+    service: &GatewayService,
+    request: pb::ExecutePipelineRequest,
+) -> (Vec<pb::Document>, bool) {
+    let mut stream = Firestore::execute_pipeline(service, Request::new(request))
+        .await
+        .unwrap()
+        .into_inner();
+    let (mut out, mut timed) = (Vec::new(), true);
+    while let Some(response) = stream.next().await {
+        let response = response.unwrap();
+        timed &= response.execution_time.is_some();
+        out.extend(response.results);
+    }
+    (out, timed)
+}
+
+async fn stored_document(service: &GatewayService, name: &str) -> pb::Document {
+    Firestore::get_document(
+        service,
+        Request::new(pb::GetDocumentRequest {
+            name: name.to_owned(),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+}
+
 async fn lowering(service: &GatewayService, request: &pb::ExecutePipelineRequest) -> Vec<Fields> {
     let parent = crate::decode::parse_parent(PARENT).unwrap();
     let compiled = crate::pipeline::compile_supported(request, &parent).unwrap();
@@ -342,13 +373,36 @@ proptest! {
         }
         let flat_service = service_for(&flat);
         let regular_m = case.m_shapes.iter().take(case.docs.len()).all(|shape| *shape == 0);
-        let (expected, top, nested, nested_expected) = runtime.block_on(async {
+        let (expected, top, nested, nested_expected, (documents, timed), stored) = runtime.block_on(async {
             let expected = lowering(&service, &pipeline(&case, "")).await;
             let top = executor(&service, pipeline(&case, "")).await;
             let nested = executor(&service, pipeline(&case, "m.")).await;
             let nested_expected = lowering(&flat_service, &pipeline(&flat, "")).await;
-            (expected, top, nested, nested_expected)
+            let documents = executor_documents(&service, pipeline(&case, "")).await;
+            let mut stored = Vec::new();
+            for document in &documents.0 {
+                if !document.name.is_empty() {
+                    stored.push(stored_document(&service, &document.name).await);
+                }
+            }
+            (expected, top, nested, nested_expected, documents, stored)
         });
+        // Every response carries the execution time. Without a select every result is the
+        // stored source document (name and times included); after one, results are fields only.
+        prop_assert!(timed);
+        if case.select.is_none() {
+            prop_assert_eq!(stored.len(), documents.len());
+            for (result, stored) in documents.iter().zip(&stored) {
+                prop_assert!(result.create_time.is_some() && result.update_time.is_some());
+                prop_assert_eq!(&result.name, &stored.name);
+                prop_assert_eq!(result.create_time, stored.create_time);
+                prop_assert_eq!(result.update_time, stored.update_time);
+                prop_assert_eq!(comparable(result), comparable(stored));
+            }
+        } else {
+            prop_assert!(stored.is_empty());
+            prop_assert!(documents.iter().all(|d| d.create_time.is_none() && d.update_time.is_none()));
+        }
         prop_assert_eq!(&top, &expected);
         // Read through the map `m`, the same values give the same answer. Without a select
         // the rows carry `m` itself, so only a regular `m` compares whole rows.

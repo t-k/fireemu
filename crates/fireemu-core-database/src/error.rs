@@ -12,8 +12,8 @@ pub enum ErrorKind {
     InvalidKey,
     /// A path string cannot name a location (for example `.priority` in the middle).
     InvalidPath,
-    /// A key is longer than the key byte limit.
-    KeyTooLong,
+    /// A path, written keys included, is longer than the path byte limit.
+    PathTooLong,
     /// The written data reaches deeper than the depth limit.
     PathTooDeep,
     /// A string value is longer than the string byte limit.

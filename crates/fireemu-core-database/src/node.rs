@@ -13,7 +13,7 @@ use crate::json::Json;
 use crate::key::{utf16_cmp, validate_key};
 use crate::limits::Limits;
 use crate::number::Number;
-use crate::path::{Path, PRIORITY_KEY};
+use crate::path::{check_path_bytes, Path, PRIORITY_KEY};
 use crate::server_value::SERVER_VALUE_KEY;
 
 /// The `.value` key of a prioritized leaf.
@@ -55,6 +55,13 @@ pub struct Node {
     pub content: Content,
     /// The priority, if one is set.
     pub priority: Option<Priority>,
+}
+
+/// Where a node being built sits: keys above it and the byte length of its path.
+#[derive(Debug, Clone, Copy)]
+struct Position {
+    depth: usize,
+    bytes: usize,
 }
 
 /// How a node is rendered as JSON.
@@ -146,14 +153,25 @@ impl Node {
         }
     }
 
-    /// Builds the node `json` describes, or `None` when it describes nothing. `depth` is the
-    /// number of keys above the node; written data may not nest deeper than the limit.
+    /// Builds the node `json` describes for the location `at`, or `None` when it describes
+    /// nothing. Written data may not nest deeper, or reach longer paths, than the limits.
     /// Server values must be resolved first.
-    pub fn from_json(json: &Json, depth: usize, limits: &Limits) -> Result<Option<Self>> {
+    pub fn from_json(json: &Json, at: &Path, limits: &Limits) -> Result<Option<Self>> {
+        Self::build(
+            json,
+            Position {
+                depth: at.depth(),
+                bytes: at.byte_len(),
+            },
+            limits,
+        )
+    }
+
+    fn build(json: &Json, at: Position, limits: &Limits) -> Result<Option<Self>> {
         if matches!(json, Json::Null) {
             return Ok(None);
         }
-        if depth > limits.max_depth {
+        if at.depth > limits.max_depth {
             return Err(too_deep(limits));
         }
         match json {
@@ -178,15 +196,15 @@ impl Node {
                     .iter()
                     .enumerate()
                     .map(|(index, item)| (index.to_string(), item));
-                Self::from_entries(entries, None, depth, limits)
+                Self::from_entries(entries, None, at, limits)
             }
-            Json::Object(map) => Self::from_object(map, depth, limits),
+            Json::Object(map) => Self::from_object(map, at, limits),
         }
     }
 
     fn from_object(
         map: &BTreeMap<String, Json>,
-        depth: usize,
+        at: Position,
         limits: &Limits,
     ) -> Result<Option<Self>> {
         if map.contains_key(SERVER_VALUE_KEY) {
@@ -206,27 +224,33 @@ impl Node {
                     "an object with \".value\" may hold only \".priority\" besides it",
                 ));
             }
-            return Ok(
-                Self::from_json(value, depth, limits)?.map(|node| node.with_priority(priority))
-            );
+            return Ok(Self::build(value, at, limits)?.map(|node| node.with_priority(priority)));
         }
         let entries = map
             .iter()
             .filter(|(k, _)| k.as_str() != PRIORITY_KEY)
             .map(|(k, v)| (k.clone(), v));
-        Self::from_entries(entries, priority, depth, limits)
+        Self::from_entries(entries, priority, at, limits)
     }
 
     fn from_entries<'a>(
         entries: impl Iterator<Item = (String, &'a Json)>,
         priority: Option<Priority>,
-        depth: usize,
+        at: Position,
         limits: &Limits,
     ) -> Result<Option<Self>> {
         let mut children = BTreeMap::new();
         for (key, value) in entries {
-            validate_key(&key, limits)?;
-            if let Some(child) = Self::from_json(value, depth + 1, limits)? {
+            validate_key(&key)?;
+            let separator = usize::from(at.depth > 0);
+            let child_at = Position {
+                depth: at.depth + 1,
+                bytes: at.bytes + separator + key.len(),
+            };
+            if !matches!(value, Json::Null) {
+                check_path_bytes(child_at.bytes, limits)?;
+            }
+            if let Some(child) = Self::build(value, child_at, limits)? {
                 children.insert(key, child);
             }
         }

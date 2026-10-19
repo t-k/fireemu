@@ -1445,3 +1445,25 @@ fn a_priority_on_a_node_the_update_empties_is_dropped() {
         (200, "null".to_owned())
     );
 }
+
+#[test]
+fn bodies_are_parsed_before_the_lock_when_there_is_one() {
+    use fireemu_adapter_database::rest::parse_body;
+    assert!(parse_body(&request("PUT", "/a.json", &[], "1")).is_some());
+    assert!(parse_body(&request("PUT", "/a.json", &[], "")).is_none());
+    assert!(parse_body(&HttpRequest {
+        method: "PUT".to_owned(),
+        target: "/a.json".to_owned(),
+        headers: Vec::new(),
+        body: vec![0xff],
+    })
+    .is_none());
+    // A body parsed beforehand is the one written.
+    let mut db = db();
+    let put = request("PUT", "/a.json?ns=pb", &[], "5");
+    let parsed = parse_body(&put);
+    match db.handle_parsed(&put, parsed, NOW) {
+        Handled::Response { response, .. } => assert_eq!(response.body, b"5"),
+        Handled::Stream { .. } => panic!("no stream expected"),
+    }
+}

@@ -439,3 +439,16 @@ proptest::proptest! {
         });
     }
 }
+
+#[tokio::test]
+async fn a_message_the_server_cannot_handle_ends_the_connection() {
+    // The official emulator stops answering the connection; this server ends it, so the
+    // SDK reconnects at once.
+    let (address, database) = start(ServerConfig::default()).await;
+    let (mut lp, _) = Lp::start(&address, "lp5").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    assert_eq!(lp.poll(&[&request(2, "g", "{}")]).await, "<!-- -->");
+    assert_eq!(database.lock().unwrap().listen_count(), 0);
+    assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
+}

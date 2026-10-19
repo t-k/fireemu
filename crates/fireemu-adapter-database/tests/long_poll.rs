@@ -147,7 +147,7 @@ fn base64_reads_the_sdks_web_safe_form() {
     assert_eq!(decode_base64("YQ==").unwrap(), b"a");
     assert_eq!(decode_base64("-_8").unwrap(), [0xFB, 0xFF]);
     assert_eq!(decode_base64("").unwrap(), b"");
-    for bad in ["%%%", "Y", "YQ.Q", "Y\u{e9}", "YQ....", "YQ."] {
+    for bad in ["%%%", "Y", "YQ.Q", "Y\u{e9}", "YQ....", "YQ.", "YQ......"] {
         assert!(decode_base64(bad).is_none(), "{bad}");
     }
 }
@@ -198,7 +198,9 @@ fn waiting_segments_are_bounded() {
     // Segments already used do not wait again.
     assert!(r.add(used).unwrap().is_empty());
     assert!(r.add(vec![seg(5, 2, "aaaaaaaa")]).is_ok());
-    assert!(r.add(vec![seg(7, 1, "aaaaaaaaa")]).is_err());
+    // Up to the limit may wait; one byte more may not.
+    assert!(r.add(vec![seg(7, 1, "aaaaaaaa")]).is_ok());
+    assert!(r.add(vec![seg(8, 1, "a")]).is_err());
 }
 
 proptest! {

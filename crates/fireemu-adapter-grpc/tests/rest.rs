@@ -7069,22 +7069,34 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
             );
             assert_eq!(body.as_array().map(Vec::len), Some(1), "{label}");
         }
-        let top_parent = pipeline_body(
-            &json!([collection, {"name": "select", "args": [{"mapValue": {"fields": {
-                "up": {"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}},
-            }}}]}]),
+        // The parent of a top-level document is the documents root under both profiles
+        // (FS-ENT-ORACLE O-1); its document ID is INVALID_ARGUMENT as in production, its
+        // collection ID INVALID_ARGUMENT as in the official emulator and unrecorded under strict.
+        let up = json!({"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}});
+        let select = |v: &Value| {
+            pipeline_body(
+                &json!([collection, {"name": "select", "args": [{"mapValue": {"fields": {"v": v}}}]}]),
+            )
+        };
+        let (status, body) = run(select(&up));
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body[0],
+            json!({"results": [{"fields": {"v": {"referenceValue": "projects/demo-app/databases/(default)/documents"}}}]})
         );
-        let (status, body) = run(top_parent);
-        if strict {
-            assert_eq!(status, 501, "{body}");
-            assert_eq!(body.as_array().map(Vec::len), Some(1));
-        } else {
-            assert_eq!(status, 200, "{body}");
-            assert_eq!(
-                body[0],
-                json!({"results": [{"fields": {"up": {"referenceValue": "projects/demo-app/databases/(default)/documents"}}}]})
-            );
-        }
+        let (status, body) = run(select(
+            &json!({"functionValue": {"name": "document_id", "args": [up]}}),
+        ));
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            stream_error(&body)["error"]["message"],
+            "document_id(...) requires a non-empty path."
+        );
+        let (status, body) = run(select(
+            &json!({"functionValue": {"name": "collection_id", "args": [up]}}),
+        ));
+        assert_eq!(status, if strict { 501 } else { 400 }, "{body}");
+        assert_eq!(body.as_array().map(Vec::len), Some(1));
     }
 }
 

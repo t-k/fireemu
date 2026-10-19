@@ -1120,7 +1120,7 @@ impl tokio_stream::Stream for PipelineResponseStream {
                     let output = crate::pipeline::document_row(&document).and_then(|row| {
                         this.cursor
                             .push(row)
-                            .map_err(|error| Status::unimplemented(error.to_string()))
+                            .map_err(|error| crate::pipeline::eval_status(&error))
                     });
                     let fields = match output {
                         Ok(Some(fields)) => fields,

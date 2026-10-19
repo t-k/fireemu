@@ -9,12 +9,13 @@
 //! 3. Rows ([`Row`]) are documents read at one fixed read version; reading them is the
 //!    caller's job, so the executor never sees two versions of the database.
 //!
-//! Under the strict profile only shapes whose behavior is already pinned evaluate to values:
-//! [`check_recorded_shapes`] refuses, before any row is read, the shapes classic queries
-//! cannot express, and anything whose production behavior is unrecorded (a function applied
-//! to an absent or mistyped input, the parent of a top-level document, a comparison across
-//! kinds) evaluates to [`EvalError::Unobserved`], and the caller refuses the pipeline. The
-//! emulator profile answers as the official emulator does instead.
+//! Production answers recorded by FS-ENT-ORACLE O-1 (2026-10-19, an Enterprise database)
+//! are answered under both profiles; they agree with the official emulator (firebase-tools
+//! 15.28.2) everywhere O-1 looked. Under the strict profile anything whose production
+//! behavior is still unrecorded (a document function of an unrecorded input, a repeated map
+//! key) evaluates to [`EvalError::Unobserved`], and the caller refuses the pipeline; the
+//! emulator profile answers what the official emulator answers instead. An input both refuse
+//! evaluates to [`EvalError::Invalid`].
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -23,7 +24,7 @@ use std::fmt;
 use crate::field_path::FieldPath;
 use crate::path::DocumentPath;
 use crate::store::get_field;
-use crate::value::{Value, ValueKind};
+use crate::value::Value;
 
 /// A document read at the pipeline's read version.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +46,9 @@ pub enum EvalError {
         /// What was outside the recorded shapes.
         reason: &'static str,
     },
+    /// The input is invalid, as production or the official emulator refuses it with
+    /// `INVALID_ARGUMENT` (the message is the official emulator's).
+    Invalid(String),
 }
 
 impl fmt::Display for EvalError {
@@ -54,6 +58,7 @@ impl fmt::Display for EvalError {
                 f,
                 "{function}: {reason}; this behavior is not observed locally"
             ),
+            Self::Invalid(message) => f.write_str(message),
         }
     }
 }
@@ -107,8 +112,6 @@ pub enum Arity {
 pub struct Context {
     /// What inputs with unrecorded production behavior give.
     pub unrecorded: Unrecorded,
-    /// Whether the call is the whole condition of a `where` stage (its arguments are not).
-    pub condition: bool,
 }
 
 /// One entry of the static function table.
@@ -288,28 +291,6 @@ impl Expr {
     /// unrecorded production behavior give.
     #[must_use]
     pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(
-            row,
-            Context {
-                unrecorded,
-                condition: false,
-            },
-        )
-    }
-
-    /// Evaluates the expression as the whole condition of a `where` stage.
-    #[must_use]
-    pub fn eval_condition_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(
-            row,
-            Context {
-                unrecorded,
-                condition: true,
-            },
-        )
-    }
-
-    fn eval_at(&self, row: &Row, cx: Context) -> Eval {
         match self {
             Self::Field(path) if path.is_document_name() => {
                 Eval::Value(Value::Reference(row.path.resource_name()))
@@ -321,9 +302,9 @@ impl Expr {
             Self::Call { function, args } => {
                 let args: Vec<Eval> = args
                     .iter()
-                    .map(|arg| arg.eval_in(row, cx.unrecorded))
+                    .map(|arg| arg.eval_in(row, unrecorded))
                     .collect();
-                (function.eval)(&args, cx)
+                (function.eval)(&args, Context { unrecorded })
             }
         }
     }
@@ -348,17 +329,6 @@ enum Comparison {
 }
 
 impl Comparison {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Equal => "equal",
-            Self::NotEqual => "not_equal",
-            Self::Less => "less_than",
-            Self::LessOrEqual => "less_than_or_equal",
-            Self::Greater => "greater_than",
-            Self::GreaterOrEqual => "greater_than_or_equal",
-        }
-    }
-
     /// The answer for two operands whose order is `order` (`None`: incomparable).
     fn holds(self, order: Option<Ordering>) -> bool {
         match self {
@@ -384,103 +354,114 @@ fn official_order(a: &Eval, b: &Eval) -> Option<Ordering> {
     }
 }
 
-/// A comparison. The emulator profile answers what the official emulator answers. Strict
-/// answers only what classic queries decide the same way ([`check_recorded_shapes`] keeps
-/// the shapes to `field op literal`): as the whole `where` condition, an equality answers
-/// whatever the operands are (classic `==`, `IS_NULL` and `IS_NAN`), and one absent operand
-/// drops the row as a classic filter on a missing field does (except `not_equal`, which the
-/// official emulator keeps and classic `!=` drops); otherwise strict answers only two present
-/// operands of one kind, neither null nor NaN. Everything else is unobserved.
-fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
+/// A comparison, as production answers it (FS-ENT-ORACLE O-1 recorded every class of
+/// operand: absent, null, NaN, numbers across integer and double, other kinds, arrays and
+/// maps, field to field and literal to literal) and the official emulator answers it.
+fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
     let [a, b] = args else {
         unreachable!("the table checks the arity");
     };
-    let answer = Eval::Value(Value::Boolean(op.holds(official_order(a, b))));
-    if cx.unrecorded == Unrecorded::OfficialEmulator {
-        return answer;
-    }
-    let unobserved = |reason| {
-        Eval::Error(EvalError::Unobserved {
-            function: op.name(),
-            reason,
-        })
-    };
-    let special = |v: &Value| matches!(v.kind(), ValueKind::Null | ValueKind::Nan);
-    match (a, b) {
-        (Eval::Value(_), Eval::Value(_)) if cx.condition && op == Comparison::Equal => answer,
-        (Eval::Value(a), Eval::Value(b)) if a.kind() == b.kind() && !special(a) => answer,
-        (Eval::Value(_), Eval::Value(_)) => {
-            unobserved("the operands differ in kind, or one is null or NaN")
-        }
-        (Eval::Absent, Eval::Value(_)) | (Eval::Value(_), Eval::Absent)
-            if cx.condition && op != Comparison::NotEqual =>
-        {
-            Eval::Absent
-        }
-        _ => unobserved("an operand is absent"),
-    }
+    Eval::Value(Value::Boolean(op.holds(official_order(a, b))))
 }
 
-/// `array(...)`: the elements in order. The official emulator writes null for an absent
-/// element; strict refuses one.
-fn eval_array(args: &[Eval], cx: Context) -> Eval {
+/// `array(...)`: the elements in order, null for an absent element (production and the
+/// official emulator answer `[1, null]` for `array(i, x)`).
+fn eval_array(args: &[Eval], _cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let mut values = Vec::with_capacity(args.len());
-    for arg in args {
-        match (arg, cx.unrecorded) {
-            (Eval::Value(value), _) => values.push(value.clone()),
-            (_, Unrecorded::OfficialEmulator) => values.push(Value::Null),
-            (_, Unrecorded::Refuse) => {
-                return Eval::Error(EvalError::Unobserved {
-                    function: "array",
-                    reason: "an element is absent",
-                })
-            }
-        }
-    }
-    Eval::Value(Value::Array(values))
+    Eval::Value(Value::Array(
+        args.iter()
+            .map(|arg| match arg {
+                Eval::Value(value) => value.clone(),
+                _ => Value::Null,
+            })
+            .collect(),
+    ))
 }
 
-/// `map(key, value, ...)`: the official emulator leaves out a key whose value is absent;
-/// strict refuses one, and a repeated key. A key that is not a string is unrecorded.
+/// The type name the official emulator's messages give a value.
+fn type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NULL",
+        Value::Boolean(_) => "BOOLEAN",
+        Value::Integer(_) => "LONG",
+        Value::Double(_) => "DOUBLE",
+        Value::Timestamp(_) => "TIMESTAMP",
+        Value::String(_) => "STRING",
+        Value::Bytes(_) => "BYTES",
+        Value::Reference(_) => "REFERENCE",
+        Value::GeoPoint(_) => "GEO_POINT",
+        Value::Array(_) => "ARRAY",
+        Value::Vector(_) => "VECTOR",
+        Value::Map(_) => "MAP",
+    }
+}
+
+/// `map(key, value, ...)`: a key whose value is absent is left out (production and the
+/// official emulator answer `{k: 1}` for `map("k", i, "k2", x)`). A repeated key and a key
+/// that is not a string are unrecorded in production; the official emulator refuses both.
 fn eval_map(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let unobserved = |reason| {
-        Eval::Error(EvalError::Unobserved {
-            function: "map",
-            reason,
+    let refuse = |reason, message: String| {
+        Eval::Error(match cx.unrecorded {
+            Unrecorded::Refuse => EvalError::Unobserved {
+                function: "map",
+                reason,
+            },
+            Unrecorded::OfficialEmulator => EvalError::Invalid(message),
         })
     };
+    let mut keys = std::collections::BTreeSet::new();
     let mut fields = BTreeMap::new();
     for pair in args.chunks(2) {
-        let [Eval::Value(Value::String(key)), value] = pair else {
-            return unobserved("a key is not a string");
+        let [key, value] = pair else {
+            unreachable!("the table checks the pairs");
         };
-        match (value, cx.unrecorded) {
-            (Eval::Value(value), _) => {
-                if fields.insert(key.clone(), value.clone()).is_some()
-                    && cx.unrecorded == Unrecorded::Refuse
-                {
-                    return unobserved("a key repeats");
-                }
+        let key = match key {
+            Eval::Value(Value::String(key)) => key,
+            Eval::Value(other) => {
+                return refuse(
+                    "a key is not a string",
+                    format!(
+                        "map key must be of type STRING, given type is {}",
+                        type_name(other)
+                    ),
+                )
             }
-            (_, Unrecorded::OfficialEmulator) => {}
-            (_, Unrecorded::Refuse) => return unobserved("a value is absent"),
+            _ => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "map",
+                    reason: "a key is absent",
+                })
+            }
+        };
+        if !keys.insert(key.clone()) {
+            return refuse(
+                "a key repeats",
+                format!("map(...) constructor given duplicate key: {key}"),
+            );
+        }
+        if let Eval::Value(value) = value {
+            fields.insert(key.clone(), value.clone());
         }
     }
     Eval::Value(Value::Map(fields))
 }
 
-/// The document a reference argument names. Anything else (absent, another type, a name
-/// that is not a document) is unrecorded; the official emulator answers null for an absent
-/// or null argument and refuses the rest.
+/// The document a reference argument names, or the answer for any other argument:
+/// - absent or null: null (production answers null for `document_id`; the official emulator
+///   for every document function);
+/// - the documents root (the parent of a top-level document): `INVALID_ARGUMENT` for
+///   `document_id` (production) and `collection_id` (the official emulator);
+/// - another type: `INVALID_ARGUMENT` (the official emulator).
+///
+/// What production has not answered stays unrecorded under strict.
 fn document_argument(
     function: &'static str,
     args: &[Eval],
@@ -489,14 +470,23 @@ fn document_argument(
     if let Some(error) = first_error(args) {
         return Err(error);
     }
+    let recorded = function == "document_id" || unrecorded == Unrecorded::OfficialEmulator;
     let unobserved = |reason| Err(Eval::Error(EvalError::Unobserved { function, reason }));
-    match (args, unrecorded) {
-        ([Eval::Value(Value::Reference(name))], _) => DocumentPath::from_resource_name(name)
-            .map_or_else(|| unobserved("the reference does not name a document"), Ok),
-        ([Eval::Absent | Eval::Value(Value::Null)], Unrecorded::OfficialEmulator) => {
-            Err(Eval::Value(Value::Null))
-        }
-        ([Eval::Absent], Unrecorded::Refuse) => unobserved("the argument is absent"),
+    let invalid = |message: String| Err(Eval::Error(EvalError::Invalid(message)));
+    match args {
+        [Eval::Value(Value::Reference(name))] => match DocumentPath::from_resource_name(name) {
+            Some(path) => Ok(path),
+            None if name.ends_with("/documents") && function != "parent" && recorded => {
+                invalid(format!("{function}(...) requires a non-empty path."))
+            }
+            None => unobserved("the reference does not name a document"),
+        },
+        [Eval::Absent | Eval::Value(Value::Null)] if recorded => Err(Eval::Value(Value::Null)),
+        [Eval::Absent | Eval::Value(Value::Null)] => unobserved("the argument is absent or null"),
+        [Eval::Value(other)] if unrecorded == Unrecorded::OfficialEmulator => invalid(format!(
+            "The function {function}(...) requires `Reference` but got `{}`.",
+            type_name(other)
+        )),
         _ => unobserved("the argument is not a document reference"),
     }
 }
@@ -515,23 +505,20 @@ fn eval_collection_id(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-/// The parent document; for a top-level document the official emulator answers the
-/// database's documents root as a reference.
+/// The parent document; for a top-level document production and the official emulator
+/// answer the database's documents root as a reference.
 fn eval_parent(args: &[Eval], cx: Context) -> Eval {
-    let unrecorded = cx.unrecorded;
-    match document_argument("parent", args, unrecorded) {
-        Ok(path) => match (path.parent_document(), unrecorded) {
-            (Some(parent), _) => Eval::Value(Value::Reference(parent.resource_name())),
-            (None, Unrecorded::OfficialEmulator) => Eval::Value(Value::Reference(format!(
-                "projects/{}/databases/{}/documents",
-                path.project().as_str(),
-                path.database().as_str()
-            ))),
-            (None, Unrecorded::Refuse) => Eval::Error(EvalError::Unobserved {
-                function: "parent",
-                reason: "a top-level document has no parent document",
-            }),
-        },
+    match document_argument("parent", args, cx.unrecorded) {
+        Ok(path) => Eval::Value(Value::Reference(path.parent_document().map_or_else(
+            || {
+                format!(
+                    "projects/{}/databases/{}/documents",
+                    path.project().as_str(),
+                    path.database().as_str()
+                )
+            },
+            |parent| parent.resource_name(),
+        ))),
         Err(e) => e,
     }
 }
@@ -549,112 +536,11 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Whether `function` takes a document reference (`document_id`, `collection_id`, `parent`).
-fn is_document_function(function: &Function) -> bool {
-    matches!(function.name, "document_id" | "collection_id" | "parent")
-}
-
-/// A field reference, or a document function of an operand or a literal (the finite
-/// subset's operands).
-fn is_operand(expr: &Expr) -> bool {
-    match expr {
-        Expr::Field(_) => true,
-        Expr::Call { function, args } => {
-            is_document_function(function)
-                && args
-                    .iter()
-                    .all(|arg| matches!(arg, Expr::Constant(_)) || is_operand(arg))
-        }
-        Expr::Constant(_) => false,
-    }
-}
-
-/// The two arguments of a comparison as an operand and a scalar literal (neither an array,
-/// a map nor a vector), in either order.
-fn operand_and_literal(args: &[Expr]) -> Option<(&Expr, &Value)> {
-    fn scalar(expr: &Expr) -> Option<&Value> {
-        match expr {
-            Expr::Constant(value)
-                if !matches!(value, Value::Array(_) | Value::Map(_) | Value::Vector(_)) =>
-            {
-                Some(value)
-            }
-            _ => None,
-        }
-    }
-    match args {
-        [operand, literal] | [literal, operand] if is_operand(operand) => {
-            scalar(literal).map(|value| (operand, value))
-        }
-        _ => None,
-    }
-}
-
-/// Whether strict answers this `where` condition without production observation: a field
-/// compared with a scalar literal (null or NaN only in an equality), or the finite subset's
-/// equality of a document function and a literal.
-fn is_recorded_condition(expr: &Expr) -> bool {
-    let Expr::Call { function, args } = expr else {
-        return false;
-    };
-    if !function.returns_boolean {
-        return false;
-    }
-    let Some((operand, literal)) = operand_and_literal(args) else {
-        return false;
-    };
-    let field = matches!(operand, Expr::Field(_));
-    function.name == "equal"
-        || (field && !matches!(literal.kind(), ValueKind::Null | ValueKind::Nan))
-}
-
-/// Whether strict answers this `select` value without production observation: an operand,
-/// or a field compared with a scalar literal that is neither null nor NaN.
-fn is_recorded_value(expr: &Expr) -> bool {
-    if is_operand(expr) {
-        return true;
-    }
-    let Expr::Call { function, args } = expr else {
-        return false;
-    };
-    function.returns_boolean
-        && matches!(
-            operand_and_literal(args),
-            Some((Expr::Field(_), literal))
-                if !matches!(literal.kind(), ValueKind::Null | ValueKind::Nan)
-        )
-}
-
-/// Checks the shapes strict answers before any row is read (the PX1 plan's strict column):
-/// only shapes a classic query expresses and decides the same way. Comparisons of two fields
-/// or two literals, comparisons below another function, array, map and vector literals and
-/// constructions, and null or NaN outside a `where` equality are unobserved until production
-/// answers them; the emulator profile skips this check.
-pub fn check_recorded_shapes(stages: &[Stage]) -> Result<(), EvalError> {
-    for stage in stages {
-        match stage {
-            Stage::Where(condition) if !is_recorded_condition(condition) => {
-                return Err(EvalError::Unobserved {
-                    function: "where",
-                    reason: "only a field compared with a scalar literal is answered without production observation",
-                });
-            }
-            Stage::Select(aliases) if !aliases.iter().all(|(_, expr)| is_recorded_value(expr)) => {
-                return Err(EvalError::Unobserved {
-                    function: "select",
-                    reason: "only fields, document functions and a field compared with a scalar literal are answered without production observation",
-                });
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 /// One stage operator.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage {
-    /// Keeps rows whose condition is `true`.
+    /// Keeps rows whose condition is `true`; any other value, and an absent one, drops the row
+    /// (production drops a row whose condition is an integer, null or a missing field).
     Where(Expr),
     /// Replaces the fields by the aliases' values. An alias is a field path, so a dotted
     /// alias nests its value; an absent value leaves its alias out. The aliases must not
@@ -713,16 +599,9 @@ impl Cursor {
     pub fn push(&mut self, mut row: Row) -> Result<Option<BTreeMap<String, Value>>, EvalError> {
         for (stage, remaining) in self.stages.iter().zip(self.counters.iter_mut()) {
             match stage {
-                Stage::Where(condition) => match condition.eval_condition_in(&row, self.unrecorded)
-                {
+                Stage::Where(condition) => match condition.eval_in(&row, self.unrecorded) {
                     Eval::Value(Value::Boolean(true)) => {}
-                    Eval::Value(Value::Boolean(false)) | Eval::Absent => return Ok(None),
-                    Eval::Value(_) => {
-                        return Err(EvalError::Unobserved {
-                            function: "where",
-                            reason: "the condition is not a boolean",
-                        })
-                    }
+                    Eval::Value(_) | Eval::Absent => return Ok(None),
                     Eval::Error(error) => return Err(error),
                 },
                 Stage::Select(aliases) => {
@@ -825,9 +704,6 @@ pub fn execute_in(
     rows: impl IntoIterator<Item = Row>,
     unrecorded: Unrecorded,
 ) -> Result<Vec<BTreeMap<String, Value>>, EvalError> {
-    if unrecorded == Unrecorded::Refuse {
-        check_recorded_shapes(&stages)?;
-    }
     let mut cursor = Cursor::new_in(stages, unrecorded);
     let mut out = Vec::new();
     for row in rows {

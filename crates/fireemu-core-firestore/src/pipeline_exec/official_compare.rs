@@ -15,15 +15,6 @@ pub struct Matrix {
     pub rows: Vec<(&'static str, Vec<&'static str>)>,
 }
 
-impl Matrix {
-    /// The official answer of `op(left, right)`.
-    pub fn cell(&self, op: &str, left: &str, right: &str) -> bool {
-        let index = |name: &str| self.operands.iter().position(|o| *o == name).unwrap();
-        let (_, rows) = self.rows.iter().find(|(name, _)| *name == op).unwrap();
-        rows[index(left)].as_bytes()[index(right)] == b'T'
-    }
-}
-
 /// Reads the recorded matrix (the generator writes one key per line).
 pub fn matrix() -> Matrix {
     let mut operands = Vec::new();

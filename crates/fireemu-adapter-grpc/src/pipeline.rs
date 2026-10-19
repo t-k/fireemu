@@ -427,8 +427,8 @@ pub struct CompiledExecution {
 /// and an optional `limit`, in that order. Operands are field references (nested paths
 /// included), literals and the table's functions. Every other stage, function or arrangement
 /// is refused. `unrecorded` decides whether shapes with unrecorded production behavior
-/// (dotted or quoted select aliases, comparisons classic queries cannot express) are refused
-/// or answered as the official emulator answers them.
+/// (a constant `where` condition, a literal holding expressions) are refused or answered as
+/// the official emulator answers them.
 pub fn compile_pipeline(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
@@ -459,7 +459,7 @@ pub fn compile_pipeline(
                     return Err(Status::unimplemented("duplicate or misplaced where stage"));
                 }
                 seen_where = true;
-                let (condition, filter) = decode_condition(stage)?;
+                let (condition, filter) = decode_condition(stage, unrecorded)?;
                 pushdown = filter;
                 stages.push(Stage::Where(condition));
             }
@@ -514,12 +514,6 @@ pub fn compile_pipeline(
             }
         }
     }
-    // Strict answers only the shapes classic queries decide the same way; the rest is refused
-    // before any row is read.
-    if unrecorded == Unrecorded::Refuse {
-        pipeline_exec::check_recorded_shapes(&stages)
-            .map_err(|error| Status::unimplemented(error.to_string()))?;
-    }
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
         pipeline_exec::referenced_fields(&stages).map(|paths| pb::structured_query::Projection {
@@ -543,54 +537,53 @@ fn expr_status(error: ExprError) -> Status {
     }
 }
 
-/// Where an operand stands: directly in a stage (a `select` value), or as an argument of a
-/// function (named, so that `__name__` can be allowed for the document functions only).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Position<'a> {
-    Stage,
-    Argument(&'a str),
-}
-
-/// The functions that take a document reference, the only ones `__name__` may be passed to.
-const DOCUMENT_FUNCTIONS: &[&str] = &["document_id", "collection_id", "parent"];
-
-/// Whether a wire value holds no expression at any depth (a literal the core can decode).
-fn is_literal(value: &pb::Value) -> bool {
-    use pb::value::ValueType as V;
-    match value.value_type.as_ref() {
-        Some(V::ArrayValue(array)) => array.values.iter().all(is_literal),
-        Some(V::MapValue(map)) => map.fields.values().all(is_literal),
-        Some(
-            V::FieldReferenceValue(_)
-            | V::VariableReferenceValue(_)
-            | V::FunctionValue(_)
-            | V::PipelineValue(_),
-        )
-        | None => false,
-        Some(_) => true,
+/// The status of an evaluation error: `UNIMPLEMENTED` for an input whose production answer is
+/// unrecorded, `INVALID_ARGUMENT` for one production or the official emulator refuses.
+#[must_use]
+pub fn eval_status(error: &pipeline_exec::EvalError) -> Status {
+    match error {
+        pipeline_exec::EvalError::Unobserved { .. } => Status::unimplemented(error.to_string()),
+        pipeline_exec::EvalError::Invalid(message) => Status::invalid_argument(message.clone()),
     }
 }
 
-/// Decodes an operand expression: a field reference, a call of a table function or, as a
-/// function argument, a literal. An array or map literal that holds expressions becomes a
-/// call of `array` / `map` in either position. `__name__` is accepted only as an argument of a
-/// document function; a pure literal is no `select` value.
-fn decode_operand(value: &pb::Value, position: Position<'_>) -> Result<Expr, Status> {
+/// Whether a wire value holds no expression at any depth (a literal the core can decode).
+fn is_literal(value: &pb::Value) -> bool {
+    expression_kind(value).is_none()
+}
+
+/// The wire name of the first expression a value holds at any depth, if any.
+fn expression_kind(value: &pb::Value) -> Option<&'static str> {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().find_map(expression_kind),
+        Some(V::MapValue(map)) => {
+            let mut keys: Vec<_> = map.fields.keys().collect();
+            keys.sort();
+            keys.into_iter()
+                .find_map(|key| expression_kind(&map.fields[key]))
+        }
+        Some(V::FieldReferenceValue(_)) => Some("FIELD_REFERENCE_VALUE"),
+        Some(V::VariableReferenceValue(_)) => Some("VARIABLE_REFERENCE_VALUE"),
+        Some(V::FunctionValue(_)) => Some("FUNCTION_VALUE"),
+        Some(V::PipelineValue(_)) => Some("PIPELINE_VALUE"),
+        Some(_) => None,
+        None => Some("VALUE_TYPE_NOT_SET"),
+    }
+}
+
+/// Decodes an operand expression: a field reference (`__name__` is the document reference),
+/// a call of a table function or a literal. An array or map literal that holds an
+/// expression is refused with `INVALID_ARGUMENT`, as production refuses a map literal holding
+/// a field reference and the official emulator refuses every such literal; under strict the
+/// shapes production has not answered are refused with `UNIMPLEMENTED` instead.
+fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         None => Err(Status::invalid_argument("expression argument is missing")),
-        Some(V::FieldReferenceValue(field)) => {
-            let path =
-                FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?;
-            let document_argument =
-                matches!(position, Position::Argument(name) if DOCUMENT_FUNCTIONS.contains(&name));
-            if path.is_document_name() && !document_argument {
-                return Err(Status::unimplemented(
-                    "__name__ field references are unsupported locally outside document functions",
-                ));
-            }
-            Ok(Expr::Field(path))
-        }
+        Some(V::FieldReferenceValue(field)) => Ok(Expr::Field(
+            FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?,
+        )),
         Some(V::FunctionValue(function)) => {
             if pipeline_exec::function(&function.name).is_none() {
                 return Err(Status::unimplemented(format!(
@@ -607,59 +600,60 @@ fn decode_operand(value: &pb::Value, position: Position<'_>) -> Result<Expr, Sta
             let args = function
                 .args
                 .iter()
-                .map(|arg| decode_operand(arg, Position::Argument(&function.name)))
+                .map(|arg| decode_operand(arg, unrecorded))
                 .collect::<Result<Vec<_>, _>>()?;
             Expr::call(&function.name, args, Placement::Value).map_err(expr_status)
         }
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
-        Some(_) if position == Position::Stage && is_literal(value) => Err(Status::unimplemented(
-            "literal expression operands are unsupported locally",
-        )),
-        Some(_) if is_literal(value) => Ok(Expr::Constant(
-            crate::decode::decode_value(value)
-                .map_err(|e| Status::invalid_argument(e.to_string()))?,
-        )),
-        Some(V::ArrayValue(array)) => {
-            let elements = array
-                .values
-                .iter()
-                .map(|element| decode_operand(element, Position::Argument("array")))
-                .collect::<Result<Vec<_>, _>>()?;
-            Expr::call("array", elements, Placement::Value).map_err(expr_status)
-        }
-        Some(V::MapValue(map)) => {
-            let mut entries: Vec<_> = map.fields.iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(b.0));
-            let mut args = Vec::with_capacity(2 * entries.len());
-            for (key, element) in entries {
-                args.push(Expr::Constant(
-                    fireemu_core_firestore::value::Value::String(key.clone()),
-                ));
-                args.push(decode_operand(element, Position::Argument("map"))?);
+        Some(_) => match expression_kind(value) {
+            None => Ok(Expr::Constant(
+                crate::decode::decode_value(value)
+                    .map_err(|e| Status::invalid_argument(e.to_string()))?,
+            )),
+            Some(kind)
+                if unrecorded == Unrecorded::OfficialEmulator
+                    || (matches!(value.value_type, Some(V::MapValue(_)))
+                        && kind == "FIELD_REFERENCE_VALUE") =>
+            {
+                Err(Status::invalid_argument(format!(
+                    "Value type is not supported: {kind}"
+                )))
             }
-            Expr::call("map", args, Placement::Value).map_err(expr_status)
-        }
-        Some(_) => unreachable!("every other kind is a literal"),
+            Some(_) => Err(Status::unimplemented(
+                "array and map literals holding expressions are not observed locally",
+            )),
+        },
     }
 }
 
-/// Decodes `where(condition)`: a call of a table function that returns a boolean. An
-/// `equal(field, scalar literal)` also gives the same filter the `RunQuery` lowering sends,
-/// for the scan to apply before it copies documents.
+/// Decodes `where(condition)`: a field (production keeps the rows where it is `true`), a
+/// call of a table function that returns a boolean, or (under the emulator profile, as the
+/// official emulator answers it) a literal. An `equal(field, scalar literal)` also gives the
+/// same filter the `RunQuery` lowering sends, for the scan to apply before it copies
+/// documents.
 fn decode_condition(
     stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
 ) -> Result<(Expr, Option<pb::structured_query::Filter>), Status> {
+    use pb::value::ValueType as V;
     let Some(condition) = stage.args.first() else {
         return Err(Status::invalid_argument("where requires a condition"));
     };
-    // A condition that is no function call (a field, a constant) is a valid request the
-    // official emulator answers; it is unsupported locally.
-    let Some(pb::value::ValueType::FunctionValue(function)) = condition.value_type.as_ref() else {
-        return Err(Status::unimplemented(
-            "where conditions other than a comparison are unsupported locally",
-        ));
+    let function = match condition.value_type.as_ref() {
+        Some(V::FunctionValue(function)) => function,
+        Some(V::FieldReferenceValue(_)) => {
+            return Ok((decode_operand(condition, unrecorded)?, None))
+        }
+        _ if is_literal(condition) && unrecorded == Unrecorded::OfficialEmulator => {
+            return Ok((decode_operand(condition, unrecorded)?, None))
+        }
+        _ => {
+            return Err(Status::unimplemented(
+                "this where condition is not observed locally",
+            ))
+        }
     };
     let Some(def) = pipeline_exec::function(&function.name).filter(|def| def.returns_boolean)
     else {
@@ -678,7 +672,7 @@ fn decode_condition(
     let args = function
         .args
         .iter()
-        .map(|arg| decode_operand(arg, Position::Argument(def.name)))
+        .map(|arg| decode_operand(arg, unrecorded))
         .collect::<Result<Vec<_>, _>>()?;
     let scalar_literal = |value: &pb::Value| {
         is_literal(value)
@@ -689,7 +683,7 @@ fn decode_condition(
     };
     let pushdown = match (&args[..], &function.args[..]) {
         ([Expr::Field(path), _], [_, literal])
-            if def.name == "equal" && scalar_literal(literal) =>
+            if def.name == "equal" && !path.is_document_name() && scalar_literal(literal) =>
         {
             Some(equal_filter(path.canonical(), literal))
         }
@@ -699,11 +693,10 @@ fn decode_condition(
     Ok((condition, pushdown))
 }
 
-/// Decodes `select({alias: operand, ...})`. An alias is a field path, as the official
-/// emulator treats it: an invalid path, `__name__`, a repeated path and an alias inside
-/// another are refused as it refuses them. A dotted or quoted alias nests or unquotes the
-/// output key there; production is unobserved, so it is refused unless `unrecorded` follows
-/// the official emulator.
+/// Decodes `select({alias: operand, ...})`. An alias is a field path, as production and the
+/// official emulator read it (FS-ENT-ORACLE O-1 recorded the same answers from both): a
+/// dotted alias nests, a quoted one unquotes, and an invalid path, a reserved name, a
+/// repeated path and an alias inside another are refused.
 fn decode_select(
     stage: &pb::pipeline::Stage,
     unrecorded: Unrecorded,
@@ -715,13 +708,6 @@ fn decode_select(
     };
     let mut aliases = Vec::with_capacity(map.fields.len());
     for (alias, value) in &map.fields {
-        // Strict answers only aliases whose output key cannot depend on how production
-        // reads an alias; every other alias, invalid ones included, is unobserved.
-        if unrecorded == Unrecorded::Refuse && !is_plain_alias(alias) {
-            return Err(Status::unimplemented(format!(
-                "select alias {alias:?} is not a plain identifier; its output shape is not observed locally"
-            )));
-        }
         if value.value_type.is_none() {
             return Err(Status::unimplemented(
                 "select expressions are unsupported locally",
@@ -739,7 +725,7 @@ fn decode_select(
                 "select alias {alias:?} uses a reserved field name"
             )));
         }
-        aliases.push((alias, path, decode_operand(value, Position::Stage)?));
+        aliases.push((alias, path, decode_operand(value, unrecorded)?));
     }
     if aliases.is_empty() {
         return Err(Status::invalid_argument(
@@ -764,17 +750,6 @@ fn decode_select(
 /// A name like `__x__`, which Firestore reserves.
 fn is_reserved_name(segment: &str) -> bool {
     segment.len() >= 4 && segment.starts_with("__") && segment.ends_with("__")
-}
-
-/// An alias that is one unquoted identifier (`[A-Za-z_][A-Za-z0-9_]*`) and not reserved:
-/// its output key is the alias itself whether production reads aliases as keys or as paths.
-fn is_plain_alias(alias: &str) -> bool {
-    let mut chars = alias.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !is_reserved_name(alias)
 }
 
 /// A projected output row as a pipeline result document: fields only, without a name or

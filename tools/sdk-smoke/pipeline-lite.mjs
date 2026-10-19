@@ -9,8 +9,8 @@
 // so the SDK connects with the emulator owner token, as the Admin SDK does.
 //
 // PIPELINE_PROFILE (strict | emulator, default strict) names the profile the daemon runs, which
-// decides the answer for the parent of a top-level document (strict refuses it as unobserved;
-// the emulator profile answers the documents root, as the official emulator does).
+// decides the answer for inputs production has not answered (strict refuses them as
+// unobserved; the emulator profile answers as the official emulator does).
 import assert from "node:assert/strict";
 import { initializeApp } from "firebase/app";
 import { getFirestore, connectFirestoreEmulator, doc, setDoc } from "firebase/firestore/lite";
@@ -89,33 +89,26 @@ assert.deepEqual(
   ),
   [{ le: true }],
 );
-// Shapes classic queries cannot express or decide differently: strict refuses them until
-// production is observed; the emulator profile answers as the official emulator does.
-const unrecorded = [
-  [source().where(field("name").lessThan(1)).select("name"), []],
-  [
-    source().where(field("profile.score").equal(field("profile.score"))).select("name"),
-    [{ name: "a" }, { name: "b" }],
-  ],
-];
-for (const [p, official] of unrecorded) {
-  if (profile === "strict") {
-    await assert.rejects(rows(p), (error) => error.code === "unimplemented");
-  } else {
-    assert.deepEqual(await rows(p), official);
-  }
-}
+// Comparisons across kinds and of two fields answer as production does (FS-ENT-ORACLE O-1).
+assert.deepEqual(await rows(source().where(field("name").lessThan(1)).select("name")), []);
+assert.deepEqual(
+  await rows(source().where(field("profile.score").equal(field("profile.score"))).select("name")),
+  [{ name: "a" }, { name: "b" }],
+);
 await assert.rejects(rows(source().where(field("name").regexMatch("a"))), (error) => {
   assert.equal(error.code, "unimplemented");
   return true;
 });
-const topParent = rows(source().select(parent(field("__name__")).as("up")));
-if (profile === "strict") {
-  await assert.rejects(topParent, (error) => error.code === "unimplemented");
-} else {
-  // The documents root, which the Lite SDK decodes into a reference with an empty path.
-  const [{ up: root }] = await topParent;
-  assert.equal(root.path, "");
-}
+// The parent of a top-level document is the documents root, which the Lite SDK decodes into
+// a reference with an empty path.
+const [{ up: root }] = await rows(source().select(parent(field("__name__")).as("up")).limit(1));
+assert.equal(root.path, "");
+// The collection ID of the documents root: unrecorded in production, so strict refuses it as
+// unimplemented (501); the official emulator refuses it as INVALID_ARGUMENT (400), which the
+// Lite SDK reports as failed-precondition, as it maps every HTTP 400.
+await assert.rejects(
+  rows(source().select(collectionId(parent(field("__name__"))).as("c"))),
+  (error) => error.code === (profile === "strict" ? "unimplemented" : "failed-precondition"),
+);
 console.log(`pipeline-lite smoke passed (${profile})`);
 process.exit(0);

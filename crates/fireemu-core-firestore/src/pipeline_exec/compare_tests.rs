@@ -2,7 +2,7 @@
 // production answer is unrecorded.
 #![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 
-use super::official_compare::{MATRIX, OPERANDS};
+use super::official_compare::matrix;
 use super::*;
 use crate::value::Timestamp;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -49,19 +49,37 @@ fn s(v: &str) -> Value {
     Value::String(v.to_owned())
 }
 
-/// The operand classes of the official matrix, as the Admin SDK wrote them (a JS `1.0` is an
-/// integer; `-0` is the double negative zero). `x` is absent.
+/// The operand classes of the official matrix, with the types the generator writes over REST.
+/// `x` is absent.
 fn operand(name: &str) -> Option<Value> {
+    let reference = |path: &str| {
+        Value::Reference(format!(
+            "projects/demo-app/databases/(default)/documents/{path}"
+        ))
+    };
     Some(match name {
         "x" => return None,
         "n" => Value::Null,
         "nan" => Value::Double(f64::NAN),
-        "i" | "one" => Value::Integer(1),
+        "i" => Value::Integer(1),
         "i2" => Value::Integer(2),
         "d5" => Value::Double(1.5),
+        "one" => Value::Double(1.0),
+        "iz" => Value::Integer(0),
+        "dz" => Value::Double(0.0),
         "nz" => Value::Double(-0.0),
+        "i53" => Value::Integer(1 << 53),
+        "d53" => Value::Double(9_007_199_254_740_992.0),
+        "i53p" => Value::Integer((1 << 53) + 1),
+        "imax" => Value::Integer(i64::MAX),
+        "d63" => Value::Double(9_223_372_036_854_775_808.0),
+        "inf" => Value::Double(f64::INFINITY),
+        "ninf" => Value::Double(f64::NEG_INFINITY),
         "s" => s("a"),
         "s2" => s("b"),
+        "by" => Value::Bytes(vec![0, 1]),
+        "ref" => reference("c/a"),
+        "geo" => Value::GeoPoint(crate::value::GeoPoint::new(0.0, 1.0).unwrap()),
         "b" => Value::Boolean(true),
         "bf" => Value::Boolean(false),
         "arr" => Value::Array(vec![Value::Integer(1), s("a")]),
@@ -76,7 +94,8 @@ fn operand(name: &str) -> Option<Value> {
 }
 
 fn matrix_row() -> Row {
-    row(OPERANDS
+    row(matrix()
+        .operands
         .iter()
         .filter_map(|name| operand(name).map(|v| ((*name).to_owned(), v)))
         .collect())
@@ -117,9 +136,10 @@ fn the_table_lists_the_comparisons_and_literals() {
 #[test]
 fn the_emulator_profile_answers_the_official_matrix() {
     let r = matrix_row();
-    for (op, rows) in MATRIX {
-        for (li, left) in OPERANDS.iter().enumerate() {
-            for (ri, right) in OPERANDS.iter().enumerate() {
+    let m = matrix();
+    for (op, rows) in &m.rows {
+        for (li, left) in m.operands.iter().enumerate() {
+            for (ri, right) in m.operands.iter().enumerate() {
                 let expected = rows[li].as_bytes()[ri] == b'T';
                 let expr = call(op, vec![field(left), field(right)]);
                 assert_eq!(
@@ -140,8 +160,9 @@ fn the_emulator_profile_answers_the_official_matrix() {
 
 /// The literal classes of the matrix strict may compare a field with: scalars (array and map
 /// literals are refused before any row is read).
-const SCALAR_LITERALS: [&str; 13] = [
-    "n", "nan", "i", "i2", "d5", "one", "nz", "s", "s2", "b", "bf", "ts", "ts2",
+const SCALAR_LITERALS: [&str; 25] = [
+    "n", "nan", "i", "i2", "d5", "one", "iz", "dz", "nz", "i53", "d53", "i53p", "imax", "d63",
+    "inf", "ninf", "s", "s2", "by", "ref", "geo", "b", "bf", "ts", "ts2",
 ];
 
 fn literal(name: &str) -> Expr {
@@ -163,12 +184,6 @@ fn strict_kept(condition: Expr) -> Option<bool> {
     strict_cell(Stage::Where(condition)).map(|out| !out.is_empty())
 }
 
-fn matrix_cell(op: &str, left: &str, right: &str) -> bool {
-    let (_, rows) = MATRIX.iter().find(|(name, _)| *name == op).unwrap();
-    let index = |name: &str| OPERANDS.iter().position(|o| *o == name).unwrap();
-    rows[index(left)].as_bytes()[index(right)] == b'T'
-}
-
 /// Strict compares a field with a scalar literal and answers the official matrix's cell
 /// exactly where classic queries decide the same way:
 /// - as the whole `where` condition (either operand order), an equality always (classic `==`,
@@ -181,9 +196,11 @@ fn matrix_cell(op: &str, left: &str, right: &str) -> bool {
 #[test]
 fn strict_answers_field_versus_literal_cells_of_the_official_matrix() {
     let r = matrix_row();
+    let m = matrix();
+    let matrix_cell = |op: &str, left: &str, right: &str| m.cell(op, left, right);
     let special = |name: &str| name == "n" || name == "nan";
     for op in OPS {
-        for left in OPERANDS {
+        for left in m.operands.iter().copied() {
             for right in SCALAR_LITERALS {
                 let stored = r.fields.get(left);
                 let lit = operand(right).unwrap();

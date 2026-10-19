@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 860a48830308a957aeae7b028c6ad6aeafb1dbd26a80f800afeae97e467621c0 # shrinks to v = Object({"a": Number(Double(-2.0113908177010943e-305))}), pretty = false
 cc 3941b63fa01ec666bf94aff5b491b68e44b61264ac373bc8380f93410ab490bf # shrinks to v = Number(Double(-4.889334488854856e-61))
+cc 8fd178cacd3ae036389f18c136dcd90ed07e02914433464c40d93c94a4ac87a6 # shrinks to bits = 9218868437227405312

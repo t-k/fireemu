@@ -211,3 +211,20 @@ fn a_multipath_write_above_a_stream_resends_its_value() {
         vec![(id, put("/", r#"{"b":2}"#))]
     );
 }
+
+#[test]
+fn a_priority_in_a_patch_event_carries_its_value() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/a.json?ns=e3", "1");
+    let (id, _) = open(&mut db, "/.json?ns=e3&format=export");
+    assert_eq!(
+        write(&mut db, "PATCH", "/.json?ns=e3", r#"{"a/.priority":3}"#),
+        vec![(
+            id,
+            SseEvent {
+                event: "patch".to_owned(),
+                data: r#"{"path":"/","data":{"a/.priority":3}}"#.to_owned(),
+            }
+        )]
+    );
+}

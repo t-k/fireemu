@@ -290,3 +290,24 @@ fn a_sparse_index_key_stays_an_object() {
         r#"["x",null,"y"]"#
     );
 }
+
+#[test]
+fn java_double_is_total() {
+    assert_eq!(java_double(f64::INFINITY), "Infinity");
+    assert_eq!(java_double(f64::NEG_INFINITY), "-Infinity");
+    assert_eq!(java_double(f64::NAN), "NaN");
+}
+
+#[test]
+fn out_of_range_numbers_parse_as_infinity_strings() {
+    let huge = format!("1{}", "0".repeat(400));
+    assert_eq!(parse(&huge).unwrap(), Json::string("Infinity"));
+    assert_eq!(
+        parse(&format!("-{huge}")).unwrap(),
+        Json::string("-Infinity")
+    );
+    assert_eq!(parse("1e400").unwrap(), Json::string("Infinity"));
+    assert_eq!(parse("-1e400").unwrap(), Json::string("-Infinity"));
+    // An underflow is an ordinary zero.
+    assert_eq!(parse("1e-400").unwrap(), Json::Number(Number::Int(0)));
+}

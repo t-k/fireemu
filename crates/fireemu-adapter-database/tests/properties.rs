@@ -227,10 +227,8 @@ proptest! {
 
     #[test]
     fn parsed_numbers_are_finite(digits in "-?[0-9]{1,500}(\\.[0-9]{1,5})?([eE][+-]?[0-9]{1,4})?") {
-        if let Ok(json) = parse(&digits) {
-            if let Json::Number(number) = json {
-                prop_assert!(number.as_f64().is_finite());
-            }
+        if let Ok(Json::Number(number)) = parse(&digits) {
+            prop_assert!(number.as_f64().is_finite());
         }
     }
 

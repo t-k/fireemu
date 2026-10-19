@@ -202,7 +202,6 @@ fn the_parser_follows_the_json_grammar() {
         "{",
         "\"\\ud83d\"",
         "\"\\ud83dx\"",
-        "1e400",
         "{\"a\" 1}",
         "[1 2]",
     ] {

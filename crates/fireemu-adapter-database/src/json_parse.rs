@@ -28,27 +28,57 @@ const MAX_NESTING: usize = 512;
 
 /// Parses one JSON value and lists its object keys in document order.
 pub fn parse_with_keys(text: &str) -> Result<(Json, Vec<KeyAt>), ParseError> {
-    let mut parser = Parser {
-        text,
-        at: 0,
-        keys: Vec::new(),
-    };
+    let mut parser = Parser::new(text, true);
+    let value = parser.whole()?;
+    Ok((value, parser.keys))
+}
+
+/// Parses one JSON value without recording key positions (the common path).
+pub fn parse(text: &str) -> Result<Json, ParseError> {
+    Parser::new(text, false).whole()
+}
+
+/// Parses the JSON value at the start of `text` (after whitespace) and returns it with the
+/// byte index just after it.
+pub fn parse_prefix(text: &str) -> Result<(Json, usize), ParseError> {
+    let mut parser = Parser::new(text, false);
     parser.skip_whitespace();
     let value = parser.value(0)?;
-    parser.skip_whitespace();
-    if parser.at != text.len() {
-        return Err(ParseError);
-    }
-    Ok((value, parser.keys))
+    Ok((value, parser.at))
 }
 
 struct Parser<'a> {
     text: &'a str,
     at: usize,
+    /// Whether to record where each key starts.
+    record_keys: bool,
     keys: Vec<KeyAt>,
+    /// The last position computed: byte index, line and column. Positions are asked for in
+    /// increasing order, so each is computed from the previous one in linear total time.
+    mark: (usize, usize, usize),
 }
 
-impl Parser<'_> {
+impl<'a> Parser<'a> {
+    fn new(text: &'a str, record_keys: bool) -> Self {
+        Self {
+            text,
+            at: 0,
+            record_keys,
+            keys: Vec::new(),
+            mark: (0, 1, 1),
+        }
+    }
+
+    fn whole(&mut self) -> Result<Json, ParseError> {
+        self.skip_whitespace();
+        let value = self.value(0)?;
+        self.skip_whitespace();
+        if self.at != self.text.len() {
+            return Err(ParseError);
+        }
+        Ok(value)
+    }
+
     fn peek(&self) -> Option<u8> {
         self.text.as_bytes().get(self.at).copied()
     }
@@ -120,13 +150,15 @@ impl Parser<'_> {
             if self.peek() != Some(b'"') {
                 return Err(ParseError);
             }
-            let (line, column) = self.position();
+            let position = self.record_keys.then(|| self.position());
             let key = self.string()?;
-            self.keys.push(KeyAt {
-                key: key.clone(),
-                line,
-                column,
-            });
+            if let Some((line, column)) = position {
+                self.keys.push(KeyAt {
+                    key: key.clone(),
+                    line,
+                    column,
+                });
+            }
             self.skip_whitespace();
             self.expect(":")?;
             self.skip_whitespace();
@@ -145,11 +177,18 @@ impl Parser<'_> {
         }
     }
 
-    fn position(&self) -> (usize, usize) {
-        let before = &self.text[..self.at];
-        let line = before.matches('\n').count() + 1;
-        let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-        (line, before[line_start..].chars().count() + 1)
+    fn position(&mut self) -> (usize, usize) {
+        let (from, mut line, mut column) = self.mark;
+        for c in self.text[from..self.at].chars() {
+            if c == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        self.mark = (self.at, line, column);
+        (line, column)
     }
 
     fn string(&mut self) -> Result<String, ParseError> {
@@ -243,12 +282,15 @@ impl Parser<'_> {
             if let Ok(int) = text.parse::<i64>() {
                 return Ok(Json::Number(Number::Int(int)));
             }
-            // Beyond the i64 range the integer becomes a double, as the server stores it.
-            let double: f64 = text.parse().map_err(|_| ParseError)?;
-            return Ok(Json::Number(Number::Double(double)));
         }
+        // Beyond the i64 range an integer is a double, as the server stores it. Beyond the
+        // double range the official emulator stores the string "Infinity" or "-Infinity".
         let double: f64 = text.parse().map_err(|_| ParseError)?;
-        Number::from_f64(double).map(Json::Number).ok_or(ParseError)
+        Ok(match Number::from_f64(double) {
+            Some(number) => Json::Number(number),
+            None if double < 0.0 => Json::string("-Infinity"),
+            None => Json::string("Infinity"),
+        })
     }
 
     fn digits(&mut self) {

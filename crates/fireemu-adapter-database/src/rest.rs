@@ -19,7 +19,7 @@ use fireemu_core_database::{
 };
 
 use crate::json_parse::parse_with_keys;
-use crate::json_text::{output_json, parse, priority_at, render, Style};
+use crate::json_text::{output_json, parse, priority_at, render, ParseError, Style};
 use crate::namespace::route;
 use crate::request::{self, Location, Output, Refusal};
 
@@ -243,7 +243,19 @@ impl Database {
 
     /// Handles one request at the server time `now_millis`.
     pub fn handle(&mut self, request: &HttpRequest, now_millis: i64) -> Handled {
-        match self.dispatch(request, now_millis) {
+        let parsed = parse_body(request);
+        self.handle_parsed(request, parsed, now_millis)
+    }
+
+    /// Handles one request whose body was parsed beforehand with [`parse_body`], so the
+    /// parse can run outside the database lock.
+    pub fn handle_parsed(
+        &mut self,
+        request: &HttpRequest,
+        parsed: Option<ParsedBody>,
+        now_millis: i64,
+    ) -> Handled {
+        match self.dispatch(request, parsed, now_millis) {
             Ok(handled) => handled,
             Err(refusal) => Handled::Response {
                 response: refusal_response(&refusal),
@@ -252,7 +264,12 @@ impl Database {
         }
     }
 
-    fn dispatch(&mut self, request: &HttpRequest, now_millis: i64) -> Result<Handled, Refusal> {
+    fn dispatch(
+        &mut self,
+        request: &HttpRequest,
+        parsed: Option<ParsedBody>,
+        now_millis: i64,
+    ) -> Result<Handled, Refusal> {
         let method = request
             .header("X-HTTP-Method-Override")
             .unwrap_or(&request.method)
@@ -275,17 +292,7 @@ impl Database {
             Location::Data(path) => path,
             Location::Settings => return Err(Refusal::new(403, "Permission denied.")),
         };
-        let if_match = request.header("if-match");
-        if if_match.is_some() && matches!(method.as_str(), "GET" | "PATCH" | "POST") {
-            return Err(Refusal::bad(
-                "The 'if-match' header is not supported with GET, PATCH or POST requests",
-            ));
-        }
-        let condition = match (if_match, request.header("if-none-match")) {
-            (Some(tag), _) => Some(Condition::Match(tag)),
-            (None, Some(tag)) => Some(Condition::NoneMatch(tag)),
-            (None, None) => None,
-        };
+        let condition = condition(request, &method)?;
         let output = request::output(&params)?;
         let read_shape = !writing && (output.shallow || request::has_query(&params));
         if condition.is_some() && (output.silent || read_shape) {
@@ -330,7 +337,7 @@ impl Database {
             "GET" => {
                 let tree = &self.namespace(&call.namespace).tree;
                 if let Some(Condition::NoneMatch(tag)) = call.condition {
-                    if etag(tree.get(&call.path)) == tag {
+                    if tag_at(tree, &call.path) == tag {
                         return Ok(respond(not_modified()));
                     }
                     return Ok(respond(read(tree, &call.path, None, &call.output, true)));
@@ -343,34 +350,41 @@ impl Database {
                     call.want_etag,
                 )))
             }
-            "PUT" => self.put(&call, &body_text(request)?),
-            "DELETE" => self.put(&call, "null"),
-            "POST" => self.post(&call, &body_text(request)?),
-            _ => self.patch(&call, &body_text(request)?),
+            "PUT" => self.put(&call, body(request, parsed)?),
+            "DELETE" => self.put(
+                &call,
+                Body {
+                    text: "null",
+                    json: Ok(Json::Null),
+                },
+            ),
+            "POST" => self.post(&call, body(request, parsed)?),
+            _ => self.patch(&call, body(request, parsed)?),
         }
     }
 
-    fn put(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
+    fn put(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
         let tree = &mut self.namespace(&call.namespace).tree;
         let current = tree.get(&call.path);
+        let current_tag = tag_at(tree, &call.path);
         match call.condition {
-            Some(Condition::Match(tag)) if etag(current) != tag => {
+            Some(Condition::Match(tag)) if current_tag != tag => {
                 return Ok(respond(precondition_failed(current, &call.output, true)));
             }
-            Some(Condition::NoneMatch(tag)) if etag(current) == tag => {
+            Some(Condition::NoneMatch(tag)) if current_tag == tag => {
                 return Ok(respond(precondition_failed(current, &call.output, false)));
             }
             _ => {}
         }
-        let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
+        let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
         tree.set(&call.path, &value, call.context)
-            .map_err(|err| write_refusal(&err, || data_refusal(body)))?;
+            .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
         let response = written(tree, &call.path, &call.output, call.want_etag);
         Ok(self.after_write(&call.namespace, response, &Change::Put(call.path.clone())))
     }
 
-    fn post(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
-        let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
+    fn post(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
+        let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
         let id = self
             .push_ids
             .next(u64::try_from(call.context.now_millis).unwrap_or(0));
@@ -378,14 +392,14 @@ impl Database {
         self.namespace(&call.namespace)
             .tree
             .set(&child, &value, call.context)
-            .map_err(|err| write_refusal(&err, || data_refusal(body)))?;
+            .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
         let name = Json::object([("name", Json::String(id))]);
         let response = json_response(&name, &call.output, None);
         Ok(self.after_write(&call.namespace, response, &Change::Put(child)))
     }
 
-    fn patch(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
-        let entries = patch_entries(body, &self.options.limits)?;
+    fn patch(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
+        let entries = patch_entries(body.json, &self.options.limits)?;
         let wire: Vec<(String, Json)> = entries
             .iter()
             .map(|entry| (entry.key.clone(), entry.value.clone()))
@@ -512,6 +526,28 @@ fn respond(response: HttpResponse) -> Handled {
     }
 }
 
+/// The conditional header of a request, refused on the methods the official emulator
+/// refuses it on.
+fn condition<'a>(request: &'a HttpRequest, method: &str) -> Result<Option<Condition<'a>>, Refusal> {
+    let if_match = request.header("if-match");
+    if if_match.is_some() && matches!(method, "GET" | "PATCH" | "POST") {
+        return Err(Refusal::bad(
+            "The 'if-match' header is not supported with GET, PATCH or POST requests",
+        ));
+    }
+    let if_none_match = request.header("if-none-match");
+    if if_none_match.is_some() && matches!(method, "DELETE" | "PATCH" | "POST") {
+        return Err(Refusal::bad(
+            "The 'if-none-match' header is not supported with PUT, POST, PATCH or DELETE requests",
+        ));
+    }
+    Ok(match (if_match, if_none_match) {
+        (Some(tag), _) => Some(Condition::Match(tag)),
+        (None, Some(tag)) => Some(Condition::NoneMatch(tag)),
+        (None, None) => None,
+    })
+}
+
 /// The token of a request: `auth`, `access_token` or an `Authorization: Bearer` header.
 fn credential<'a>(
     request: &'a HttpRequest,
@@ -528,11 +564,32 @@ fn credential<'a>(
         })
 }
 
-fn body_text(request: &HttpRequest) -> Result<String, Refusal> {
+/// A request body parsed ahead of the database lock.
+#[derive(Debug)]
+pub struct ParsedBody {
+    json: Result<Json, ParseError>,
+}
+
+/// Parses the body of `request`, if it has a UTF-8 one. Call it before taking the database
+/// lock and pass the result to [`Database::handle_parsed`].
+pub fn parse_body(request: &HttpRequest) -> Option<ParsedBody> {
+    let text = std::str::from_utf8(&request.body).ok()?;
+    (!text.is_empty()).then(|| ParsedBody { json: parse(text) })
+}
+
+/// A write body: its text, for refusal positions, and its parsed value.
+struct Body<'a> {
+    text: &'a str,
+    json: Result<Json, ParseError>,
+}
+
+fn body(request: &HttpRequest, parsed: Option<ParsedBody>) -> Result<Body<'_>, Refusal> {
     if request.body.is_empty() {
         return Err(Refusal::bad("No data supplied."));
     }
-    String::from_utf8(request.body.clone()).map_err(|_| Refusal::bad(PARSE_ERROR))
+    let text = std::str::from_utf8(&request.body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
+    let json = parsed.map_or_else(|| parse(text), |parsed| parsed.json);
+    Ok(Body { text, json })
 }
 
 fn header(name: &str, value: &str) -> (String, String) {
@@ -595,8 +652,15 @@ fn json_response(json: &Json, output: &Output, etag: Option<String>) -> HttpResp
     if let Some(callback) = &output.callback {
         headers[0] = header("Content-Type", "application/javascript; charset=utf-8");
         body = format!("/**/ {callback}({body});");
+        headers.push(header("X-Content-Type-Options", "nosniff"));
     } else if let Some(name) = &output.download {
         headers[0] = header("Content-Type", "application/octet-stream; charset=utf-8");
+        // The official emulator drops quotes and line breaks from the name; control
+        // characters go too, so the header stays one parameter.
+        let name: String = name
+            .chars()
+            .filter(|c| *c != '"' && !c.is_control())
+            .collect();
         headers.push(header(
             "Content-Disposition",
             &format!("attachment; filename=\"{name}\""),
@@ -640,7 +704,17 @@ fn read(
     } else {
         view(tree, path, query, format)
     };
-    json_response(&json, output, want_etag.then(|| etag(node)))
+    json_response(&json, output, want_etag.then(|| tag_at(tree, path)))
+}
+
+/// The `ETag` of a location; for `<location>/.priority`, of its priority as a leaf (the
+/// official emulator's answer).
+fn tag_at(tree: &Tree, path: &Path) -> String {
+    if path.is_priority() {
+        let parent = path.parent().unwrap_or_default();
+        return etag(stored_priority(tree.get(&parent)).as_ref());
+    }
+    etag(tree.get(path))
 }
 
 /// The `shallow=true` answer; the export format adds `.priority: true`.
@@ -708,7 +782,7 @@ fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpRe
     } else {
         output_json(tree.get(path), Format::Export)
     };
-    let tag = want_etag.then(|| etag(tree.get(path)));
+    let tag = want_etag.then(|| tag_at(tree, path));
     json_response(&json, output, tag)
 }
 
@@ -742,8 +816,11 @@ fn data_refusal(body: &str) -> Refusal {
 }
 
 /// The entries of a `PATCH` body.
-fn patch_entries(body: &str, limits: &Limits) -> Result<Vec<PatchEntry>, Refusal> {
-    let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
+fn patch_entries(
+    body: Result<Json, ParseError>,
+    limits: &Limits,
+) -> Result<Vec<PatchEntry>, Refusal> {
+    let value = body.map_err(|_| Refusal::bad(PARSE_ERROR))?;
     let Json::Object(map) = value else {
         return Err(Refusal::bad(PATCH_ERROR));
     };
@@ -855,7 +932,12 @@ fn stream_event(
         Change::Patch(base, entries) if subscription.query.is_none() && location.contains(base) => {
             let mut data = BTreeMap::new();
             for entry in entries {
-                let value = output_json(tree.get(&base.join(entry)), subscription.format);
+                let target = base.join(entry);
+                let value = if target.is_priority() {
+                    priority_at(tree, &target)
+                } else {
+                    output_json(tree.get(&target), subscription.format)
+                };
                 data.insert(entry.keys().join("/"), value);
             }
             SseEvent {

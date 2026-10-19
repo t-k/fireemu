@@ -216,56 +216,6 @@ impl Window {
             Self::ChildFirst(n) => format!(r#"{{"i":"x","l":{n},"vf":"l"}}"#),
         }
     }
-
-    fn trim(&self, cache: &Json) -> Json {
-        let Json::Object(map) = cache else {
-            return Json::Null;
-        };
-        let kept: BTreeMap<String, Json> = match self {
-            Self::First(n) => map
-                .iter()
-                .take(*n)
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            Self::Last(n) => map
-                .iter()
-                .rev()
-                .take(*n)
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            Self::Range(start, end) => map
-                .iter()
-                .filter(|(k, _)| k.as_str() >= *start && k.as_str() <= *end)
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            Self::ChildFirst(n) => {
-                // Children without `x` first, then numbers, then objects, each by key.
-                let mut sorted: Vec<(&String, &Json)> = map.iter().collect();
-                sorted.sort_by_key(|(k, v)| {
-                    let x = match v {
-                        Json::Object(child) => child.get("x"),
-                        _ => None,
-                    };
-                    let rank = match x {
-                        None | Some(Json::Null) => (0, 0),
-                        Some(Json::Number(Number::Int(x))) => (1, *x),
-                        Some(_) => (2, 0),
-                    };
-                    (rank, (*k).clone())
-                });
-                sorted
-                    .into_iter()
-                    .take(*n)
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            }
-        };
-        if kept.is_empty() {
-            Json::Null
-        } else {
-            Json::Object(kept)
-        }
-    }
 }
 
 fn window() -> impl Strategy<Value = Window> {
@@ -323,6 +273,227 @@ fn pushes_for(db: &mut Database, client: u64) -> Vec<String> {
         .collect()
 }
 
+/// A window client that keeps only its window and applies each child as the SDK's
+/// `LimitedFilter` and `RangedFilter` do: a full window takes a new child only when it sorts
+/// before the window's boundary (evicting the boundary), keeps a changed child while it is
+/// in range, and pulls nothing from outside the window; a merge's children already in the
+/// window go first; a deep write to a child the window does not hold is ignored.
+struct WindowClient {
+    window: Window,
+    cache: BTreeMap<String, Json>,
+}
+
+impl Window {
+    fn limit(&self) -> Option<usize> {
+        match self {
+            Self::First(n) | Self::Last(n) | Self::ChildFirst(n) => Some(*n),
+            Self::Range(..) => None,
+        }
+    }
+
+    fn reverse(&self) -> bool {
+        matches!(self, Self::Last(_))
+    }
+
+    fn in_range(&self, key: &str) -> bool {
+        match self {
+            Self::Range(start, end) => key >= *start && key <= *end,
+            _ => true,
+        }
+    }
+
+    /// The query order of a child.
+    fn order(&self, key: &str, value: &Json) -> ((i32, i64), String) {
+        let rank = match self {
+            Self::ChildFirst(_) => match value {
+                Json::Object(child) => match child.get("x") {
+                    None | Some(Json::Null) => (0, 0),
+                    Some(Json::Number(Number::Int(x))) => (1, *x),
+                    Some(_) => (2, 0),
+                },
+                _ => (0, 0),
+            },
+            _ => (0, 0),
+        };
+        (rank, key.to_owned())
+    }
+}
+
+impl WindowClient {
+    fn sorted(&self) -> Vec<(String, Json)> {
+        let mut children: Vec<(String, Json)> = self
+            .cache
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        children
+            .sort_by(|(ka, a), (kb, b)| self.window.order(ka, a).cmp(&self.window.order(kb, b)));
+        children
+    }
+
+    /// The whole location's value arrived: keep its window.
+    fn overwrite(&mut self, value: &Json) {
+        let Json::Object(children) = value else {
+            self.cache.clear();
+            return;
+        };
+        let mut kept: Vec<(String, Json)> = children
+            .iter()
+            .filter(|(k, v)| **v != Json::Null && self.window.in_range(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        kept.sort_by(|(ka, a), (kb, b)| self.window.order(ka, a).cmp(&self.window.order(kb, b)));
+        if let Some(limit) = self.window.limit() {
+            if self.window.reverse() {
+                let skip = kept.len().saturating_sub(limit);
+                kept.drain(..skip);
+            } else {
+                kept.truncate(limit);
+            }
+        }
+        self.cache = kept.into_iter().collect();
+    }
+
+    /// One child's new value (`None` for none).
+    fn update_child(&mut self, key: &str, value: Option<Json>) {
+        let value = value.filter(|v| *v != Json::Null);
+        let Some(limit) = self.window.limit() else {
+            match value {
+                Some(v) if self.window.in_range(key) => {
+                    self.cache.insert(key.to_owned(), v);
+                }
+                _ => {
+                    self.cache.remove(key);
+                }
+            }
+            return;
+        };
+        if self.cache.len() < limit {
+            match value {
+                Some(v) if self.window.in_range(key) => {
+                    self.cache.insert(key.to_owned(), v);
+                }
+                _ => {
+                    self.cache.remove(key);
+                }
+            }
+            return;
+        }
+        if self.cache.contains_key(key) {
+            // Nothing can be pulled from outside the window: the child stays while in range.
+            match value {
+                Some(v) if self.window.in_range(key) => {
+                    self.cache.insert(key.to_owned(), v);
+                }
+                _ => {
+                    self.cache.remove(key);
+                }
+            }
+            return;
+        }
+        let Some(v) = value else { return };
+        if !self.window.in_range(key) {
+            return;
+        }
+        let sorted = self.sorted();
+        let boundary = if self.window.reverse() {
+            sorted.first()
+        } else {
+            sorted.last()
+        };
+        let Some((boundary_key, boundary_value)) = boundary.cloned() else {
+            return;
+        };
+        let new_order = self.window.order(key, &v);
+        let boundary_order = self.window.order(&boundary_key, &boundary_value);
+        let enters = if self.window.reverse() {
+            new_order >= boundary_order
+        } else {
+            boundary_order >= new_order
+        };
+        if enters {
+            self.cache.remove(&boundary_key);
+            self.cache.insert(key.to_owned(), v);
+        }
+    }
+
+    /// A write inside child `key`: whole when `rest` is empty, otherwise deep, which only
+    /// reaches a child the window holds.
+    fn write_child(&mut self, key: &str, rest: &[String], value: Json) {
+        if rest.is_empty() {
+            self.update_child(key, Some(value));
+            return;
+        }
+        let Some(mut child) = self.cache.get(key).cloned() else {
+            return;
+        };
+        set_at(&mut child, rest, value);
+        self.update_child(key, Some(child));
+    }
+
+    fn apply(&mut self, message: &str) {
+        let Ok(Json::Object(envelope)) = parse(message) else {
+            panic!("{message}")
+        };
+        let Some(Json::Object(data)) = envelope.get("d") else {
+            panic!("{message}")
+        };
+        let (Some(Json::Object(body)), Some(Json::String(action))) = (data.get("b"), data.get("a"))
+        else {
+            panic!("{message}")
+        };
+        let Some(Json::String(path)) = body.get("p") else {
+            panic!("{message}")
+        };
+        let at = keys(path);
+        assert!(at.first().map(String::as_str) == Some("s"), "{message}");
+        let relative = at[1..].to_vec();
+        let value = body.get("d").cloned().unwrap_or(Json::Null);
+        match (action.as_str(), relative.split_first()) {
+            ("d", None) => self.overwrite(&value),
+            ("d", Some((key, rest))) => self.write_child(key, rest, value),
+            ("m", None) => {
+                let Json::Object(entries) = value else {
+                    panic!("{message}")
+                };
+                // Children the window holds go first, then the others, each in order.
+                let mut held = Vec::new();
+                let mut others = Vec::new();
+                for (path, entry) in entries {
+                    let path = keys(&path);
+                    if self.cache.contains_key(&path[0]) {
+                        held.push((path, entry));
+                    } else {
+                        others.push((path, entry));
+                    }
+                }
+                for (path, entry) in held.into_iter().chain(others) {
+                    self.write_child(&path[0], &path[1..], entry);
+                }
+            }
+            ("m", Some((key, rest))) => {
+                let Json::Object(entries) = value else {
+                    panic!("{message}")
+                };
+                for (path, entry) in entries {
+                    let mut target = rest.to_vec();
+                    target.extend(keys(&path));
+                    self.write_child(key, &target, entry);
+                }
+            }
+            (other, _) => panic!("action {other} in {message}"),
+        }
+    }
+
+    fn view(&self) -> Json {
+        if self.cache.is_empty() {
+            Json::Null
+        } else {
+            Json::Object(self.cache.clone())
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
@@ -366,7 +537,7 @@ proptest! {
         let mut reader = open(&mut db);
         writer.receive(&mut db, &frame(1, "p", &format!(r#"{{"p":"/s","d":{}}}"#, render(&start, Style::Compact))), NOW);
         let q = window.wire();
-        let mut client = Client { location: keys("/s"), cache: Json::Null };
+        let mut client = WindowClient { window: window.clone(), cache: BTreeMap::new() };
         for message in listener.receive(&mut db, &frame(1, "q", &format!(r#"{{"p":"/s","q":{q},"t":1,"h":""}}"#)), NOW).replies {
             if message.contains(r#""a":"d""#) {
                 client.apply(&message);
@@ -378,10 +549,8 @@ proptest! {
                 prop_assert!(message.contains(r#","t":1}"#), "untagged {message}");
                 client.apply(&message);
             }
-            // The client keeps only its window, as the SDK's filters do.
-            client.cache = window.trim(&client.cache);
             let held = server(&mut db, &mut reader, "/s", Some(&q));
-            prop_assert_eq!(&client.cache, &held, "after {:?}", write);
+            prop_assert_eq!(&client.view(), &held, "after {:?}", write);
         }
     }
 }

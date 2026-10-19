@@ -677,3 +677,22 @@ fn limits_that_are_not_integers_are_connection_errors() {
         assert!(replies[0].contains("Error on incoming message"), "{frame}");
     }
 }
+
+/// A merge below a child the client does not hold sends the whole child: a range window
+/// keeps the entries in the order sent, a limit window that gains only that child gets it
+/// as one `d` message.
+#[test]
+#[rustfmt::skip]
+fn entries_below_children_the_client_lacks_arrive_whole() {
+    replay("r15", &[
+        (("REST", r#"PUT /w.json {"z":1}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","sp":"b","ep":"c"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"m","b":{"p":"/w","d":{"b/x":0}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":{"x":0}},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":2,"a":"m","b":{"p":"/w","d":{"c/x":1,"b/y":2}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":{"x":1},"b/y":2},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":3,"a":"p","b":{"p":"/w/c/x","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/c/x","d":null,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":4,"a":"m","b":{"p":"/","d":{"w/c/y":5}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":{"y":5}},"t":1},"a":"m"}}"#]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":2,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b":{"x":0,"y":2},"c":{"y":5}},"t":2},"a":"d"}}"#, r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":5,"a":"m","b":{"p":"/w","d":{"a/x":3}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/a","d":{"x":3},"t":2},"a":"d"}}"#]),
+        (("B", r#"{"r":6,"a":"p","b":{"p":"/w/0/x","d":4}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/0","d":{"x":4},"t":2},"a":"d"}}"#]),
+    ]);
+}

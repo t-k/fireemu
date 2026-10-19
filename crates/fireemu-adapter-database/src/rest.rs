@@ -19,7 +19,9 @@ use fireemu_core_database::{
 };
 
 use crate::json_parse::parse_with_keys;
-use crate::json_text::{output_json, parse, priority_at, render, value_at, ParseError, Style};
+use crate::json_text::{
+    output_json, parse, priority_at, render, value_at, written_priority_at, ParseError, Style,
+};
 use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Location, Output, Refusal};
@@ -1024,7 +1026,7 @@ fn not_modified() -> HttpResponse {
 
 fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpResponse {
     let json = if path.is_priority() {
-        priority_at(tree, path)
+        written_priority_at(tree, path)
     } else {
         output_json(tree.get(path), Format::Export)
     };
@@ -1176,7 +1178,7 @@ fn stream_event(
             };
             if inside_one_child {
                 let data = if path.is_priority() {
-                    priority_at(tree, path)
+                    written_priority_at(tree, path)
                 } else {
                     output_json(tree.get(path), subscription.format)
                 };
@@ -1191,7 +1193,7 @@ fn stream_event(
             for entry in entries.iter().map(|entry| &entry.path) {
                 let target = base.join(entry);
                 let value = if target.is_priority() {
-                    priority_at(tree, &target)
+                    written_priority_at(tree, &target)
                 } else {
                     output_json(tree.get(&target), subscription.format)
                 };

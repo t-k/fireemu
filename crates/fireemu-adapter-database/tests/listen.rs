@@ -483,3 +483,35 @@ fn merges_into_a_limit_window_follow_the_official_emulator() {
         (("B", r#"{"r":13,"a":"m","b":{"p":"/w","d":{"0":12,"a":11}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":11,"0":12},"t":1},"a":"m"}}"#]),
     ]);
 }
+
+/// Priorities written to a leaf's `.priority` read as doubles in values, while the
+/// messages for the write carry it as written; a `g` of a `.priority` path reads it.
+#[test]
+#[rustfmt::skip]
+fn priorities_written_to_leaves_read_as_doubles() {
+    replay("r7", &[
+        (("REST", r#"PUT /x.json {"a":1}"#), &[]),
+        (("A", r#"{"r":1,"a":"p","b":{"p":"/x/.priority","d":5}}"#), &[r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}"#]),
+        (("A", r#"{"r":2,"a":"g","b":{"p":"/x","q":{}}}"#), &[r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{".priority":5,"a":1}}}}"#]),
+        (("A", r#"{"r":3,"a":"g","b":{"p":"/x/.priority","q":{}}}"#), &[r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":5}}}"#]),
+        (("A", r#"{"r":4,"a":"q","b":{"p":"/x","h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"x","d":{".priority":5,"a":1}},"a":"d"}}"#, r#"{"t":"d","d":{"r":4,"b":{"s":"ok","d":{}}}}"#]),
+        (("A", r#"{"r":5,"a":"p","b":{"p":"/y","d":{".value":1,".priority":7}}}"#), &[r#"{"t":"d","d":{"r":5,"b":{"s":"ok","d":""}}}"#]),
+        (("A", r#"{"r":6,"a":"p","b":{"p":"/y/.priority","d":8}}"#), &[r#"{"t":"d","d":{"r":6,"b":{"s":"ok","d":""}}}"#]),
+        (("A", r#"{"r":7,"a":"g","b":{"p":"/y","q":{}}}"#), &[r#"{"t":"d","d":{"r":7,"b":{"s":"ok","d":{".value":1,".priority":8.0}}}}"#]),
+    ]);
+    replay("r8", &[
+        (("REST", r"PUT /y.json 1"), &[]),
+        (("A", r#"{"r":1,"a":"p","b":{"p":"/y/.priority","d":8}}"#), &[r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}"#]),
+        (("A", r#"{"r":2,"a":"g","b":{"p":"/y/.priority","q":{}}}"#), &[r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":8.0}}}"#]),
+        (("A", r#"{"r":3,"a":"g","b":{"p":"/nope/.priority","q":{}}}"#), &[r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":null}}}"#]),
+        (("A", r#"{"r":4,"a":"q","b":{"p":"/y/.priority","h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"y/.priority","d":8.0},"a":"d"}}"#, r#"{"t":"d","d":{"r":4,"b":{"s":"ok","d":{}}}}"#]),
+    ]);
+    replay("r6", &[
+        (("REST", r#"PUT /s.json {"a":{".value":1,".priority":1},"b":{".value":2,".priority":2},"c":{".value":3,".priority":3}}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/s","q":{"l":1,"vf":"l"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"a":{".value":1,".priority":1.0}},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"p","b":{"p":"/s/a/.priority","d":5}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"b":{".value":2,".priority":2.0},"a":{".value":1,".priority":5.0}},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":2,"a":"p","b":{"p":"/s/a","d":{".value":0,".priority":0}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s/a","d":{".value":0,".priority":0.0},"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":3,"a":"m","b":{"p":"/s","d":{"a":{".value":7,".priority":9},"z":1}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"z":1,"a":{".value":7,".priority":9.0}},"t":1},"a":"m"}}"#]),
+        (("B", r#"{"r":4,"a":"m","b":{"p":"/s","d":{"b":{".value":7,".priority":9},"c/.priority":8}}}"#), &[]),
+    ]);
+}

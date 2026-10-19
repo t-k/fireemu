@@ -34,7 +34,7 @@ use std::collections::BTreeMap;
 use fireemu_core_database::hash::node_hash;
 use fireemu_core_database::{Content, Json, Leaf, Limit, Node, OrderBy, Path, QueryParams, Tree};
 
-use crate::json_text::{render, value_at, wire_json, Style};
+use crate::json_text::{priority_at, render, value_at, wire_json, Style};
 use crate::rest::Change;
 
 /// One listen of a realtime connection.
@@ -68,6 +68,7 @@ impl Listen {
     /// The data the listen currently shows.
     pub fn view(&self, tree: &Tree) -> Json {
         match self.window_children(tree) {
+            None if self.path.is_priority() => priority_at(tree, &self.path),
             None => wire_json(tree.get(&self.path)),
             Some(children) if children.is_empty() => match &self.window {
                 Some((query, _)) if query.limit.is_none() => Json::Object(BTreeMap::new()),
@@ -86,6 +87,11 @@ impl Listen {
     /// window's children.
     pub fn hash(&self, tree: &Tree) -> String {
         match self.window_children(tree) {
+            None if self.path.is_priority() => {
+                let parent = self.path.parent().unwrap_or_default();
+                let priority = tree.get(&parent).and_then(|node| node.priority.as_ref());
+                node_hash(priority.map(|p| Node::leaf(p.as_leaf())).as_ref())
+            }
             None => node_hash(tree.get(&self.path)),
             Some(children) if children.is_empty() => node_hash(None),
             Some(children) => node_hash(Some(&Node {
@@ -167,14 +173,28 @@ impl Listen {
             } => Vec::new(),
             Change::Put { path, .. } if path.contains(location) => vec![self.snapshot(fresh)],
             Change::Put { path, .. } if location.contains(path) => {
-                let entries = window_diff(tree, location, &self.last, fresh);
+                let written = child_of(path);
+                let entries = window_diff(
+                    tree,
+                    location,
+                    &self.last,
+                    fresh,
+                    &written.iter().collect::<Vec<_>>(),
+                );
                 if entries.is_empty() && self.would_show_nothing_at(tree, path) {
                     // Null written where the window would show a child: sent as written.
                     return vec![frame("d", path, &Json::Null, tag)];
                 }
+                let shown =
+                    |key: &String| matches!(&self.last, Json::Object(map) if map.contains_key(key));
                 match entries.as_slice() {
-                    [(key, _)] if Some(key) == child_of(path).as_ref() => {
+                    // The client holds the child: the write as written.
+                    [(key, _)] if Some(key) == written.as_ref() && shown(key) => {
                         vec![frame("d", path, &value_at(tree, path), tag)]
+                    }
+                    // A child that entered arrives whole.
+                    [(key, value)] if Some(key) == written.as_ref() => {
+                        vec![frame("d", &location.child(key), value, tag)]
                     }
                     _ => message("m", location, &entries, tag),
                 }
@@ -252,7 +272,8 @@ impl Listen {
             return message("m", base, &relative_values(tree, base, &kept), tag);
         }
         if query.limit.is_some() && kept.len() < inside.len() {
-            let changed = window_diff(tree, location, &self.last, fresh);
+            let written: Vec<&String> = inside.iter().map(|path| &path.keys()[depth]).collect();
+            let changed = window_diff(tree, location, &self.last, fresh, &written);
             return match changed.as_slice() {
                 [(key, value)] => vec![frame("d", &location.child(key), value, tag)],
                 _ => message("m", location, &changed, tag),
@@ -263,7 +284,12 @@ impl Listen {
             .map(|path| (path.keys()[depth..].join("/"), value_at(tree, path)))
             .collect();
         if query.limit.is_some() {
-            let covered: Vec<&String> = kept.iter().map(|path| &path.keys()[depth]).collect();
+            // Children an entry wrote whole; one written deeper still enters whole.
+            let covered: Vec<&String> = kept
+                .iter()
+                .filter(|path| path.depth() == depth + 1)
+                .map(|path| &path.keys()[depth])
+                .collect();
             sequence.extend(
                 after
                     .iter()
@@ -365,9 +391,16 @@ fn relative_values(tree: &Tree, from: &Path, paths: &[Path]) -> Vec<(String, Jso
 }
 
 /// What changed between two views of a window: the children that entered or changed, in
-/// key order, then the children deleted from the data, as null. A child that left the
-/// window but is still stored was pushed out and is not reported.
-fn window_diff(tree: &Tree, location: &Path, last: &Json, fresh: &Json) -> Vec<(String, Json)> {
+/// key order, then the children that left it, in key order: deleted ones as null, and ones
+/// the write moved out with their new value. A child that left the window untouched was
+/// pushed out and is not reported.
+fn window_diff(
+    tree: &Tree,
+    location: &Path,
+    last: &Json,
+    fresh: &Json,
+    written: &[&String],
+) -> Vec<(String, Json)> {
     let (before, after) = (as_map(last), as_map(fresh));
     let mut changed: Vec<(String, Json)> = after
         .iter()
@@ -377,8 +410,12 @@ fn window_diff(tree: &Tree, location: &Path, last: &Json, fresh: &Json) -> Vec<(
     changed.extend(
         before
             .keys()
-            .filter(|key| !after.contains_key(*key) && tree.get(&location.child(key)).is_none())
-            .map(|key| (key.clone(), Json::Null)),
+            .filter(|key| !after.contains_key(*key))
+            .filter_map(|key| match tree.get(&location.child(key)) {
+                None => Some((key.clone(), Json::Null)),
+                Some(node) if written.contains(&key) => Some((key.clone(), wire_json(Some(node)))),
+                Some(_) => None,
+            }),
     );
     changed
 }

@@ -377,6 +377,28 @@ fn put_answers_the_stored_value_in_export_form() {
         call(&mut db, "GET", "/x.json?ns=t1&format=export", "").1,
         r#"{".priority":5,"b":2}"#
     );
+    // A leaf's priority reads as a double; the write itself answers what was written.
+    call(&mut db, "PUT", "/l.json?ns=t1", "1");
+    assert_eq!(
+        call(&mut db, "PUT", "/l/.priority.json?ns=t1", "5"),
+        (200, "5".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/l.json?ns=t1&format=export", "").1,
+        r#"{".value":1,".priority":5.0}"#
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/l/.priority.json?ns=t1", ""),
+        (200, "5.0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PATCH", "/.json?ns=t1", r#"{"l/.priority":4}"#).1,
+        r#"{"l":{".priority":4}}"#
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/l.json?ns=t1&format=export", "").1,
+        r#"{".value":1,".priority":4.0}"#
+    );
     assert_eq!(
         call(&mut db, "PUT", "/x/.priority.json?ns=t1", "true"),
         (

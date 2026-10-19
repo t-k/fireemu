@@ -46,7 +46,9 @@ pub fn output_json(node: Option<&Node>, format: Format) -> Json {
             let value = leaf_json(leaf);
             match priority {
                 None => value,
-                Some(p) => Json::object([(VALUE_KEY, value), (PRIORITY_KEY, priority_json(p))]),
+                Some(p) => {
+                    Json::object([(VALUE_KEY, value), (PRIORITY_KEY, priority_json(p, true))])
+                }
             }
         }
         Content::Children(children) => {
@@ -66,7 +68,7 @@ pub fn output_json(node: Option<&Node>, format: Format) -> Json {
                 .map(|(k, child)| (k.clone(), output_json(Some(child), format)))
                 .collect();
             if let Some(p) = priority {
-                map.insert(PRIORITY_KEY.to_owned(), priority_json(p));
+                map.insert(PRIORITY_KEY.to_owned(), priority_json(p, false));
             }
             Json::Object(map)
         }
@@ -99,10 +101,12 @@ pub fn wire_json(node: Option<&Node>) -> Json {
     match (&node.priority, value) {
         (None, value) => value,
         (Some(p), Json::Object(mut map)) => {
-            map.insert(PRIORITY_KEY.to_owned(), priority_json(p));
+            map.insert(PRIORITY_KEY.to_owned(), priority_json(p, false));
             Json::Object(map)
         }
-        (Some(p), leaf) => Json::object([(VALUE_KEY, leaf), (PRIORITY_KEY, priority_json(p))]),
+        (Some(p), leaf) => {
+            Json::object([(VALUE_KEY, leaf), (PRIORITY_KEY, priority_json(p, true))])
+        }
     }
 }
 
@@ -122,11 +126,11 @@ fn array_length(children: &BTreeMap<String, Node>) -> Option<usize> {
     (max < 2 * children.len()).then_some(max + 1)
 }
 
-/// The realtime protocol's value at `path`: the node's, or the priority for a
-/// `<location>/.priority` path.
+/// The value a write to `path` reports in its events and data messages: the node's, or
+/// for a `<location>/.priority` path the priority as it was written.
 pub fn value_at(tree: &Tree, path: &Path) -> Json {
     if path.is_priority() {
-        priority_at(tree, path)
+        written_priority_at(tree, path)
     } else {
         wire_json(tree.get(path))
     }
@@ -134,18 +138,35 @@ pub fn value_at(tree: &Tree, path: &Path) -> Json {
 
 /// A priority as answer JSON. Numbers keep the type the core stored (ledger 1475): a
 /// `.priority` member is a double, a priority written to `<location>/.priority` keeps its
-/// parsed type, as the official emulator answers.
-fn priority_json(priority: &Priority) -> Json {
-    priority.to_json()
+/// parsed type. The official emulator stores a leaf's priority as a double, so an integer
+/// priority of a leaf reads as one (`5.0`).
+fn priority_json(priority: &Priority, leaf: bool) -> Json {
+    match priority {
+        #[allow(clippy::cast_precision_loss)]
+        Priority::Number(Number::Int(int)) if leaf => Json::Number(Number::Double(*int as f64)),
+        other => other.to_json(),
+    }
 }
 
-/// The answer for a `<location>/.priority` path: the priority of the location, `null`
-/// when it has none.
+/// The answer for reading a `<location>/.priority` path: the priority of the location,
+/// `null` when it has none.
 pub fn priority_at(tree: &Tree, path: &Path) -> Json {
+    let parent = path.parent().unwrap_or_default();
+    tree.get(&parent).map_or(Json::Null, |node| {
+        let leaf = matches!(node.content, Content::Leaf(_));
+        node.priority
+            .as_ref()
+            .map_or(Json::Null, |priority| priority_json(priority, leaf))
+    })
+}
+
+/// The priority at a `<location>/.priority` path as it was written: the official emulator
+/// answers a write and notifies it with the written value, even on a leaf.
+pub fn written_priority_at(tree: &Tree, path: &Path) -> Json {
     let parent = path.parent().unwrap_or_default();
     tree.get(&parent)
         .and_then(|node| node.priority.as_ref())
-        .map_or(Json::Null, priority_json)
+        .map_or(Json::Null, Priority::to_json)
 }
 
 /// Writes a number: integers as digits, doubles in Java's form (ledger 1475).

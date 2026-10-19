@@ -20,7 +20,7 @@ use fireemu_core_database::{
 };
 
 use crate::json_parse::parse_with_keys;
-use crate::json_text::{render, wire_json, Style};
+use crate::json_text::{priority_at, render, wire_json, Style};
 use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Refusal};
@@ -503,6 +503,9 @@ impl Session {
             }
         }
         let tree = db.tree_mut(&self.namespace);
+        if path.is_priority() {
+            return Ok(priority_at(tree, &path));
+        }
         let node = tree.get(&path);
         let selected = match (&query, node) {
             // The official emulator answers a query on a leaf with null.

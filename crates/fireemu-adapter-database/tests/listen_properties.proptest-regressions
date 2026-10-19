@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9ee223d7a000c3c4789b84f143c2d11a523f940a01d844fae5972eece70b1fd3 # shrinks to start = Null, location = "/s", writes = [Put("/s", Number(Int(0))), Put("/s/a", Null)]
+cc 78ec10739760b87c5df2774b4390f266dbf25bb0396be666db81de7ecc5fd832 # shrinks to start = Object({"c": Number(Int(0))}), window = Range("b", "c"), writes = [Merge("/s", [("c/x", Null)])]
+cc 239e5ad985c877403e00d6bd7e5402c1cf9dbbe4163595da20c7ddde86dada4c # shrinks to start = Object({"a": Number(Int(0)), "b": Number(Int(0))}), window = Last(3), writes = [Merge("/s", [("c/x", Number(Int(0)))]), Put("/s/d/x", Number(Int(0))), Merge("/s", [("c/x", Null), ("a/x", Null)])]
+cc 885e0755425b5279d22908dbaa09c6f079b3676acf8fd7f1857089d74c6c10c1 # shrinks to start = Null, window = ChildFirst(1), writes = [Merge("/s", [("b", Number(Int(0)))]), Merge("/s", [("b/x", Object({"x": Number(Int(0))})), ("c/x", Number(Int(0)))])]
+cc 1e3d34028671a2b74afd29ef8cd61fb2849fdf0264fd9fc6b996f9db0b06dd6a # shrinks to start = Object({"b": Number(Int(0))}), window = ChildFirst(1), writes = [Merge("/s", [("c", Number(Int(0)))]), Merge("/s", [("b/x", Number(Int(0))), ("a/x", Null)])]
+cc 67e6d151ba1ee098f55d9475cf6355e244ce4cbae6d65067261869595489714a # shrinks to start = Object({"c": Number(Int(0))}), window = ChildFirst(1), writes = [Put("/s/b/x", Number(Int(0))), Put("/s/b/y", Number(Int(0))), Put("/s/b/x", Null)]

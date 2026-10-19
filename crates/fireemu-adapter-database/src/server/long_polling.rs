@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
+use fireemu_adapter_support::entropy;
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use tokio::sync::oneshot;
@@ -176,7 +177,34 @@ fn find(shared: &Shared, id: &str, password: &str) -> Option<Arc<Connection>> {
     (connection.password == password).then_some(connection)
 }
 
+/// A connection's password: ten letters and digits, as the official emulator's, drawn from
+/// the operating system. The password is all that keeps another page from polling the
+/// connection (the client number is sequential), so it never comes from the database's
+/// seeded generator; `None` when the operating system has no entropy to give.
+fn draw_password() -> Option<String> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut password = String::with_capacity(PASSWORD_LENGTH);
+    let mut bytes = [0u8; 32];
+    while password.len() < PASSWORD_LENGTH {
+        entropy::fill(&mut bytes).ok()?;
+        // 248 = 4 * 62: rejecting the rest keeps every character equally likely.
+        password.extend(
+            bytes
+                .iter()
+                .filter(|b| **b < 248)
+                .map(|b| char::from(ALPHABET[usize::from(*b % 62)]))
+                .take(PASSWORD_LENGTH - password.len()),
+        );
+    }
+    Some(password)
+}
+
+const PASSWORD_LENGTH: usize = 10;
+
 fn start(shared: &Arc<Shared>, target: &str, host: &str, callback: Option<i32>) -> Response<Body> {
+    let Some(password) = draw_password() else {
+        return full(refusal_response(&Refusal::new(503, "Service Unavailable")));
+    };
     let now = (shared.config.clock)();
     let mut database = lock_database(shared);
     let opened = match database.open_realtime(target, Some(host).filter(|h| !h.is_empty()), now) {
@@ -198,7 +226,6 @@ fn start(shared: &Arc<Shared>, target: &str, host: &str, callback: Option<i32>) 
             frames.into_iter().next().unwrap_or_default(),
         ),
     };
-    let password = database.long_poll_password();
     let limit = database.realtime_message_bytes();
     let client = session.client();
     let connection = Arc::new(Connection {

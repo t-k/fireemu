@@ -623,6 +623,7 @@ name = "fireemu-adapter-database"
 version = "0.27.1"
 dependencies = [
  "bytes",
+ "fireemu-adapter-support",
  "fireemu-core-database",
  "http-body-util",
  "hyper",

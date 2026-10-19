@@ -795,12 +795,6 @@ impl Database {
         (self.clients, self.token(32))
     }
 
-    /// A long-polling connection's password: ten letters and digits, as the official
-    /// emulator's.
-    pub(crate) fn long_poll_password(&mut self) -> String {
-        self.token(10)
-    }
-
     /// `length` letters and digits drawn from the session generator.
     fn token(&mut self, length: usize) -> String {
         const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";

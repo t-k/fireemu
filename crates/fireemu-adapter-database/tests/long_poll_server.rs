@@ -530,3 +530,19 @@ async fn bounds_are_inclusive_and_regular_requests_keep_a_connection() {
         .await
         .starts_with("pRTLPCB(2,"));
 }
+
+#[tokio::test]
+async fn passwords_come_from_the_operating_system_not_the_database_seed() {
+    // Two servers built the same way, with the same database seed: a password that followed
+    // the seed would let any page that can reach the port poll another connection.
+    let (first, _) = start(ServerConfig::default()).await;
+    let (second, _) = start(ServerConfig::default()).await;
+    let (a, _) = Lp::start(&first, "pw1").await;
+    let (b, _) = Lp::start(&second, "pw1").await;
+    assert_eq!(a.id, b.id, "the client numbers are the same");
+    assert_ne!(a.pw, b.pw);
+    for pw in [&a.pw, &b.pw] {
+        assert_eq!(pw.len(), 10, "{pw}");
+        assert!(pw.bytes().all(|c| c.is_ascii_alphanumeric()), "{pw}");
+    }
+}

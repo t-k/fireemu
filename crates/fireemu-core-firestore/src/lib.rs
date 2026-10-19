@@ -8,6 +8,7 @@ pub mod index_usage;
 pub mod limits;
 pub mod path;
 pub mod pipeline;
+pub mod pipeline_exec;
 pub mod query;
 pub mod size;
 pub mod store;

@@ -494,6 +494,53 @@ static RUN_AGGREGATION_QUERY: Schema = Schema {
         ),
     ],
 };
+static STRUCTURED_PIPELINE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredPipeline",
+    fields: &[
+        f("pipeline", "pipeline", Kind::Message(&PIPELINE)),
+        f("options", "options", Kind::ValueMap),
+    ],
+};
+static EXECUTE_PIPELINE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.ExecutePipelineRequest",
+    fields: &[
+        f("database", "database", Kind::Str),
+        one(
+            "structuredPipeline",
+            "structured_pipeline",
+            Kind::Message(&STRUCTURED_PIPELINE),
+            "pipeline_type",
+        ),
+        one(
+            "transaction",
+            "transaction",
+            Kind::Bytes,
+            "consistency_selector",
+        ),
+        one(
+            "newTransaction",
+            "new_transaction",
+            Kind::Message(&TRANSACTION_OPTIONS),
+            "consistency_selector",
+        ),
+        one(
+            "readTime",
+            "read_time",
+            Kind::Timestamp,
+            "consistency_selector",
+        ),
+        f(
+            "autoCommitTransaction",
+            "auto_commit_transaction",
+            Kind::Bool,
+        ),
+        f(
+            "requestOptions",
+            "request_options",
+            Kind::Message(&REQUEST_OPTIONS),
+        ),
+    ],
+};
 static PARTITION_QUERY: Schema = Schema {
     type_url: "type.googleapis.com/google.firestore.v1.PartitionQueryRequest",
     fields: &[
@@ -547,6 +594,7 @@ fn request_schema(method: &str) -> Option<&'static Schema> {
         "runAggregationQuery" => Some(&RUN_AGGREGATION_QUERY),
         "partitionQuery" => Some(&PARTITION_QUERY),
         "listCollectionIds" => Some(&LIST_COLLECTION_IDS),
+        "executePipeline" => Some(&EXECUTE_PIPELINE),
         _ => None,
     }
 }

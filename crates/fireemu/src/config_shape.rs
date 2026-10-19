@@ -911,6 +911,7 @@ mod tests {
                         ("parse_sign_in_providers", "phone") => "/auth/signIn/phoneNumber",
                         ("apply_firestore", "entry") => "/firestore/*",
                         ("apply_storage", "entry") => "/storage/*",
+                        ("apply_database", "entry") => "/database/*",
                         ("apply_functions", "entry") => "/functions/*",
                         ("emulator_addr", "obj") => "/emulators/firestore",
                         ("apply_firebase_json", "entry") => {
@@ -949,6 +950,7 @@ mod tests {
                         }
                         ("apply_firestore", "entry") => &["/firestore"],
                         ("apply_storage", "entry") if key != "target" => &["/storage"],
+                        ("apply_database", "entry") => &["/database"],
                         ("apply_functions", "entry") => &["/functions"],
                         ("emulator_addr", "obj") => &[
                             "/emulators/auth",
@@ -957,6 +959,7 @@ mod tests {
                             "/emulators/eventarc",
                             "/emulators/tasks",
                             "/emulators/pubsub",
+                            "/emulators/database",
                             "/emulators/hub",
                             "/emulators/ui",
                             "/emulators/logging",

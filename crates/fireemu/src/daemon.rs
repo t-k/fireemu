@@ -104,6 +104,7 @@ struct ServiceAssembly {
     storage: Arc<fireemu_adapter_http::storage::StorageState>,
     control: Arc<fireemu_adapter_http::control::ControlState>,
     pubsub: fireemu_adapter_pubsub::PubSubHandle,
+    realtime_database: Arc<Mutex<fireemu_adapter_database::rest::Database>>,
 }
 
 fn function_log_input(
@@ -562,6 +563,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         eventarc: eventarc_listener,
         tasks: tasks_listener,
         pubsub: pubsub_listener,
+        database: database_listener,
         hub: hub_listener,
         logging: logging_listener,
     } = listeners;
@@ -571,6 +573,21 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     // through the bridge (EVTINFRA-02), when a functions runtime is loaded.
     let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
         cfg.seed ^ 0x5053_5542,
+    )));
+    // The Realtime Database: one tree per namespace. Its push ids and session ids draw from
+    // the daemon seed with its own tag. Without a rules file every request is allowed, as the
+    // official emulator allows it; `productionExact` denies all but the `owner` credential
+    // (owner decision Q4, ledger 1471).
+    let realtime_database = Arc::new(Mutex::new(fireemu_adapter_database::rest::Database::new(
+        fireemu_adapter_database::rest::RestOptions {
+            rules: if cfg.production_exact {
+                fireemu_adapter_database::rest::RulesMode::DenyAll
+            } else {
+                fireemu_adapter_database::rest::RulesMode::AllowAll
+            },
+            ..fireemu_adapter_database::rest::RestOptions::default()
+        },
+        cfg.seed ^ 0x5254_4442,
     )));
     {
         // Without a retry policy production redelivers as soon as possible, which is the default
@@ -892,6 +909,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             eventarc: eventarc_listener,
             tasks: tasks_listener,
             pubsub: pubsub_listener,
+            database: database_listener,
             hub: hub_listener,
             logging: logging_listener,
         },
@@ -909,6 +927,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         storage,
         control,
         pubsub: pubsub_handle,
+        realtime_database,
     })
 }
 
@@ -1137,6 +1156,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         storage,
         control,
         pubsub,
+        realtime_database,
     } = assembly;
     let http_addr = addrs.control;
     let hub_addr = addrs.hub;
@@ -1355,6 +1375,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         firestore_service: service,
         rest,
         pubsub,
+        realtime_database,
     })
 }
 
@@ -1383,6 +1404,7 @@ struct ReadySuite {
     firestore_service: GatewayService,
     rest: Arc<RestState>,
     pubsub: fireemu_adapter_pubsub::PubSubHandle,
+    realtime_database: Arc<Mutex<fireemu_adapter_database::rest::Database>>,
 }
 
 async fn serve_suite(
@@ -1421,6 +1443,7 @@ async fn serve_suite(
         firestore_service,
         rest,
         pubsub,
+        realtime_database,
     } = ready;
     let Listeners {
         firestore: grpc_listener,
@@ -1431,6 +1454,7 @@ async fn serve_suite(
         eventarc: eventarc_listener,
         tasks: tasks_listener,
         pubsub: pubsub_listener,
+        database: database_listener,
         hub: hub_listener,
         logging: logging_listener,
     } = listeners;
@@ -1534,6 +1558,21 @@ async fn serve_suite(
             fireemu_adapter_pubsub::serve_pubsub(listener, pubsub.clone())
         );
     }
+    if let Some(listener) = database_listener {
+        // Server values and the handshake read the daemon's virtual clock.
+        let database_clock = clock.clone();
+        spawn_server!(
+            "Realtime Database",
+            fireemu_adapter_database::server::serve(
+                listener,
+                realtime_database.clone(),
+                fireemu_adapter_database::server::ServerConfig {
+                    clock: Arc::new(move || clock_millis(&database_clock)),
+                    ..fireemu_adapter_database::server::ServerConfig::default()
+                },
+            )
+        );
+    }
     for (name, addr) in [
         ("firestore", addrs.firestore),
         ("auth", addrs.auth),
@@ -1542,6 +1581,7 @@ async fn serve_suite(
         ("eventarc", addrs.eventarc),
         ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
+        ("database", addrs.database),
     ] {
         if let Some(addr) = addr {
             log_bus.publish(
@@ -2088,6 +2128,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             eventarc: eventarc_listener,
             tasks: tasks_listener,
             pubsub: pubsub_listener,
+            database: database_listener,
             hub: hub_listener,
             logging: logging_listener,
         } = bind_listeners(&cfg, &only).await?;
@@ -2108,6 +2149,9 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             .and_then(|l| l.local_addr().ok());
         let tasks_addr = tasks_listener.as_ref().and_then(|l| l.local_addr().ok());
         let pubsub_addr = pubsub_listener.as_ref().and_then(|l| l.local_addr().ok());
+        let database_addr = database_listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok());
         let hub_addr = hub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let logging_addr = logging_listener.as_ref().and_then(|l| l.local_addr().ok());
         let (ui_listener, ui_note) = match ui::bind().await? {
@@ -2125,6 +2169,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 ("eventarc", eventarc_addr),
                 ("tasks", tasks_addr),
                 ("pubsub", pubsub_addr),
+                ("database", database_addr),
             ]) {
                 eprintln!("warning: {warning}");
             }
@@ -2145,6 +2190,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             eventarc: connectable(eventarc_addr),
             tasks: connectable(tasks_addr),
             pubsub: connectable(pubsub_addr),
+            database: connectable(database_addr),
             hub: hub_addr,
             ui: ui_addr,
             logging: logging_addr,
@@ -2267,6 +2313,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     eventarc: eventarc_listener,
                     tasks: tasks_listener,
                     pubsub: pubsub_listener,
+                    database: database_listener,
                     hub: hub_listener,
                     logging: logging_listener,
                 },

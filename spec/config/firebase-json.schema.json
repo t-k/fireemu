@@ -19,6 +19,22 @@
         { "type": "array", "items": { "$ref": "#/$defs/storageTargetEntry" }, "minItems": 1 }
       ]
     },
+    "database": {
+      "description": "Realtime Database rules: one entry for every instance, or an array of entries naming their instance or deploy target. fireemu checks the shape but does not evaluate the rules yet (it says so at startup); requests are answered as without rules.",
+      "oneOf": [
+        { "$ref": "#/$defs/databaseEntry" },
+        {
+          "type": "array",
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/databaseEntry" },
+              { "anyOf": [{ "required": ["instance"] }, { "required": ["target"] }] }
+            ]
+          },
+          "minItems": 1
+        }
+      ]
+    },
     "functions": {
       "description": "One codebase, or an array of them. fireemu loads every selected codebase with one runner each and applies a local safety budget of 32 concurrent runners; --only functions:<codebase> narrows the run to one. firebase-tools 15.28.2 does not impose this local count limit.",
       "oneOf": [
@@ -74,6 +90,16 @@
       "properties": {
         "target": { "type": "string", "minLength": 1 },
         "rules": { "type": "string", "minLength": 1 }
+      }
+    },
+    "databaseEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules"],
+      "properties": {
+        "rules": { "type": "string" },
+        "instance": { "type": "string" },
+        "target": { "type": "string" }
       }
     },
     "functionsEntry": {

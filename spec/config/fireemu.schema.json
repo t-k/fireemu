@@ -778,6 +778,12 @@
         "eventarcPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "tasksPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "pubsubPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "databasePort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port of the Realtime Database emulator, the same setting as emulators.database.port in firebase.json and --database-port. Setting it starts the emulator; the official default port is 9000."
+        },
         "loggingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "hubPort": {
           "type": "integer",

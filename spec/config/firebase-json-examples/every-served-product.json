@@ -6,6 +6,9 @@
   "storage": {
     "rules": "storage.rules"
   },
+  "database": [
+    { "instance": "demo-default-rtdb", "rules": "database.rules.json" }
+  ],
   "functions": {
     "source": "functions",
     "codebase": "default",
@@ -18,6 +21,7 @@
     "firestore": { "host": "127.0.0.1", "port": 8080 },
     "storage": { "host": "127.0.0.1", "port": 9199 },
     "functions": { "host": "127.0.0.1", "port": 5001 },
+    "database": { "host": "127.0.0.1", "port": 9000 },
     "hub": { "host": "127.0.0.1", "port": 4400 },
     "ui": { "enabled": true, "port": 4000 }
   }

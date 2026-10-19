@@ -583,6 +583,7 @@ name = "fireemu"
 version = "0.27.1"
 dependencies = [
  "bytes",
+ "fireemu-adapter-database",
  "fireemu-adapter-functions",
  "fireemu-adapter-grpc",
  "fireemu-adapter-http",

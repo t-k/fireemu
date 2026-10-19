@@ -84,10 +84,8 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
                 let shared = Arc::clone(&shared);
                 async move { Ok::<_, Infallible>(answer(&shared, request).await) }
             });
-            // One request per connection, so only its request line needs escaping. A
-            // connection error concerns that client only.
+            // A connection error concerns that client only.
             let _ = http1::Builder::new()
-                .keep_alive(false)
                 .serve_connection(TokioIo::new(TargetEscaper::new(socket)), service)
                 .with_upgrades()
                 .await;

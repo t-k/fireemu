@@ -4,8 +4,12 @@
 //! The Firebase documentation's own curl examples send `orderBy="$key"` with raw quotes;
 //! `http` (under hyper) rejects `"` in a query, and `<`, `>` and `` ` `` in a path. The REST
 //! layer percent-decodes every path segment and parameter, so encoding these bytes on the way
-//! in changes nothing it reads. Only the request line of a connection's first request is
-//! rewritten, so the server serves one request per connection.
+//! in changes nothing it reads.
+//!
+//! The escaper follows HTTP/1.1 framing so that every request of a kept-alive connection is
+//! escaped: it reads the headers for `Content-Length`, chunked `Transfer-Encoding` and
+//! `Upgrade`, passes bodies through untouched, and passes everything after an upgrade
+//! request's headers through, since the connection then speaks WebSocket.
 
 use std::io;
 use std::pin::Pin;
@@ -14,21 +18,57 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Where the reader is in the stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum State {
     /// The method, before the first space.
     Method,
-    /// The request target and the protocol version, up to the end of the line.
+    /// The request target, escaped.
     Target,
-    /// Everything after the request line, passed through.
-    Rest,
+    /// The protocol version, up to the end of the request line.
+    Version,
+    /// A header line being read.
+    Header(Vec<u8>),
+    /// A body with this many bytes left.
+    Body(u64),
+    /// A chunk-size line being read.
+    ChunkSize(Vec<u8>),
+    /// Chunk data with this many bytes left.
+    ChunkData(u64),
+    /// The line end after chunk data, with this many bytes left.
+    ChunkEnd(u8),
+    /// A trailer line being read after the last chunk.
+    Trailer(Vec<u8>),
+    /// Everything from here on (after an upgrade) passes through.
+    Passthrough,
 }
 
-/// A connection whose first request line has its target escaped.
+/// What the headers of the current request said about its body.
+#[derive(Debug, Clone, Copy, Default)]
+struct Framing {
+    length: u64,
+    chunked: bool,
+    upgrade: bool,
+}
+
+/// A connection whose request targets are escaped.
 pub struct TargetEscaper<S> {
     inner: S,
     state: State,
+    framing: Framing,
     pending: Vec<u8>,
+}
+
+/// Whether the target byte is escaped.
+fn escaped_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'"' | b'#' | b'<' | b'>' | b'`' | b'{' | b'}' | b'|' | b'\\' | b'^'
+    )
+}
+
+/// A line without its trailing CR.
+fn line(bytes: &[u8]) -> &[u8] {
+    bytes.strip_suffix(b"\r").unwrap_or(bytes)
 }
 
 impl<S> TargetEscaper<S> {
@@ -37,32 +77,112 @@ impl<S> TargetEscaper<S> {
         Self {
             inner,
             state: State::Method,
+            framing: Framing::default(),
             pending: Vec::new(),
         }
     }
 
     /// Escapes `input` according to the current state, appending to `pending`.
     fn transform(&mut self, input: &[u8]) {
-        for &byte in input {
-            match (self.state, byte) {
-                (State::Method, b' ') => {
-                    self.state = State::Target;
-                    self.pending.push(byte);
+        let mut at = 0;
+        while at < input.len() {
+            // Bodies pass through in runs, not byte by byte.
+            if let State::Body(left) | State::ChunkData(left) = self.state {
+                let take = usize::try_from(left)
+                    .unwrap_or(usize::MAX)
+                    .min(input.len() - at);
+                self.pending.extend_from_slice(&input[at..at + take]);
+                at += take;
+                let left = left - take as u64;
+                self.state = match (&self.state, left) {
+                    (State::Body(_), 0) => State::Method,
+                    (State::Body(_), left) => State::Body(left),
+                    (_, 0) => State::ChunkEnd(2),
+                    (_, left) => State::ChunkData(left),
+                };
+                continue;
+            }
+            if self.state == State::Passthrough {
+                self.pending.extend_from_slice(&input[at..]);
+                return;
+            }
+            self.step(input[at]);
+            at += 1;
+        }
+    }
+
+    fn step(&mut self, byte: u8) {
+        if self.state == State::Target && escaped_byte(byte) {
+            self.pending
+                .extend_from_slice(format!("%{byte:02X}").as_bytes());
+            return;
+        }
+        self.pending.push(byte);
+        let state = std::mem::replace(&mut self.state, State::Passthrough);
+        self.state = match (state, byte) {
+            (State::Method, b' ') => State::Target,
+            (State::Target, b' ') => State::Version,
+            (State::Method | State::Target | State::Version, b'\n') => {
+                self.framing = Framing::default();
+                State::Header(Vec::new())
+            }
+            (State::Header(text), b'\n') => self.end_header(&text),
+            (State::Header(mut text), other) => {
+                text.push(other);
+                State::Header(text)
+            }
+            (State::ChunkSize(text), b'\n') => {
+                let size = line(&text).split(|b| *b == b';').next().unwrap_or_default();
+                let size = std::str::from_utf8(size)
+                    .ok()
+                    .and_then(|s| u64::from_str_radix(s.trim(), 16).ok())
+                    .unwrap_or(0);
+                if size == 0 {
+                    State::Trailer(Vec::new())
+                } else {
+                    State::ChunkData(size)
                 }
-                (
-                    State::Target,
-                    b'"' | b'#' | b'<' | b'>' | b'`' | b'{' | b'}' | b'|' | b'\\' | b'^',
-                ) => {
-                    self.pending
-                        .extend_from_slice(format!("%{byte:02X}").as_bytes());
+            }
+            (State::ChunkSize(mut text), other) => {
+                text.push(other);
+                State::ChunkSize(text)
+            }
+            (State::ChunkEnd(1), _) => State::ChunkSize(Vec::new()),
+            (State::ChunkEnd(left), _) => State::ChunkEnd(left - 1),
+            (State::Trailer(text), b'\n') if line(&text).is_empty() => State::Method,
+            (State::Trailer(_), b'\n') => State::Trailer(Vec::new()),
+            (State::Trailer(mut text), other) => {
+                text.push(other);
+                State::Trailer(text)
+            }
+            (other, _) => other,
+        };
+    }
+
+    /// The state after a header line (without its LF).
+    fn end_header(&mut self, text: &[u8]) -> State {
+        let text = line(text);
+        if text.is_empty() {
+            return match self.framing {
+                Framing { upgrade: true, .. } => State::Passthrough,
+                Framing { chunked: true, .. } => State::ChunkSize(Vec::new()),
+                Framing { length: 0, .. } => State::Method,
+                Framing { length, .. } => State::Body(length),
+            };
+        }
+        let text = String::from_utf8_lossy(text);
+        if let Some((name, value)) = text.split_once(':') {
+            let value = value.trim();
+            match name.trim().to_ascii_lowercase().as_str() {
+                "content-length" => self.framing.length = value.parse().unwrap_or(0),
+                "transfer-encoding" => {
+                    self.framing.chunked = value.to_ascii_lowercase().contains("chunked");
                 }
-                (State::Method | State::Target, b'\n') => {
-                    self.state = State::Rest;
-                    self.pending.push(byte);
-                }
-                _ => self.pending.push(byte),
+                "upgrade" => self.framing.upgrade = true,
+                _ => {}
             }
         }
+        State::Header(Vec::new())
     }
 }
 
@@ -74,7 +194,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for TargetEscaper<S> {
     ) -> Poll<io::Result<()>> {
         let this = &mut *self;
         if this.pending.is_empty() {
-            if this.state == State::Rest {
+            if this.state == State::Passthrough {
                 return Pin::new(&mut this.inner).poll_read(cx, buf);
             }
             let mut scratch = [0u8; 4096];
@@ -152,5 +272,111 @@ mod tests {
             String::from_utf8(whole).unwrap(),
             "PUT /%3Ca%3E%60%7C%5C%5E%23.json?x=%22 HTTP/1.1\r\n\r\n\""
         );
+    }
+
+    fn escape_target(target: &str) -> String {
+        target
+            .bytes()
+            .map(|b| match b {
+                b'"' | b'#' | b'<' | b'>' | b'`' | b'{' | b'}' | b'|' | b'\\' | b'^' => {
+                    format!("%{b:02X}")
+                }
+                other => char::from(other).to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_request_of_a_kept_alive_connection_is_escaped() {
+        let input = concat!(
+            "PUT /a\"1\".json HTTP/1.1\r\nContent-Length: 3\r\n\r\n\"x\"",
+            "POST /b\"2\".json HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n\"y\r\n1;ext=1\r\n\"\r\n0\r\nX-T: \"t\"\r\n\r\n",
+            "GET /c.json?q=\"3\" HTTP/1.1\r\n\r\n",
+        );
+        let expected = concat!(
+            "PUT /a%221%22.json HTTP/1.1\r\nContent-Length: 3\r\n\r\n\"x\"",
+            "POST /b%222%22.json HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n\"y\r\n1;ext=1\r\n\"\r\n0\r\nX-T: \"t\"\r\n\r\n",
+            "GET /c.json?q=%223%22 HTTP/1.1\r\n\r\n",
+        );
+        assert_eq!(
+            String::from_utf8(escaped(&[input.as_bytes()])).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn an_upgrade_passes_everything_after_its_headers_through() {
+        let input = b"GET /.ws?v=\"5\" HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nGET /x\" HTTP/1.1\r\n";
+        assert_eq!(
+            String::from_utf8(escaped(&[input])).unwrap(),
+            "GET /.ws?v=%225%22 HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nGET /x\" HTTP/1.1\r\n"
+        );
+    }
+
+    #[derive(Debug, Clone)]
+    struct Request {
+        target: String,
+        body: Vec<u8>,
+        chunked: bool,
+        chunk_size: usize,
+    }
+
+    impl Request {
+        fn wire(&self, target: &str) -> Vec<u8> {
+            let mut out = format!("PUT {target} HTTP/1.1\r\nHost: x\r\n").into_bytes();
+            if self.chunked {
+                out.extend_from_slice(b"Transfer-Encoding: chunked\r\n\r\n");
+                for chunk in self.body.chunks(self.chunk_size.max(1)) {
+                    out.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+                    out.extend_from_slice(chunk);
+                    out.extend_from_slice(b"\r\n");
+                }
+                out.extend_from_slice(b"0\r\n\r\n");
+            } else {
+                out.extend_from_slice(
+                    format!("Content-Length: {}\r\n\r\n", self.body.len()).as_bytes(),
+                );
+                out.extend_from_slice(&self.body);
+            }
+            out
+        }
+    }
+
+    fn request() -> impl proptest::strategy::Strategy<Value = Request> {
+        use proptest::prelude::*;
+        (
+            "/[a-z\"{}<>|^`#?=&%]{0,12}",
+            prop::collection::vec(any::<u8>(), 0..40),
+            any::<bool>(),
+            1usize..9,
+        )
+            .prop_map(|(target, body, chunked, chunk_size)| Request {
+                target,
+                body,
+                chunked,
+                chunk_size,
+            })
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn targets_are_escaped_and_bodies_untouched_whatever_the_reads(
+            requests in proptest::collection::vec(request(), 1..5),
+            cuts in proptest::collection::vec(1usize..17, 1..40),
+        ) {
+            let input: Vec<u8> = requests.iter().flat_map(|r| r.wire(&r.target)).collect();
+            let expected: Vec<u8> = requests.iter().flat_map(|r| r.wire(&escape_target(&r.target))).collect();
+            let mut pieces = Vec::new();
+            let mut at = 0;
+            for cut in cuts.iter().cycle() {
+                if at >= input.len() {
+                    break;
+                }
+                let end = (at + cut).min(input.len());
+                pieces.push(&input[at..end]);
+                at = end;
+            }
+            proptest::prop_assert_eq!(escaped(&pieces), expected);
+        }
     }
 }

@@ -17,13 +17,18 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt as _;
 
-use crate::rest::{Database, Handled, HttpRequest, HttpResponse, SseEvent};
+use crate::realtime::{Opened, Session};
+use crate::rest::{refusal_response, Database, Handled, HttpRequest, HttpResponse, SseEvent};
 use crate::target_escape::TargetEscaper;
+use crate::websocket::{
+    accept_key, decode, encode, Assembler, CloseCode, Decoded, Message, Opcode,
+};
 
 /// The server time in milliseconds since the epoch.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -84,12 +89,16 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
             let _ = http1::Builder::new()
                 .keep_alive(false)
                 .serve_connection(TokioIo::new(TargetEscaper::new(socket)), service)
+                .with_upgrades()
                 .await;
         });
     }
 }
 
 async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Body> {
+    if is_websocket_upgrade(&request) {
+        return upgrade(shared, request);
+    }
     let (parts, body) = request.into_parts();
     let Ok(collected) = Limited::new(body, shared.config.max_body_bytes)
         .collect()
@@ -208,4 +217,152 @@ fn plain(status: u16, message: &'static str) -> Response<Body> {
     *response.status_mut() =
         hyper::StatusCode::from_u16(status).unwrap_or(hyper::StatusCode::INTERNAL_SERVER_ERROR);
     response
+}
+
+fn header<'a>(request: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
+    request.headers().get(name).and_then(|v| v.to_str().ok())
+}
+
+fn is_websocket_upgrade(request: &Request<Incoming>) -> bool {
+    request.method() == hyper::Method::GET
+        && header(request, "upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+}
+
+/// Answers a WebSocket upgrade: a refusal before the upgrade, or 101 and a task that
+/// serves the realtime protocol on the upgraded connection.
+fn upgrade(shared: &Arc<Shared>, mut request: Request<Incoming>) -> Response<Body> {
+    let Some(key) = header(&request, "sec-websocket-key").map(str::to_owned) else {
+        return plain(400, "Missing Sec-WebSocket-Key.");
+    };
+    if header(&request, "sec-websocket-version") != Some("13") {
+        return plain(400, "Unsupported Sec-WebSocket-Version.");
+    }
+    let target = request.uri().path_and_query().map_or_else(
+        || request.uri().path().to_owned(),
+        |pq| pq.as_str().to_owned(),
+    );
+    let host = header(&request, "host").map(str::to_owned);
+    let now = (shared.config.clock)();
+    let opened = shared
+        .database
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .open_realtime(&target, host.as_deref(), now);
+    let opened = match opened {
+        Ok(opened) => opened,
+        Err(refusal) => return full(refusal_response(&refusal)),
+    };
+    let on_upgrade = hyper::upgrade::on(&mut request);
+    let shared = Arc::clone(shared);
+    tokio::spawn(async move {
+        if let Ok(upgraded) = on_upgrade.await {
+            serve_realtime(&shared, TokioIo::new(upgraded), opened).await;
+        }
+    });
+    Response::builder()
+        .status(101)
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Accept", accept_key(&key))
+        .body(Full::new(Bytes::new()).boxed())
+        .unwrap_or_else(|_| plain(500, "Invalid response."))
+}
+
+async fn send_text<S: AsyncWrite + Unpin>(
+    socket: &mut S,
+    frames: &[String],
+) -> std::io::Result<()> {
+    for frame in frames {
+        socket
+            .write_all(&encode(Opcode::Text, frame.as_bytes()))
+            .await?;
+    }
+    socket.flush().await
+}
+
+async fn send_close<S: AsyncWrite + Unpin>(socket: &mut S, code: CloseCode) {
+    // The connection ends either way; a failed close concerns that client only.
+    let _ = socket
+        .write_all(&encode(Opcode::Close, &code.code().to_be_bytes()))
+        .await;
+    let _ = socket.shutdown().await;
+}
+
+/// Serves one realtime connection until the client closes it or breaks the protocol.
+async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
+    shared: &Arc<Shared>,
+    mut socket: S,
+    opened: Opened,
+) {
+    let mut session: Session = match opened {
+        Opened::Shutdown(frames) => {
+            let _ = send_text(&mut socket, &frames).await;
+            send_close(&mut socket, CloseCode::Normal).await;
+            return;
+        }
+        Opened::Session(session, frames) => {
+            if send_text(&mut socket, &frames).await.is_err() {
+                return;
+            }
+            session
+        }
+    };
+    let limit = shared.config.max_body_bytes;
+    let mut assembler = Assembler::new(limit);
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut chunk = vec![0u8; 16 * 1024];
+    loop {
+        match decode(&buffer, limit) {
+            Err(error) => {
+                send_close(&mut socket, error.close_code()).await;
+                return;
+            }
+            Ok(Decoded::Incomplete) => match socket.read(&mut chunk).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+            },
+            Ok(Decoded::Frame(frame, used)) => {
+                buffer.drain(..used);
+                let message = match assembler.push(frame) {
+                    Err(error) => {
+                        send_close(&mut socket, error.close_code()).await;
+                        return;
+                    }
+                    Ok(None) => continue,
+                    Ok(Some(message)) => message,
+                };
+                let written = match message {
+                    Message::Text(text) => {
+                        let replies = {
+                            let now = (shared.config.clock)();
+                            let mut database = shared
+                                .database
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner);
+                            let received = session.receive(&mut database, &text, now);
+                            deliver(shared, &mut database, received.events);
+                            received.replies
+                        };
+                        send_text(&mut socket, &replies).await
+                    }
+                    Message::Ping(payload) => {
+                        socket.write_all(&encode(Opcode::Pong, &payload)).await
+                    }
+                    Message::Binary(_) | Message::Pong => Ok(()),
+                    Message::Close(code) => {
+                        let payload = code
+                            .map(u16::to_be_bytes)
+                            .map(Vec::from)
+                            .unwrap_or_default();
+                        let _ = socket.write_all(&encode(Opcode::Close, &payload)).await;
+                        let _ = socket.shutdown().await;
+                        return;
+                    }
+                };
+                if written.is_err() {
+                    return;
+                }
+            }
+        }
+    }
 }

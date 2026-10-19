@@ -608,7 +608,7 @@ fn json_headers() -> Vec<(String, String)> {
     ]
 }
 
-fn refusal_response(refusal: &Refusal) -> HttpResponse {
+pub(crate) fn refusal_response(refusal: &Refusal) -> HttpResponse {
     if refusal.plain {
         return HttpResponse {
             status: refusal.status,

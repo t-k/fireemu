@@ -156,3 +156,161 @@ async fn oversized_bodies_are_refused() {
     assert!(response.ends_with("Request body too large."), "{response}");
     assert!(database.lock().unwrap().tree("t1").is_none());
 }
+
+/// A minimal WebSocket client for the tests: masked text frames out, unmasked frames in.
+struct Client {
+    stream: TcpStream,
+    buffer: Vec<u8>,
+}
+
+impl Client {
+    async fn connect(address: &str, target: &str) -> (Self, String) {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let request = format!(
+            "GET {target} HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            assert_eq!(
+                stream.read(&mut byte).await.unwrap(),
+                1,
+                "closed during the handshake"
+            );
+            head.push(byte[0]);
+        }
+        (
+            Self {
+                stream,
+                buffer: Vec::new(),
+            },
+            String::from_utf8(head).unwrap(),
+        )
+    }
+
+    async fn send(&mut self, opcode: u8, payload: &[u8]) {
+        let mask = [7u8, 1, 2, 3];
+        let mut frame = vec![0x80 | opcode];
+        if payload.len() < 126 {
+            frame.push(0x80 | u8::try_from(payload.len()).unwrap());
+        } else {
+            frame.push(0x80 | 0x7E);
+            frame.extend_from_slice(&u16::try_from(payload.len()).unwrap().to_be_bytes());
+        }
+        frame.extend_from_slice(&mask);
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        self.stream.write_all(&frame).await.unwrap();
+    }
+
+    async fn text(&mut self, text: &str) {
+        self.send(0x1, text.as_bytes()).await;
+    }
+
+    /// The next frame: opcode and payload.
+    async fn next(&mut self) -> (u8, Vec<u8>) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if self.buffer.len() >= 2 {
+                    let opcode = self.buffer[0] & 0x0F;
+                    let (len, at) = match self.buffer[1] & 0x7F {
+                        126 if self.buffer.len() >= 4 => (
+                            usize::from(u16::from_be_bytes([self.buffer[2], self.buffer[3]])),
+                            4,
+                        ),
+                        126 | 127 => (usize::MAX, 0),
+                        short => (usize::from(short), 2),
+                    };
+                    if len != usize::MAX && self.buffer.len() >= at + len {
+                        let payload = self.buffer[at..at + len].to_vec();
+                        self.buffer.drain(..at + len);
+                        return (opcode, payload);
+                    }
+                }
+                let mut chunk = [0u8; 4096];
+                let n = self.stream.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    return (0xFF, Vec::new());
+                }
+                self.buffer.extend_from_slice(&chunk[..n]);
+            }
+        })
+        .await
+        .expect("no frame within 5 s")
+    }
+
+    async fn next_text(&mut self) -> String {
+        let (opcode, payload) = self.next().await;
+        assert_eq!(opcode, 0x1, "{payload:?}");
+        String::from_utf8(payload).unwrap()
+    }
+}
+
+#[tokio::test]
+async fn the_realtime_protocol_runs_over_a_websocket() {
+    let (address, database) = start(Duration::from_secs(30)).await;
+    let (mut client, head) = Client::connect(&address, "/.ws?v=5&ns=w1").await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("sec-websocket-accept: s3pplmbitxaq9kygzzhzrbk+xoo="),
+        "{head}"
+    );
+    let handshake = client.next_text().await;
+    assert!(
+        handshake.starts_with(r#"{"t":"c","d":{"t":"h","d":{"ts":1000,"v":"5","h":""#),
+        "{handshake}"
+    );
+
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"p","b":{"p":"/a","d":{"x":1}}}}"#)
+        .await;
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}"#
+    );
+    client
+        .text(r#"{"t":"d","d":{"r":2,"a":"g","b":{"p":"/a","q":{}}}}"#)
+        .await;
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{"x":1}}}}"#
+    );
+    assert!(database
+        .lock()
+        .unwrap()
+        .tree("w1")
+        .unwrap()
+        .get(&fireemu_core_database::Path::from_keys(["a", "x"]))
+        .is_some());
+
+    // A WebSocket ping is answered with a pong carrying the same payload.
+    client.send(0x9, b"hey").await;
+    assert_eq!(client.next().await, (0xA, b"hey".to_vec()));
+    // A close is answered with a close.
+    client.send(0x8, &[0x03, 0xE8]).await;
+    assert_eq!(client.next().await, (0x8, vec![0x03, 0xE8]));
+}
+
+#[tokio::test]
+async fn the_websocket_upgrade_refuses_versions_and_namespaces() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    let (mut client, head) = Client::connect(&address, "/.ws?v=4&ns=w1").await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"c","d":{"t":"s","d":"Version error. Please make sure you are using the latest Firebase library"}}"#
+    );
+    assert_eq!(client.next().await.0, 0x8);
+    let (_, refused) = Client::connect(&address, "/.ws?v=5&ns=Bad_NS").await;
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+}
+
+#[tokio::test]
+async fn unmasked_frames_close_the_connection_with_a_protocol_error() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w1").await;
+    client.next_text().await;
+    client.stream.write_all(&[0x81, 0x01, b'a']).await.unwrap();
+    assert_eq!(client.next().await, (0x8, vec![0x03, 0xEA]));
+}

@@ -15,7 +15,7 @@ bytes = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time", "io-util"] }
 tokio-stream = "0.1"
 
 [dev-dependencies]

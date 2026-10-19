@@ -577,9 +577,10 @@ async fn realtime_listens_receive_writes_from_other_connections_and_rest() {
 
 #[tokio::test]
 async fn a_listener_that_stops_reading_is_dropped_once_its_queue_fills() {
+    // A long idle time: only the full queue can drop the listener within the test's time.
     let (address, database) = start_with(ServerConfig {
         stream_queue: 4,
-        realtime_idle: Duration::from_secs(1),
+        realtime_idle: Duration::from_secs(120),
         ..ServerConfig::default()
     })
     .await;

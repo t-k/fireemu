@@ -1,7 +1,6 @@
 // Test fixtures index small row counts; the casts cannot wrap.
 #![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 
-
 use super::*;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
 use proptest::prelude::*;
@@ -517,4 +516,58 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn referenced_fields_cover_every_stage_once_a_select_narrows_the_row() {
+    let paths = |ps: &[&str]| {
+        ps.iter()
+            .map(|p| FieldPath::parse(p).unwrap())
+            .collect::<Vec<_>>()
+    };
+    // Without a select every field reaches the output.
+    assert_eq!(
+        referenced_fields(&[
+            Stage::Where(condition(
+                "equal",
+                vec![field("a"), Expr::Constant(Value::Integer(1))]
+            )),
+            Stage::Limit(1)
+        ]),
+        None
+    );
+    assert_eq!(referenced_fields(&[]), None);
+    // A select keeps what the select and every earlier condition read, minimal and sorted.
+    let stages = [
+        Stage::Where(condition(
+            "equal",
+            vec![field("w.x"), Expr::Constant(Value::Integer(1))],
+        )),
+        Stage::Select(vec![
+            ("one".to_owned(), field("a.b")),
+            ("two".to_owned(), field("a")),
+            ("three".to_owned(), field("w.x")),
+            (
+                "id".to_owned(),
+                call("document_id", vec![field("__name__")]),
+            ),
+            ("ref".to_owned(), call("collection_id", vec![field("r")])),
+        ]),
+        Stage::Offset(1),
+    ];
+    assert_eq!(
+        referenced_fields(&stages),
+        Some(paths(&["__name__", "a", "r", "w.x"]))
+    );
+    // Only document functions: the scan needs no field, so it reads names only.
+    let names_only = [Stage::Select(vec![(
+        "id".to_owned(),
+        call("document_id", vec![field("__name__")]),
+    )])];
+    assert_eq!(referenced_fields(&names_only), Some(paths(&["__name__"])));
+    let constant = [Stage::Select(vec![(
+        "c".to_owned(),
+        call("document_id", vec![Expr::Constant(Value::Null)]),
+    )])];
+    assert_eq!(referenced_fields(&constant), Some(paths(&["__name__"])));
 }

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- Enterprise pipelines run locally on a new pipeline executor. Besides top-level fields, `where(equal(...))` and `select` accept nested field paths (`a.b`) and `documentId`, `collectionId` and `parent` of a document reference. Inputs whose production result is unrecorded, such as the parent of a top-level document or the document ID of a missing field, are refused with `UNIMPLEMENTED`; every other function stays refused.
+
 ## [0.27.0] - 2026-10-18
 
 ### Changed

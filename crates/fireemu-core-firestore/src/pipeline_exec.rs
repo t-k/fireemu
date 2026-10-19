@@ -198,6 +198,15 @@ impl Expr {
         Ok(Self::Call { function, args })
     }
 
+    /// Adds every field path the expression reads.
+    fn collect_fields(&self, out: &mut Vec<FieldPath>) {
+        match self {
+            Self::Field(path) => out.push(path.clone()),
+            Self::Constant(_) => {}
+            Self::Call { args, .. } => args.iter().for_each(|arg| arg.collect_fields(out)),
+        }
+    }
+
     /// Evaluates the expression against one row.
     #[must_use]
     pub fn eval(&self, row: &Row) -> Eval {
@@ -380,6 +389,41 @@ impl Cursor {
         }
         Ok(Some(row.fields))
     }
+}
+
+/// The field paths a scan must read for these stages, or `None` when every field can reach
+/// the output (no `select`). The paths are sorted and minimal (no path under another); a
+/// pipeline that reads no field still names `__name__`, so the scan reads names only.
+#[must_use]
+pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
+    if !stages.iter().any(|stage| matches!(stage, Stage::Select(_))) {
+        return None;
+    }
+    let mut paths = Vec::new();
+    for stage in stages {
+        match stage {
+            Stage::Where(condition) => condition.collect_fields(&mut paths),
+            Stage::Select(aliases) => aliases
+                .iter()
+                .for_each(|(_, expr)| expr.collect_fields(&mut paths)),
+            Stage::Offset(_) | Stage::Limit(_) => {}
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    let minimal: Vec<FieldPath> = paths
+        .iter()
+        .filter(|path| {
+            !paths
+                .iter()
+                .any(|other| other != *path && other.is_prefix_of(path))
+        })
+        .cloned()
+        .collect();
+    if minimal.is_empty() {
+        return Some(vec![FieldPath::document_name()]);
+    }
+    Some(minimal)
 }
 
 /// Runs stages over all rows, stopping once a limit is used up.

@@ -207,3 +207,11 @@ proptest! {
         prop_assert_eq!(parse(&text).unwrap(), from_serde(&value));
     }
 }
+
+#[test]
+fn malformed_escapes_stay_as_they_are() {
+    assert_eq!(percent_decode("%4"), "%4");
+    assert_eq!(percent_decode("a%"), "a%");
+    assert_eq!(percent_decode("%zz%41"), "%zzA");
+    assert_eq!(percent_decode("%41%"), "A%");
+}

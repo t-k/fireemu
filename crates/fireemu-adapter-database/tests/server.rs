@@ -140,3 +140,19 @@ async fn streams_deliver_changes_and_keep_alives_and_close_with_the_client() {
     .await
     .expect("the subscription was not closed");
 }
+
+#[tokio::test]
+async fn oversized_bodies_are_refused() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 3)));
+    let config = ServerConfig {
+        max_body_bytes: 4,
+        ..ServerConfig::default()
+    };
+    tokio::spawn(serve(listener, Arc::clone(&database), config));
+    let response = exchange(&address, "PUT", "/a.json?ns=t1", "123456").await;
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+    assert!(response.ends_with("Request body too large."), "{response}");
+    assert!(database.lock().unwrap().tree("t1").is_none());
+}

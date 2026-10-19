@@ -403,3 +403,14 @@ fn export_reads_back_to_the_same_tree() {
     copy.set(&Path::root(), &exported, NOW).unwrap();
     assert_eq!(copy, tree);
 }
+
+#[test]
+fn a_key_at_the_root_has_no_separator() {
+    let mut tree = Tree::new(Limits::default());
+    tree.set(&Path::root(), &j(json!({ "k".repeat(768): 1 })), NOW)
+        .unwrap();
+    let err = tree
+        .set(&Path::root(), &j(json!({ "k".repeat(769): 1 })), NOW)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooLong);
+}

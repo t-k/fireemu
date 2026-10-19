@@ -18,10 +18,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 enum State {
     /// The method, before the first space.
     Method,
-    /// The request target.
+    /// The request target and the protocol version, up to the end of the line.
     Target,
-    /// The rest of the request line.
-    Version,
     /// Everything after the request line, passed through.
     Rest,
 }
@@ -47,13 +45,8 @@ impl<S> TargetEscaper<S> {
     fn transform(&mut self, input: &[u8]) {
         for &byte in input {
             match (self.state, byte) {
-                (State::Rest, _) => self.pending.push(byte),
                 (State::Method, b' ') => {
                     self.state = State::Target;
-                    self.pending.push(byte);
-                }
-                (State::Target, b' ') => {
-                    self.state = State::Version;
                     self.pending.push(byte);
                 }
                 (
@@ -63,7 +56,7 @@ impl<S> TargetEscaper<S> {
                     self.pending
                         .extend_from_slice(format!("%{byte:02X}").as_bytes());
                 }
-                (_, b'\n') => {
+                (State::Method | State::Target, b'\n') => {
                     self.state = State::Rest;
                     self.pending.push(byte);
                 }

@@ -247,3 +247,46 @@ fn the_parser_follows_the_json_grammar() {
         ]
     );
 }
+
+#[test]
+fn nesting_is_limited_for_arrays_and_objects_alike() {
+    let arrays = |k: usize| format!("{}{}", "[".repeat(k), "]".repeat(k));
+    let objects = |k: usize| format!("{}1{}", "{\"a\":".repeat(k), "}".repeat(k));
+    // The outermost value is level 0; 512 levels below it are read.
+    assert!(parse(&arrays(513)).is_ok());
+    assert!(parse(&arrays(514)).is_err());
+    assert!(parse(&objects(512)).is_ok());
+    assert!(parse(&objects(513)).is_err());
+    assert!(parse(&objects(600)).is_err());
+}
+
+#[test]
+fn integral_doubles_keep_their_point_zero() {
+    assert_eq!(java_double(1234.0), "1234.0");
+    assert_eq!(java_double(100.0), "100.0");
+    assert_eq!(java_double(-5.0), "-5.0");
+}
+
+#[test]
+fn a_sparse_index_key_stays_an_object() {
+    assert_eq!(
+        get(&stored(r#"{"2":"x"}"#), Format::Plain, Style::Compact),
+        r#"{"2":"x"}"#
+    );
+    assert_eq!(
+        get(&stored(r#"{"1":"x"}"#), Format::Plain, Style::Compact),
+        r#"[null,"x"]"#
+    );
+    assert_eq!(
+        get(&stored(r#"{"0":"x"}"#), Format::Plain, Style::Compact),
+        r#"["x"]"#
+    );
+    assert_eq!(
+        get(
+            &stored(r#"{"0":"x","2":"y"}"#),
+            Format::Plain,
+            Style::Compact
+        ),
+        r#"["x",null,"y"]"#
+    );
+}

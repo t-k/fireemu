@@ -142,7 +142,6 @@ const ALLOWED_METHODS: &str = "OPTIONS,GET,POST,PUT,DELETE,PATCH";
 #[derive(Debug)]
 struct Namespace {
     tree: Tree,
-    push_ids: PushIdGenerator,
 }
 
 /// An open event stream.
@@ -162,8 +161,17 @@ struct Call<'a> {
     path: Path,
     output: Output,
     want_etag: bool,
-    if_match: Option<&'a str>,
+    condition: Option<Condition<'a>>,
     context: ServerValueContext,
+}
+
+/// A conditional request header.
+#[derive(Clone, Copy)]
+enum Condition<'a> {
+    /// `if-match`: write only when the current `ETag` is this one.
+    Match(&'a str),
+    /// `if-none-match`: read or write only when the current `ETag` is another one.
+    NoneMatch(&'a str),
 }
 
 /// One entry of a `PATCH` body.
@@ -185,7 +193,8 @@ enum Change {
 #[derive(Debug)]
 pub struct Database {
     options: RestOptions,
-    seed: u64,
+    /// One generator for the whole server, so push ids increase across namespaces.
+    push_ids: PushIdGenerator,
     namespaces: BTreeMap<String, Namespace>,
     indexes: BTreeMap<String, BTreeMap<Path, BTreeSet<String>>>,
     subscriptions: BTreeMap<u64, Subscription>,
@@ -197,7 +206,7 @@ impl Database {
     pub fn new(options: RestOptions, seed: u64) -> Self {
         Self {
             options,
-            seed,
+            push_ids: PushIdGenerator::new(seed),
             namespaces: BTreeMap::new(),
             indexes: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
@@ -271,7 +280,18 @@ impl Database {
                 "The 'if-match' header is not supported with GET, PATCH or POST requests",
             ));
         }
+        let condition = match (if_match, request.header("if-none-match")) {
+            (Some(tag), _) => Some(Condition::Match(tag)),
+            (None, Some(tag)) => Some(Condition::NoneMatch(tag)),
+            (None, None) => None,
+        };
         let output = request::output(&params)?;
+        let read_shape = !writing && (output.shallow || request::has_query(&params));
+        if condition.is_some() && (output.silent || read_shape) {
+            return Err(Refusal::bad(
+                "Mixing 'shallow', querying parameters or 'print=silent' and if-match or if-none-match requests is not supported",
+            ));
+        }
         if writing && request::has_query(&params) {
             return Err(Refusal::bad(
                 "Querying related parameters not supported on this request type",
@@ -302,12 +322,18 @@ impl Database {
             path,
             output,
             want_etag,
-            if_match,
+            condition,
             context: ServerValueContext { now_millis },
         };
         match method.as_str() {
             "GET" => {
                 let tree = &self.namespace(&call.namespace).tree;
+                if let Some(Condition::NoneMatch(tag)) = call.condition {
+                    if etag(tree.get(&call.path)) == tag {
+                        return Ok(respond(not_modified()));
+                    }
+                    return Ok(respond(read(tree, &call.path, None, &call.output, true)));
+                }
                 Ok(respond(read(
                     tree,
                     &call.path,
@@ -325,11 +351,15 @@ impl Database {
 
     fn put(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
         let tree = &mut self.namespace(&call.namespace).tree;
-        if let Some(expected) = call.if_match {
-            let current = tree.get(&call.path);
-            if etag(current) != expected {
-                return Ok(respond(precondition_failed(current, &call.output)));
+        let current = tree.get(&call.path);
+        match call.condition {
+            Some(Condition::Match(tag)) if etag(current) != tag => {
+                return Ok(respond(precondition_failed(current, &call.output, true)));
             }
+            Some(Condition::NoneMatch(tag)) if etag(current) == tag => {
+                return Ok(respond(precondition_failed(current, &call.output, false)));
+            }
+            _ => {}
         }
         let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
         tree.set(&call.path, &value, call.context)
@@ -340,12 +370,12 @@ impl Database {
 
     fn post(&mut self, call: &Call<'_>, body: &str) -> Result<Handled, Refusal> {
         let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
-        let ns = self.namespace(&call.namespace);
-        let id = ns
+        let id = self
             .push_ids
             .next(u64::try_from(call.context.now_millis).unwrap_or(0));
         let child = call.path.child(&id);
-        ns.tree
+        self.namespace(&call.namespace)
+            .tree
             .set(&child, &value, call.context)
             .map_err(|_| data_refusal(body))?;
         let name = Json::object([("name", Json::String(id))]);
@@ -373,13 +403,11 @@ impl Database {
     }
 
     fn namespace(&mut self, name: &str) -> &mut Namespace {
-        let seed = self.seed ^ fnv1a(name);
         let limits = self.options.limits;
         self.namespaces
             .entry(name.to_owned())
             .or_insert_with(|| Namespace {
                 tree: Tree::new(limits),
-                push_ids: PushIdGenerator::new(seed),
             })
     }
 
@@ -495,12 +523,6 @@ fn credential<'a>(
                 .header("Authorization")
                 .and_then(|v| v.strip_prefix("Bearer "))
         })
-}
-
-fn fnv1a(text: &str) -> u64 {
-    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    })
 }
 
 fn body_text(request: &HttpRequest) -> Result<String, Refusal> {
@@ -660,18 +682,21 @@ fn view(tree: &Tree, path: &Path, query: Option<&QueryParams>, format: Format) -
     output_json(Some(&view), format)
 }
 
-fn precondition_failed(current: Option<&Node>, output: &Output) -> HttpResponse {
-    let plain = Output {
-        silent: false,
-        ..output.clone()
-    };
-    let mut response = json_response(
-        &output_json(current, Format::Plain),
-        &plain,
-        Some(etag(current)),
-    );
+/// The 412 answer: the current value, with its `ETag` for a failed `if-match`. A
+/// conditional request is never silent, so the body is always sent.
+fn precondition_failed(current: Option<&Node>, output: &Output, with_etag: bool) -> HttpResponse {
+    let tag = with_etag.then(|| etag(current));
+    let mut response = json_response(&output_json(current, Format::Plain), output, tag);
     response.status = 412;
     response
+}
+
+fn not_modified() -> HttpResponse {
+    HttpResponse {
+        status: 304,
+        headers: json_headers(),
+        body: Vec::new(),
+    }
 }
 
 fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpResponse {
@@ -786,10 +811,10 @@ fn stream_event(
             let inside_one_child = match (&subscription.query, &subscription.last, fresh) {
                 (None, _, _) => true,
                 (Some(_), Json::Object(before), Json::Object(after)) => {
+                    // A put changes one child; while that child stays shown, the other
+                    // children of the window cannot change either.
                     let first = &relative.keys()[0];
-                    before.contains_key(first)
-                        && after.contains_key(first)
-                        && before.keys().eq(after.keys())
+                    before.contains_key(first) && after.contains_key(first)
                 }
                 (Some(_), _, _) => false,
             };

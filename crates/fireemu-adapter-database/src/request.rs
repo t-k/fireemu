@@ -258,9 +258,14 @@ fn order_by(text: &str) -> Result<OrderBy, Refusal> {
         "$value" => Ok(OrderBy::Value),
         "$priority" => Ok(OrderBy::Priority),
         _ => {
+            // The official emulator reads `.priority` as the priority order and the root
+            // (`""` or `/`) as a child path whose index is named "".
             let path = Path::parse(&name, &Limits::default()).map_err(|_| invalid())?;
-            if path.is_root() || path.is_info() || path.is_priority() {
+            if path.is_info() {
                 return Err(invalid());
+            }
+            if path.depth() == 1 && path.is_priority() {
+                return Ok(OrderBy::Priority);
             }
             Ok(OrderBy::Child(path))
         }

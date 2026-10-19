@@ -137,6 +137,12 @@ fn the_namespace_comes_from_ns_then_the_host_then_the_default() {
     assert_eq!(get(&[host("other.firebaseio.com")], "/a.json?ns=q1"), "1");
     assert_eq!(get(&[host("localhost:9000")], "/a.json"), "null");
     assert_eq!(get(&[host("127.0.0.1:9000")], "/a.json"), "null");
+    call(&mut db, "PUT", "/a.json", "7");
+    let mut get = |headers: &[(&str, &str)], target: &str| {
+        String::from_utf8(send(&mut db, "GET", target, headers, "").body).unwrap()
+    };
+    assert_eq!(get(&[host("127.0.0.1:9000")], "/a.json"), "7");
+    assert_eq!(get(&[host("localhost")], "/a.json"), "7");
     assert_eq!(get(&[], "/a.json?ns=Q1"), "1");
     call(&mut db, "PUT", "/d.json", "2");
     assert_eq!(
@@ -984,4 +990,127 @@ fn numbers_render_in_java_form() {
         .1,
         r#"{"a":0,"b":1.0E20,"c":1.0E-5,"d":0.001,"g":0.1}"#
     );
+}
+
+#[test]
+fn order_by_accepts_the_root_and_dot_priority() {
+    let mut db = query_db();
+    // Answers of the official emulator: the root is a child path needing the index "",
+    // `.priority` is the priority order, and `.info` is no path.
+    assert_eq!(
+        call(&mut db, "GET", "/d.json?ns=q1&orderBy=\"\"", ""),
+        (
+            400,
+            error("Index not defined, add \".indexOn\": \"\", for path \"/d\", to the rules")
+        )
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/d.json?ns=q1&orderBy=\"/\"", ""),
+        (
+            400,
+            error("Index not defined, add \".indexOn\": \"\", for path \"/d\", to the rules")
+        )
+    );
+    assert_eq!(
+        call(
+            &mut db,
+            "GET",
+            "/d.json?ns=q1&orderBy=\".priority\"&limitToFirst=2",
+            ""
+        )
+        .1,
+        r#"{"2":{"h":5},"10":{"h":5}}"#
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/d.json?ns=q1&orderBy=\".info/x\"", ""),
+        (400, error("orderBy must be a valid JSON encoded path"))
+    );
+}
+
+#[test]
+fn conditional_requests_cannot_be_silent_or_queries() {
+    let mut db = db();
+    call(&mut db, "PUT", "/z.json?ns=m1", r#"{"a":1}"#);
+    let mixing = error(
+        "Mixing 'shallow', querying parameters or 'print=silent' and if-match or if-none-match requests is not supported",
+    );
+    let tag = "gIphxiFGusLh2VwSNVKSvNu90m4=";
+    let silent = send(
+        &mut db,
+        "DELETE",
+        "/z.json?ns=m1&print=silent",
+        &[("if-match", tag)],
+        "",
+    );
+    assert_eq!(
+        (silent.status, String::from_utf8(silent.body).unwrap()),
+        (400, mixing.clone())
+    );
+    let shallow = send(
+        &mut db,
+        "GET",
+        "/z.json?ns=m1&shallow=true",
+        &[("if-none-match", tag)],
+        "",
+    );
+    assert_eq!(
+        (shallow.status, String::from_utf8(shallow.body).unwrap()),
+        (400, mixing)
+    );
+}
+
+#[test]
+fn if_none_match_answers_not_modified_or_refuses_the_write() {
+    let mut db = db();
+    call(&mut db, "PUT", "/z.json?ns=m1", r#"{"a":1}"#);
+    let tag = "gIphxiFGusLh2VwSNVKSvNu90m4=";
+    let unchanged = send(
+        &mut db,
+        "GET",
+        "/z.json?ns=m1",
+        &[("if-none-match", tag)],
+        "",
+    );
+    assert_eq!((unchanged.status, unchanged.body.len()), (304, 0));
+    let changed = send(
+        &mut db,
+        "GET",
+        "/z.json?ns=m1",
+        &[("if-none-match", "other")],
+        "",
+    );
+    assert_eq!((changed.status, header(&changed, "ETag")), (200, Some(tag)));
+    assert_eq!(changed.body, br#"{"a":1}"#);
+    let refused = send(
+        &mut db,
+        "PUT",
+        "/z.json?ns=m1",
+        &[("if-none-match", tag)],
+        "2",
+    );
+    assert_eq!(
+        (refused.status, refused.body.as_slice()),
+        (412, &br#"{"a":1}"#[..])
+    );
+    assert_eq!(header(&refused, "ETag"), None);
+    let accepted = send(
+        &mut db,
+        "PUT",
+        "/z.json?ns=m1",
+        &[("if-none-match", "other")],
+        "2",
+    );
+    assert_eq!(accepted.status, 200);
+    assert_eq!(
+        call(&mut db, "GET", "/z.json?ns=m1", ""),
+        (200, "2".to_owned())
+    );
+}
+
+#[test]
+fn push_ids_increase_across_namespaces() {
+    let mut db = db();
+    let (_, first) = call(&mut db, "POST", "/l.json?ns=a1", "1");
+    let (_, second) = call(&mut db, "POST", "/l.json?ns=b1", "1");
+    assert!(first < second, "{first} {second}");
 }

@@ -141,3 +141,24 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn the_random_part_follows_the_seed() {
+    // Pinned so the session seed keeps reproducing the same ids.
+    assert_eq!(
+        PushIdGenerator::new(42).next(1_792_408_481_564),
+        "-P4IriwRj9GL1rCnKbCU"
+    );
+    assert_ne!(
+        PushIdGenerator::new(1).next(5_000),
+        PushIdGenerator::new(2).next(5_000)
+    );
+    let mut ids = PushIdGenerator::new(7);
+    let a = ids.next(5_000);
+    let b = ids.next(5_001);
+    assert_ne!(
+        &a[8..],
+        &b[8..],
+        "each new millisecond draws a new random part"
+    );
+}

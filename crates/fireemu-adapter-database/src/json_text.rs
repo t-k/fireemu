@@ -97,27 +97,11 @@ fn array_length(children: &BTreeMap<String, Node>) -> Option<usize> {
     (max < 2 * children.len()).then_some(max + 1)
 }
 
-/// How numbers are written: the one switch of ledger 1471 Q7.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumberForm {
-    /// Q7 as ruled (provisional): an integral value is written as an integer, priorities
-    /// included. The core stores integral doubles as integers.
-    IntegralAsInteger,
-    /// The official emulator's form, pending the owner's review of Q7: priorities are
-    /// doubles (`2.0`). Writing `1.0` or `-0.0` also needs the core to keep doubles, which
-    /// waits for the same ruling.
-    JavaDouble,
-}
-
-/// The number form in force.
-pub const NUMBER_FORM: NumberForm = NumberForm::IntegralAsInteger;
-
-/// A priority as answer JSON, in the number form in force.
+/// A priority as answer JSON. Numbers keep the type the core stored (ledger 1475): a
+/// `.priority` member is a double, a priority written to `<location>/.priority` keeps its
+/// parsed type, as the official emulator answers.
 fn priority_json(priority: &Priority) -> Json {
-    match (NUMBER_FORM, priority) {
-        (NumberForm::JavaDouble, Priority::Number(n)) => Json::Number(Number::Double(n.as_f64())),
-        _ => priority.to_json(),
-    }
+    priority.to_json()
 }
 
 /// The answer for a `<location>/.priority` path: the priority of the location, `null`
@@ -129,7 +113,7 @@ pub fn priority_at(tree: &Tree, path: &Path) -> Json {
         .map_or(Json::Null, priority_json)
 }
 
-/// Writes a number in the number form in force.
+/// Writes a number: integers as digits, doubles in Java's form (ledger 1475).
 fn write_number(out: &mut String, number: Number) {
     match number {
         Number::Int(i) => {

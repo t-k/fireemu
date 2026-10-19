@@ -350,7 +350,7 @@ fn put_answers_the_stored_value_in_export_form() {
             "/p.json?ns=t1",
             r#"{".value":1,".priority":2}"#
         ),
-        (200, r#"{".value":1,".priority":2}"#.to_owned())
+        (200, r#"{".value":1,".priority":2.0}"#.to_owned())
     );
     assert_eq!(
         call(&mut db, "GET", "/p.json?ns=t1", ""),
@@ -358,11 +358,11 @@ fn put_answers_the_stored_value_in_export_form() {
     );
     assert_eq!(
         call(&mut db, "GET", "/p.json?ns=t1&format=export", ""),
-        (200, r#"{".value":1,".priority":2}"#.to_owned())
+        (200, r#"{".value":1,".priority":2.0}"#.to_owned())
     );
     assert_eq!(
         call(&mut db, "GET", "/p/.priority.json?ns=t1", ""),
-        (200, "2".to_owned())
+        (200, "2.0".to_owned())
     );
     assert_eq!(
         call(&mut db, "PUT", "/arr.json?ns=t1", r#"["a","b",null,"d"]"#),
@@ -629,7 +629,7 @@ fn print_shallow_export_callback_and_download() {
     );
     assert_eq!(
         call(&mut db, "GET", "/e.json?ns=t1&format=export", "").1,
-        r#"{".priority":1,"k":{".value":"v",".priority":"p"}}"#
+        r#"{".priority":1.0,"k":{".value":"v",".priority":"p"}}"#
     );
     assert_eq!(
         call(
@@ -1200,11 +1200,11 @@ fn priority_placeholders_add_to_the_stored_priority() {
             "/a/.priority.json?ns=pri",
             r#"{".sv":{"increment":1}}"#
         ),
-        (200, "6".to_owned())
+        (200, "6.0".to_owned())
     );
     assert_eq!(
         call(&mut db, "GET", "/a.json?ns=pri&format=export", "").1,
-        r#"{".value":1,".priority":6}"#
+        r#"{".value":1,".priority":6.0}"#
     );
 }
 

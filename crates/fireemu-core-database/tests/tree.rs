@@ -98,9 +98,9 @@ fn priorities_are_written_with_dot_priority_and_dot_value() {
     assert_eq!(plain(&tree, "/"), json!({"leaf": 3, "obj": {"x": 1}}));
     assert_eq!(
         export(&tree, "/"),
-        json!({"leaf": {".value": 3, ".priority": 1}, "obj": {"x": 1, ".priority": "p"}})
+        json!({"leaf": {".value": 3, ".priority": 1.0}, "obj": {"x": 1, ".priority": "p"}})
     );
-    assert_eq!(plain(&tree, "/leaf/.priority"), json!(1));
+    assert_eq!(plain(&tree, "/leaf/.priority"), json!(1.0));
     assert_eq!(plain(&tree, "/obj/.priority"), json!("p"));
     assert_eq!(plain(&tree, "/missing/.priority"), json!(null));
 }
@@ -125,21 +125,22 @@ fn a_priority_placeholder_resolves_against_the_stored_priority() {
     let mut tree = tree_with(json!({"a": {".value": 1, ".priority": 5}}));
     let inc = j(json!({".sv": {"increment": 1}}));
     tree.set(&p("/a/.priority"), &inc, NOW).unwrap();
-    assert_eq!(export(&tree, "/a"), json!({".value": 1, ".priority": 6}));
+    // A `.priority` member is a double (5.0), so the increment gives 6.0.
+    assert_eq!(export(&tree, "/a"), json!({".value": 1, ".priority": 6.0}));
     tree.set(
         &p("/a"),
         &j(json!({".value": 2, ".priority": {".sv": {"increment": 1}}})),
         NOW,
     )
     .unwrap();
-    assert_eq!(export(&tree, "/a"), json!({".value": 2, ".priority": 7}));
+    assert_eq!(export(&tree, "/a"), json!({".value": 2, ".priority": 7.0}));
     tree.set(
         &p("/b"),
         &j(json!({"x": 1, ".priority": {".sv": {"increment": 2}}})),
         NOW,
     )
     .unwrap();
-    assert_eq!(export(&tree, "/b"), json!({"x": 1, ".priority": 2}));
+    assert_eq!(export(&tree, "/b"), json!({"x": 1, ".priority": 2.0}));
 }
 
 #[test]
@@ -220,7 +221,10 @@ fn deletes_are_held_to_the_depth_and_path_limits() {
 fn overwriting_a_value_drops_its_priority_but_child_writes_keep_it() {
     let mut tree = tree_with(json!({"a": {"x": 1, ".priority": 2}}));
     tree.set(&p("/a/y"), &j(json!(2)), NOW).unwrap();
-    assert_eq!(export(&tree, "/a"), json!({"x": 1, "y": 2, ".priority": 2}));
+    assert_eq!(
+        export(&tree, "/a"),
+        json!({"x": 1, "y": 2, ".priority": 2.0})
+    );
     tree.set(&p("/a"), &j(json!({"z": 1})), NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!({"z": 1}));
 }
@@ -237,7 +241,7 @@ fn a_priority_disappears_with_the_last_child() {
 fn a_leaf_keeps_its_priority_when_a_child_replaces_it() {
     let mut tree = tree_with(json!({"a": {".value": 1, ".priority": 9}}));
     tree.set(&p("/a/b"), &j(json!(1)), NOW).unwrap();
-    assert_eq!(export(&tree, "/a"), json!({"b": 1, ".priority": 9}));
+    assert_eq!(export(&tree, "/a"), json!({"b": 1, ".priority": 9.0}));
 }
 
 #[test]
@@ -343,7 +347,7 @@ fn server_timestamp_resolves_to_the_context_time() {
     .unwrap();
     assert_eq!(
         export(&tree, "/a"),
-        json!({"t": NOW.now_millis, "x": {".value": 1, ".priority": NOW.now_millis}})
+        json!({"t": NOW.now_millis, "x": {".value": 1, ".priority": 1_760_000_000_000.0}})
     );
 }
 
@@ -398,7 +402,7 @@ fn increment_in_a_prioritized_value_uses_the_stored_number() {
         NOW,
     )
     .unwrap();
-    assert_eq!(export(&tree, "/n"), json!({".value": 6, ".priority": 2}));
+    assert_eq!(export(&tree, "/n"), json!({".value": 6, ".priority": 2.0}));
 }
 
 #[test]
@@ -541,4 +545,27 @@ fn a_key_at_the_root_has_no_separator() {
         .set(&Path::root(), &j(json!({ "k".repeat(769): 1 })), NOW)
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::PathTooLong);
+}
+
+#[test]
+fn priorities_inside_data_are_doubles_and_written_ones_keep_their_type() {
+    // The official emulator answers `{".value":1,".priority":2.0}` for a `.priority` member
+    // of 2, and `5` for a write of 5 to `<location>/.priority` (ledger 1475, provisional).
+    use fireemu_core_database::{Number, Priority};
+    let mut tree =
+        tree_with(json!({"a": {".value": 1, ".priority": 2}, "b": {"x": 1, ".priority": 3}}));
+    let priority = |tree: &Tree, path: &str| tree.get(&p(path)).unwrap().priority.clone();
+    assert!(matches!(priority(&tree, "/a"), Some(Priority::Number(Number::Double(d))) if d == 2.0));
+    assert!(matches!(priority(&tree, "/b"), Some(Priority::Number(Number::Double(d))) if d == 3.0));
+    tree.set(&p("/a/.priority"), &j(json!(5)), NOW).unwrap();
+    assert!(matches!(
+        priority(&tree, "/a"),
+        Some(Priority::Number(Number::Int(5)))
+    ));
+    tree.set(&p("/a"), &j(json!({".value": 1, ".priority": "s"})), NOW)
+        .unwrap();
+    assert_eq!(
+        priority(&tree, "/a"),
+        Some(Priority::String("s".to_owned()))
+    );
 }

@@ -1,0 +1,18 @@
+{
+  "name": "fireemu-sdk-smoke-database",
+  "private": true,
+  "description": "Realtime Database SDK smokes (WebSocket, queries, long polling in headless Chromium) for fireemu and the official database emulator.",
+  "type": "module",
+  "scripts": {
+    "smoke": "node run.mjs",
+    "test": "node --test compare.test.mjs"
+  },
+  "devDependencies": {
+    "firebase": "12.18.0",
+    "firebase-admin": "14.3.0",
+    "playwright": "1.62.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

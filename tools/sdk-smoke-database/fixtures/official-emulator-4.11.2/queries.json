@@ -1,0 +1,1013 @@
+{
+ "first2": [
+  [
+   "start",
+   "first2 added",
+   "a",
+   {
+    "n": 5
+   }
+  ],
+  [
+   "start",
+   "first2 added",
+   "b",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "start",
+   "first2 value",
+   "room",
+   {
+    "b": {
+     "n": 1
+    },
+    "a": {
+     "n": 5
+    }
+   }
+  ],
+  [
+   "remove first",
+   "first2 removed",
+   "a",
+   {
+    "n": 5
+   }
+  ],
+  [
+   "remove first",
+   "first2 added",
+   "c",
+   {
+    "n": 4
+   }
+  ],
+  [
+   "remove first",
+   "first2 value",
+   "room",
+   {
+    "b": {
+     "n": 1
+    },
+    "c": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "add before first",
+   "first2 removed",
+   "c",
+   {
+    "n": 4
+   }
+  ],
+  [
+   "add before first",
+   "first2 added",
+   "0",
+   {
+    "n": 9
+   }
+  ],
+  [
+   "add before first",
+   "first2 value",
+   "room",
+   {
+    "0": {
+     "n": 9
+    },
+    "b": {
+     "n": 1
+    }
+   }
+  ],
+  [
+   "child value moves",
+   "first2 changed",
+   "b",
+   {
+    "n": 10
+   }
+  ],
+  [
+   "child value moves",
+   "first2 value",
+   "room",
+   {
+    "0": {
+     "n": 9
+    },
+    "b": {
+     "n": 10
+    }
+   }
+  ],
+  [
+   "multi-path update",
+   "first2 removed",
+   "0",
+   {
+    "n": 9
+   }
+  ],
+  [
+   "multi-path update",
+   "first2 added",
+   "c",
+   {
+    "n": 7
+   }
+  ],
+  [
+   "multi-path update",
+   "first2 value",
+   "room",
+   {
+    "b": {
+     "n": 10
+    },
+    "c": {
+     "n": 7
+    }
+   }
+  ],
+  [
+   "deep write into new child",
+   "first2 removed",
+   "c",
+   {
+    "n": 7
+   }
+  ],
+  [
+   "deep write into new child",
+   "first2 added",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "deep write into new child",
+   "first2 value",
+   "room",
+   {
+    "b": {
+     "n": 10
+    },
+    "bb": {
+     "n": 2
+    }
+   }
+  ],
+  [
+   "replace room",
+   "first2 removed",
+   "b",
+   {
+    "n": 10
+   }
+  ],
+  [
+   "replace room",
+   "first2 removed",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "first2 added",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "first2 added",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "replace room",
+   "first2 value",
+   "room",
+   {
+    "k": {
+     "n": 2
+    },
+    "m": {
+     "n": 1
+    }
+   }
+  ],
+  [
+   "remove room",
+   "first2 removed",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "remove room",
+   "first2 removed",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "remove room",
+   "first2 value",
+   "room",
+   null
+  ]
+ ],
+ "last2": [
+  [
+   "start",
+   "last2 added",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "start",
+   "last2 added",
+   "e",
+   {
+    "n": 3
+   }
+  ],
+  [
+   "start",
+   "last2 value",
+   "room",
+   {
+    "d": {
+     "n": 2
+    },
+    "e": {
+     "n": 3
+    }
+   }
+  ],
+  [
+   "remove last",
+   "last2 removed",
+   "e",
+   {
+    "n": 3
+   }
+  ],
+  [
+   "remove last",
+   "last2 added",
+   "c",
+   {
+    "n": 4
+   }
+  ],
+  [
+   "remove last",
+   "last2 value",
+   "room",
+   {
+    "d": {
+     "n": 2
+    },
+    "c": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "add after last",
+   "last2 removed",
+   "c",
+   {
+    "n": 4
+   }
+  ],
+  [
+   "add after last",
+   "last2 added",
+   "z",
+   {
+    "n": 0
+   }
+  ],
+  [
+   "add after last",
+   "last2 value",
+   "room",
+   {
+    "d": {
+     "n": 2
+    },
+    "z": {
+     "n": 0
+    }
+   }
+  ],
+  [
+   "priority moves in",
+   "last2 changed",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "priority moves in",
+   "last2 value",
+   "room",
+   {
+    "z": {
+     "n": 0
+    },
+    "d": {
+     "n": 2
+    }
+   }
+  ],
+  [
+   "multi-path update",
+   "last2 removed",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "multi-path update",
+   "last2 added",
+   "x",
+   {
+    "n": 6
+   }
+  ],
+  [
+   "multi-path update",
+   "last2 value",
+   "room",
+   {
+    "x": {
+     "n": 6
+    },
+    "z": {
+     "n": 0
+    }
+   }
+  ],
+  [
+   "replace room",
+   "last2 removed",
+   "x",
+   {
+    "n": 6
+   }
+  ],
+  [
+   "replace room",
+   "last2 removed",
+   "z",
+   {
+    "n": 0
+   }
+  ],
+  [
+   "replace room",
+   "last2 added",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "last2 added",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "replace room",
+   "last2 value",
+   "room",
+   {
+    "k": {
+     "n": 2
+    },
+    "m": {
+     "n": 1
+    }
+   }
+  ],
+  [
+   "remove room",
+   "last2 removed",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "remove room",
+   "last2 removed",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "remove room",
+   "last2 value",
+   "room",
+   null
+  ]
+ ],
+ "prio2": [
+  [
+   "start",
+   "prio2 added",
+   "b",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "start",
+   "prio2 added",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "start",
+   "prio2 value",
+   "room",
+   {
+    "b": {
+     "n": 1
+    },
+    "d": {
+     "n": 2
+    }
+   }
+  ],
+  [
+   "add before first",
+   "prio2 removed",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "add before first",
+   "prio2 added",
+   "0",
+   {
+    "n": 9
+   }
+  ],
+  [
+   "add before first",
+   "prio2 value",
+   "room",
+   {
+    "0": {
+     "n": 9
+    },
+    "b": {
+     "n": 1
+    }
+   }
+  ],
+  [
+   "child value moves",
+   "prio2 changed",
+   "b",
+   {
+    "n": 10
+   }
+  ],
+  [
+   "child value moves",
+   "prio2 value",
+   "room",
+   {
+    "0": {
+     "n": 9
+    },
+    "b": {
+     "n": 10
+    }
+   }
+  ],
+  [
+   "multi-path update",
+   "prio2 removed",
+   "0",
+   {
+    "n": 9
+   }
+  ],
+  [
+   "multi-path update",
+   "prio2 added",
+   "x",
+   {
+    "n": 6
+   }
+  ],
+  [
+   "multi-path update",
+   "prio2 value",
+   "room",
+   {
+    "b": {
+     "n": 10
+    },
+    "x": {
+     "n": 6
+    }
+   }
+  ],
+  [
+   "deep write into new child",
+   "prio2 removed",
+   "x",
+   {
+    "n": 6
+   }
+  ],
+  [
+   "deep write into new child",
+   "prio2 added",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "deep write into new child",
+   "prio2 value",
+   "room",
+   {
+    "b": {
+     "n": 10
+    },
+    "bb": {
+     "n": 2
+    }
+   }
+  ],
+  [
+   "replace room",
+   "prio2 removed",
+   "b",
+   {
+    "n": 10
+   }
+  ],
+  [
+   "replace room",
+   "prio2 removed",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "prio2 added",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "prio2 added",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "replace room",
+   "prio2 value",
+   "room",
+   {
+    "k": {
+     "n": 2
+    },
+    "m": {
+     "n": 1
+    }
+   }
+  ],
+  [
+   "remove room",
+   "prio2 removed",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "remove room",
+   "prio2 removed",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "remove room",
+   "prio2 value",
+   "room",
+   null
+  ]
+ ],
+ "range": [
+  [
+   "start",
+   "range added",
+   "b",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "start",
+   "range added",
+   "c",
+   {
+    "n": 4
+   }
+  ],
+  [
+   "start",
+   "range added",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "start",
+   "range value",
+   "room",
+   {
+    "b": {
+     "n": 1
+    },
+    "d": {
+     "n": 2
+    },
+    "c": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "priority moves in",
+   "range changed",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "priority moves in",
+   "range value",
+   "room",
+   {
+    "b": {
+     "n": 1
+    },
+    "d": {
+     "n": 2
+    },
+    "c": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "child value moves",
+   "range changed",
+   "b",
+   {
+    "n": 10
+   }
+  ],
+  [
+   "child value moves",
+   "range value",
+   "room",
+   {
+    "b": {
+     "n": 10
+    },
+    "d": {
+     "n": 2
+    },
+    "c": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "multi-path update",
+   "range changed",
+   "c",
+   {
+    "n": 7
+   }
+  ],
+  [
+   "multi-path update",
+   "range value",
+   "room",
+   {
+    "b": {
+     "n": 10
+    },
+    "d": {
+     "n": 2
+    },
+    "c": {
+     "n": 7
+    }
+   }
+  ],
+  [
+   "deep write into new child",
+   "range added",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "deep write into new child",
+   "range value",
+   "room",
+   {
+    "b": {
+     "n": 10
+    },
+    "bb": {
+     "n": 2
+    },
+    "d": {
+     "n": 2
+    },
+    "c": {
+     "n": 7
+    }
+   }
+  ],
+  [
+   "replace room",
+   "range removed",
+   "b",
+   {
+    "n": 10
+   }
+  ],
+  [
+   "replace room",
+   "range removed",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "range removed",
+   "c",
+   {
+    "n": 7
+   }
+  ],
+  [
+   "replace room",
+   "range removed",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "range value",
+   "room",
+   null
+  ]
+ ],
+ "child": [
+  [
+   "start",
+   "child added",
+   "b",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "start",
+   "child added",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "start",
+   "child value",
+   "room",
+   {
+    "b": {
+     "n": 1
+    },
+    "d": {
+     "n": 2
+    }
+   }
+  ],
+  [
+   "add after last",
+   "child removed",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "add after last",
+   "child added",
+   "z",
+   {
+    "n": 0
+   }
+  ],
+  [
+   "add after last",
+   "child value",
+   "room",
+   {
+    "b": {
+     "n": 1
+    },
+    "z": {
+     "n": 0
+    }
+   }
+  ],
+  [
+   "child value moves",
+   "child removed",
+   "b",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "child value moves",
+   "child added",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "child value moves",
+   "child value",
+   "room",
+   {
+    "z": {
+     "n": 0
+    },
+    "d": {
+     "n": 2
+    }
+   }
+  ],
+  [
+   "deep write into new child",
+   "child removed",
+   "d",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "deep write into new child",
+   "child added",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "deep write into new child",
+   "child value",
+   "room",
+   {
+    "bb": {
+     "n": 2
+    },
+    "z": {
+     "n": 0
+    }
+   }
+  ],
+  [
+   "replace room",
+   "child removed",
+   "z",
+   {
+    "n": 0
+   }
+  ],
+  [
+   "replace room",
+   "child removed",
+   "bb",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "child added",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "replace room",
+   "child added",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "replace room",
+   "child value",
+   "room",
+   {
+    "k": {
+     "n": 2
+    },
+    "m": {
+     "n": 1
+    }
+   }
+  ],
+  [
+   "remove room",
+   "child removed",
+   "m",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "remove room",
+   "child removed",
+   "k",
+   {
+    "n": 2
+   }
+  ],
+  [
+   "remove room",
+   "child value",
+   "room",
+   null
+  ]
+ ]
+}

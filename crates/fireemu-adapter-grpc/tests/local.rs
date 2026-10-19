@@ -7193,7 +7193,7 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
     }
 }
 
-/// PX1a: the six comparisons stand in where and select with literals on either side, and
+/// `PX1a`: the six comparisons stand in where and select with literals on either side, and
 /// array and map literals compare deeply. Inputs whose production answer is unrecorded (an
 /// absent operand below the top of a where, a null operand of an ordering, an absent array
 /// element) are refused by strict and answered as the official emulator answers them by the
@@ -7250,7 +7250,7 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
             })
             .await
             .unwrap();
-        let mut run = |stages: Vec<pb::pipeline::Stage>| {
+        let run = |stages: Vec<pb::pipeline::Stage>| {
             let mut client = client.clone();
             async move {
                 match client.execute_pipeline(pipeline_request(stages)).await {

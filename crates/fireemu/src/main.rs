@@ -3480,6 +3480,7 @@ fn control_state(
     pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
     pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
+    realtime_database: &Arc<Mutex<fireemu_adapter_database::rest::Database>>,
     listen_expiry: Option<fireemu_adapter_grpc::rules::ListenExpiry>,
     missing_indexes_reported: bool,
 ) -> fireemu_adapter_http::control::ControlState {
@@ -3574,6 +3575,7 @@ fn control_state(
             app_check: app_check.clone(),
             pubsub: pubsub.clone(),
             pubsub_handle: pubsub_handle.clone(),
+            realtime_database: realtime_database.clone(),
         })),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))

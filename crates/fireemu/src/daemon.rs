@@ -876,6 +876,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         &pubsub_state,
         &pubsub_handle,
         &pubsub_resources,
+        &realtime_database,
         (cfg.rules_enforced && only.firestore).then(|| listen_expiry.clone()),
         only.firestore
             && cfg.index_policy()

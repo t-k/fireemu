@@ -147,7 +147,7 @@ fn base64_reads_the_sdks_web_safe_form() {
     assert_eq!(decode_base64("YQ==").unwrap(), b"a");
     assert_eq!(decode_base64("-_8").unwrap(), [0xFB, 0xFF]);
     assert_eq!(decode_base64("").unwrap(), b"");
-    for bad in ["%%%", "Y", "YQ.Q", "Y\u{e9}", "YQ...."] {
+    for bad in ["%%%", "Y", "YQ.Q", "Y\u{e9}", "YQ....", "YQ."] {
         assert!(decode_base64(bad).is_none(), "{bad}");
     }
 }
@@ -193,8 +193,12 @@ fn packets_are_joined_in_segment_order() {
 #[test]
 fn waiting_segments_are_bounded() {
     let mut r = Reassembler::new(16);
-    assert!(r.add(vec![seg(1, 2, "aaaaaaaa")]).is_ok());
-    assert!(r.add(vec![seg(5, 1, "aaaaaaaaa")]).is_err());
+    let used: Vec<Segment> = (0..4).map(|n| seg(n, 1, "YQ..")).collect();
+    assert_eq!(r.add(used.clone()).unwrap().len(), 4);
+    // Segments already used do not wait again.
+    assert!(r.add(used).unwrap().is_empty());
+    assert!(r.add(vec![seg(5, 2, "aaaaaaaa")]).is_ok());
+    assert!(r.add(vec![seg(7, 1, "aaaaaaaaa")]).is_err());
 }
 
 proptest! {

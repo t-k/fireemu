@@ -227,10 +227,6 @@ async fn poll(
                 return script(NOTHING.to_owned());
             }
         }
-        if state.outbox.len() > shared.config.stream_queue.max(1) {
-            close(shared, connection, &mut state);
-            return script(NOTHING.to_owned());
-        }
         if !state.outbox.is_empty() {
             return script(state.take_packet());
         }
@@ -309,8 +305,8 @@ fn close(shared: &Shared, connection: &Connection, state: &mut State) {
 }
 
 /// Moves what other connections push into the connection's outbox, releasing a held
-/// request; closes the connection when its queue overflowed or no request came for the
-/// hold time.
+/// request; closes the connection when its queue overflowed or no request came for twice
+/// the hold time (a held request that runs out closes it sooner).
 async fn forward(
     shared: Arc<Shared>,
     connection: Arc<Connection>,
@@ -342,7 +338,7 @@ async fn forward(
                 if state.closed {
                     return;
                 }
-                if state.held.is_none() && state.last_request.elapsed() >= hold {
+                if state.held.is_none() && state.last_request.elapsed() >= hold * 2 {
                     close(&shared, &connection, &mut state);
                     return;
                 }

@@ -287,6 +287,14 @@ async fn unknown_connections_frames_and_bad_segments() {
         .poll(&[&request(2, "echo", r#"{"d":"y"}"#)])
         .await
         .starts_with("pRTLPCB(3,"));
+    // Messages stay whole: no WebSocket frame counts, even past 16384 characters.
+    let big = "x".repeat(20_000);
+    lp.poll(&[&request(3, "p", &format!(r#"{{"p":"/big","d":"{big}"}}"#))])
+        .await;
+    assert_eq!(
+        lp.poll(&[&request(4, "g", r#"{"p":"/big","q":{}}"#)]).await,
+        format!("pRTLPCB(5,[{{\"t\":\"d\",\"d\":{{\"r\":4,\"b\":{{\"s\":\"ok\",\"d\":\"{big}\"}}}}}}]);\n")
+    );
 }
 
 #[tokio::test]
@@ -300,6 +308,7 @@ async fn a_held_request_that_runs_out_closes_the_connection() {
     lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
     assert_eq!(database.lock().unwrap().listen_count(), 1);
     assert_eq!(lp.poll(&[]).await, "<!-- -->");
+    // Closed at once, well before an idle connection would be (twice the hold time).
     assert_eq!(database.lock().unwrap().listen_count(), 0);
     assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
 }
@@ -312,7 +321,7 @@ async fn a_connection_that_never_polls_is_closed() {
     })
     .await;
     let (mut lp, _) = Lp::start(&address, "lp4").await;
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    tokio::time::sleep(Duration::from_millis(900)).await;
     assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
 }
 

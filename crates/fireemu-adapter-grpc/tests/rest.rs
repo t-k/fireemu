@@ -7111,6 +7111,22 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
         extra,
     );
     assert_eq!(status, 200, "{body}");
+    // On Standard only strict has the route (production's refusal); the emulator profile keeps
+    // its plain 404.
+    let (status, _) = call(
+        &state_with_profile(true),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        pipeline_body(&collection),
+    );
+    assert_eq!(status, 400);
+    let (status, body) = call(
+        &state_with_profile(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        pipeline_body(&collection),
+    );
+    assert_eq!(status, 404, "{body}");
     // The route is the database's documents root only.
     for path in ["nest:executePipeline", "nest/a:executePipeline"] {
         let (status, _) = call(

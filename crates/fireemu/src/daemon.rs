@@ -575,15 +575,18 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         cfg.seed ^ 0x5053_5542,
     )));
     // The Realtime Database: one tree per namespace. Its push ids and session ids draw from
-    // the daemon seed with its own tag. Without a rules file every request is allowed, as the
-    // official emulator allows it; `productionExact` denies all but the `owner` credential
-    // (owner decision Q4, ledger 1471).
+    // the daemon seed with its own tag. Without a rules file it follows
+    // `database.defaultAccess`: open, as the official emulator, or locked to the `owner`
+    // credential (the `productionExact` value; owner decision Q4, ledger 1471).
     let realtime_database = Arc::new(Mutex::new(fireemu_adapter_database::rest::Database::new(
         fireemu_adapter_database::rest::RestOptions {
-            rules: if cfg.production_exact {
-                fireemu_adapter_database::rest::RulesMode::DenyAll
-            } else {
-                fireemu_adapter_database::rest::RulesMode::AllowAll
+            rules: match cfg.database_default_access {
+                crate::config::DatabaseDefaultAccess::Locked => {
+                    fireemu_adapter_database::rest::RulesMode::DenyAll
+                }
+                crate::config::DatabaseDefaultAccess::Open => {
+                    fireemu_adapter_database::rest::RulesMode::AllowAll
+                }
             },
             ..fireemu_adapter_database::rest::RestOptions::default()
         },

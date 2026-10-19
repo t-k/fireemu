@@ -841,6 +841,18 @@
         "maxAttempts": { "type": "integer", "minimum": 1 }
       }
     },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The Realtime Database emulator (served with --only database, emulators.database or daemon.databasePort).",
+      "properties": {
+        "defaultAccess": {
+          "enum": ["open", "locked"],
+          "default": "open",
+          "description": "What a database without a rules file allows. fireemu does not evaluate Realtime Database rules files yet. \"open\" (development default, as the official emulator): every request. \"locked\" (productionExact; strict profile only): only the emulator's owner credential (Authorization: Bearer owner), as a new production database in locked mode admits only administrators."
+        }
+      }
+    },
     "pubsub": {
       "type": "object",
       "description": "Pub/Sub emulator behaviour that the service configuration has no counterpart for.",

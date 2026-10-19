@@ -1269,6 +1269,8 @@ pub struct RuntimeConfig {
     /// `pubsub.deadLetterAuthorization`: whether strict dead-letter forwarding needs the service
     /// agent's grants. Default: `implicit` unless `productionExact` or the key asks for `iam`.
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
+    /// `database.defaultAccess`: what a Realtime Database without rules allows.
+    pub database_default_access: DatabaseDefaultAccess,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -1365,6 +1367,43 @@ impl AppCheckDebugTokens {
         match self {
             Self::Any => "any",
             Self::Registered => "registered",
+        }
+    }
+}
+
+/// `database.defaultAccess`: what a Realtime Database without a rules file allows.
+///
+/// The official emulator allows everything without rules, and fireemu does not evaluate rules
+/// files yet (RTDB-03), so both profiles default to `open`. A new production database in
+/// locked mode refuses everyone but administrators; `productionExact` asks for that
+/// (`locked`): only the emulator's `owner` credential, the administrator the official tooling
+/// uses, gets through (owner decision Q4, ledger 1471).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DatabaseDefaultAccess {
+    /// Every request is allowed.
+    #[default]
+    Open,
+    /// Only the `owner` credential is allowed.
+    Locked,
+}
+
+impl DatabaseDefaultAccess {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "open" => Some(Self::Open),
+            "locked" => Some(Self::Locked),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Locked => "locked",
         }
     }
 }
@@ -1650,6 +1689,7 @@ impl Default for RuntimeConfig {
             pubsub_project_numbers: BTreeMap::new(),
             pubsub_local_bearer_token: None,
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
+            database_default_access: DatabaseDefaultAccess::Open,
             pubsub_push_minimum_redelivery_interval_millis:
                 fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
@@ -2038,6 +2078,9 @@ pub(crate) const PUBSUB_KEYS: [&str; 4] = [
     "authentication",
     "deadLetterAuthorization",
 ];
+
+/// The keys of the `database` section.
+pub(crate) const DATABASE_KEYS: [&str; 1] = ["defaultAccess"];
 
 /// The keys of the `scheduler` section.
 pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
@@ -3785,6 +3828,7 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "storage",
     "events",
     "pubsub",
+    "database",
     "eventarc",
     "scheduler",
     "functions",
@@ -3941,6 +3985,11 @@ impl RuntimeConfig {
         } else {
             DeadLetterAuthorization::Implicit
         };
+        self.database_default_access = if exact {
+            DatabaseDefaultAccess::Locked
+        } else {
+            DatabaseDefaultAccess::Open
+        };
         self.app_check.debug_tokens = if !exact && self.profile == CompatibilityProfile::Strict {
             AppCheckDebugTokens::Any
         } else {
@@ -4026,6 +4075,10 @@ impl RuntimeConfig {
             (
                 "appCheck.debugTokens",
                 self.app_check.debug_tokens.as_config_str(),
+            ),
+            (
+                "database.defaultAccess",
+                self.database_default_access.as_config_str(),
             ),
         ];
         self.development_defaults = values
@@ -4384,6 +4437,36 @@ impl RuntimeConfig {
             catalog.insert(key, grants);
         }
         cfg.eventarc_oauth_credentials = Some(catalog);
+        Ok(())
+    }
+
+    /// Reads the `database` section. `locked` refuses what the official emulator allows, so
+    /// it requires the strict profile.
+    fn parse_database(
+        d: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        for key in d.keys() {
+            if !DATABASE_KEYS.contains(&key.as_str()) {
+                return Err(ConfigError(format!("database: unknown key {key:?}")));
+            }
+        }
+        if let Some(value) = d.get("defaultAccess") {
+            let access = value
+                .as_str()
+                .and_then(DatabaseDefaultAccess::parse_config)
+                .ok_or_else(|| {
+                    ConfigError("database.defaultAccess must be \"open\" or \"locked\"".to_owned())
+                })?;
+            if access == DatabaseDefaultAccess::Locked
+                && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "database.defaultAccess \"locked\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.database_default_access = access;
+        }
         Ok(())
     }
 
@@ -5114,6 +5197,12 @@ impl RuntimeConfig {
         }
         if let Some(pubsub) = obj.get("pubsub").and_then(Value::as_object) {
             Self::parse_pubsub(pubsub, &mut cfg)?;
+        }
+        if let Some(database) = obj.get("database") {
+            let database = database
+                .as_object()
+                .ok_or_else(|| ConfigError("database must be an object".to_owned()))?;
+            Self::parse_database(database, &mut cfg)?;
         }
         if let Some(scheduler) = obj.get("scheduler") {
             let scheduler = scheduler
@@ -6190,6 +6279,10 @@ mod tests {
                     json!(cfg.pubsub_dead_letter_authorization.as_config_str()),
                 ),
                 (
+                    "database.defaultAccess",
+                    json!(cfg.database_default_access.as_config_str()),
+                ),
+                (
                     "functions.clock.date",
                     json!(if cfg.functions_clock.date_virtual {
                         "virtual"
@@ -6238,6 +6331,7 @@ mod tests {
                         json!("registered")
                     }
                     ("pubsub.deadLetterAuthorization", true) => json!("iam"),
+                    ("database.defaultAccess", true) => json!("locked"),
                     ("eventarc.authentication", true) => json!("production"),
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
@@ -9299,6 +9393,68 @@ mod tests {
     /// Naming a Pub/Sub project number is how a configuration asks for production's dead-letter
     /// grants, and the report says so; an empty map, the emulator profile and an explicit key
     /// say something else.
+    #[test]
+    fn the_database_default_access_is_open_unless_production_exact_or_declared() {
+        let access = |input: Value| {
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let entry = cfg
+                .development_defaults
+                .iter()
+                .find(|entry| entry["key"] == "database.defaultAccess")
+                .unwrap()
+                .clone();
+            (
+                cfg.database_default_access,
+                entry["source"].as_str().unwrap().to_owned(),
+            )
+        };
+        assert_eq!(
+            access(json!({"schemaVersion": 1, "profile": "emulator"})),
+            (DatabaseDefaultAccess::Open, "default".to_owned())
+        );
+        assert_eq!(
+            access(json!({"schemaVersion": 1, "profile": "strict"})),
+            (DatabaseDefaultAccess::Open, "default".to_owned())
+        );
+        assert_eq!(
+            access(json!({"schemaVersion": 1, "profile": "strict", "productionExact": true})),
+            (DatabaseDefaultAccess::Locked, "productionExact".to_owned())
+        );
+        assert_eq!(
+            access(
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true, "database": {"defaultAccess": "open"}})
+            ),
+            (DatabaseDefaultAccess::Open, "explicit".to_owned())
+        );
+        assert_eq!(
+            access(
+                json!({"schemaVersion": 1, "profile": "strict", "database": {"defaultAccess": "locked"}})
+            ),
+            (DatabaseDefaultAccess::Locked, "explicit".to_owned())
+        );
+        for (bad, message) in [
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "database": {"defaultAccess": "locked"}}),
+                "requires the strict profile",
+            ),
+            (
+                json!({"schemaVersion": 1, "database": {"defaultAccess": "closed"}}),
+                "must be \"open\" or \"locked\"",
+            ),
+            (
+                json!({"schemaVersion": 1, "database": {"other": 1}}),
+                "unknown key",
+            ),
+            (
+                json!({"schemaVersion": 1, "database": 1}),
+                "database must be an object",
+            ),
+        ] {
+            let error = RuntimeConfig::from_json(&bad).unwrap_err();
+            assert!(error.0.contains(message), "{bad}: {}", error.0);
+        }
+    }
+
     #[test]
     fn the_dead_letter_default_reports_the_project_numbers_that_selected_it() {
         let report = |config: Value| {

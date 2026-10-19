@@ -1634,6 +1634,17 @@ async fn start_with_edition(
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_with_edition_and_policy(edition, IndexValidationPolicy::Production).await
+}
+
+async fn start_with_edition_and_policy(
+    edition: FirestoreEdition,
+    policy: IndexValidationPolicy,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -1641,7 +1652,7 @@ async fn start_with_edition(
         ctx: PlanningContext {
             edition,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Production,
+            policy,
         },
         indexes: IndexSet::default(),
     };
@@ -6468,11 +6479,6 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             unsupported,
         ),
         (
-            "nested field",
-            vec![pipeline_equal("profile.score", i(7))],
-            unsupported,
-        ),
-        (
             "document name",
             vec![pipeline_equal("__name__", s("x"))],
             unsupported,
@@ -6605,6 +6611,633 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
     }
     handle.abort();
     assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+fn pipeline_select_map(aliases: Vec<(&str, pb::Value)>) -> pb::pipeline::Stage {
+    pipeline_stage(
+        "select",
+        pb::Value {
+            value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                fields: aliases
+                    .into_iter()
+                    .map(|(alias, value)| (alias.to_owned(), value))
+                    .collect(),
+            })),
+        },
+    )
+}
+
+/// The first error a pipeline answers, whether at the call or inside the stream.
+async fn pipeline_error(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    stages: Vec<pb::pipeline::Stage>,
+) -> tonic::Status {
+    match client.execute_pipeline(pipeline_request(stages)).await {
+        Err(status) => status,
+        Ok(response) => {
+            let mut stream = response.into_inner();
+            loop {
+                match stream.message().await {
+                    Err(status) => break status,
+                    Ok(Some(_)) => {}
+                    Ok(None) => panic!("the pipeline answered without an error"),
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_executes_nested_fields_and_document_functions() {
+    let map = |fields: &[(&str, pb::Value)]| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        })),
+    };
+    let reference = |relative: &str| pb::Value {
+        value_type: Some(pb::value::ValueType::ReferenceValue(format!(
+            "{DOCS}/{relative}"
+        ))),
+    };
+    let name = || pipeline_field("__name__");
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write(
+                    "nest/a",
+                    &[("profile", map(&[("score", i(7))])), ("name", s("a"))],
+                ),
+                update_write(
+                    "nest/b",
+                    &[("profile", map(&[("score", i(8))])), ("name", s("b"))],
+                ),
+                update_write("nest/c", &[("profile", i(7)), ("name", s("c"))]),
+                update_write("nest/a/sub/s1", &[("k", s("x"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // A nested field in where and in select.
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", s("nest")),
+                pipeline_equal("profile.score", i(7)),
+                pipeline_select_map(vec![
+                    ("label", pipeline_field("name")),
+                    ("score", pipeline_field("profile.score")),
+                ]),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(docs.len(), 1);
+    assert_eq!(
+        docs[0].fields,
+        [("label".to_owned(), s("a")), ("score".to_owned(), i(7))]
+            .into_iter()
+            .collect()
+    );
+    // Document functions in select; an absent nested value leaves its alias out.
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", s("nest")),
+                pipeline_select_map(vec![
+                    ("score", pipeline_field("profile.score")),
+                    ("id", pipeline_function("document_id", vec![name()])),
+                    ("coll", pipeline_function("collection_id", vec![name()])),
+                ]),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        3,
+    )
+    .await;
+    let expected = [("a", Some(7)), ("b", Some(8)), ("c", None)];
+    assert_eq!(docs.len(), expected.len());
+    for (doc, (id, score)) in docs.iter().zip(expected) {
+        let mut want: std::collections::HashMap<String, pb::Value> =
+            [("id".to_owned(), s(id)), ("coll".to_owned(), s("nest"))]
+                .into_iter()
+                .collect();
+        if let Some(score) = score {
+            want.insert("score".to_owned(), i(score));
+        }
+        assert_eq!(doc.fields, want, "{id}");
+    }
+    // A subcollection input: parent names the owning document.
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", s("nest/a/sub")),
+                pipeline_select_map(vec![
+                    ("up", pipeline_function("parent", vec![name()])),
+                    (
+                        "upId",
+                        pipeline_function(
+                            "document_id",
+                            vec![pipeline_function("parent", vec![name()])],
+                        ),
+                    ),
+                ]),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(
+        docs[0].fields,
+        [
+            ("up".to_owned(), reference("nest/a")),
+            ("upId".to_owned(), s("a"))
+        ]
+        .into_iter()
+        .collect()
+    );
+    // A reference literal is a function argument.
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", s("nest")),
+                pipeline_select_map(vec![(
+                    "lit",
+                    pipeline_function("document_id", vec![reference("other/z")]),
+                )]),
+                pipeline_stage("limit", i(1)),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(
+        docs[0].fields,
+        [("lit".to_owned(), s("z"))].into_iter().collect()
+    );
+    // document_id in a where condition, with offset and limit after it.
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", s("nest")),
+                pipeline_stage(
+                    "where",
+                    pipeline_function(
+                        "equal",
+                        vec![pipeline_function("document_id", vec![name()]), s("b")],
+                    ),
+                ),
+                pipeline_select("name"),
+                pipeline_offset(0),
+                pipeline_stage("limit", i(5)),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(
+        docs[0].fields,
+        [("label".to_owned(), s("b"))].into_iter().collect()
+    );
+    // Refusals: unrecorded inputs at run time, unknown or misplaced functions and literal
+    // arguments as unsupported, malformed calls as invalid.
+    let unsupported = tonic::Code::Unimplemented;
+    let invalid = tonic::Code::InvalidArgument;
+    let mut options = pipeline_function("document_id", vec![name()]);
+    let Some(pb::value::ValueType::FunctionValue(function)) = options.value_type.as_mut() else {
+        unreachable!()
+    };
+    function.options.insert("unexpected".into(), i(1));
+    let cases = [
+        (
+            "parent of a top-level document",
+            vec![pipeline_select_map(vec![(
+                "up",
+                pipeline_function("parent", vec![name()]),
+            )])],
+            unsupported,
+        ),
+        (
+            "document_id of a non-reference field",
+            vec![pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![pipeline_field("name")]),
+            )])],
+            unsupported,
+        ),
+        (
+            "document_id of a missing field",
+            vec![pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![pipeline_field("missing")]),
+            )])],
+            unsupported,
+        ),
+        (
+            "document_id of a path literal",
+            vec![pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![s("nest/a")]),
+            )])],
+            unsupported,
+        ),
+        (
+            "equal in select",
+            vec![pipeline_select_map(vec![(
+                "same",
+                pipeline_function("equal", vec![pipeline_field("name"), s("a")]),
+            )])],
+            unsupported,
+        ),
+        (
+            "unknown function in select",
+            vec![pipeline_select_map(vec![(
+                "abs",
+                pipeline_function("abs", vec![pipeline_field("name")]),
+            )])],
+            unsupported,
+        ),
+        (
+            "value function as a where condition",
+            vec![pipeline_stage(
+                "where",
+                pipeline_function("document_id", vec![name()]),
+            )],
+            unsupported,
+        ),
+        (
+            "bare document name in select",
+            vec![pipeline_select_map(vec![("n", name())])],
+            unsupported,
+        ),
+        (
+            "literal in select",
+            vec![pipeline_select_map(vec![("n", s("x"))])],
+            unsupported,
+        ),
+        (
+            "reference literal in select",
+            vec![pipeline_select_map(vec![("n", reference("nest/a"))])],
+            unsupported,
+        ),
+        (
+            "equal in select with a malformed argument",
+            vec![pipeline_select_map(vec![(
+                "same",
+                pipeline_function("equal", vec![pipeline_field("a..b"), s("a")]),
+            )])],
+            unsupported,
+        ),
+        (
+            "equal with one argument",
+            vec![pipeline_stage(
+                "where",
+                pipeline_function("equal", vec![pipeline_field("name")]),
+            )],
+            invalid,
+        ),
+        (
+            "document_id without arguments",
+            vec![pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![]),
+            )])],
+            invalid,
+        ),
+        (
+            "document_id with options",
+            vec![pipeline_select_map(vec![("id", options)])],
+            invalid,
+        ),
+        (
+            "document_id with a missing argument",
+            vec![pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![pb::Value::default()]),
+            )])],
+            invalid,
+        ),
+        (
+            "invalid nested select path",
+            vec![pipeline_select_map(vec![("n", pipeline_field("a..b"))])],
+            invalid,
+        ),
+    ];
+    for (label, tail, code) in cases {
+        let stages = std::iter::once(pipeline_stage("collection", s("nest")))
+            .chain(tail)
+            .collect::<Vec<_>>();
+        let canonical = stages
+            .iter()
+            .map(|stage| format!("{}({})", stage.name, stage.args.len()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let err = pipeline_error(&mut client, stages).await;
+        assert_eq!(err.code(), code, "{label}: {err}");
+        if label == "equal with one argument" {
+            assert_eq!(
+                err.message(),
+                "equal requires exactly two arguments and no options"
+            );
+        }
+        assert_eq!(
+            err.metadata()
+                .get("fireemu-code")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            if code == unsupported {
+                "FS_PIPE_UNSUPPORTED_STAGE"
+            } else {
+                "FS_PIPE_INVALID"
+            },
+            "{label}"
+        );
+        assert_eq!(
+            err.metadata()
+                .get("fireemu-pipeline")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            canonical,
+            "{label}"
+        );
+    }
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+/// Inputs whose production result is unrecorded: the strict profile refuses them, the
+/// emulator profile answers what the official emulator (firebase-tools 15.28.2, Enterprise)
+/// answers (null for a document function of a missing or null value, the documents root for
+/// the parent of a top-level document) and refuses what it refuses (another type).
+#[tokio::test]
+async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
+    let name = || pipeline_field("__name__");
+    let select = || {
+        vec![
+            pipeline_stage("collection", s("edge")),
+            pipeline_select_map(vec![
+                (
+                    "missing",
+                    pipeline_function("document_id", vec![pipeline_field("missing")]),
+                ),
+                (
+                    "nul",
+                    pipeline_function("collection_id", vec![pipeline_field("nul")]),
+                ),
+                ("up", pipeline_function("parent", vec![name()])),
+            ]),
+        ]
+    };
+    let mistyped = || {
+        vec![
+            pipeline_stage("collection", s("edge")),
+            pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![pipeline_field("name")]),
+            )]),
+        ]
+    };
+    let null = pb::Value {
+        value_type: Some(pb::value::ValueType::NullValue(0)),
+    };
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "edge/a",
+                    &[("name", s("a")), ("nul", null.clone())],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        if policy == IndexValidationPolicy::Production {
+            let err = pipeline_error(&mut client, select()).await;
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+        } else {
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(select()))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert_eq!(
+                docs[0].fields,
+                [
+                    ("missing".to_owned(), null.clone()),
+                    ("nul".to_owned(), null.clone()),
+                    (
+                        "up".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::ReferenceValue(DOCS.to_owned())),
+                        }
+                    ),
+                ]
+                .into_iter()
+                .collect()
+            );
+        }
+        let err = pipeline_error(&mut client, mistyped()).await;
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        assert_eq!(
+            err.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_UNSUPPORTED_STAGE"
+        );
+        handle.abort();
+    }
+}
+
+/// A select alias is a field path, as the official emulator (firebase-tools 15.28.2,
+/// Enterprise) treats it: `select('profile.score')` answers `{profile: {score}}`. Production
+/// is unobserved, so strict refuses every alias that is not a plain identifier (UNIMPLEMENTED,
+/// before any other alias check); the emulator profile refuses what the official emulator
+/// refuses (an invalid path, a reserved name, an alias inside another) as `INVALID_ARGUMENT`.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_select_aliases_are_field_paths() {
+    let map = |fields: &[(&str, pb::Value)]| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        })),
+    };
+    let stages = |aliases: Vec<(&str, pb::Value)>| {
+        vec![
+            pipeline_stage("collection", s("alias")),
+            pipeline_select_map(aliases),
+        ]
+    };
+    let nested = || {
+        stages(vec![
+            ("x.y", pipeline_field("top")),
+            ("m.s", pipeline_field("profile.score")),
+            ("m.r", pipeline_field("profile.rank")),
+            ("`q.r`", pipeline_field("top")),
+            ("plain", pipeline_field("top")),
+        ])
+    };
+    let invalid = [
+        (
+            "invalid path",
+            stages(vec![("a..b", pipeline_field("top"))]),
+        ),
+        (
+            "document name",
+            stages(vec![("__name__", pipeline_field("top"))]),
+        ),
+        (
+            "alias inside another",
+            stages(vec![
+                ("m", pipeline_field("top")),
+                ("m.r", pipeline_field("profile.rank")),
+            ]),
+        ),
+        (
+            "same path twice",
+            stages(vec![
+                ("a", pipeline_field("top")),
+                ("`a`", pipeline_field("top")),
+            ]),
+        ),
+        (
+            "hyphen",
+            stages(vec![("total-count", pipeline_field("top"))]),
+        ),
+        ("non-ASCII", stages(vec![("名前", pipeline_field("top"))])),
+        (
+            "leading digit",
+            stages(vec![("1st", pipeline_field("top"))]),
+        ),
+        (
+            "reserved-looking",
+            stages(vec![("__x__", pipeline_field("top"))]),
+        ),
+    ];
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "alias/a",
+                    &[
+                        ("profile", map(&[("score", i(7)), ("rank", i(2))])),
+                        ("top", s("t")),
+                    ],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let strict = policy == IndexValidationPolicy::Production;
+        if strict {
+            for aliases in [
+                vec![("x.y", pipeline_field("top"))],
+                vec![("`q.r`", pipeline_field("top"))],
+            ] {
+                let err = pipeline_error(&mut client, stages(aliases)).await;
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+                assert_eq!(
+                    err.metadata().get("fireemu-code").unwrap(),
+                    "FS_PIPE_UNSUPPORTED_STAGE"
+                );
+            }
+            // A plain identifier, `_` included, still answers under strict; only a name both
+            // starting and ending with `__` is reserved.
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(stages(vec![
+                        ("_plain1", pipeline_field("top")),
+                        ("__lead", pipeline_field("top")),
+                        ("trail__", pipeline_field("top")),
+                    ])))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert_eq!(
+                docs[0].fields,
+                [
+                    ("_plain1".to_owned(), s("t")),
+                    ("__lead".to_owned(), s("t")),
+                    ("trail__".to_owned(), s("t")),
+                ]
+                .into_iter()
+                .collect()
+            );
+        } else {
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(nested()))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert_eq!(
+                docs[0].fields,
+                [
+                    ("x".to_owned(), map(&[("y", s("t"))])),
+                    ("m".to_owned(), map(&[("s", i(7)), ("r", i(2))])),
+                    ("q.r".to_owned(), s("t")),
+                    ("plain".to_owned(), s("t")),
+                ]
+                .into_iter()
+                .collect()
+            );
+        }
+        for (label, refused) in invalid.clone() {
+            let err = pipeline_error(&mut client, refused).await;
+            let (code, fireemu_code) = if strict {
+                (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
+            } else {
+                (tonic::Code::InvalidArgument, "FS_PIPE_INVALID")
+            };
+            assert_eq!(err.code(), code, "{policy:?} {label}: {err}");
+            assert_eq!(
+                err.metadata().get("fireemu-code").unwrap(),
+                fireemu_code,
+                "{label}"
+            );
+        }
+        handle.abort();
+    }
 }
 
 #[tokio::test]
@@ -7220,7 +7853,7 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
             }
         }
     }
-    // A quoted literal dot is one field, unlike the unsupported nested extraction below.
+    // A quoted literal dot is one field, not a nested extraction.
     let literal = drain_pipeline(
         client
             .execute_pipeline(request(vec![
@@ -7247,10 +7880,6 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
         (
             "limit before select",
             vec![collection("items"), limit(1), select("name")],
-        ),
-        (
-            "nested reference",
-            vec![collection("items"), select("profile.name")],
         ),
         (
             "document metadata",

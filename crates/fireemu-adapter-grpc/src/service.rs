@@ -665,25 +665,27 @@ impl Firestore for GatewayService {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
             let canonical = ast.canonical_text();
-            let compiled = crate::pipeline::compile_supported(request.get_ref(), &parent)
-                .map_err(|error| pipeline_status(error, &canonical))?;
-            let mut query = compiled.query;
-            if compiled.limit.is_some_and(|limit| limit > i32::MAX as u32) {
-                if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
-                    query.query_type.as_mut()
-                {
-                    query.limit = None;
-                }
-            }
+            // Strict refuses shapes and inputs whose production result is unrecorded; the
+            // emulator profile answers them as the official emulator does, where it answers.
+            let unrecorded = if self.gateway.production_refusals() {
+                fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
+            } else {
+                fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+            };
+            let compiled =
+                crate::pipeline::compile_pipeline(request.get_ref(), &parent, unrecorded)
+                    .map_err(|error| pipeline_status(error, &canonical))?;
             let response = self
-                .run_query_with_caller(caller, query)
+                .run_query_with_caller(caller, compiled.input)
                 .await
                 .map_err(|error| pipeline_status(error, &canonical))?;
             return Ok(Response::new(Box::pin(PipelineResponseStream {
                 inner: Some(response.into_inner()),
-                projection: compiled.projection,
+                cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(
+                    compiled.stages,
+                    unrecorded,
+                ),
                 canonical,
-                remaining: compiled.limit,
                 emitted: false,
             })));
         }
@@ -1050,11 +1052,11 @@ fn pipeline_status(mut error: Status, canonical: &str) -> Status {
 }
 
 // Own the inner receiver directly: reaching the limit or dropping the public stream
-// releases backpressure/transaction ownership without draining the remaining query.
+// releases backpressure/transaction ownership without draining the remaining query. The
+// inner stream is the input scan; the cursor runs the pipeline's stages over its rows.
 struct PipelineResponseStream {
     inner: Option<BoxStream<pb::RunQueryResponse>>,
-    projection: Option<Vec<(String, fireemu_core_firestore::field_path::FieldPath)>>,
-    remaining: Option<u32>,
+    cursor: fireemu_core_firestore::pipeline_exec::Cursor,
     canonical: String,
     emitted: bool,
 }
@@ -1089,24 +1091,31 @@ impl tokio_stream::Stream for PipelineResponseStream {
                     let Some(document) = response.document else {
                         continue;
                     };
-                    if this.remaining == Some(0) {
+                    if this.cursor.is_exhausted() {
                         this.inner = None;
                         return Poll::Ready(
                             (!this.emitted).then(|| Ok(pb::ExecutePipelineResponse::default())),
                         );
                     }
-                    this.emitted = true;
-                    if let Some(remaining) = &mut this.remaining {
-                        *remaining -= 1;
-                        if *remaining == 0 {
+                    let output = crate::pipeline::document_row(&document).and_then(|row| {
+                        this.cursor
+                            .push(row)
+                            .map_err(|error| Status::unimplemented(error.to_string()))
+                    });
+                    let fields = match output {
+                        Ok(Some(fields)) => fields,
+                        Ok(None) => continue,
+                        Err(error) => {
                             this.inner = None;
+                            return Poll::Ready(Some(Err(pipeline_status(error, &this.canonical))));
                         }
+                    };
+                    this.emitted = true;
+                    if this.cursor.is_exhausted() {
+                        this.inner = None;
                     }
                     return Poll::Ready(Some(Ok(pb::ExecutePipelineResponse {
-                        results: vec![crate::pipeline::project_document(
-                            document,
-                            &this.projection,
-                        )],
+                        results: vec![crate::pipeline::result_document(&fields)],
                         ..Default::default()
                     })));
                 }
@@ -1742,22 +1751,25 @@ mod tests {
 
     #[tokio::test]
     async fn execute_pipeline_stream_limit_stops_polling_and_empty_error_are_distinct() {
+        use fireemu_core_firestore::pipeline_exec::{Cursor, Stage};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio_stream::StreamExt;
         let polls = Arc::new(AtomicUsize::new(0));
         let count = polls.clone();
-        let source = tokio_stream::iter((0..10).map(move |_| {
+        let source = tokio_stream::iter((0..10).map(move |index| {
             count.fetch_add(1, Ordering::SeqCst);
             Ok(pb::RunQueryResponse {
-                document: Some(pb::Document::default()),
+                document: Some(pb::Document {
+                    name: format!("projects/p/databases/(default)/documents/items/{index}"),
+                    ..Default::default()
+                }),
                 ..Default::default()
             })
         }));
         let mut stream = PipelineResponseStream {
             inner: Some(Box::pin(source)),
-            projection: None,
+            cursor: Cursor::new(vec![Stage::Limit(3)]),
             canonical: "collection(items)".to_owned(),
-            remaining: Some(3),
             emitted: false,
         };
         for _ in 0..3 {
@@ -1770,9 +1782,8 @@ mod tests {
             inner: Some(Box::pin(tokio_stream::iter([Ok(
                 pb::RunQueryResponse::default(),
             )]))),
-            projection: None,
+            cursor: Cursor::new(Vec::new()),
             canonical: "collection(items)".to_owned(),
-            remaining: None,
             emitted: false,
         };
         assert_eq!(
@@ -1784,9 +1795,8 @@ mod tests {
             inner: Some(Box::pin(tokio_stream::iter([Err(Status::unavailable(
                 "fixture error",
             ))]))),
-            projection: None,
+            cursor: Cursor::new(Vec::new()),
             canonical: "collection(items)".to_owned(),
-            remaining: None,
             emitted: false,
         };
         assert_eq!(
@@ -1968,6 +1978,7 @@ mod tests {
     }
 
     mod explain_tests;
+    mod pipeline_exec_tests;
     mod query_transaction_tests;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

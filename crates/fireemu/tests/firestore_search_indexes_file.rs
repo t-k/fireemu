@@ -305,3 +305,44 @@ fn a_named_databases_search_index_is_noted_and_leaves_its_missing_index_answer_a
     assert!(notes.is_empty(), "{notes:?}");
     assert_eq!((status, with_search), (plain_status, without_search));
 }
+
+/// A hot reload that brings a search index prints the note after the new indexes are in force,
+/// that is after the reload line.
+#[test]
+fn a_hot_reload_notes_the_search_indexes_after_it_takes_effect() {
+    let (mut command, dir) = command("reload", "strict", NAMED_WITHOUT_SEARCH);
+    let mut child = Running(command.spawn().unwrap());
+    let rx = lines(&mut child.0);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(Line::Out(line)) if line.contains("control API:") => break,
+            Ok(Line::Err(line)) => assert!(!line.contains("searchConfig"), "{line}"),
+            Ok(Line::Out(_)) => {}
+            Err(error) => panic!("the daemon did not start ({error})"),
+        }
+    }
+    std::fs::write(dir.join("firestore.indexes.json"), SEARCH_INDEXES).unwrap();
+    let mut seen = Vec::new();
+    while !seen
+        .iter()
+        .any(|line: &String| line.contains("searchConfig"))
+    {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(Line::Err(line)) if line.starts_with("note: ") => seen.push(line),
+            Ok(_) => {}
+            Err(error) => panic!("no search note after the reload ({error}): {seen:?}"),
+        }
+    }
+    let reloaded = seen
+        .iter()
+        .position(|line| line.contains("reloaded Firestore indexes"))
+        .unwrap_or_else(|| panic!("{seen:?}"));
+    let noted = seen
+        .iter()
+        .position(|line| line.contains("2 search indexes"))
+        .unwrap_or_else(|| panic!("{seen:?}"));
+    assert!(reloaded < noted, "{seen:?}");
+}

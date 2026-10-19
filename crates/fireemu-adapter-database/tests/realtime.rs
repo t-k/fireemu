@@ -542,3 +542,84 @@ fn realtime_writes_reach_event_streams() {
     assert_eq!(received.events[0].0, stream);
     assert_eq!(received.events[0].1.data, r#"{"path":"/b","data":1}"#);
 }
+
+#[test]
+fn auth_tokens_need_a_subject_and_an_issue_time() {
+    // The official emulator's answers for unsigned tokens with these claims.
+    let token = |claims: &str| {
+        let encode = |text: &str| {
+            let mut out = String::new();
+            let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            for chunk in text.as_bytes().chunks(3) {
+                let b = [
+                    chunk[0],
+                    *chunk.get(1).unwrap_or(&0),
+                    *chunk.get(2).unwrap_or(&0),
+                ];
+                let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+                for i in 0..=chunk.len() {
+                    out.push(char::from(table[((n >> (18 - 6 * i)) & 63) as usize]));
+                }
+            }
+            out
+        };
+        format!("{}.{}.", encode(r#"{"alg":"none"}"#), encode(claims))
+    };
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=jw");
+    let mut auth = |r: u64, claims: &str| {
+        send(
+            &mut db,
+            &mut s,
+            &request(r, "auth", &format!(r#"{{"cred":"{}"}}"#, token(claims))),
+        )
+    };
+    assert_eq!(
+        auth(1, r#"{"sub":"u1","iat":1}"#),
+        vec![reply(
+            1,
+            "ok",
+            r#"{"auth":{"provider":"anonymous","token":{"iat":1,"sub":"u1"},"uid":"u1"},"expires":null}"#
+        )]
+    );
+    assert_eq!(
+        auth(2, r#"{"iat":1}"#),
+        vec![reply(
+            2,
+            "invalid_token",
+            r#""Missing claim 'sub' in auth token.""#
+        )]
+    );
+    assert_eq!(
+        auth(3, r#"{"sub":"u1","iat":1,"exp":1}"#),
+        vec![reply(
+            3,
+            "ok",
+            r#"{"auth":{"provider":"anonymous","token":{"exp":1,"iat":1,"sub":"u1"},"uid":"u1"},"expires":null}"#
+        )]
+    );
+    assert_eq!(
+        auth(6, r#"{"sub":"u1","iat":"x"}"#),
+        vec![reply(
+            6,
+            "invalid_token",
+            r#""Missing claim 'iat' in auth token.""#
+        )]
+    );
+    assert_eq!(
+        auth(7, r#"{"user_id":"u1","iat":1}"#),
+        vec![reply(
+            7,
+            "invalid_token",
+            r#""Missing claim 'sub' in auth token.""#
+        )]
+    );
+    assert_eq!(
+        auth(9, "[1]"),
+        vec![reply(
+            9,
+            "invalid_token",
+            r#""Could not parse auth token.""#
+        )]
+    );
+}

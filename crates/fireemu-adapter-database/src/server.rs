@@ -294,8 +294,10 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
 ) {
     let mut session: Session = match opened {
         Opened::Shutdown(frames) => {
+            // The official emulator drops the connection after the shutdown message, without
+            // a close frame.
             let _ = send_text(&mut socket, &frames).await;
-            send_close(&mut socket, CloseCode::Normal).await;
+            let _ = socket.shutdown().await;
             return;
         }
         Opened::Session(session, frames) => {

@@ -301,7 +301,8 @@ async fn the_websocket_upgrade_refuses_versions_and_namespaces() {
         client.next_text().await,
         r#"{"t":"c","d":{"t":"s","d":"Version error. Please make sure you are using the latest Firebase library"}}"#
     );
-    assert_eq!(client.next().await.0, 0x8);
+    // The official emulator drops the connection without a close frame (1006).
+    assert_eq!(client.next().await.0, 0xFF);
     let (_, refused) = Client::connect(&address, "/.ws?v=5&ns=Bad_NS").await;
     assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
 }

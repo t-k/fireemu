@@ -349,21 +349,37 @@ impl Session {
                 "Could not parse auth token.".to_owned(),
             ));
         };
-        self.identity = Identity::Credential;
-        let claim = |name: &str| claims.get(name).cloned().unwrap_or(Json::Null);
-        let provider = match claims.get("firebase") {
-            Some(Json::Object(firebase)) => firebase
-                .get("sign_in_provider")
-                .cloned()
-                .unwrap_or(Json::Null),
-            _ => Json::Null,
+        // The official emulator needs a string `sub` and a numeric `iat`; it does not check
+        // `exp` or the signature.
+        let missing = |name: &str| {
+            Failure::Status(
+                "invalid_token",
+                format!("Missing claim '{name}' in auth token."),
+            )
         };
-        let auth = Json::object([
-            ("uid", claim("sub")),
-            ("token", Json::Object(claims.clone())),
-            ("provider", provider),
-            ("user_id", claim("user_id")),
+        let Some(Json::String(subject)) = claims.get("sub") else {
+            return Err(missing("sub"));
+        };
+        if !matches!(claims.get("iat"), Some(Json::Number(_))) {
+            return Err(missing("iat"));
+        }
+        self.identity = Identity::Credential;
+        let provider = match claims.get("firebase") {
+            Some(Json::Object(firebase)) => firebase.get("sign_in_provider").cloned(),
+            _ => None,
+        };
+        let mut auth = BTreeMap::from([
+            ("uid".to_owned(), Json::String(subject.clone())),
+            ("token".to_owned(), Json::Object(claims.clone())),
+            (
+                "provider".to_owned(),
+                provider.unwrap_or_else(|| Json::string("anonymous")),
+            ),
         ]);
+        if let Some(user_id) = claims.get("user_id") {
+            auth.insert("user_id".to_owned(), user_id.clone());
+        }
+        let auth = Json::Object(auth);
         Ok(Json::object([("auth", auth), ("expires", Json::Null)]))
     }
 

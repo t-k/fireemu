@@ -1463,3 +1463,53 @@ fn bodies_are_parsed_before_the_lock_when_there_is_one() {
         Handled::Stream { .. } => panic!("no stream expected"),
     }
 }
+
+#[test]
+fn increments_beyond_the_double_range_stop_at_the_largest_double() {
+    // The official emulator answers 1.7976931348623157E308 for 1e308 + 1e308.
+    let mut db = Database::new(RestOptions::default(), 1);
+    call(&mut db, "PUT", "/i.json?ns=t9", "1e308");
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/i.json?ns=t9",
+            r#"{".sv":{"increment":1e308}}"#
+        ),
+        (200, "1.7976931348623157E308".to_owned())
+    );
+    call(&mut db, "PUT", "/i.json?ns=t9", "-1e308");
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/i.json?ns=t9",
+            r#"{".sv":{"increment":-1e308}}"#
+        ),
+        (200, "-1.7976931348623157E308".to_owned())
+    );
+}
+
+#[test]
+fn limits_must_be_positive_integers() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    call(&mut db, "PUT", "/q.json?ns=t10", r#"{"a":1,"b":2,"c":3}"#);
+    for (limit, message) in [
+        ("2.0", "limitToFirst must be an integer"),
+        ("2.5", "limitToFirst must be an integer"),
+        ("1e1", "limitToFirst must be an integer"),
+        ("-1", "limitToFirst must be positive"),
+        ("0", "limitToFirst must be positive"),
+    ] {
+        assert_eq!(
+            call(
+                &mut db,
+                "GET",
+                &format!("/q.json?ns=t10&orderBy=%22%24key%22&limitToFirst={limit}"),
+                ""
+            ),
+            (400, error(message)),
+            "{limit}"
+        );
+    }
+}

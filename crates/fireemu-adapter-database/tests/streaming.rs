@@ -228,3 +228,25 @@ fn a_priority_in_a_patch_event_carries_its_value() {
         )]
     );
 }
+
+#[test]
+fn a_write_of_an_equal_number_is_no_write() {
+    // The official emulator keeps 1 when 1.0 is written over it and sends no event; -0.0
+    // over 1 is a change, and 0 over -0.0 is not.
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/s.json?ns=e9", "1");
+    let (id, _) = open(&mut db, "/s.json?ns=e9");
+    assert!(write(&mut db, "PUT", "/s.json?ns=e9", "1.0").is_empty());
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=e9", "-0.0"),
+        vec![(id, put("/", "-0.0"))]
+    );
+    assert!(write(&mut db, "PUT", "/s.json?ns=e9", "0").is_empty());
+    let read = db.handle(&request("GET", "/s.json?ns=e9", false, ""), 0);
+    match read {
+        fireemu_adapter_database::rest::Handled::Response { response, .. } => {
+            assert_eq!(String::from_utf8(response.body).unwrap(), "-0.0");
+        }
+        fireemu_adapter_database::rest::Handled::Stream { .. } => panic!("stream"),
+    }
+}

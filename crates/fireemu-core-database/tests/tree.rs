@@ -573,3 +573,40 @@ fn priorities_inside_data_are_doubles_and_written_ones_keep_their_type() {
         Some(Priority::String("s".to_owned()))
     );
 }
+
+#[test]
+fn rewriting_an_equal_value_keeps_the_stored_form() {
+    // The official emulator treats a write of an equal value as no write: 1.0 over 1
+    // keeps 1, 0 over -0.0 keeps -0.0, while -0.0 over 1 is stored.
+    let mut tree = tree_with(json!({"a": 1, "o": {"x": 1}}));
+    tree.set(
+        &p("/a"),
+        &Json::Number(fireemu_core_database::Number::Double(1.0)),
+        NOW,
+    )
+    .unwrap();
+    assert!(matches!(
+        tree.get(&p("/a")).unwrap().content,
+        fireemu_core_database::Content::Leaf(fireemu_core_database::Leaf::Number(
+            fireemu_core_database::Number::Int(1)
+        ))
+    ));
+    tree.set(
+        &p("/a"),
+        &Json::Number(fireemu_core_database::Number::Double(-0.0)),
+        NOW,
+    )
+    .unwrap();
+    tree.set(&p("/a"), &j(json!(0)), NOW).unwrap();
+    assert!(matches!(
+        tree.get(&p("/a")).unwrap().content,
+        fireemu_core_database::Content::Leaf(fireemu_core_database::Leaf::Number(fireemu_core_database::Number::Double(d))) if d.to_bits() == (-0.0f64).to_bits()
+    ));
+    let double_x = Json::object([(
+        "x",
+        Json::Number(fireemu_core_database::Number::Double(1.0)),
+    )]);
+    tree.update(&p("/"), &[("o".to_owned(), double_x)], NOW)
+        .unwrap();
+    assert_eq!(export(&tree, "/o"), json!({"x": 1}));
+}

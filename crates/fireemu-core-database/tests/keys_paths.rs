@@ -96,20 +96,38 @@ fn paths_allow_info_first_and_priority_last_only() {
     assert!(p("/.info/connected").is_info());
     assert!(p("/a/.priority").is_priority());
     assert!(p("/.priority").is_priority());
-    for bad in [
-        "/a/.info",
-        "/.priority/a",
-        "/a/.value",
-        "/a.b",
-        "/a$",
-        "/a/\u{0}",
-    ] {
+    for bad in ["/a/.info", "/.priority/a", "/.info/.info", "/a/.priority/b"] {
         let err = Path::parse(bad, &limits).unwrap_err();
-        assert!(
-            matches!(err.kind, ErrorKind::InvalidPath | ErrorKind::InvalidKey),
-            "{bad:?}: {err:?}"
-        );
+        assert_eq!(err.kind, ErrorKind::InvalidPath, "{bad:?}");
     }
+    for bad in ["/a/.value", "/a.b", "/a$", "/a/\u{0}"] {
+        let err = Path::parse(bad, &limits).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidKey, "{bad:?}");
+    }
+}
+
+#[test]
+fn path_builders() {
+    assert_eq!(Path::root(), p("/"));
+    assert!(!p("/a").is_root());
+    assert_eq!(p("/a").child("b"), p("/a/b"));
+    assert_eq!(Path::root().child("b").depth(), 1);
+    assert_eq!(p("/a").join(&p("b/c")), p("/a/b/c"));
+}
+
+#[test]
+fn production_limits_are_the_documented_values() {
+    assert_eq!(Limits::PRODUCTION.max_depth, 32);
+    assert_eq!(Limits::PRODUCTION.max_key_bytes, 768);
+    assert_eq!(Limits::PRODUCTION.max_string_bytes, 10_485_760);
+    assert_eq!(Limits::default(), Limits::PRODUCTION);
+}
+
+#[test]
+fn errors_display_their_message() {
+    let err = validate_key("", &Limits::default()).unwrap_err();
+    assert_eq!(err.to_string(), err.message);
+    assert!(!err.message.is_empty());
 }
 
 #[test]
@@ -171,6 +189,26 @@ fn numbers_compare_exactly_across_representations() {
         Number::Int(i64::MAX).total_cmp(Number::Double(9_223_372_036_854_775_808.0)),
         Ordering::Less
     );
+}
+
+#[test]
+fn integral_doubles_beyond_the_safe_range_equal_their_integers() {
+    let two_pow_60 = 1_152_921_504_606_846_976_i64;
+    #[allow(clippy::cast_precision_loss)]
+    let double = Number::from_f64(two_pow_60 as f64).unwrap();
+    assert!(matches!(double, Number::Double(_)));
+    assert_eq!(Number::Int(two_pow_60).total_cmp(double), Ordering::Equal);
+    assert_eq!(double.total_cmp(Number::Int(two_pow_60)), Ordering::Equal);
+    assert_eq!(
+        Number::Int(two_pow_60 + 1).total_cmp(double),
+        Ordering::Greater
+    );
+    // -2^63 is an exact double and an exact i64.
+    let min = Number::from_f64(-9_223_372_036_854_775_808.0).unwrap();
+    assert_eq!(Number::Int(i64::MIN).total_cmp(min), Ordering::Equal);
+    assert_eq!(Number::Int(i64::MIN + 1).total_cmp(min), Ordering::Greater);
+    assert_ne!(Number::Int(1), Number::Int(2));
+    assert_eq!(Number::Int(1), Number::Int(1));
 }
 
 #[test]

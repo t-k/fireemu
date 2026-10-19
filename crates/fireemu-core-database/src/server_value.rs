@@ -57,11 +57,12 @@ pub fn resolve(json: &Json, existing: Option<&Node>, context: ServerValueContext
     let resolved = map
         .iter()
         .map(|(key, value)| {
-            // `.value` stands for the location itself; a priority never increments.
-            let existing_child = match key.as_str() {
-                PRIORITY_KEY => None,
-                VALUE_KEY => existing,
-                _ => child(existing, key),
+            // `.value` stands for the location itself. No stored node has a `.priority`
+            // child, so a priority placeholder always starts from nothing.
+            let existing_child = if key == VALUE_KEY {
+                existing
+            } else {
+                child(existing, key)
             };
             Ok((key.clone(), resolve(value, existing_child, context)?))
         })

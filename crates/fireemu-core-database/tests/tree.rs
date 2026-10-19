@@ -246,6 +246,31 @@ fn unknown_or_malformed_server_values_are_refused() {
 }
 
 #[test]
+fn increment_in_a_prioritized_value_uses_the_stored_number() {
+    let mut tree = tree_with(json!({"n": 5}));
+    tree.set(
+        &p("/n"),
+        &j(json!({".value": {".sv": {"increment": 1}}, ".priority": 2})),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(export(&tree, "/n"), json!({".value": 6, ".priority": 2}));
+}
+
+#[test]
+fn trees_report_their_limits_and_node_depth() {
+    let limits = Limits {
+        max_depth: 3,
+        ..Limits::default()
+    };
+    assert_eq!(*Tree::new(limits).limits(), limits);
+    let tree = tree_with(json!({"a": {"b": {"c": 1}}, "d": 1}));
+    assert_eq!(tree.root().unwrap().depth(), 3);
+    assert_eq!(tree.get(&p("/a/b")).unwrap().depth(), 1);
+    assert_eq!(tree.get(&p("/d")).unwrap().depth(), 0);
+}
+
+#[test]
 fn multipath_update_writes_each_path_and_keeps_siblings() {
     let mut tree = tree_with(json!({"a": {"x": 1, "y": 2}, "b": {"z": 3}}));
     tree.update(

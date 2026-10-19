@@ -7138,3 +7138,40 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
         assert!(status == 404 || status == 400, "{path}: {status}");
     }
 }
+
+/// Over REST too, a result without a select is the whole source document, and every element
+/// carries the execution time.
+#[test]
+fn rest_execute_pipeline_results_carry_document_metadata_without_select() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        let (status, stored) = call(&s, "GET", &format!("{DOCS}/nest/a"), json!({}));
+        assert_eq!(status, 200, "{stored}");
+        let run = |stages: &Value| {
+            call(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                pipeline_body(stages),
+            )
+        };
+        let (status, body) = run(&json!([
+            {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+            {"name": "limit", "args": [{"integerValue": "1"}]},
+        ]));
+        assert_eq!(status, 200, "{body}");
+        let element = &body[0];
+        assert_eq!(element["results"], json!([stored]), "strict={strict}");
+        assert!(
+            element["executionTime"].is_string(),
+            "strict={strict} {body}"
+        );
+        let (status, body) =
+            run(&json!([{"name": "collection", "args": [{"referenceValue": "/nothing"}]}]));
+        assert_eq!(status, 200);
+        assert_eq!(body.as_array().map(Vec::len), Some(1));
+        assert!(body[0]["executionTime"].is_string(), "{body}");
+        assert!(body[0].get("results").is_none());
+    }
+}

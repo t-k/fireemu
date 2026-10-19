@@ -6,3 +6,5 @@
 //! [`server`] runs it behind hyper and delivers the streaming events.
 
 pub mod json_text;
+pub mod namespace;
+pub mod rest;

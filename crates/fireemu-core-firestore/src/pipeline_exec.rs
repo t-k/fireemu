@@ -603,9 +603,9 @@ fn is_recorded_condition(expr: &Expr) -> bool {
     let Some((operand, literal)) = operand_and_literal(args) else {
         return false;
     };
-    let equal = function.name == "equal";
     let field = matches!(operand, Expr::Field(_));
-    (field || equal) && (equal || !matches!(literal.kind(), ValueKind::Null | ValueKind::Nan))
+    function.name == "equal"
+        || (field && !matches!(literal.kind(), ValueKind::Null | ValueKind::Nan))
 }
 
 /// Whether strict answers this `select` value without production observation: an operand,

@@ -283,6 +283,7 @@ fn select(expr: Expr) -> Stage {
 /// map literals and constructions, and null or NaN outside a `where` equality. The emulator
 /// profile answers them all.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn strict_refuses_shapes_classic_queries_cannot_express() {
     let c = |v: Value| Expr::Constant(v);
     let id = || call("document_id", vec![field("__name__")]);

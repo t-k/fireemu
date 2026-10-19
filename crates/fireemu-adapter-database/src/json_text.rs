@@ -22,44 +22,13 @@ pub enum Style {
     Pretty,
 }
 
-/// A body that is not one JSON value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError;
+pub use crate::json_parse::ParseError;
 
-/// Parses one JSON value. Integers that fit an i64 stay integers; other numbers become
-/// doubles (and integral doubles integers, see [`Number::from_f64`]).
+/// Parses one JSON value. Integers that fit an i64 stay integers; other numbers become the
+/// correctly rounded double of their text (and integral doubles integers, see
+/// [`Number::from_f64`]).
 pub fn parse(text: &str) -> Result<Json, ParseError> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| ParseError)?;
-    from_value(value)
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn from_value(value: serde_json::Value) -> Result<Json, ParseError> {
-    Ok(match value {
-        serde_json::Value::Null => Json::Null,
-        serde_json::Value::Bool(b) => Json::Bool(b),
-        serde_json::Value::Number(n) => {
-            let number = match (n.as_i64(), n.as_u64(), n.as_f64()) {
-                (Some(i), _, _) => Number::Int(i),
-                (None, Some(u), _) => Number::Double(u as f64),
-                (None, None, Some(f)) => Number::from_f64(f).ok_or(ParseError)?,
-                (None, None, None) => return Err(ParseError),
-            };
-            Json::Number(number)
-        }
-        serde_json::Value::String(s) => Json::String(s),
-        serde_json::Value::Array(items) => Json::Array(
-            items
-                .into_iter()
-                .map(from_value)
-                .collect::<Result<_, _>>()?,
-        ),
-        serde_json::Value::Object(map) => Json::Object(
-            map.into_iter()
-                .map(|(k, v)| Ok((k, from_value(v)?)))
-                .collect::<Result<_, _>>()?,
-        ),
-    })
+    crate::json_parse::parse_with_keys(text).map(|(json, _)| json)
 }
 
 /// The answer JSON for a node (`null` when absent), with dense integer-keyed children as

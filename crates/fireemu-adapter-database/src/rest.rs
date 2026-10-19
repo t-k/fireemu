@@ -17,6 +17,7 @@ use fireemu_core_database::{
     Content, Format, Json, Limits, Node, Path, QueryParams, ServerValueContext, Tree,
 };
 
+use crate::json_parse::parse_with_keys;
 use crate::json_text::{output_json, parse, render, Style};
 use crate::namespace::route;
 use crate::request::{self, Location, Output, Refusal};
@@ -332,7 +333,7 @@ impl Database {
         }
         let value = parse(body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
         tree.set(&call.path, &value, call.context)
-            .map_err(|_| data_refusal(body, &value))?;
+            .map_err(|_| data_refusal(body))?;
         let response = written(tree, &call.path, &call.output, call.want_etag);
         Ok(self.after_write(&call.namespace, response, &Change::Put(call.path.clone())))
     }
@@ -346,7 +347,7 @@ impl Database {
         let child = call.path.child(&id);
         ns.tree
             .set(&child, &value, call.context)
-            .map_err(|_| data_refusal(body, &value))?;
+            .map_err(|_| data_refusal(body))?;
         let name = Json::object([("name", Json::String(id))]);
         let response = json_response(&name, &call.output, None);
         Ok(self.after_write(&call.namespace, response, &Change::Put(child)))
@@ -673,49 +674,24 @@ fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpRe
     json_response(&json, output, tag)
 }
 
-/// The refusal for data the tree did not accept: the position of the first key with a
-/// forbidden character when there is one, the generic parse error otherwise.
-fn data_refusal(body: &str, value: &Json) -> Refusal {
-    let mut keys = BTreeSet::new();
-    invalid_keys(value, &mut keys);
-    let position = keys.iter().filter_map(|key| key_position(body, key)).min();
-    match position {
-        Some((line, column)) => Refusal::bad(format!(
-            "Invalid data; couldn't parse key beginning at {line}:{column}. Key value can't be empty or contain $ # [ ] / or ."
+/// The refusal for data the tree did not accept: the position of the first key, in
+/// document order, with a forbidden character when there is one; the generic parse error
+/// otherwise (an empty key included, as the official emulator answers).
+fn data_refusal(body: &str) -> Refusal {
+    let keys = parse_with_keys(body)
+        .map(|(_, keys)| keys)
+        .unwrap_or_default();
+    let refused = keys.iter().find(|at| {
+        let special = matches!(at.key.as_str(), PRIORITY_KEY | VALUE_KEY | SERVER_VALUE_KEY);
+        !at.key.is_empty() && !special && validate_key(&at.key).is_err()
+    });
+    match refused {
+        Some(at) => Refusal::bad(format!(
+            "Invalid data; couldn't parse key beginning at {}:{}. Key value can't be empty or contain $ # [ ] / or .",
+            at.line, at.column
         )),
         None => Refusal::bad(PARSE_ERROR),
     }
-}
-
-fn invalid_keys(value: &Json, keys: &mut BTreeSet<String>) {
-    match value {
-        Json::Object(map) => {
-            for (key, child) in map {
-                let special = matches!(key.as_str(), PRIORITY_KEY | VALUE_KEY | SERVER_VALUE_KEY);
-                if !key.is_empty() && !special && validate_key(key).is_err() {
-                    keys.insert(key.clone());
-                }
-                invalid_keys(child, keys);
-            }
-        }
-        Json::Array(items) => items.iter().for_each(|item| invalid_keys(item, keys)),
-        _ => {}
-    }
-}
-
-/// The 1-based line and column of the first place `key` is written as an object key.
-fn key_position(body: &str, key: &str) -> Option<(usize, usize)> {
-    let token = serde_json::to_string(key).ok()?;
-    body.match_indices(&token).find_map(|(at, _)| {
-        let rest = body[at + token.len()..].trim_start();
-        if !rest.starts_with(':') {
-            return None;
-        }
-        let before = &body[..at];
-        let line = before.matches('\n').count() + 1;
-        let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-        Some((line, body[line_start..at].chars().count() + 1))
-    })
 }
 
 /// The entries of a `PATCH` body.

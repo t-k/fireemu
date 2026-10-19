@@ -179,3 +179,71 @@ fn pretty_output_follows_the_server_layout() {
     assert_eq!(render(&Json::Null, Style::Pretty), "null");
     assert_eq!(output_json(None, Format::Plain), Json::Null);
 }
+
+#[test]
+fn the_parser_follows_the_json_grammar() {
+    use fireemu_adapter_database::json_parse::parse_with_keys;
+    for bad in [
+        "01",
+        "1.",
+        ".5",
+        "-",
+        "1e",
+        "+1",
+        "[1,]",
+        "{\"a\":1,}",
+        "{a:1}",
+        "'a'",
+        "\"\\x\"",
+        "\"a\nb\"",
+        "nul",
+        "tru",
+        "[",
+        "{",
+        "\"\\ud83d\"",
+        "\"\\ud83dx\"",
+        "1e400",
+        "{\"a\" 1}",
+        "[1 2]",
+    ] {
+        assert!(parse(bad).is_err(), "{bad:?}");
+    }
+    assert_eq!(parse(" \t\r\n[ ]\n").unwrap(), Json::Array(vec![]));
+    assert_eq!(
+        parse(r#""\"\\\/\b\f\n\r\t\u00e9\ud83d\ude00""#).unwrap(),
+        Json::String("\"\\/\u{8}\u{c}\n\r\té\u{1F600}".to_owned())
+    );
+    assert_eq!(
+        parse(r#"{"a":1,"a":2}"#).unwrap(),
+        Json::object([("a", Json::int(2))])
+    );
+    assert_eq!(
+        parse("-9223372036854775808").unwrap(),
+        Json::Number(Number::Int(i64::MIN))
+    );
+    assert!(matches!(
+        parse("9223372036854775808").unwrap(),
+        Json::Number(Number::Double(_))
+    ));
+    assert!(
+        matches!(parse("2.5E-3").unwrap(), Json::Number(Number::Double(d)) if (d - 0.0025).abs() < 1e-18)
+    );
+    let deep = format!("{}{}", "[".repeat(600), "]".repeat(600));
+    assert!(parse(&deep).is_err());
+    let fine = format!("{}{}", "[".repeat(100), "]".repeat(100));
+    assert!(parse(&fine).is_ok());
+
+    let (_, keys) = parse_with_keys("{\"a\":{\n  \"bé\" : [ {\"c\":1} ] }}").unwrap();
+    let found: Vec<(String, usize, usize)> = keys
+        .into_iter()
+        .map(|k| (k.key, k.line, k.column))
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            ("a".to_owned(), 1, 2),
+            ("bé".to_owned(), 2, 3),
+            ("c".to_owned(), 2, 13)
+        ]
+    );
+}

@@ -6933,11 +6933,14 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     assert!(handle.await.unwrap_err().is_cancelled());
 }
 
-/// Inputs whose production result is unrecorded: the strict profile refuses them, the
-/// emulator profile answers what the official emulator (firebase-tools 15.28.2, Enterprise)
-/// answers (null for a document function of a missing or null value, the documents root for
-/// the parent of a top-level document) and refuses what it refuses (another type).
+/// Document functions: both profiles answer what production answered in FS-ENT-ORACLE O-1
+/// (null for `document_id` of a missing value, the documents root for the parent of a
+/// top-level document). Inputs whose production result is unrecorded are refused by strict;
+/// the emulator profile answers what the official emulator (firebase-tools 15.28.2,
+/// Enterprise) answers (null for `collection_id` of null) and refuses what it refuses
+/// (another type, as `INVALID_ARGUMENT`).
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
     let name = || pipeline_field("__name__");
     let select = || {

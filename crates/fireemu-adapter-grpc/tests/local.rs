@@ -11343,3 +11343,107 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
         handle.abort();
     }
 }
+
+/// The execution time is the input snapshot's read time: every response of one answer carries
+/// the read time a RunQuery reports at the same state (with a result, after a select, and on
+/// the empty answer), and a later snapshot answers a later time.
+#[tokio::test]
+async fn execute_pipeline_execution_time_is_the_snapshot_read_time() {
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (client, clock, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        let commit = |name: &'static str| {
+            let mut client = client.clone();
+            async move {
+                client
+                    .commit(pb::CommitRequest {
+                        database: DB.to_owned(),
+                        writes: vec![update_write(name, &[("n", i(1))])],
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .commit_time
+            }
+        };
+        let query_read_time = || {
+            let mut client = client.clone();
+            async move {
+                let mut stream = client
+                    .run_query(query("time", None))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut read_time = None;
+                while let Some(response) = stream.next().await {
+                    read_time = read_time.or(response.unwrap().read_time);
+                }
+                read_time.expect("RunQuery answers a read time")
+            }
+        };
+        let execution_times = |stages| {
+            let mut client = client.clone();
+            async move {
+                let mut stream = client
+                    .execute_pipeline(pipeline_request(stages))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut out = Vec::new();
+                while let Some(response) = stream.message().await.unwrap() {
+                    out.push(response.execution_time.expect("every response is timed"));
+                }
+                out
+            }
+        };
+        let answers = || async {
+            vec![
+                execution_times(vec![pipeline_stage("collection", s("time"))]).await,
+                execution_times(vec![
+                    pipeline_stage("collection", s("time")),
+                    pipeline_select("n"),
+                ])
+                .await,
+                execution_times(vec![pipeline_stage("collection", s("time-empty"))]).await,
+            ]
+        };
+        commit("time/a").await;
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(5))
+            .unwrap();
+        let first = query_read_time().await;
+        for times in answers().await {
+            assert!(!times.is_empty(), "{policy:?}");
+            assert!(
+                times.iter().all(|t| *t == first),
+                "{policy:?} {times:?} != {first:?}"
+            );
+        }
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(5))
+            .unwrap();
+        let written = commit("time/b").await.expect("commit time");
+        let second = query_read_time().await;
+        assert_ne!(second, first, "{policy:?}");
+        assert!(
+            (second.seconds, second.nanos) >= (written.seconds, written.nanos),
+            "{policy:?}"
+        );
+        for times in answers().await {
+            assert!(!times.is_empty(), "{policy:?}");
+            assert!(
+                times.iter().all(|t| *t == second),
+                "{policy:?} {times:?} != {second:?}"
+            );
+        }
+        handle.abort();
+    }
+}

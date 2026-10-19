@@ -1548,7 +1548,8 @@ impl RestState {
     /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does.
     /// An Enterprise database runs the pipeline through the same validation, compilation and
     /// executor as gRPC, over one snapshot of the input, and answers one array element per
-    /// result (`[{}]` when there is none). A refusal answers no partial results.
+    /// result (`[{executionTime}]` when there is none), each with the snapshot's read time as
+    /// `executionTime`. A refusal answers no partial results.
     fn execute_pipeline(
         &self,
         principal: &Caller,

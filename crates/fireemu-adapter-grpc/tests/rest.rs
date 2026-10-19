@@ -7284,3 +7284,102 @@ fn rest_execute_pipeline_results_carry_document_metadata_without_select() {
         assert!(body[0].get("results").is_none());
     }
 }
+
+/// Over REST the execution time is the input snapshot's read time: every element carries the
+/// `readTime` a runQuery reports at the same state, and a later snapshot answers a later time.
+/// A document with no fields comes back as GET answers it.
+#[test]
+fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
+    for strict in [true, false] {
+        let gateway = enterprise_state(strict, None).gateway.as_ref().clone();
+        let (s, clock) = state_with_gateway(gateway, None, TokenAcceptance::Verified);
+        let write = |path: &str, fields: Value| {
+            let (status, body) = call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/{path}"),
+                json!({"fields": fields}),
+            );
+            assert_eq!(status, 200, "{body}");
+            body
+        };
+        let query_read_time = || {
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:runQuery"),
+                json!({"structuredQuery": {"from": [{"collectionId": "time"}]}}),
+            );
+            assert_eq!(status, 200, "{body}");
+            body[0]["readTime"].as_str().unwrap().to_owned()
+        };
+        let execution_times = |stages: &Value| {
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                pipeline_body(stages),
+            );
+            assert_eq!(status, 200, "{body}");
+            body.as_array()
+                .unwrap()
+                .iter()
+                .map(|element| element["executionTime"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let answers = || {
+            [
+                json!([{"name": "collection", "args": [{"referenceValue": "/time"}]}]),
+                json!([
+                    {"name": "collection", "args": [{"referenceValue": "/time"}]},
+                    {"name": "select", "args": [{"mapValue": {"fields": {"n": {"fieldReferenceValue": "n"}}}}]},
+                ]),
+                json!([{"name": "collection", "args": [{"referenceValue": "/time-empty"}]}]),
+            ]
+            .iter()
+            .map(execution_times)
+            .collect::<Vec<_>>()
+        };
+        write("time/a", json!({"n": {"integerValue": "1"}}));
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(5))
+            .unwrap();
+        let first = query_read_time();
+        for times in answers() {
+            assert!(!times.is_empty(), "strict={strict}");
+            assert!(
+                times.iter().all(|t| *t == first),
+                "strict={strict} {times:?} != {first}"
+            );
+        }
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(5))
+            .unwrap();
+        let empty = write("time/b", json!({}));
+        let second = query_read_time();
+        assert_ne!(second, first, "strict={strict}");
+        for times in answers() {
+            assert!(!times.is_empty(), "strict={strict}");
+            assert!(
+                times.iter().all(|t| *t == second),
+                "strict={strict} {times:?} != {second}"
+            );
+        }
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            pipeline_body(&json!([
+                {"name": "collection", "args": [{"referenceValue": "/time"}]},
+                {"name": "offset", "args": [{"integerValue": "1"}]},
+            ])),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body[0]["results"], json!([empty]), "strict={strict}");
+        assert!(empty.get("fields").is_none(), "{empty}");
+    }
+}

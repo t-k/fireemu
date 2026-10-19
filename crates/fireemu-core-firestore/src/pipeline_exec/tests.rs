@@ -571,3 +571,84 @@ fn referenced_fields_cover_every_stage_once_a_select_narrows_the_row() {
     )])];
     assert_eq!(referenced_fields(&constant), Some(paths(&["__name__"])));
 }
+
+#[test]
+fn errors_and_functions_describe_themselves() {
+    let error = EvalError::Unobserved {
+        function: "parent",
+        reason: "a top-level document has no parent document",
+    };
+    assert_eq!(
+        error.to_string(),
+        "parent: a top-level document has no parent document; this behavior is not observed locally"
+    );
+    assert_eq!(
+        ExprError::Unsupported("function \"abs\" is unsupported locally".into()).to_string(),
+        "function \"abs\" is unsupported locally"
+    );
+    assert_eq!(
+        ExprError::Invalid("function \"equal\" takes 2 argument(s), got 1".into()).to_string(),
+        "function \"equal\" takes 2 argument(s), got 1"
+    );
+    let debug = format!("{:?}", function("document_id").unwrap());
+    assert!(
+        debug.contains("\"document_id\"") && debug.contains("arity: 1") && debug.contains("Value"),
+        "{debug}"
+    );
+    // Calls compare by function and arguments.
+    assert_eq!(
+        call("document_id", vec![field("__name__")]),
+        call("document_id", vec![field("__name__")])
+    );
+    assert_ne!(
+        call("document_id", vec![field("__name__")]),
+        call("collection_id", vec![field("__name__")])
+    );
+    assert_ne!(
+        call("document_id", vec![field("__name__")]),
+        call("document_id", vec![field("a")])
+    );
+}
+
+#[test]
+fn document_functions_name_why_an_input_is_unobserved() {
+    let r = row("c/x", &[("str", s("c/x"))]);
+    let reason = |name: &str, arg: Expr| match call(name, vec![arg]).eval(&r) {
+        Eval::Error(EvalError::Unobserved { function, reason }) => {
+            assert_eq!(function, name);
+            reason
+        }
+        other => panic!("{name}: {other:?}"),
+    };
+    for name in ["document_id", "collection_id", "parent"] {
+        assert_eq!(reason(name, field("missing")), "the argument is absent");
+        assert_eq!(
+            reason(name, field("str")),
+            "the argument is not a document reference"
+        );
+        assert_eq!(
+            reason(
+                name,
+                Expr::Constant(Value::Reference(
+                    "projects/p/databases/(default)/documents/c".into()
+                ))
+            ),
+            "the reference does not name a document"
+        );
+    }
+    assert_eq!(
+        reason("parent", field("__name__")),
+        "a top-level document has no parent document"
+    );
+    // A reference constant names its document.
+    assert_eq!(
+        call(
+            "document_id",
+            vec![Expr::Constant(Value::Reference(
+                "projects/p/databases/(default)/documents/o/z".into()
+            ))]
+        )
+        .eval(&r),
+        Eval::Value(s("z"))
+    );
+}

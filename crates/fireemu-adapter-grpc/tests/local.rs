@@ -6757,6 +6757,27 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         .into_iter()
         .collect()
     );
+    // A reference literal is a function argument.
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", s("nest")),
+                pipeline_select_map(vec![(
+                    "lit",
+                    pipeline_function("document_id", vec![reference("other/z")]),
+                )]),
+                pipeline_stage("limit", i(1)),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(
+        docs[0].fields,
+        [("lit".to_owned(), s("z"))].into_iter().collect()
+    );
     // document_id in a where condition, with offset and limit after it.
     let docs = drain_pipeline(
         client
@@ -6857,6 +6878,19 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         (
             "literal in select",
             vec![pipeline_select_map(vec![("n", s("x"))])],
+            unsupported,
+        ),
+        (
+            "reference literal in select",
+            vec![pipeline_select_map(vec![("n", reference("nest/a"))])],
+            unsupported,
+        ),
+        (
+            "equal in select with a malformed argument",
+            vec![pipeline_select_map(vec![(
+                "same",
+                pipeline_function("equal", vec![pipeline_field("a..b"), s("a")]),
+            )])],
             unsupported,
         ),
         (

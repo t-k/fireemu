@@ -175,6 +175,7 @@ fn both_profiles_answer_the_official_matrix() {
 /// The comparison answers FS-ENT-ORACLE O-1 recorded from production for its probe document
 /// (`fs-ent-pipeline/px1/select` and `/where`), under both profiles.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn both_profiles_answer_what_production_answered() {
     let r = row(vec![
         ("i".to_owned(), Value::Integer(1)),

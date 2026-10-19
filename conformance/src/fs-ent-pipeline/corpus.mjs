@@ -6,7 +6,7 @@
 // row is kept). The expressions are the ones the official emulator 1.22.0 was probed with, so
 // the production rows and the emulator's answers line up one to one.
 
-import { arr, bool, dbl, int, map, nan, nul, ref, str, ts } from "../fs-query-index/values.mjs";
+import { arr, bool, dbl, inf, int, map, nan, nul, ref, str, ts } from "../fs-query-index/values.mjs";
 
 // --- expression builders (proto3 JSON `Value`s) ---
 
@@ -307,6 +307,111 @@ const aliasProgram = {
   ].map(([label, aliases]) => step(label, pipeline(collection("al"), select(aliases)))),
 };
 
+// --- O-2 (2026-10-20): the select width limit and typed numbers ---
+
+/**
+ * One document of typed numbers. Seeded over REST, so a double stays a double whatever its
+ * value (`one` is the double 1.0, `nz` the double -0.0), unlike a JS number sent by the Admin
+ * SDK.
+ */
+export const NUMBER_DOC = {
+  i: int(1),
+  one: dbl(1),
+  iz: int(0),
+  dz: dbl(0),
+  nz: dbl("-0"),
+  i53: int("9007199254740992"),
+  d53: dbl(9007199254740992),
+  i53p: int("9007199254740993"),
+  imax: int("9223372036854775807"),
+  imin: int("-9223372036854775808"),
+  d63: dbl(2 ** 63),
+  inf: inf(),
+  ninf: inf(-1),
+  nan: nan(),
+};
+
+const num = (name) => fld(name);
+
+/** `[label, expression]` pairs over NUMBER_DOC evaluated with `select`. */
+export const NUMBER_EXPRESSIONS = [
+  ["equal-i-one", fn("equal", num("i"), num("one"))],
+  ["not-equal-i-one", fn("not_equal", num("i"), num("one"))],
+  ["less-than-i-one", fn("less_than", num("i"), num("one"))],
+  ["less-than-or-equal-i-one", fn("less_than_or_equal", num("i"), num("one"))],
+  ["equal-iz-dz", fn("equal", num("iz"), num("dz"))],
+  ["equal-dz-nz", fn("equal", num("dz"), num("nz"))],
+  ["less-than-nz-dz", fn("less_than", num("nz"), num("dz"))],
+  ["less-than-nz-iz", fn("less_than", num("nz"), num("iz"))],
+  ["greater-than-dz-nz", fn("greater_than", num("dz"), num("nz"))],
+  ["equal-i53-d53", fn("equal", num("i53"), num("d53"))],
+  ["less-than-d53-i53p", fn("less_than", num("d53"), num("i53p"))],
+  ["equal-imax-d63", fn("equal", num("imax"), num("d63"))],
+  ["less-than-imax-d63", fn("less_than", num("imax"), num("d63"))],
+  ["greater-than-d63-imax", fn("greater_than", num("d63"), num("imax"))],
+  ["less-than-ninf-imin", fn("less_than", num("ninf"), num("imin"))],
+  ["less-than-imax-inf", fn("less_than", num("imax"), num("inf"))],
+  ["equal-inf-inf", fn("equal", num("inf"), num("inf"))],
+  ["less-than-nan-ninf", fn("less_than", num("nan"), num("ninf"))],
+  ["equal-i-double-literal", fn("equal", num("i"), dbl(1))],
+  ["equal-one-int-literal", fn("equal", num("one"), int(1))],
+  ["equal-nz-zero-literal", fn("equal", num("nz"), int(0))],
+  ["equal-dz-negative-zero-literal", fn("equal", num("dz"), dbl("-0"))],
+  ["value-one", num("one")],
+  ["value-nz", num("nz")],
+  ["value-d53", num("d53")],
+  ["value-d63", num("d63")],
+  ["value-inf", num("inf")],
+  ["value-nan", num("nan")],
+  ["value-imin", num("imin")],
+];
+
+/** `[label, condition]` pairs over NUMBER_DOC evaluated with `where`. */
+export const NUMBER_CONDITIONS = [
+  ["equal-i-double-literal", fn("equal", num("i"), dbl(1))],
+  ["equal-one-int-literal", fn("equal", num("one"), int(1))],
+  ["equal-nz-zero-literal", fn("equal", num("nz"), int(0))],
+  ["less-than-nz-dz", fn("less_than", num("nz"), num("dz"))],
+];
+
+const numberProgram = {
+  id: "fs-ent-pipeline/o2/numbers",
+  seed: [["num/d", NUMBER_DOC]],
+  steps: [
+    ...NUMBER_EXPRESSIONS.map(([label, expr]) =>
+      step(label, pipeline(collection("num"), select({ v: expr }))),
+    ),
+    ...NUMBER_CONDITIONS.map(([label, condition]) =>
+      step(
+        `where-${label}`,
+        pipeline(
+          collection("num"),
+          stage("where", condition),
+          select({ id: fn("document_id", fld("__name__")) }),
+        ),
+      ),
+    ),
+  ],
+};
+
+/** A select stage of `n` aliases `a00`, `a01`, ... of the field `i`. */
+export const wideSelect = (n) =>
+  select(
+    Object.fromEntries(
+      Array.from({ length: n }, (_, k) => [`a${String(k).padStart(2, "0")}`, fld("i")]),
+    ),
+  );
+
+/** The official emulator answers at most 64 select fields per stage; production is unobserved. */
+const widthProgram = {
+  id: "fs-ent-pipeline/o2/select-width",
+  seed: [["wide/d", { i: int(1) }]],
+  steps: [64, 65].flatMap((n) => [
+    step(`select-${n}`, pipeline(collection("wide"), wideSelect(n))),
+    grpcStep(`select-${n}-grpc`, pipeline(collection("wide"), wideSelect(n))),
+  ]),
+};
+
 export const PROGRAMS = [
   expressionProgram,
   whereProgram,
@@ -314,4 +419,6 @@ export const PROGRAMS = [
   resultProgram,
   orderProgram,
   aliasProgram,
+  numberProgram,
+  widthProgram,
 ];

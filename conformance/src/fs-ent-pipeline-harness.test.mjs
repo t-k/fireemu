@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  NUMBER_CONDITIONS,
+  NUMBER_DOC,
+  NUMBER_EXPRESSIONS,
   PROGRAMS,
   PROBE_DOC,
   SELECT_EXPRESSIONS,
@@ -64,7 +67,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 162);
+  assert.equal(requests, 199);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline"]);
   // The only writes are the order program's single-document commits into `ord`.
@@ -76,13 +79,69 @@ test("the corpus validates, stays within its budget and only reads pipelines or 
     }
   }
   const labels = (pairs) => pairs.map(([label]) => label);
-  for (const pairs of [SELECT_EXPRESSIONS, WHERE_CONDITIONS, STATIC_REFUSALS]) {
+  for (const pairs of [
+    SELECT_EXPRESSIONS,
+    WHERE_CONDITIONS,
+    STATIC_REFUSALS,
+    NUMBER_EXPRESSIONS,
+    NUMBER_CONDITIONS,
+  ]) {
     assert.equal(new Set(labels(pairs)).size, pairs.length);
     for (const label of labels(pairs)) assert.match(label, /^[a-z0-9-]+$/);
   }
   // The probe document never holds a run-window time and never sets `x`.
   assert.equal(PROBE_DOC.x, undefined);
   assert.equal(PROBE_DOC.ts.timestampValue.startsWith("2020-"), true);
+});
+
+test("O-2 records typed numbers and the select width alone, leaving the O-1 programs as they were", async () => {
+  const { programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
+  const o2 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o2/");
+  assert.deepEqual(
+    o2.map((p) => p.id),
+    ["fs-ent-pipeline/o2/numbers", "fs-ent-pipeline/o2/select-width"],
+  );
+  assert.equal(
+    o2.reduce((n, p) => n + p.steps.length, 0),
+    37,
+  );
+  // The O-1 programs keep the digests their production rows were recorded under.
+  const recorded = JSON.parse(
+    await (await import("node:fs/promises")).readFile(
+      new URL("../fs-ent-pipeline-production.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const o1 = PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o2/"));
+  assert.equal(o1.length, 6);
+  for (const program of o1) {
+    assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
+  }
+  // Doubles are written as doubles, whatever their value.
+  assert.deepEqual(NUMBER_DOC.one, { doubleValue: 1 });
+  assert.deepEqual(NUMBER_DOC.dz, { doubleValue: 0 });
+  assert.deepEqual(NUMBER_DOC.nz, { doubleValue: "-0" });
+  assert.deepEqual(NUMBER_DOC.d63, { doubleValue: 2 ** 63 });
+  assert.equal(JSON.parse(JSON.stringify(NUMBER_DOC.d63)).doubleValue, 9223372036854775808);
+  assert.deepEqual(NUMBER_DOC.i53p, { integerValue: "9007199254740993" });
+  assert.deepEqual(NUMBER_DOC.inf, { doubleValue: "Infinity" });
+  // The width steps select exactly 64 and 65 distinct aliases, over REST and gRPC.
+  const width = o2[1];
+  assert.deepEqual(
+    width.steps.map((step) => [step.id, step.transport ?? "rest"]),
+    [
+      ["select-64", "rest"],
+      ["select-64-grpc", "grpc"],
+      ["select-65", "rest"],
+      ["select-65-grpc", "grpc"],
+    ],
+  );
+  for (const step of width.steps) {
+    const stages = step.body.structuredPipeline.pipeline.stages;
+    const aliases = Object.keys(stages[1].args[0].mapValue.fields);
+    assert.equal(aliases.length, step.id.startsWith("select-64") ? 64 : 65, step.id);
+    assert.equal(new Set(aliases).size, aliases.length);
+  }
 });
 
 test("every step stays in the named database on both transports", () => {

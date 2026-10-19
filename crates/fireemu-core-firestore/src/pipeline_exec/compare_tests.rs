@@ -88,7 +88,6 @@ fn the_table_lists_the_comparisons_and_literals() {
         let f = function(name).unwrap();
         assert_eq!(f.arity, Arity::Exact(2), "{name}");
         assert!(f.returns_boolean, "{name}");
-        assert_eq!(f.placement, Placement::Value, "{name}");
     }
     assert_eq!(function("array").unwrap().arity, Arity::Any);
     assert_eq!(function("map").unwrap().arity, Arity::Pairs);
@@ -139,53 +138,266 @@ fn the_emulator_profile_answers_the_official_matrix() {
     }
 }
 
-/// Strict answers only what classic queries already decide, and then what the official
-/// emulator answers; everything else is unobserved.
+/// The literal classes of the matrix strict may compare a field with: scalars (array and map
+/// literals are refused before any row is read).
+const SCALAR_LITERALS: [&str; 13] = [
+    "n", "nan", "i", "i2", "d5", "one", "nz", "s", "s2", "b", "bf", "ts", "ts2",
+];
+
+fn literal(name: &str) -> Expr {
+    Expr::Constant(operand(name).unwrap())
+}
+
+fn condition(op: &str, args: Vec<Expr>) -> Expr {
+    Expr::call(op, args, Placement::Condition).unwrap()
+}
+
+/// How strict answers one cell: refused, or the rows that come out.
+fn strict_cell(stage: Stage) -> Option<Vec<BTreeMap<String, Value>>> {
+    execute_in(vec![stage], [matrix_row()], Unrecorded::Refuse).ok()
+}
+
+/// How strict answers one `where` cell: refused, or whether the row is kept (the row holds
+/// NaN, which compares unequal to itself, so the rows are counted).
+fn strict_kept(condition: Expr) -> Option<bool> {
+    strict_cell(Stage::Where(condition)).map(|out| !out.is_empty())
+}
+
+fn matrix_cell(op: &str, left: &str, right: &str) -> bool {
+    let (_, rows) = MATRIX.iter().find(|(name, _)| *name == op).unwrap();
+    let index = |name: &str| OPERANDS.iter().position(|o| *o == name).unwrap();
+    rows[index(left)].as_bytes()[index(right)] == b'T'
+}
+
+/// Strict compares a field with a scalar literal and answers the official matrix's cell
+/// exactly where classic queries decide the same way:
+/// - as the whole `where` condition (either operand order), an equality always (classic `==`,
+///   `IS_NULL`, `IS_NAN`), and the other comparisons for two operands of one kind that are
+///   neither null nor NaN; a missing field drops the row except under `not_equal`;
+/// - as a `select` value, two present operands of one kind that are neither null nor NaN.
+///
+/// Every other cell is refused (comparisons across kinds, null or NaN outside a `where`
+/// equality, a missing field outside the `where` rule).
 #[test]
-fn strict_answers_a_subset_of_the_official_matrix() {
+fn strict_answers_field_versus_literal_cells_of_the_official_matrix() {
     let r = matrix_row();
-    for (op, rows) in MATRIX {
-        for (li, left) in OPERANDS.iter().enumerate() {
-            for (ri, right) in OPERANDS.iter().enumerate() {
-                let expected = rows[li].as_bytes()[ri] == b'T';
-                let got = call(op, vec![field(left), field(right)]).eval_in(&r, Unrecorded::Refuse);
-                let absent = *left == "x" || *right == "x";
-                let special = |name: &str| name == "n" || name == "nan";
-                let refused = absent || (op != "equal" && (special(left) || special(right)));
-                if refused {
-                    assert!(unobserved(&got), "{op}({left}, {right}) = {got:?}");
+    let special = |name: &str| name == "n" || name == "nan";
+    for op in OPS {
+        for left in OPERANDS {
+            for right in SCALAR_LITERALS {
+                let stored = r.fields.get(left);
+                let lit = operand(right).unwrap();
+                let same_kind = stored.is_some_and(|v| v.kind() == lit.kind());
+                let comparable = same_kind && !special(right);
+                let where_answers = !(special(right) && op != "equal")
+                    && match stored {
+                        None => op != "not_equal",
+                        Some(_) => op == "equal" || comparable,
+                    };
+                let kept = |cell: bool| Some(stored.is_some() && cell);
+                let got = strict_kept(condition(op, vec![field(left), literal(right)]));
+                let expected = if where_answers {
+                    kept(matrix_cell(op, left, right))
                 } else {
-                    assert_eq!(got, boolean(expected), "{op}({left}, {right})");
-                }
+                    None
+                };
+                assert_eq!(got, expected, "where {op}({left}, {right})");
+                let got = strict_kept(condition(op, vec![literal(right), field(left)]));
+                let expected = if where_answers {
+                    kept(matrix_cell(op, right, left))
+                } else {
+                    None
+                };
+                assert_eq!(got, expected, "where {op}({right}, {left})");
+                let alias = FieldPath::parse("v").unwrap();
+                let got = strict_cell(Stage::Select(vec![(
+                    alias,
+                    call(op, vec![field(left), literal(right)]),
+                )]));
+                let expected = comparable.then(|| {
+                    vec![[("v".to_owned(), Value::Boolean(matrix_cell(op, left, right)))].into()]
+                });
+                assert_eq!(got, expected, "select {op}({left}, {right})");
             }
         }
     }
 }
 
-/// At the top of a where condition, strict drops a row whose comparison has one absent operand
-/// (classic queries never match a missing field, and the official answer, false, drops it
-/// too), except for `not_equal`, where the official emulator keeps the row and classic
-/// `!=` drops it.
+/// At the top of a where condition, strict drops a row whose field is missing (classic queries
+/// never match a missing field, and the official answer, false, drops it too), except for
+/// `not_equal`, where the official emulator keeps the row and classic `!=` drops it.
 #[test]
 fn strict_drops_one_absent_operand_at_the_top_of_where() {
     let r = row(vec![("i".to_owned(), Value::Integer(1))]);
+    let one = || Expr::Constant(Value::Integer(1));
     for op in OPS {
-        let one_absent = call(op, vec![field("x"), field("i")]);
+        let one_absent = call(op, vec![field("x"), one()]);
         let got = one_absent.eval_condition_in(&r, Unrecorded::Refuse);
         if op == "not_equal" {
             assert!(unobserved(&got), "{op}");
         } else {
             assert_eq!(got, Eval::Absent, "{op}");
         }
-        // Both absent is no classic shape.
-        assert!(unobserved(
-            &call(op, vec![field("x"), field("y")]).eval_condition_in(&r, Unrecorded::Refuse)
-        ));
         // Below the top, absence is unobserved.
         assert!(
             unobserved(&one_absent.eval_in(&r, Unrecorded::Refuse)),
             "{op}"
         );
+        // Two fields are no classic shape.
+        assert!(
+            execute_in(
+                vec![Stage::Where(condition(op, vec![field("x"), field("y")]))],
+                [r.clone()],
+                Unrecorded::Refuse
+            )
+            .is_err(),
+            "{op}"
+        );
+    }
+}
+
+fn select(expr: Expr) -> Stage {
+    Stage::Select(vec![(FieldPath::parse("v").unwrap(), expr)])
+}
+
+/// Strict refuses, before reading any row, every shape a classic query cannot express or may
+/// decide differently: comparisons of two fields or two literals, comparisons below another
+/// function or of a document function other than the finite subset's equality, array and
+/// map literals and constructions, and null or NaN outside a `where` equality. The emulator
+/// profile answers them all.
+#[test]
+fn strict_refuses_shapes_classic_queries_cannot_express() {
+    let c = |v: Value| Expr::Constant(v);
+    let id = || call("document_id", vec![field("__name__")]);
+    let array_literal = |n| c(Value::Array(vec![Value::Integer(n)]));
+    let refused = [
+        Stage::Where(condition(
+            "less_than",
+            vec![c(s("a")), c(Value::Integer(1))],
+        )),
+        Stage::Where(condition(
+            "less_than",
+            vec![array_literal(1), array_literal(2)],
+        )),
+        Stage::Where(condition("equal", vec![field("a"), field("b")])),
+        Stage::Where(condition("equal", vec![field("a"), array_literal(1)])),
+        Stage::Where(condition(
+            "equal",
+            vec![field("a"), call("array", vec![field("b")])],
+        )),
+        Stage::Where(condition("less_than", vec![field("a"), c(Value::Null)])),
+        Stage::Where(condition(
+            "greater_than",
+            vec![c(Value::Double(f64::NAN)), field("a")],
+        )),
+        Stage::Where(condition("less_than", vec![id(), c(s("b"))])),
+        Stage::Where(condition(
+            "equal",
+            vec![
+                call("equal", vec![field("a"), c(Value::Integer(1))]),
+                c(Value::Boolean(true)),
+            ],
+        )),
+        Stage::Where(condition(
+            "equal",
+            vec![
+                field("a"),
+                c(Value::Map([("k".to_owned(), Value::Integer(1))].into())),
+            ],
+        )),
+        Stage::Where(condition(
+            "equal",
+            vec![field("a"), c(Value::Vector(vec![1.0]))],
+        )),
+        select(call("equal", vec![field("n"), c(Value::Null)])),
+        select(call("equal", vec![field("n"), c(Value::Double(f64::NAN))])),
+        select(call("equal", vec![field("a"), field("b")])),
+        select(call(
+            "equal",
+            vec![c(Value::Integer(1)), c(Value::Integer(1))],
+        )),
+        select(call("equal", vec![id(), c(s("b"))])),
+        select(call("less_than", vec![array_literal(1), field("a")])),
+        select(call("array", vec![field("a")])),
+        select(call("map", vec![c(s("k")), field("a")])),
+        select(call(
+            "equal",
+            vec![
+                call("less_than", vec![field("a"), c(Value::Integer(1))]),
+                c(Value::Boolean(true)),
+            ],
+        )),
+    ];
+    let r = row(vec![
+        ("a".to_owned(), Value::Integer(1)),
+        ("b".to_owned(), Value::Integer(1)),
+        ("n".to_owned(), Value::Null),
+    ]);
+    for stage in refused {
+        let got = execute_in(vec![stage.clone()], [r.clone()], Unrecorded::Refuse);
+        assert!(
+            matches!(got, Err(EvalError::Unobserved { .. })),
+            "{stage:?}: {got:?}"
+        );
+        // The check runs before any row is read.
+        assert!(
+            execute_in(vec![stage.clone()], [], Unrecorded::Refuse).is_err(),
+            "{stage:?}"
+        );
+        assert!(
+            execute_in(
+                vec![stage.clone()],
+                [r.clone()],
+                Unrecorded::OfficialEmulator
+            )
+            .is_ok(),
+            "{stage:?}"
+        );
+    }
+    let answered = [
+        Stage::Where(condition("equal", vec![id(), c(s("d"))])),
+        Stage::Where(condition("equal", vec![c(s("d")), id()])),
+        Stage::Where(condition(
+            "less_than",
+            vec![c(Value::Integer(0)), field("a")],
+        )),
+        Stage::Where(condition("equal", vec![field("n"), c(Value::Null)])),
+        Stage::Where(condition(
+            "equal",
+            vec![field("a"), c(Value::Double(f64::NAN))],
+        )),
+        Stage::Where(condition(
+            "not_equal",
+            vec![field("a"), c(Value::Integer(2))],
+        )),
+        Stage::Select(vec![
+            (FieldPath::parse("f").unwrap(), field("a")),
+            (FieldPath::parse("id").unwrap(), id()),
+            (
+                FieldPath::parse("up").unwrap(),
+                call(
+                    "collection_id",
+                    vec![call("parent", vec![field("__name__")])],
+                ),
+            ),
+            (
+                FieldPath::parse("lt").unwrap(),
+                call("less_than", vec![c(Value::Double(0.5)), field("a")]),
+            ),
+        ]),
+    ];
+    let nested = Row {
+        path: DocumentPath::parse(
+            &ProjectId::try_new("p").unwrap(),
+            &DatabaseId::try_new("(default)").unwrap(),
+            "c/d/e/f",
+        )
+        .unwrap(),
+        fields: r.fields.clone(),
+    };
+    for stage in answered {
+        let got = execute_in(vec![stage.clone()], [nested.clone()], Unrecorded::Refuse);
+        assert!(got.is_ok(), "{stage:?}: {got:?}");
     }
 }
 
@@ -331,22 +543,76 @@ fn comparisons_in_where_and_select() {
     }
 }
 
-fn value() -> impl Strategy<Value = Option<Value>> {
-    let scalar = prop_oneof![
+/// Scalars of every kind, with the integer and double boundaries near 2^53 and 2^63, both
+/// zeros, both infinities, references of different depths and collections, bytes and geo
+/// points.
+fn scalar() -> impl Strategy<Value = Value> {
+    const TWO_53: i64 = 1 << 53;
+    let reference =
+        |path: &str| Value::Reference(format!("projects/p/databases/(default)/documents/{path}"));
+    prop_oneof![
         Just(Value::Null),
         any::<bool>().prop_map(Value::Boolean),
-        (-2_i64..3).prop_map(Value::Integer),
-        prop_oneof![Just(f64::NAN), Just(-0.0), Just(0.0), Just(1.0), Just(1.5)]
-            .prop_map(Value::Double),
-        "[ab]{0,2}".prop_map(Value::String),
-        (0_i64..2).prop_map(|seconds| Value::Timestamp(Timestamp::new(seconds, 0).unwrap())),
-    ];
-    let value = scalar.prop_recursive(2, 8, 3, |inner| {
         prop_oneof![
-            prop::collection::vec(inner.clone(), 0..3).prop_map(Value::Array),
-            prop::collection::btree_map("[ab]", inner, 0..2).prop_map(Value::Map),
+            -2_i64..3,
+            Just(TWO_53 - 1),
+            Just(TWO_53),
+            Just(TWO_53 + 1),
+            Just(-TWO_53),
+            Just(i64::MAX),
+            Just(i64::MIN),
         ]
-    });
+        .prop_map(Value::Integer),
+        prop_oneof![
+            Just(f64::NAN),
+            Just(-0.0),
+            Just(0.0),
+            Just(1.0),
+            Just(1.5),
+            Just(f64::INFINITY),
+            Just(f64::NEG_INFINITY),
+            Just(9_007_199_254_740_992.0),
+            Just(9_007_199_254_740_994.0),
+            Just(9_223_372_036_854_775_808.0),
+            Just(-9_223_372_036_854_775_808.0),
+        ]
+        .prop_map(Value::Double),
+        "[ab]{0,2}".prop_map(Value::String),
+        prop::collection::vec(prop_oneof![Just(0_u8), Just(1), Just(255)], 0..3)
+            .prop_map(Value::Bytes),
+        prop_oneof![
+            Just(reference("c/a")),
+            Just(reference("c/b")),
+            Just(reference("c/a/d/x")),
+            Just(reference("d/a")),
+        ],
+        prop_oneof![
+            Just((0.0, 0.0)),
+            Just((0.0, 1.0)),
+            Just((1.0, 0.0)),
+            Just((-1.0, 0.0))
+        ]
+        .prop_map(|(lat, lng)| Value::GeoPoint(crate::value::GeoPoint::new(lat, lng).unwrap())),
+        ((0_i64..2), prop_oneof![Just(0_u32), Just(1_000)])
+            .prop_map(|(seconds, nanos)| Value::Timestamp(Timestamp::new(seconds, nanos).unwrap())),
+    ]
+}
+
+/// A storable value, or absent: a scalar of every kind, or arrays and maps nested to depth 2
+/// holding them (an array never directly holds an array, as Firestore requires).
+fn value() -> impl Strategy<Value = Option<Value>> {
+    let array =
+        |inner: BoxedStrategy<Value>| prop::collection::vec(inner, 0..3).prop_map(Value::Array);
+    let map = |inner: BoxedStrategy<Value>| {
+        prop::collection::btree_map("[ab]", inner, 0..2).prop_map(Value::Map)
+    };
+    let inner_map = map(scalar().boxed());
+    let inner_array = array(scalar().boxed());
+    let value = prop_oneof![
+        4 => scalar(),
+        1 => array(prop_oneof![3 => scalar(), 1 => inner_map].boxed()),
+        1 => map(prop_oneof![3 => scalar(), 1 => inner_array.clone(), 1 => map(scalar().boxed())].boxed()),
+    ];
     prop::option::weighted(0.85, value)
 }
 
@@ -368,40 +634,117 @@ fn official(op: &str, a: Option<&Value>, b: Option<&Value>) -> bool {
     }
 }
 
-/// The classic answer of `field op literal` (a missing field never matches, null and NaN only
-/// through `IS_NULL` / `IS_NAN` equality, ranges only within one type), where classic queries have
-/// one.
-fn classic(op: &str, field: Option<&Value>, literal: &Value) -> Option<bool> {
-    let nan = |v: &Value| matches!(v, Value::Double(d) if d.is_nan());
-    let field = field?;
-    if op == "equal" {
-        return Some(values_equal(field, literal));
+fn document(index: usize) -> DocumentPath {
+    DocumentPath::parse(
+        &ProjectId::try_new("p").unwrap(),
+        &DatabaseId::try_new("(default)").unwrap(),
+        &format!("c/d{index}"),
+    )
+    .unwrap()
+}
+
+/// The documents of `stored` (field `f`, missing when `None`; field `k` numbers them).
+fn documents(stored: &[Option<Value>]) -> Vec<Row> {
+    stored
+        .iter()
+        .enumerate()
+        .map(|(index, value)| Row {
+            path: document(index),
+            fields: value
+                .iter()
+                .map(|v| ("f".to_owned(), v.clone()))
+                .chain([("k".to_owned(), Value::Integer(index as i64))])
+                .collect(),
+        })
+        .collect()
+}
+
+/// Which of the documents a classic query `f op literal` returns, through the store's
+/// `RunQuery` path (null and NaN equalities as the SDKs send them, `IS_NULL` / `IS_NAN` and
+/// their negations), or `None` when the store refuses the query.
+fn classic_keeps(op: &str, stored: &[Option<Value>], literal: &Value) -> Option<Vec<i64>> {
+    use crate::query::{FieldOp, FilterExpr, Query, QueryScope, UnaryOp};
+    use crate::store::{FirestoreState, Write, WriteOp};
+    use fireemu_core_types::ids::CollectionId;
+    use fireemu_core_types::time::LogicalInstant;
+    let mut state = FirestoreState::new();
+    for (index, row) in documents(stored).into_iter().enumerate() {
+        state
+            .commit(
+                &[Write {
+                    op: WriteOp::Set {
+                        path: row.path,
+                        fields: row.fields,
+                        update_mask: None,
+                    },
+                    precondition: None,
+                    transforms: vec![],
+                }],
+                None,
+                LogicalInstant::from_unix_seconds(1_000 + index as i64),
+            )
+            .unwrap();
     }
-    if matches!(field, Value::Null) || matches!(literal, Value::Null) || nan(field) || nan(literal)
-    {
-        return None;
+    let f = FieldPath::parse("f").unwrap();
+    let nan = matches!(literal, Value::Double(d) if d.is_nan());
+    let unary = |op| FilterExpr::Unary {
+        field: f.clone(),
+        op,
+    };
+    let filter = match (op, literal) {
+        ("equal", Value::Null) => unary(UnaryOp::IsNull),
+        ("equal", _) if nan => unary(UnaryOp::IsNan),
+        ("not_equal", Value::Null) => unary(UnaryOp::IsNotNull),
+        ("not_equal", _) if nan => unary(UnaryOp::IsNotNan),
+        _ => FilterExpr::Field {
+            field: f.clone(),
+            op: match op {
+                "equal" => FieldOp::Equal,
+                "not_equal" => FieldOp::NotEqual,
+                "less_than" => FieldOp::LessThan,
+                "less_than_or_equal" => FieldOp::LessThanOrEqual,
+                "greater_than" => FieldOp::GreaterThan,
+                _ => FieldOp::GreaterThanOrEqual,
+            },
+            value: literal.clone(),
+        },
+    };
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("c").unwrap(),
+    ))
+    .with_filter(filter)
+    .canonicalize()
+    .ok()?;
+    let kept = state.run_query(&query, None).ok()?;
+    Some(
+        kept.iter()
+            .map(|document| match document.fields["k"] {
+                Value::Integer(k) => k,
+                ref other => panic!("{other:?}"),
+            })
+            .collect(),
+    )
+}
+
+/// The mirror of a comparison (`literal op field` is `field mirror(op) literal`).
+fn mirror(op: &str) -> &str {
+    match op {
+        "less_than" => "greater_than",
+        "less_than_or_equal" => "greater_than_or_equal",
+        "greater_than" => "less_than",
+        "greater_than_or_equal" => "less_than_or_equal",
+        other => other,
     }
-    if op == "not_equal" {
-        return Some(!values_equal(field, literal));
-    }
-    if field.kind() != literal.kind() {
-        return Some(false);
-    }
-    let order = field.canonical_cmp(literal);
-    Some(match op {
-        "less_than" => order == Ordering::Less,
-        "less_than_or_equal" => order != Ordering::Greater,
-        "greater_than" => order == Ordering::Greater,
-        _ => order != Ordering::Less,
-    })
 }
 
 proptest! {
     /// The official order: not_equal is the negation of equal, the inclusive comparisons are
-    /// the strict ones or equality, greater is the mirror of less, and less is antisymmetric.
+    /// the strict ones or equality, greater is the mirror of less, less is antisymmetric, and
+    /// less and equal are transitive.
     #[test]
-    fn the_official_comparisons_are_one_order(a in value(), b in value()) {
-        let (a, b) = (a.as_ref(), b.as_ref());
+    fn the_official_comparisons_are_one_order(a in value(), b in value(), c in value()) {
+        let (a, b, c) = (a.as_ref(), b.as_ref(), c.as_ref());
         let eq = official("equal", a, b);
         prop_assert_eq!(official("equal", b, a), eq);
         prop_assert_eq!(official("not_equal", a, b), !eq);
@@ -412,45 +755,47 @@ proptest! {
         prop_assert!(!(lt && official("less_than", b, a)));
         prop_assert!(!(lt && eq));
         prop_assert!(official("equal", a, a));
-    }
-
-    /// Whenever strict answers, it answers what the official emulator answers.
-    #[test]
-    fn strict_answers_agree_with_the_official_emulator(a in value(), b in value()) {
-        for op in OPS {
-            match eval_op(op, a.as_ref(), b.as_ref(), Unrecorded::Refuse) {
-                Eval::Value(Value::Boolean(v)) => prop_assert_eq!(v, official(op, a.as_ref(), b.as_ref()), "{}", op),
-                Eval::Error(EvalError::Unobserved { .. }) => {}
-                other => prop_assert!(false, "{op}: {other:?}"),
-            }
+        if lt && official("less_than", b, c) {
+            prop_assert!(official("less_than", a, c));
+        }
+        if eq && official("equal", b, c) {
+            prop_assert!(official("equal", a, c));
+        }
+        if lt && official("equal", b, c) {
+            prop_assert!(official("less_than", a, c));
         }
     }
 
-    /// At the top of a where, strict keeps exactly the rows classic queries keep for
-    /// `field op literal`, wherever classic queries have an answer and strict answers.
+    /// As the whole where condition, strict keeps exactly the documents the store's classic
+    /// query keeps for `field op literal` (and for the mirrored `literal op field`), missing
+    /// fields included; it refuses exactly when a document falls outside the shapes it answers.
     #[test]
-    fn strict_where_matches_classic_queries(stored in value(), literal in value().prop_filter("a literal is present", Option::is_some)) {
-        let literal = literal.unwrap();
+    fn strict_where_matches_classic_queries(
+        stored in prop::collection::vec(value(), 0..5),
+        literal in scalar(),
+    ) {
+        let rows = documents(&stored);
+        let special = |v: &Value| matches!(v.kind(), ValueKind::Null | ValueKind::Nan);
         for op in OPS {
-            let mut fields = Vec::new();
-            if let Some(v) = &stored {
-                fields.push(("f".to_owned(), v.clone()));
-            }
-            let got = Expr::call(op, vec![field("f"), Expr::Constant(literal.clone())], Placement::Condition)
-                .unwrap()
-                .eval_condition_in(&row(fields), Unrecorded::Refuse);
-            let kept = match got {
-                Eval::Value(Value::Boolean(v)) => Some(v),
-                Eval::Absent => Some(false),
-                Eval::Error(EvalError::Unobserved { .. }) => None,
-                other => { prop_assert!(false, "{op}: {other:?}"); None }
-            };
-            if let (Some(kept), Some(expected)) = (kept, classic(op, stored.as_ref(), &literal)) {
-                prop_assert_eq!(kept, expected, "{}", op);
-            }
-            // Strict answers every equality classic queries answer.
-            if op == "equal" && stored.is_some() {
-                prop_assert!(kept.is_some());
+            let answerable = !(special(&literal) && op != "equal")
+                && stored.iter().all(|value| match value {
+                    None => op != "not_equal",
+                    Some(v) => op == "equal" || (v.kind() == literal.kind() && !special(v)),
+                });
+            for (args, classic_op) in [
+                (vec![field("f"), Expr::Constant(literal.clone())], op),
+                (vec![Expr::Constant(literal.clone()), field("f")], mirror(op)),
+            ] {
+                let got = execute_in(vec![Stage::Where(condition(op, args))], rows.clone(), Unrecorded::Refuse);
+                prop_assert_eq!(got.is_ok(), answerable, "{} {:?}", op, got);
+                if let Ok(out) = got {
+                    let kept: Vec<i64> = out
+                        .iter()
+                        .map(|fields| match fields["k"] { Value::Integer(k) => k, _ => -1 })
+                        .collect();
+                    let classic = classic_keeps(classic_op, &stored, &literal);
+                    prop_assert_eq!(Some(kept), classic, "{}", op);
+                }
             }
         }
     }

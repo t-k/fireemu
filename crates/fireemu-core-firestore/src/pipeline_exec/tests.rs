@@ -68,14 +68,8 @@ fn table_lists_exactly_the_px1a_functions() {
         ]
     );
     assert_eq!(function("equal").unwrap().arity, Arity::Exact(2));
-    assert_eq!(function("equal").unwrap().placement, Placement::Value);
     for name in ["document_id", "collection_id", "parent"] {
         assert_eq!(function(name).unwrap().arity, Arity::Exact(1), "{name}");
-        assert_eq!(
-            function(name).unwrap().placement,
-            Placement::Value,
-            "{name}"
-        );
     }
     for name in ["eq", "between", "abs", "and", "", "Equal"] {
         assert!(function(name).is_none(), "{name}");
@@ -231,7 +225,11 @@ fn equal_is_three_valued() {
         "c/x",
         &[("n", Value::Integer(7)), ("nan", Value::Double(f64::NAN))],
     );
-    let eq = |a: Expr, b: Expr| condition("equal", vec![a, b]).eval(&r);
+    // As the whole where condition, strict answers an equality of a field and a literal of
+    // any kind (classic `==`, `IS_NULL`, `IS_NAN`).
+    let eq =
+        |a: Expr, b: Expr| condition("equal", vec![a, b]).eval_condition_in(&r, Unrecorded::Refuse);
+    let below = |a: Expr, b: Expr| condition("equal", vec![a, b]).eval(&r);
     let k = |v: Value| Expr::Constant(v);
     assert_eq!(
         eq(field("n"), k(Value::Integer(7))),
@@ -262,7 +260,14 @@ fn equal_is_three_valued() {
         |a: Expr, b: Expr| condition("equal", vec![a, b]).eval_condition_in(&r, Unrecorded::Refuse);
     assert_eq!(top(field("missing"), k(Value::Integer(7))), Eval::Absent);
     assert_eq!(top(k(Value::Integer(7)), field("missing")), Eval::Absent);
-    assert!(unobserved(&eq(field("missing"), k(Value::Integer(7)))));
+    assert!(unobserved(&below(field("missing"), k(Value::Integer(7)))));
+    // Below the top, strict answers only operands of one kind that are neither null nor NaN.
+    assert_eq!(
+        below(field("n"), k(Value::Double(7.0))),
+        Eval::Value(Value::Boolean(true))
+    );
+    assert!(unobserved(&below(field("n"), k(s("7")))));
+    assert!(unobserved(&below(field("nan"), k(Value::Double(f64::NAN)))));
     // An error wins over absent and values, on either side.
     let error = call("parent", vec![field("__name__")]);
     assert!(unobserved(&eq(error.clone(), k(Value::Integer(7)))));
@@ -432,7 +437,10 @@ fn execute_stops_reading_after_the_limit() {
     );
     let guarded = vec![
         Stage::Limit(2),
-        Stage::Where(condition("equal", vec![field("i"), field("i")])),
+        Stage::Where(condition(
+            "greater_than_or_equal",
+            vec![field("i"), Expr::Constant(Value::Integer(0))],
+        )),
     ];
     assert_eq!(ids(&execute(guarded, input.clone()).unwrap()), [0, 1]);
     assert!(execute(vec![Stage::Where(error)], input).is_err());
@@ -613,7 +621,7 @@ fn errors_and_functions_describe_themselves() {
     assert!(
         debug.contains("\"document_id\"")
             && debug.contains("arity: Exact(1)")
-            && debug.contains("Value"),
+            && debug.contains("returns_boolean: false"),
         "{debug}"
     );
     // Calls compare by function and arguments.

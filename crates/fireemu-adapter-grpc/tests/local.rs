@@ -7193,11 +7193,13 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
     }
 }
 
-/// `PX1a`: the six comparisons stand in where and select with literals on either side, and
-/// array and map literals compare deeply. Inputs whose production answer is unrecorded (an
-/// absent operand below the top of a where, a null operand of an ordering, an absent array
-/// element) are refused by strict and answered as the official emulator answers them by the
-/// emulator profile.
+/// `PX1a`: the six comparisons of a field and a literal (either side) stand in where and
+/// select under both profiles. Shapes classic queries cannot express (two fields, two
+/// literals, array and map literals and constructions, null equality in a select) and inputs
+/// whose production answer is unrecorded (kinds that differ in an ordering, an absent operand
+/// below the top of a where, a null operand of an ordering, an absent array element) are
+/// refused by strict and answered as the official emulator answers them by the emulator
+/// profile.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
@@ -7297,59 +7299,104 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
             ])],
             "{policy:?}"
         );
-        for (label, cond) in [
-            ("reversed", condition("greater_than", vec![i(3), f("i")])),
-            (
-                "array literal",
-                condition("equal", vec![f("arr"), array(vec![i(1), s("a")])]),
-            ),
-            (
-                "map literal",
-                condition("equal", vec![f("m"), map(&[("a", i(1))])]),
-            ),
-            (
-                "expression literal",
-                condition("equal", vec![array(vec![f("i")]), array(vec![i(1)])]),
-            ),
-        ] {
-            let got = run(vec![
-                collection(),
-                cond,
-                pipeline_select_map(vec![("i", f("i"))]),
-            ])
-            .await
-            .unwrap();
-            assert_eq!(got, vec![fields(&[("i", i(1))])], "{policy:?} {label}");
-        }
-        let both = run(vec![
+        let got = run(vec![
             collection(),
-            condition("equal", vec![f("i"), f("i")]),
+            condition("greater_than", vec![i(3), f("i")]),
             pipeline_select_map(vec![("i", f("i"))]),
         ])
         .await
         .unwrap();
-        assert_eq!(both.len(), 2, "{policy:?}");
-        let literals = run(vec![
-            collection(),
-            condition("equal", vec![f("s"), s("a")]),
-            pipeline_select_map(vec![
-                ("arr", call("array", vec![f("i"), f("s")])),
-                ("map", map(&[("k", f("i"))])),
-            ]),
-        ])
-        .await
-        .unwrap();
-        assert_eq!(
-            literals,
-            vec![fields(&[
-                ("arr", array(vec![i(1), s("a")])),
-                ("map", map(&[("k", i(1))]))
-            ])],
-            "{policy:?}"
-        );
-        // Unrecorded inputs.
+        assert_eq!(got, vec![fields(&[("i", i(1))])], "{policy:?} reversed");
+        // A field as the whole condition is a valid request (the official emulator keeps the
+        // rows where it is true) that is unsupported locally in both profiles.
+        let err = run(vec![collection(), pipeline_stage("where", f("i"))])
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        // Shapes classic queries cannot express, and inputs whose production answer is
+        // unrecorded: strict refuses them, the emulator profile answers the official emulator's
+        // answer.
         let only_a = || condition("equal", vec![f("s"), s("a")]);
+        let select_i = || pipeline_select_map(vec![("i", f("i"))]);
         let cases = [
+            (
+                "array literal",
+                vec![
+                    collection(),
+                    condition("equal", vec![f("arr"), array(vec![i(1), s("a")])]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))])],
+            ),
+            (
+                "map literal",
+                vec![
+                    collection(),
+                    condition("equal", vec![f("m"), map(&[("a", i(1))])]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))])],
+            ),
+            (
+                "expression literal",
+                vec![
+                    collection(),
+                    condition("equal", vec![array(vec![f("i")]), array(vec![i(1)])]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))])],
+            ),
+            (
+                "field to field",
+                vec![
+                    collection(),
+                    condition("equal", vec![f("i"), f("i")]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))]), fields(&[("i", i(5))])],
+            ),
+            (
+                "literal to literal",
+                vec![
+                    collection(),
+                    condition("less_than", vec![s("a"), i(1)]),
+                    select_i(),
+                ],
+                vec![],
+            ),
+            (
+                "ordering across kinds",
+                vec![
+                    collection(),
+                    condition("less_than", vec![f("s"), i(1)]),
+                    select_i(),
+                ],
+                vec![],
+            ),
+            (
+                "array and map construction",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![
+                        ("arr", call("array", vec![f("i"), f("s")])),
+                        ("map", map(&[("k", f("i"))])),
+                    ]),
+                ],
+                vec![fields(&[
+                    ("arr", array(vec![i(1), s("a")])),
+                    ("map", map(&[("k", i(1))])),
+                ])],
+            ),
+            (
+                "null equality in select",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![("v", call("equal", vec![f("n"), null.clone()]))]),
+                ],
+                vec![fields(&[("v", boolean(true))])],
+            ),
             (
                 "absent below the top",
                 vec![
@@ -7382,7 +7429,7 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
                 vec![
                     collection(),
                     condition("not_equal", vec![f("x"), i(1)]),
-                    pipeline_select_map(vec![("i", f("i"))]),
+                    select_i(),
                 ],
                 vec![fields(&[("i", i(1))]), fields(&[("i", i(5))])],
             ),

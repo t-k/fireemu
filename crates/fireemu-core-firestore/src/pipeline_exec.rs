@@ -115,9 +115,6 @@ pub struct Function {
     pub name: &'static str,
     /// Number of arguments.
     pub arity: Arity,
-    /// Where the function may appear: every table function may stand where a value is
-    /// expected.
-    pub placement: Placement,
     /// Whether the function returns a boolean, so that it may be a whole `where` condition.
     pub returns_boolean: bool,
     eval: fn(&[Eval], Context) -> Eval,
@@ -128,7 +125,6 @@ impl fmt::Debug for Function {
         f.debug_struct("Function")
             .field("name", &self.name)
             .field("arity", &self.arity)
-            .field("placement", &self.placement)
             .field("returns_boolean", &self.returns_boolean)
             .finish_non_exhaustive()
     }
@@ -145,7 +141,6 @@ const fn comparison(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> F
     Function {
         name,
         arity: Arity::Exact(2),
-        placement: Placement::Value,
         returns_boolean: true,
         eval,
     }
@@ -156,7 +151,6 @@ const fn document_function(name: &'static str, eval: fn(&[Eval], Context) -> Eva
     Function {
         name,
         arity: Arity::Exact(1),
-        placement: Placement::Value,
         returns_boolean: false,
         eval,
     }
@@ -185,14 +179,12 @@ const FUNCTIONS: &[Function] = &[
     Function {
         name: "array",
         arity: Arity::Any,
-        placement: Placement::Value,
         returns_boolean: false,
         eval: eval_array,
     },
     Function {
         name: "map",
         arity: Arity::Pairs,
-        placement: Placement::Value,
         returns_boolean: false,
         eval: eval_map,
     },
@@ -391,10 +383,12 @@ fn official_order(a: &Eval, b: &Eval) -> Option<Ordering> {
 }
 
 /// A comparison. The emulator profile answers what the official emulator answers. Strict
-/// answers only what classic queries decide the same way: present operands, and null or NaN
-/// only in an equality (classic `IS_NULL` / `IS_NAN`). One absent operand at the top of a
-/// `where` drops the row, as a classic filter on a missing field does (except `not_equal`,
-/// which the official emulator keeps and classic `!=` drops); any other absence is unobserved.
+/// answers only what classic queries decide the same way ([`check_recorded_shapes`] keeps
+/// the shapes to `field op literal`): as the whole `where` condition, an equality answers
+/// whatever the operands are (classic `==`, `IS_NULL` and `IS_NAN`), and one absent operand
+/// drops the row as a classic filter on a missing field does (except `not_equal`, which the
+/// official emulator keeps and classic `!=` drops); otherwise strict answers only two present
+/// operands of one kind, neither null nor NaN. Everything else is unobserved.
 fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
@@ -412,14 +406,12 @@ fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
             reason,
         })
     };
+    let special = |v: &Value| matches!(v.kind(), ValueKind::Null | ValueKind::Nan);
     match (a, b) {
-        (Eval::Value(a), Eval::Value(b)) => {
-            let special = |v: &Value| matches!(v.kind(), ValueKind::Null | ValueKind::Nan);
-            if op != Comparison::Equal && (special(a) || special(b)) {
-                unobserved("an operand is null or NaN")
-            } else {
-                answer
-            }
+        (Eval::Value(_), Eval::Value(_)) if cx.condition && op == Comparison::Equal => answer,
+        (Eval::Value(a), Eval::Value(b)) if a.kind() == b.kind() && !special(a) => answer,
+        (Eval::Value(_), Eval::Value(_)) => {
+            unobserved("the operands differ in kind, or one is null or NaN")
         }
         (Eval::Absent, Eval::Value(_)) | (Eval::Value(_), Eval::Absent)
             if cx.condition && op != Comparison::NotEqual =>
@@ -553,6 +545,108 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (false, false) => a.canonical_cmp(b) == Ordering::Equal,
         _ => false,
     }
+}
+
+/// Whether `function` takes a document reference (`document_id`, `collection_id`, `parent`).
+fn is_document_function(function: &Function) -> bool {
+    matches!(function.name, "document_id" | "collection_id" | "parent")
+}
+
+/// A field reference, or a document function of an operand or a literal (the finite
+/// subset's operands).
+fn is_operand(expr: &Expr) -> bool {
+    match expr {
+        Expr::Field(_) => true,
+        Expr::Call { function, args } => {
+            is_document_function(function)
+                && args
+                    .iter()
+                    .all(|arg| matches!(arg, Expr::Constant(_)) || is_operand(arg))
+        }
+        Expr::Constant(_) => false,
+    }
+}
+
+/// The two arguments of a comparison as an operand and a scalar literal (neither an array,
+/// a map nor a vector), in either order.
+fn operand_and_literal(args: &[Expr]) -> Option<(&Expr, &Value)> {
+    fn scalar(expr: &Expr) -> Option<&Value> {
+        match expr {
+            Expr::Constant(value)
+                if !matches!(value, Value::Array(_) | Value::Map(_) | Value::Vector(_)) =>
+            {
+                Some(value)
+            }
+            _ => None,
+        }
+    }
+    match args {
+        [operand, literal] | [literal, operand] if is_operand(operand) => {
+            scalar(literal).map(|value| (operand, value))
+        }
+        _ => None,
+    }
+}
+
+/// Whether strict answers this `where` condition without production observation: a field
+/// compared with a scalar literal (null or NaN only in an equality), or the finite subset's
+/// equality of a document function and a literal.
+fn is_recorded_condition(expr: &Expr) -> bool {
+    let Expr::Call { function, args } = expr else {
+        return false;
+    };
+    if !function.returns_boolean {
+        return false;
+    }
+    let Some((operand, literal)) = operand_and_literal(args) else {
+        return false;
+    };
+    let equal = function.name == "equal";
+    let field = matches!(operand, Expr::Field(_));
+    (field || equal) && (equal || !matches!(literal.kind(), ValueKind::Null | ValueKind::Nan))
+}
+
+/// Whether strict answers this `select` value without production observation: an operand,
+/// or a field compared with a scalar literal that is neither null nor NaN.
+fn is_recorded_value(expr: &Expr) -> bool {
+    if is_operand(expr) {
+        return true;
+    }
+    let Expr::Call { function, args } = expr else {
+        return false;
+    };
+    function.returns_boolean
+        && matches!(
+            operand_and_literal(args),
+            Some((Expr::Field(_), literal))
+                if !matches!(literal.kind(), ValueKind::Null | ValueKind::Nan)
+        )
+}
+
+/// Checks the shapes strict answers before any row is read (the PX1 plan's strict column):
+/// only shapes a classic query expresses and decides the same way. Comparisons of two fields
+/// or two literals, comparisons below another function, array, map and vector literals and
+/// constructions, and null or NaN outside a `where` equality are unobserved until production
+/// answers them; the emulator profile skips this check.
+pub fn check_recorded_shapes(stages: &[Stage]) -> Result<(), EvalError> {
+    for stage in stages {
+        match stage {
+            Stage::Where(condition) if !is_recorded_condition(condition) => {
+                return Err(EvalError::Unobserved {
+                    function: "where",
+                    reason: "only a field compared with a scalar literal is answered without production observation",
+                });
+            }
+            Stage::Select(aliases) if !aliases.iter().all(|(_, expr)| is_recorded_value(expr)) => {
+                return Err(EvalError::Unobserved {
+                    function: "select",
+                    reason: "only fields, document functions and a field compared with a scalar literal are answered without production observation",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// One stage operator.
@@ -729,6 +823,9 @@ pub fn execute_in(
     rows: impl IntoIterator<Item = Row>,
     unrecorded: Unrecorded,
 ) -> Result<Vec<BTreeMap<String, Value>>, EvalError> {
+    if unrecorded == Unrecorded::Refuse {
+        check_recorded_shapes(&stages)?;
+    }
     let mut cursor = Cursor::new_in(stages, unrecorded);
     let mut out = Vec::new();
     for row in rows {

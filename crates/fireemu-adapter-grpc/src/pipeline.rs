@@ -514,6 +514,12 @@ pub fn compile_pipeline(
             }
         }
     }
+    // Strict answers only the shapes classic queries decide the same way; the rest is refused
+    // before any row is read.
+    if unrecorded == Unrecorded::Refuse {
+        pipeline_exec::check_recorded_shapes(&stages)
+            .map_err(|error| Status::unimplemented(error.to_string()))?;
+    }
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
         pipeline_exec::referenced_fields(&stages).map(|paths| pb::structured_query::Projection {
@@ -645,11 +651,14 @@ fn decode_operand(value: &pb::Value, position: Position<'_>) -> Result<Expr, Sta
 fn decode_condition(
     stage: &pb::pipeline::Stage,
 ) -> Result<(Expr, Option<pb::structured_query::Filter>), Status> {
-    let Some(pb::value::ValueType::FunctionValue(function)) =
-        stage.args.first().and_then(|v| v.value_type.as_ref())
-    else {
-        return Err(Status::invalid_argument(
-            "where requires a boolean expression",
+    let Some(condition) = stage.args.first() else {
+        return Err(Status::invalid_argument("where requires a condition"));
+    };
+    // A condition that is no function call (a field, a constant) is a valid request the
+    // official emulator answers; it is unsupported locally.
+    let Some(pb::value::ValueType::FunctionValue(function)) = condition.value_type.as_ref() else {
+        return Err(Status::unimplemented(
+            "where conditions other than a comparison are unsupported locally",
         ));
     };
     let Some(def) = pipeline_exec::function(&function.name).filter(|def| def.returns_boolean)

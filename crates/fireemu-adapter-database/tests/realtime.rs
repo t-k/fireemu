@@ -135,7 +135,7 @@ fn reads_use_the_export_form_without_arrays() {
     ));
     assert_eq!(
         go(&request(2, "g", r#"{"p":"/p","q":{}}"#)),
-        vec![reply(2, "ok", r#"{".value":1,".priority":2}"#)]
+        vec![reply(2, "ok", r#"{".value":1,".priority":2.0}"#)]
     );
     go(&request(3, "p", r#"{"p":"/l","d":["a","b"]}"#));
     assert_eq!(

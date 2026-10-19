@@ -1296,5 +1296,12 @@ mod tests {
             0,
         );
         assert_eq!(crate::listen::views_built(), before + 1);
+        // Neither does a merge whose only entry there changes nothing.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":22,"a":"m","b":{"p":"/","d":{"other":99,"big/k1":7}}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
     }
 }

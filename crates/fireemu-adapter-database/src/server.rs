@@ -650,6 +650,16 @@ mod tests {
     }
 
     #[test]
+    fn a_push_queue_takes_messages_up_to_its_byte_budget() {
+        let (queue, mut pushes) = push_queue(16);
+        let frames = vec!["12345".to_owned(), "678".to_owned()];
+        assert!(queue.offer(frames.clone(), 8));
+        assert!(!queue.offer(frames.clone(), 15));
+        assert_eq!(pushes.try_recv(), Some(frames.clone()));
+        assert!(queue.offer(frames, 8));
+    }
+
+    #[test]
     fn queued_pushes_go_before_the_connections_own() {
         let shared = shared();
         let (mut a, mut a_pushes) = connect(&shared);

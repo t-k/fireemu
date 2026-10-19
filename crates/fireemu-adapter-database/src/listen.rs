@@ -287,38 +287,26 @@ impl Listen {
                 _ => message("m", location, &changed, tag),
             };
         }
-        // An entry below a child the client does not hold arrives as the whole child, as
-        // the official emulator sends it (the client could not apply it deeper).
+        // An entry for a child the client does not hold arrives as the whole child, as the
+        // official emulator sends it (the client could not apply it deeper).
         let mut sequence: Vec<(String, Json)> = Vec::new();
         let mut whole: Vec<&String> = Vec::new();
         for path in &kept {
             let key = &path.keys()[depth];
-            let unheld = !before.contains_key(key);
-            if unheld && path.depth() > depth + 1 {
-                if !whole.contains(&key) {
-                    whole.push(key);
-                    sequence.push((key.clone(), value_at(tree, &location.child(key))));
-                }
-            } else {
-                if unheld {
-                    whole.push(key);
-                }
+            if before.contains_key(key) {
                 sequence.push((path.keys()[depth..].join("/"), value_at(tree, path)));
+            } else if !whole.contains(&key) {
+                whole.push(key);
+                sequence.push((key.clone(), value_at(tree, &location.child(key))));
             }
         }
         if query.limit.is_none() {
             return message("m", location, &sequence, tag);
         }
-        // Children an entry wrote whole; one written deeper still enters whole.
-        let covered: Vec<&String> = kept
-            .iter()
-            .filter(|path| path.depth() == depth + 1)
-            .map(|path| &path.keys()[depth])
-            .chain(whole.iter().copied())
-            .collect();
+        // Children that entered without an entry of their own arrive whole too.
         let entered: Vec<(String, Json)> = after
             .iter()
-            .filter(|(key, _)| !before.contains_key(*key) && !covered.contains(key))
+            .filter(|(key, _)| !before.contains_key(*key) && !whole.contains(key))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
         // A merge that only brings one child the client does not hold sends that child.

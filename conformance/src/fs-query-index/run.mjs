@@ -61,7 +61,9 @@ const { approvedDivergence, crossRowChecks } = LANE.divergences
   ? await import(LANE.divergences)
   : { approvedDivergence: () => undefined, crossRowChecks: () => ({ demote: new Set() }) };
 const FIXTURE = join(CONFORMANCE_DIR, LANE.fixture);
-const INDEXES = join(CONFORMANCE_DIR, LANE.indexes);
+// A lane without an index file (the Enterprise pipeline lane) records without index checks.
+const INDEXES = LANE.indexes ? join(CONFORMANCE_DIR, LANE.indexes) : null;
+const DATABASE_ID = LANE.database ?? DATABASE;
 const LOCAL_CONFIG = join(CONFORMANCE_DIR, LANE.localConfig);
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", LANE.id);
 const TASK_ID = LANE.taskId;
@@ -92,7 +94,7 @@ export async function harnessDigest() {
       readFile(join(CONFORMANCE_DIR, "src/fs-query-index", file), "utf8"),
     ),
   );
-  const indexes = await readFile(INDEXES, "utf8");
+  const indexes = INDEXES ? await readFile(INDEXES, "utf8") : "";
   return sha256(`${sources.join("\n")}\n${indexes}`);
 }
 
@@ -125,7 +127,16 @@ async function assertIgnored(path) {
 async function assertCleanTree() {
   const { stdout } = await execFileAsync(
     "git",
-    ["status", "--porcelain", "--", ...LANE.sources, LANE.fixture, LANE.localConfig, LANE.indexes],
+    [
+      "status",
+      "--porcelain",
+      "--",
+      ...LANE.sources,
+      LANE.fixture,
+      LANE.localConfig,
+      ...(LANE.firebaseJson ? [LANE.firebaseJson] : []),
+      ...(LANE.indexes ? [LANE.indexes] : []),
+    ],
     { cwd: CONFORMANCE_DIR },
   );
   if (stdout.trim()) throw new Error(`record-production needs a clean tree:\n${stdout}`);
@@ -236,6 +247,7 @@ export function indexKey(groupId, queryScope, fields) {
 }
 
 async function verifyIndexes() {
+  if (!INDEXES) throw new Error(`lane ${LANE.id} has no index file`);
   const token = await accessToken();
   const expected = JSON.parse(await readFile(INDEXES, "utf8"));
   const { composites, overrides } = await productionIndexes(token);
@@ -300,7 +312,7 @@ async function verifyIndexes() {
  */
 async function databaseDocuments(token) {
   const response = await fetch(
-    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/${DATABASE}/documents:runQuery`,
+    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/${DATABASE_ID}/documents:runQuery`,
     {
       method: "POST",
       headers: {
@@ -329,6 +341,7 @@ async function databaseDocuments(token) {
  * Read-only.
  */
 async function preflight(token) {
+  if (!INDEXES) return preflightNamedDatabase(token);
   const shared = JSON.parse(
     await readFile(join(CONFORMANCE_DIR, "firestore.indexes.json"), "utf8"),
   );
@@ -346,11 +359,37 @@ async function preflight(token) {
       `the sandbox (default) database is not empty (${documents[0]}); record only into an empty database`,
     );
   }
-  console.log(JSON.stringify({ preflight: "ok", database: DATABASE }, null, 2));
+  console.log(JSON.stringify({ preflight: "ok", database: DATABASE_ID }, null, 2));
+}
+
+/**
+ * The checks before a recording into a lane's named database (read-only): it exists in the
+ * lane's edition and is empty. The lane creates and deletes it in its own packet steps.
+ */
+async function preflightNamedDatabase(token) {
+  const database = await adminGet(`projects/${SANDBOX_PROJECT}/databases/${DATABASE_ID}`, token);
+  if (database.databaseEdition !== LANE.edition)
+    throw new Error(
+      `database ${DATABASE_ID} is ${database.databaseEdition}, the lane records into ${LANE.edition}`,
+    );
+  const documents = await databaseDocuments(token);
+  if (documents.length) {
+    throw new Error(
+      `the sandbox ${DATABASE_ID} database is not empty (${documents[0]}); record only into an empty database`,
+    );
+  }
+  console.log(
+    JSON.stringify(
+      { preflight: "ok", database: DATABASE_ID, edition: database.databaseEdition },
+      null,
+      2,
+    ),
+  );
 }
 
 async function recordOnce(programs, run, token, projectNumber) {
   const ctx = createContext({
+    database: DATABASE_ID,
     run,
     target: {
       kind: "production",
@@ -377,9 +416,10 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
     : { version: 1, recordedAgainst: {}, programs: {} };
   fixture.recordedAgainst = {
     target:
+      LANE.target ??
       "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
     project: RECORDED_PROJECT,
-    indexes: `conformance/${LANE.indexes}`,
+    ...(LANE.indexes ? { indexes: `conformance/${LANE.indexes}` } : {}),
     note: `Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as ${RECORDED_PROJECT} in every lane. Missing-index links keep their encoded index with the project id replaced. \`second\` holds the other recording of rows that differed.`,
   };
   for (const program of programs) {
@@ -523,7 +563,7 @@ async function recordProductionLocked() {
       `${JSON.stringify({
         ts: new Date().toISOString(),
         project: SANDBOX_PROJECT,
-        database: DATABASE,
+        database: DATABASE_ID,
         gitSha: meta.sha,
         corpusDigest: sha256(JSON.stringify(programs)),
         requests,
@@ -559,6 +599,7 @@ export function estimatedUsd(programs, recordings) {
  */
 export function renormalize(recording, programs) {
   const ctx = createContext({
+    database: DATABASE_ID,
     run: recording.context.run,
     startedMs: recording.context.startedMs,
     target: {
@@ -628,6 +669,7 @@ async function sessionLocal() {
   if (!host) throw new Error("FIRESTORE_EMULATOR_HOST is not set");
   const url = new URL(`http://${host}`);
   const ctx = createContext({
+    database: DATABASE_ID,
     run: process.env.FS_QUERY_INDEX_RUN,
     target: {
       kind: "local",
@@ -668,6 +710,8 @@ async function runLocal(programs) {
       "0",
       "--logging-port",
       "0",
+      // A lane that records into a named database declares it, as firebase.json does.
+      ...(LANE.firebaseJson ? ["--firebase-json", join(CONFORMANCE_DIR, LANE.firebaseJson)] : []),
       "--",
       process.execPath,
       join(CONFORMANCE_DIR, "src/fs-query-index/run.mjs"),

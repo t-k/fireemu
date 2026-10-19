@@ -74,9 +74,25 @@ const whole = await execute(source().where(field("name").equal("a")));
 assert.equal(whole.results.length, 1);
 assert.equal(whole.results[0].ref.path, "pipeline-lite/a");
 assert.equal(whole.results[0].id, "a");
-assert.ok(whole.results[0].createTime, "createTime");
-assert.ok(whole.results[0].updateTime, "updateTime");
-assert.ok(whole.executionTime, "executionTime");
+// The Lite SDK's document snapshots do not expose the times, so compare with a REST read.
+const read = await fetch(
+  `http://${host}:${port}/v1/projects/${project}/databases/(default)/documents/pipeline-lite/a`,
+  { headers: { authorization: "Bearer owner" } },
+);
+assert.equal(read.status, 200);
+const stored = await read.json();
+const timestamp = (text) => {
+  const [, seconds, fraction = ""] = /^(.*?)(?:\.(\d+))?Z$/.exec(text);
+  return [Date.parse(`${seconds}Z`) / 1000, Number(fraction.padEnd(9, "0"))];
+};
+const parts = (time) => [time.seconds, time.nanoseconds];
+assert.deepEqual(parts(whole.results[0].createTime), timestamp(stored.createTime), "createTime");
+assert.deepEqual(parts(whole.results[0].updateTime), timestamp(stored.updateTime), "updateTime");
+const [executed, updated] = [parts(whole.executionTime), parts(whole.results[0].updateTime)];
+assert.ok(
+  executed[0] > updated[0] || (executed[0] === updated[0] && executed[1] >= updated[1]),
+  "executionTime is no earlier than the update time",
+);
 const projected = await execute(source().select("name").limit(1));
 assert.equal(projected.results[0].ref, undefined);
 assert.ok(projected.executionTime, "executionTime after select");

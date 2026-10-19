@@ -7175,13 +7175,15 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                     "FS_PIPE_UNSUPPORTED_STAGE"
                 );
             }
-            // A plain identifier, `_` included, still answers under strict.
+            // A plain identifier, `_` included, still answers under strict; only a name both
+            // starting and ending with `__` is reserved.
             let docs = drain_pipeline(
                 client
-                    .execute_pipeline(pipeline_request(stages(vec![(
-                        "_plain1",
-                        pipeline_field("top"),
-                    )])))
+                    .execute_pipeline(pipeline_request(stages(vec![
+                        ("_plain1", pipeline_field("top")),
+                        ("__lead", pipeline_field("top")),
+                        ("trail__", pipeline_field("top")),
+                    ])))
                     .await
                     .unwrap()
                     .into_inner(),
@@ -7190,7 +7192,13 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             .await;
             assert_eq!(
                 docs[0].fields,
-                [("_plain1".to_owned(), s("t"))].into_iter().collect()
+                [
+                    ("_plain1".to_owned(), s("t")),
+                    ("__lead".to_owned(), s("t")),
+                    ("trail__".to_owned(), s("t")),
+                ]
+                .into_iter()
+                .collect()
             );
         } else {
             let docs = drain_pipeline(

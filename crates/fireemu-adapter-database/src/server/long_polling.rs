@@ -309,10 +309,8 @@ fn answer_message(
     let now = (shared.config.clock)();
     let mut received = state.session.dispatch_prepared(database, prepared, now);
     deliver_events(shared, database, std::mem::take(&mut received.events));
-    for reply in received.replies {
-        state.outbox_bytes += reply.len();
-        state.outbox.push(reply);
-    }
+    // The request answers these at once, so they do not count against the bounds.
+    state.outbox.extend(received.replies);
     received.close.is_none() && !received.drop_connection
 }
 

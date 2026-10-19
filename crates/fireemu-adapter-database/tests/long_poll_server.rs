@@ -465,3 +465,68 @@ async fn pushes_waiting_for_a_request_go_before_the_connections_own() {
         "pRTLPCB(2,[{\"t\":\"d\",\"d\":{\"b\":{\"p\":\"a\",\"d\":1},\"a\":\"d\"}},{\"t\":\"d\",\"d\":{\"b\":{\"p\":\"a\",\"d\":2},\"a\":\"d\"}},{\"t\":\"d\",\"d\":{\"r\":2,\"b\":{\"s\":\"ok\",\"d\":\"\"}}}]);\n"
     );
 }
+
+#[tokio::test]
+async fn a_connection_whose_waiting_messages_pass_a_bound_is_dropped() {
+    // In bytes: one large push is enough.
+    let (address, database) = start(ServerConfig {
+        stream_queue_bytes: 10_000,
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lp7").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    get(
+        &address,
+        "PUT",
+        "/a.json?ns=lp7",
+        &format!("\"{}\"", "x".repeat(20_000)),
+    )
+    .await;
+    assert_eq!(database.lock().unwrap().listen_count(), 0);
+    assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
+    // In messages: more pushes than the queue takes.
+    let (address, database) = start(ServerConfig {
+        stream_queue: 2,
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lp8").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    for v in 1..=2 {
+        get(&address, "PUT", "/a.json?ns=lp8", &v.to_string()).await;
+    }
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    get(&address, "PUT", "/a.json?ns=lp8", "3").await;
+    assert_eq!(database.lock().unwrap().listen_count(), 0);
+}
+
+#[tokio::test]
+async fn bounds_are_inclusive_and_regular_requests_keep_a_connection() {
+    // A push of exactly the byte budget is kept.
+    let value = "x".repeat(100);
+    let message = format!(r#"{{"t":"d","d":{{"b":{{"p":"a","d":"{value}"}},"a":"d"}}}}"#);
+    let (address, database) = start(ServerConfig {
+        stream_queue_bytes: message.len(),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lp9").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    get(&address, "PUT", "/a.json?ns=lp9", &format!("\"{value}\"")).await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    assert_eq!(lp.poll(&[]).await, format!("pRTLPCB(2,[{message}]);\n"));
+    // A connection asking again within twice the hold time stays open.
+    let (address, _) = start(ServerConfig {
+        long_poll_hold: Duration::from_millis(400),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lp10").await;
+    lp.poll(&[&request(1, "echo", r#"{"d":"a"}"#)]).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(lp
+        .poll(&[&request(2, "echo", r#"{"d":"b"}"#)])
+        .await
+        .starts_with("pRTLPCB(2,"));
+}

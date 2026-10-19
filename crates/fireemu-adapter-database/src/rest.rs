@@ -537,8 +537,15 @@ fn refusal_response(refusal: &Refusal) -> HttpResponse {
     HttpResponse {
         status: refusal.status,
         headers: json_headers(),
-        body: render(&body, Style::Pretty).into_bytes(),
+        body: pretty_text(&body).into_bytes(),
     }
+}
+
+/// Pretty text as the server writes it: Jackson's layout and a final newline.
+fn pretty_text(json: &Json) -> String {
+    let mut text = render(json, Style::Pretty);
+    text.push('\n');
+    text
 }
 
 fn options_response() -> HttpResponse {
@@ -556,7 +563,10 @@ fn options_response() -> HttpResponse {
 /// A JSON answer with the output options applied; `etag` adds the `ETag` header.
 fn json_response(json: &Json, output: &Output, etag: Option<String>) -> HttpResponse {
     let mut headers = json_headers();
-    let mut body = render(json, output.style);
+    let mut body = match output.style {
+        Style::Compact => render(json, Style::Compact),
+        Style::Pretty => pretty_text(json),
+    };
     if let Some(callback) = &output.callback {
         headers[0] = header("Content-Type", "application/javascript; charset=utf-8");
         body = format!("/**/ {callback}({body});");
@@ -675,15 +685,15 @@ fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpRe
 }
 
 /// The refusal for data the tree did not accept: the position of the first key, in
-/// document order, with a forbidden character when there is one; the generic parse error
-/// otherwise (an empty key included, as the official emulator answers).
+/// document order, that is empty or holds a forbidden character when there is one; the
+/// generic parse error otherwise.
 fn data_refusal(body: &str) -> Refusal {
     let keys = parse_with_keys(body)
         .map(|(_, keys)| keys)
         .unwrap_or_default();
     let refused = keys.iter().find(|at| {
         let special = matches!(at.key.as_str(), PRIORITY_KEY | VALUE_KEY | SERVER_VALUE_KEY);
-        !at.key.is_empty() && !special && validate_key(&at.key).is_err()
+        !special && validate_key(&at.key).is_err()
     });
     match refused {
         Some(at) => Refusal::bad(format!(

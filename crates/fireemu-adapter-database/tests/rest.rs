@@ -54,7 +54,10 @@ fn header<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str> {
 }
 
 fn error(message: &str) -> String {
-    format!("{{\n  \"error\" : \"{}\"\n}}", message.replace('"', "\\\""))
+    format!(
+        "{{\n  \"error\" : \"{}\"\n}}\n",
+        message.replace('"', "\\\"")
+    )
 }
 
 #[test]
@@ -283,11 +286,14 @@ fn write_bodies_are_checked() {
         (400, key("1:2"))
     );
     assert_eq!(
+        call(&mut db, "PUT", "/x.json?ns=v1", r#"{"":1}"#),
+        (400, key("1:2"))
+    );
+    assert_eq!(
         call(&mut db, "PUT", "/f.json?ns=q1", r#"{"x":{"y":1},"x/z":2}"#),
         (400, key("1:14"))
     );
     for body in [
-        r#"{"":1}"#,
         r#"{"a":1,".priority":true}"#,
         r#"{".value":1,"a":2}"#,
         r#"{".sv":"timestamp","x":1}"#,
@@ -585,7 +591,7 @@ fn print_shallow_export_callback_and_download() {
         call(&mut db, "GET", "/a.json?ns=t1&print=pretty", ""),
         (
             200,
-            "{\n  \"w\" : 3,\n  \"x\" : 1,\n  \"y\" : {\n    \"z\" : \"t\"\n  }\n}".to_owned()
+            "{\n  \"w\" : 3,\n  \"x\" : 1,\n  \"y\" : {\n    \"z\" : \"t\"\n  }\n}\n".to_owned()
         )
     );
     assert_eq!(
@@ -728,7 +734,7 @@ fn query_parameters_need_order_by_and_valid_values() {
         ("orderBy=\"$bad\"", "orderBy must be a valid JSON encoded path"),
         ("orderBy=\"a.b\"", "orderBy must be a valid JSON encoded path"),
         ("orderBy=\"h\"&startAt=5&startAfter=1", "Only one of startAfter and startAt may be specified"),
-        ("orderBy=\"h\"&endAt=5&endBefore=1", "Only one of endBefore and endAt may be specified"),
+        ("orderBy=\"h\"&endAt=5&endBefore=1", "Only one of endAt and endBefore may be specified"),
         ("orderBy=\"$key\"&startAt=\"a\"&equalTo=\"a\"", "equalTo cannot be specified in addition to startAfter, startAt, endAt, or endBefore"),
         ("orderBy=\"h\"&limitToFirst=0", "limitToFirst must be positive"),
         ("orderBy=\"h\"&limitToFirst=-1", "limitToFirst must be positive"),
@@ -897,7 +903,7 @@ fn key_and_priority_queries() {
             ""
         )
         .1,
-        "{\n  \"z\" : 1\n}"
+        "{\n  \"z\" : 1\n}\n"
     );
     assert_eq!(
         call(&mut db, "GET", "/k/a.json?ns=s1&orderBy=\"$key\"", ""),

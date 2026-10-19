@@ -194,7 +194,7 @@ pub fn query(
     }
     if params.contains_key("endAt") && params.contains_key("endBefore") {
         return Err(Refusal::bad(
-            "Only one of endBefore and endAt may be specified",
+            "Only one of endAt and endBefore may be specified",
         ));
     }
     let ranged = ["startAt", "startAfter", "endAt", "endBefore"]

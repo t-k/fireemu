@@ -43,9 +43,30 @@ fn null_children_and_empty_objects_store_nothing() {
 }
 
 #[test]
-fn arrays_are_stored_as_objects_keyed_by_index_without_null_items() {
-    let tree = tree_with(json!({"list": ["a", null, "c"]}));
-    assert_eq!(plain(&tree, "/list"), json!({"0": "a", "2": "c"}));
+fn plain_reads_render_dense_index_keys_as_arrays() {
+    // The SDK's `val()` rule, and the official emulator's GET for the same writes: every
+    // key a canonical index and the largest below twice the count.
+    let read = |value: serde_json::Value| plain(&tree_with(json!({ "l": value })), "/l");
+    assert_eq!(read(json!(["a", null, "c"])), json!(["a", null, "c"]));
+    assert_eq!(read(json!({"0": "a", "3": "b"})), json!(["a", null, null, "b"]));
+    assert_eq!(read(json!({"1": "x"})), json!([null, "x"]));
+    assert_eq!(read(json!({"0": "a", "4": "b"})), json!({"0": "a", "4": "b"}));
+    assert_eq!(read(json!({"0": "a", "x": 1})), json!({"0": "a", "x": 1}));
+    assert_eq!(read(json!({"00": 1})), json!({"00": 1}));
+    assert_eq!(read(json!({"2": "x"})), json!({"2": "x"}));
+    assert_eq!(read(json!([[1, 2], {"0": "z"}])), json!([[1, 2], ["z"]]));
+    assert_eq!(
+        read(json!({"0": {".value": "a", ".priority": 1}, "1": "b", ".priority": 5})),
+        json!(["a", "b"])
+    );
+}
+
+#[test]
+fn exports_keep_index_keys_as_objects() {
+    // The SDK never converts in export format; the REST layer renders the official
+    // emulator's form on its own.
+    let tree = tree_with(json!({"l": ["a", null, "c"]}));
+    assert_eq!(export(&tree, "/l"), json!({"0": "a", "2": "c"}));
 }
 
 #[test]
@@ -85,9 +106,85 @@ fn setting_dot_priority_changes_only_an_existing_node() {
     assert_eq!(export(&tree, "/a"), json!({".value": 1, ".priority": 7}));
     tree.set(&p("/a/.priority"), &Json::Null, NOW).unwrap();
     assert_eq!(export(&tree, "/a"), json!(1));
-    tree.set(&p("/missing/.priority"), &j(json!(7)), NOW)
-        .unwrap();
+    // The official emulator refuses "could not set priority on non-existent node".
+    let err = tree
+        .set(&p("/missing/.priority"), &j(json!(7)), NOW)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PriorityOnAbsentNode);
     assert_eq!(export(&tree, "/"), json!({"a": 1}));
+}
+
+#[test]
+fn a_priority_placeholder_resolves_against_the_stored_priority() {
+    let mut tree = tree_with(json!({"a": {".value": 1, ".priority": 5}}));
+    let inc = j(json!({".sv": {"increment": 1}}));
+    tree.set(&p("/a/.priority"), &inc, NOW).unwrap();
+    assert_eq!(export(&tree, "/a"), json!({".value": 1, ".priority": 6}));
+    tree.set(&p("/a"), &j(json!({".value": 2, ".priority": {".sv": {"increment": 1}}})), NOW)
+        .unwrap();
+    assert_eq!(export(&tree, "/a"), json!({".value": 2, ".priority": 7}));
+    tree.set(&p("/b"), &j(json!({"x": 1, ".priority": {".sv": {"increment": 2}}})), NOW)
+        .unwrap();
+    assert_eq!(export(&tree, "/b"), json!({"x": 1, ".priority": 2}));
+}
+
+#[test]
+fn update_priorities_need_a_node_that_exists_before_the_update() {
+    let mut tree = tree_with(json!({"keep": 1}));
+    let entries = |pairs: &[(&str, serde_json::Value)]| {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), j(v.clone())))
+            .collect::<Vec<_>>()
+    };
+    for order in [
+        entries(&[("b/.priority", json!(3)), ("b/c", json!(1))]),
+        entries(&[("b/c", json!(1)), ("b/.priority", json!(3))]),
+    ] {
+        let err = tree.update(&Path::root(), &order, NOW).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::PriorityOnAbsentNode);
+        assert_eq!(export(&tree, "/"), json!({"keep": 1}));
+    }
+    tree.set(&p("/b"), &j(json!({"x": 1})), NOW).unwrap();
+    tree.update(&Path::root(), &entries(&[("b/.priority", json!(3)), ("b/c", json!(1))]), NOW)
+        .unwrap();
+    assert_eq!(export(&tree, "/b"), json!({"c": 1, "x": 1, ".priority": 3}));
+    // The priority is applied after the values, so a node the update empties is gone.
+    tree.set(&p("/d"), &j(json!({"x": 1})), NOW).unwrap();
+    tree.update(&Path::root(), &entries(&[("d/.priority", json!(3)), ("d/x", json!(null))]), NOW)
+        .unwrap();
+    assert_eq!(export(&tree, "/d"), json!(null));
+}
+
+#[test]
+fn a_priority_on_an_empty_value_is_refused() {
+    // The official emulator answers "couldn't parse" for each of these.
+    let mut tree = Tree::new(Limits::default());
+    for value in [
+        json!({".priority": 1}),
+        json!({"a": null, ".priority": 1}),
+        json!({".value": null, ".priority": 1}),
+        json!({"a": {".priority": 1}}),
+        json!({"a": {}, ".priority": 1}),
+    ] {
+        let err = tree.set(&p("/n"), &j(value.clone()), NOW).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidData, "{value}");
+    }
+    tree.set(&p("/n"), &j(json!({})), NOW).unwrap();
+    tree.set(&p("/n"), &j(json!({"a": {}})), NOW).unwrap();
+    assert!(tree.root().is_none());
+}
+
+#[test]
+fn deletes_are_held_to_the_depth_and_path_limits() {
+    let mut tree = Tree::new(Limits::default());
+    let deep = (0..33).map(|i| format!("k{i}")).collect::<Vec<_>>().join("/");
+    let err = tree.set(&p(&deep), &Json::Null, NOW).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooDeep);
+    let err = tree
+        .set(&p("/x"), &j(json!({ "k".repeat(400): { "k".repeat(400): null } })), NOW)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::PathTooLong);
 }
 
 #[test]

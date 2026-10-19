@@ -7,8 +7,9 @@
 
 use std::cmp::Ordering;
 
-/// The largest integer a double holds exactly (2^53).
-pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_992;
+/// 2^53: every integer of at most this magnitude is exact in a double. (JavaScript's
+/// `Number.MAX_SAFE_INTEGER` is one less.)
+pub const TWO_POW_53: i64 = 9_007_199_254_740_992;
 
 /// A finite number.
 #[derive(Debug, Clone, Copy)]
@@ -26,7 +27,7 @@ impl Number {
         if !value.is_finite() {
             return None;
         }
-        if value.fract() == 0.0 && value.abs() <= MAX_SAFE_INTEGER as f64 {
+        if value.fract() == 0.0 && value.abs() <= TWO_POW_53 as f64 {
             // In the safe range the conversion is exact; `-0.0` becomes `0`.
             return Some(Self::Int(value as i64));
         }

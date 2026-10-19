@@ -14,7 +14,7 @@ use fireemu_core_database::path::PRIORITY_KEY;
 use fireemu_core_database::push_id::PushIdGenerator;
 use fireemu_core_database::server_value::{resolve, stored_priority, SERVER_VALUE_KEY};
 use fireemu_core_database::{
-    Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, QueryParams,
+    Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, Priority, QueryParams,
     ServerValueContext, Tree,
 };
 
@@ -436,7 +436,7 @@ impl Database {
         let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
         tree.set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
-        let response = written(tree, &call.path, &call.output, call.want_etag);
+        let response = written(tree, &call.path, &value, &call.output, call.want_etag);
         let [path] = written_paths;
         let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
         Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
@@ -1046,11 +1046,26 @@ fn not_modified() -> HttpResponse {
     }
 }
 
-fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpResponse {
+/// The answer to a `PUT`: what was written, in the form it was written (the official
+/// emulator answers `1.0` for 1.0 written over 1, which keeps 1); a value with server values
+/// answers what they resolved to.
+fn written(
+    tree: &Tree,
+    path: &Path,
+    value: &Json,
+    output: &Output,
+    want_etag: bool,
+) -> HttpResponse {
     let json = if path.is_priority() {
-        written_priority_at(tree, path)
+        match Priority::from_json(value) {
+            Ok(Some(priority)) => priority.to_json(),
+            _ => written_priority_at(tree, path),
+        }
     } else {
-        output_json(tree.get(path), Format::Export)
+        match Node::from_json(value, path, tree.limits()) {
+            Ok(node) => output_json(node.as_ref(), Format::Export),
+            Err(_) => output_json(tree.get(path), Format::Export),
+        }
     };
     let tag = want_etag.then(|| tag_at(tree, path));
     json_response(&json, output, tag)

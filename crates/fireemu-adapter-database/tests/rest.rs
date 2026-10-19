@@ -1513,3 +1513,40 @@ fn limits_must_be_positive_integers() {
         );
     }
 }
+
+#[test]
+fn a_write_answers_what_was_written_even_when_it_keeps_the_stored_form() {
+    // The official emulator answers 1.0 for a PUT of 1.0 over 1, and still reads back 1.
+    let mut db = Database::new(RestOptions::default(), 1);
+    call(&mut db, "PUT", "/n.json?ns=t11", "1");
+    assert_eq!(
+        call(&mut db, "PUT", "/n.json?ns=t11", "1.0"),
+        (200, "1.0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/n.json?ns=t11", ""),
+        (200, "1".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/n.json?ns=t11", "-0.0"),
+        (200, "-0.0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/n.json?ns=t11", "0"),
+        (200, "0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/n.json?ns=t11", ""),
+        (200, "-0.0".to_owned())
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/p.json?ns=t11",
+        r#"{".value":1,".priority":5}"#,
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/p/.priority.json?ns=t11", "5"),
+        (200, "5".to_owned())
+    );
+}

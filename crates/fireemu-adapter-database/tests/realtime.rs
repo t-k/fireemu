@@ -744,7 +744,7 @@ fn edge_messages_follow_the_official_emulator() {
     assert!(send(&mut db, &mut s, r#"{"t":"d","d":{"r":14,"a":"echo","#).is_empty());
     assert_eq!(
         send(&mut db, &mut s, r#""b":{"d":1}}}"#),
-        vec![reply(14, "ok", "1")]
+        vec![reply(14, "ok", r#""1""#)]
     );
 }
 

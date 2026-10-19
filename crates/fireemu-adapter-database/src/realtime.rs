@@ -304,7 +304,12 @@ impl Session {
     ) -> Answer {
         match action {
             "s" => Ok(Json::string("")),
-            "echo" => Ok(arguments.get("d").cloned().unwrap_or(Json::Null)),
+            // The official emulator echoes the data as text.
+            "echo" => Ok(match arguments.get("d") {
+                Some(Json::String(text)) => Json::String(text.clone()),
+                Some(other) => Json::String(render(other, Style::Compact)),
+                None => Json::Null,
+            }),
             "auth" => self.authenticate(arguments),
             "gauth" => {
                 self.identity = match arguments.get("cred") {

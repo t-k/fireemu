@@ -1,0 +1,3099 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Firestore REST v1 and gRPC google.firestore.v1, Enterprise edition, Native API, database entpipe1",
+    "project": "demo-fs-query-index",
+    "note": "Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as demo-fs-query-index in every lane. Missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed."
+  },
+  "programs": {
+    "fs-ent-pipeline/px0/aliases": {
+      "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-19T12:53:45.973Z",
+      "gitSha": "f01bbc40def0c2969e05387cb4f4eba7406bc49f",
+      "steps": {
+        "dotted": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "profile": {
+                      "mapValue": {
+                        "fields": {
+                          "score": {
+                            "integerValue": "7"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "dotted-renamed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "x": {
+                      "mapValue": {
+                        "fields": {
+                          "y": {
+                            "stringValue": "t"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "quoted": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "q.r": {
+                      "stringValue": "t"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "hyphen": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"total-count\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "non-ascii": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"名前\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "leading-digit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"1st\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "reserved": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-name": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__name__' is reserved and can not be overwritten.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "overlap": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "m.r"
+                    },
+                    "reason": "OVERLAPPING_PROPERTY_PATHS"
+                  }
+                ],
+                "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "bare-name": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "n": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/al/d"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/px1/select": {
+      "corpusDigest": "bd45a3a6644777c05e45de6a2d412c91fd7052d3e6ac291d8a9c8ce0c8522459",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-19T12:53:45.973Z",
+      "gitSha": "f01bbc40def0c2969e05387cb4f4eba7406bc49f",
+      "steps": {
+        "equal-i-d5": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-i-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-nan-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-x-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-x-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-x-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-arr-literal": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-m-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-nz-z": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-big-bigd": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-r-ref": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-name-ref": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-x-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-n-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-i-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-nan-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-i-d5": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-i-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-s-i": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-n-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-nan-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-x-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-null-false": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-true-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-bigd-big": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-max-double": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "less-than-or-equal-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "greater-than-arr-literal": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "greater-than-or-equal-ts-ts": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "greater-than-s-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-any-i-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-any-x-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-any-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-any-nan-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-any-i-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "equal-any-i-s": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "eq_any"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function eq_any(...) requires `Array` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "equal-any-i-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-any-i-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-any-x-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-any-n-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "and-true-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "and-false-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "and-true-i": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "and"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function and(...) requires `Boolean` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "and-null-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "and-false-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "or-true-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "or-false-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "or-false-i": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "or"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function or(...) requires `Boolean` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "or-null-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-b": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-i": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "not"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function not(...) requires `Boolean` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "not-n": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "xor-b-b": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "xor-b-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "xor-null-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "nor-false-false": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "exists-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "exists-n": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "exists-i": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-absent-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-absent-n": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-error-less-than-i-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-error-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-error-sqrt-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-type-i-int64": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-type-i-number": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-type-d5-float64": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-type-x-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-type-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-type-i-bogus": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'type' for function 'is_type' must be a literal of type string from the following list: [null, array, boolean, bytes, timestamp, geo_point, number, int32, int64, float64, decimal128, map, reference, string, vector, max_key, min_key, object_id, regex, bson_timestamp]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "type-i": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "int64"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-d5": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "float64"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "float64"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-n": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "null"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-arr": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "array"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-m": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "map"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-ts": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "timestamp"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-b": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "boolean"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "type-r": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "reference"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-arr-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-arr-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-arr-1-0": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-x-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-i-1": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_contains"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_contains(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-contains-arr-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-all-arr-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-all-arr-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-all-x-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-any-arr-list": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-any-arr-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-contains-any-i-list": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_contains_any"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_contains_any(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-i-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "nullValue": null
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-i-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "stringValue": "a"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-i-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "k": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "constant-nested-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "integerValue": "2"
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-literal": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "document-id-n": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "parent-name": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "document-id-parent-name": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "document_id(...) requires a non-empty path.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/px1/static-refusals": {
+      "corpusDigest": "bf0c723e7e35bcbf44bdc0e98b83566e0ecf189a3c41c72f30064969a8394798",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-19T12:53:45.973Z",
+      "gitSha": "f01bbc40def0c2969e05387cb4f4eba7406bc49f",
+      "steps": {
+        "select-and-1-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-and-1-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "select-array-contains-1-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-array-contains-1-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "select-is-type-bogus": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'type' for function 'is_type' must be a literal of type string from the following list: [null, array, boolean, bytes, timestamp, geo_point, number, int32, int64, float64, decimal128, map, reference, string, vector, max_key, min_key, object_id, regex, bson_timestamp]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "where-is-type-bogus": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'type' for function 'is_type' must be a literal of type string from the following list: [null, array, boolean, bytes, timestamp, geo_point, number, int32, int64, float64, decimal128, map, reference, string, vector, max_key, min_key, object_id, regex, bson_timestamp]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-equal-any-1-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-equal-any-1-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "select-sqrt-a": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-sqrt-a": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/px1/where": {
+      "corpusDigest": "4a5a0e669fd398df4c0a0692dd64366cfa0e831370e29c822dcbf11c2263db62",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-19T12:53:45.973Z",
+      "gitSha": "f01bbc40def0c2969e05387cb4f4eba7406bc49f",
+      "steps": {
+        "less-than-i-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "equal-x-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-i": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-n": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-b": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "id": {
+                      "stringValue": "d"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "field-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "not-equal-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "id": {
+                      "stringValue": "d"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "not-equal-x-1": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "id": {
+                      "stringValue": "d"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "is-error-less-than-i-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "sqrt-s-positive": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "sqrt"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function sqrt(...) requires `Float` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-x": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/results/metadata": {
+      "corpusDigest": "6cf5159c300480779794b56a60678de654536a383a72fe65ce51ed739aaf3886",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-19T12:53:45.973Z",
+      "gitSha": "f01bbc40def0c2969e05387cb4f4eba7406bc49f",
+      "steps": {
+        "bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "bare-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "select": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "select-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "where": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "where-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "limit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "limit-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "add-fields": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "k": {
+                      "integerValue": "3"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    },
+                    "k": {
+                      "integerValue": "2"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "k": {
+                      "integerValue": "1"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "add-fields-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "k": {
+                      "integerValue": "3"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    },
+                    "k": {
+                      "integerValue": "2"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "k": {
+                      "integerValue": "1"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "remove-fields": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "remove-fields-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/res/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "aggregate": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+          "messages": []
+        },
+        "distinct": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "distinct-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "empty-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/results/order": {
+      "corpusDigest": "b142177f5397fd34a715e1cae201fde2d643a7c6b5465109b34b48b050375455",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-19T12:53:45.973Z",
+      "gitSha": "f01bbc40def0c2969e05387cb4f4eba7406bc49f",
+      "steps": {
+        "write-c": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "write-a": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "write-bb": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "write-b": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "unsorted": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t3>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/b",
+                  "updateTime": "<t3>"
+                },
+                {
+                  "createTime": "<t4>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/bb",
+                  "updateTime": "<t4>"
+                },
+                {
+                  "createTime": "<t5>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/a",
+                  "updateTime": "<t5>"
+                }
+              ]
+            }
+          ]
+        },
+        "unsorted-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t3>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/b",
+                  "updateTime": "<t3>"
+                },
+                {
+                  "createTime": "<t4>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/bb",
+                  "updateTime": "<t4>"
+                },
+                {
+                  "createTime": "<t5>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/a",
+                  "updateTime": "<t5>"
+                }
+              ]
+            }
+          ]
+        },
+        "unsorted-again": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t3>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/b",
+                  "updateTime": "<t3>"
+                },
+                {
+                  "createTime": "<t4>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/bb",
+                  "updateTime": "<t4>"
+                },
+                {
+                  "createTime": "<t5>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ord/a",
+                  "updateTime": "<t5>"
+                }
+              ]
+            }
+          ]
+        },
+        "unsorted-select": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -11,7 +11,9 @@
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
-use fireemu_core_firestore::pipeline_exec::{self, Expr, ExprError, Placement, Stage, Unrecorded};
+use fireemu_core_firestore::pipeline_exec::{
+    self, Arity, Expr, ExprError, Placement, Stage, Unrecorded,
+};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
@@ -535,25 +537,48 @@ fn expr_status(error: ExprError) -> Status {
     }
 }
 
-/// Where an operand stands: directly in a stage (`where` operand, `select` value) or as a
-/// function argument.
+/// Where an operand stands: directly in a stage (a `select` value), or as an argument of a
+/// function (named, so that `__name__` can be allowed for the document functions only).
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Position {
+enum Position<'a> {
     Stage,
-    Argument,
+    Argument(&'a str),
 }
 
-/// Decodes an operand expression: a field reference, a call of a table value function or,
-/// as a function argument only, a reference literal. `__name__` is accepted only as a
-/// function argument.
-fn decode_operand(value: &pb::Value, position: Position) -> Result<Expr, Status> {
+/// The functions that take a document reference, the only ones `__name__` may be passed to.
+const DOCUMENT_FUNCTIONS: &[&str] = &["document_id", "collection_id", "parent"];
+
+/// Whether a wire value holds no expression at any depth (a literal the core can decode).
+fn is_literal(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().all(is_literal),
+        Some(V::MapValue(map)) => map.fields.values().all(is_literal),
+        Some(
+            V::FieldReferenceValue(_)
+            | V::VariableReferenceValue(_)
+            | V::FunctionValue(_)
+            | V::PipelineValue(_),
+        )
+        | None => false,
+        Some(_) => true,
+    }
+}
+
+/// Decodes an operand expression: a field reference, a call of a table function or, as a
+/// function argument, a literal. An array or map literal that holds expressions becomes a
+/// call of `array` / `map` in either position. `__name__` is accepted only as an argument of a
+/// document function; a pure literal is no `select` value.
+fn decode_operand(value: &pb::Value, position: Position<'_>) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         None => Err(Status::invalid_argument("expression argument is missing")),
         Some(V::FieldReferenceValue(field)) => {
             let path =
                 FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?;
-            if path.is_document_name() && position == Position::Stage {
+            let document_argument =
+                matches!(position, Position::Argument(name) if DOCUMENT_FUNCTIONS.contains(&name));
+            if path.is_document_name() && !document_argument {
                 return Err(Status::unimplemented(
                     "__name__ field references are unsupported locally outside document functions",
                 ));
@@ -561,20 +586,11 @@ fn decode_operand(value: &pb::Value, position: Position) -> Result<Expr, Status>
             Ok(Expr::Field(path))
         }
         Some(V::FunctionValue(function)) => {
-            match pipeline_exec::function(&function.name) {
-                None => {
-                    return Err(Status::unimplemented(format!(
-                        "function {:?} is unsupported locally",
-                        function.name
-                    )))
-                }
-                Some(def) if def.placement != Placement::Value => {
-                    return Err(Status::unimplemented(format!(
-                        "function {:?} is unsupported in this position locally",
-                        function.name
-                    )))
-                }
-                Some(_) => {}
+            if pipeline_exec::function(&function.name).is_none() {
+                return Err(Status::unimplemented(format!(
+                    "function {:?} is unsupported locally",
+                    function.name
+                )));
             }
             if !function.options.is_empty() {
                 return Err(Status::invalid_argument(format!(
@@ -585,21 +601,47 @@ fn decode_operand(value: &pb::Value, position: Position) -> Result<Expr, Status>
             let args = function
                 .args
                 .iter()
-                .map(|arg| decode_operand(arg, Position::Argument))
+                .map(|arg| decode_operand(arg, Position::Argument(&function.name)))
                 .collect::<Result<Vec<_>, _>>()?;
             Expr::call(&function.name, args, Placement::Value).map_err(expr_status)
         }
-        Some(V::ReferenceValue(reference)) if position == Position::Argument => Ok(Expr::Constant(
-            fireemu_core_firestore::value::Value::Reference(reference.clone()),
+        Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
+            "variable and pipeline operands are unsupported locally",
         )),
-        Some(_) => Err(Status::unimplemented(
+        Some(_) if position == Position::Stage && is_literal(value) => Err(Status::unimplemented(
             "literal expression operands are unsupported locally",
         )),
+        Some(_) if is_literal(value) => Ok(Expr::Constant(
+            crate::decode::decode_value(value)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?,
+        )),
+        Some(V::ArrayValue(array)) => {
+            let elements = array
+                .values
+                .iter()
+                .map(|element| decode_operand(element, Position::Argument("array")))
+                .collect::<Result<Vec<_>, _>>()?;
+            Expr::call("array", elements, Placement::Value).map_err(expr_status)
+        }
+        Some(V::MapValue(map)) => {
+            let mut entries: Vec<_> = map.fields.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let mut args = Vec::with_capacity(2 * entries.len());
+            for (key, element) in entries {
+                args.push(Expr::Constant(
+                    fireemu_core_firestore::value::Value::String(key.clone()),
+                ));
+                args.push(decode_operand(element, Position::Argument("map"))?);
+            }
+            Expr::call("map", args, Placement::Value).map_err(expr_status)
+        }
+        Some(_) => unreachable!("every other kind is a literal"),
     }
 }
 
-/// Decodes `where(equal(operand, scalar literal))`. A field operand also gives the same
-/// filter the `RunQuery` lowering sends, for the scan to apply before it copies documents.
+/// Decodes `where(condition)`: a call of a table function that returns a boolean. An
+/// `equal(field, scalar literal)` also gives the same filter the `RunQuery` lowering sends,
+/// for the scan to apply before it copies documents.
 fn decode_condition(
     stage: &pb::pipeline::Stage,
 ) -> Result<(Expr, Option<pb::structured_query::Filter>), Status> {
@@ -607,60 +649,44 @@ fn decode_condition(
         stage.args.first().and_then(|v| v.value_type.as_ref())
     else {
         return Err(Status::invalid_argument(
-            "where requires an equal expression",
+            "where requires a boolean expression",
         ));
     };
-    let Some(def) =
-        pipeline_exec::function(&function.name).filter(|def| def.placement == Placement::Condition)
+    let Some(def) = pipeline_exec::function(&function.name).filter(|def| def.returns_boolean)
     else {
         return Err(Status::unimplemented(
             "where expression is unsupported locally",
         ));
     };
-    // `equal` is the table's only condition and takes two arguments; the wording is the
-    // finite subset's.
-    if function.args.len() != def.arity || !function.options.is_empty() {
+    // Every boolean function of the table is a comparison of two arguments; the wording is
+    // the finite subset's.
+    if def.arity != Arity::Exact(function.args.len()) || !function.options.is_empty() {
         return Err(Status::invalid_argument(format!(
             "{} requires exactly two arguments and no options",
             def.name
         )));
     }
-    let left = match function.args[0].value_type.as_ref() {
-        None => return Err(Status::invalid_argument("equal first argument is missing")),
-        Some(
-            pb::value::ValueType::FieldReferenceValue(_) | pb::value::ValueType::FunctionValue(_),
-        ) => decode_operand(&function.args[0], Position::Stage)?,
-        Some(_) => {
-            return Err(Status::unimplemented(
-                "equal first argument is unsupported locally",
-            ))
+    let args = function
+        .args
+        .iter()
+        .map(|arg| decode_operand(arg, Position::Argument(def.name)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let scalar_literal = |value: &pb::Value| {
+        is_literal(value)
+            && !matches!(
+                value.value_type,
+                Some(pb::value::ValueType::ArrayValue(_) | pb::value::ValueType::MapValue(_))
+            )
+    };
+    let pushdown = match (&args[..], &function.args[..]) {
+        ([Expr::Field(path), _], [_, literal])
+            if def.name == "equal" && scalar_literal(literal) =>
+        {
+            Some(equal_filter(path.canonical(), literal))
         }
+        _ => None,
     };
-    let right = match function.args[1].value_type.as_ref() {
-        None => return Err(Status::invalid_argument("where literal is missing")),
-        Some(
-            pb::value::ValueType::ArrayValue(_)
-            | pb::value::ValueType::MapValue(_)
-            | pb::value::ValueType::FieldReferenceValue(_)
-            | pb::value::ValueType::VariableReferenceValue(_)
-            | pb::value::ValueType::FunctionValue(_)
-            | pb::value::ValueType::PipelineValue(_),
-        ) => {
-            return Err(Status::unimplemented(
-                "where literal is unsupported locally",
-            ))
-        }
-        Some(_) => Expr::Constant(
-            crate::decode::decode_value(&function.args[1])
-                .map_err(|e| Status::invalid_argument(e.to_string()))?,
-        ),
-    };
-    let pushdown = match &left {
-        Expr::Field(path) => Some(equal_filter(path.canonical(), &function.args[1])),
-        Expr::Constant(_) | Expr::Call { .. } => None,
-    };
-    let condition =
-        Expr::call(def.name, vec![left, right], Placement::Condition).map_err(expr_status)?;
+    let condition = Expr::call(def.name, args, Placement::Condition).map_err(expr_status)?;
     Ok((condition, pushdown))
 }
 

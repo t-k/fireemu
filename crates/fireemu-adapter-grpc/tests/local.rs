@@ -6451,18 +6451,8 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             unsupported,
         ),
         (
-            "other function",
-            vec![expression("less_than", vec![pipeline_field("score"), i(7)])],
-            unsupported,
-        ),
-        (
             "eq alias",
             vec![expression("eq", vec![pipeline_field("score"), i(7)])],
-            unsupported,
-        ),
-        (
-            "reversed operands",
-            vec![expression("equal", vec![i(7), pipeline_field("score")])],
             unsupported,
         ),
         (
@@ -6482,38 +6472,11 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             unsupported,
         ),
         (
-            "array literal",
-            vec![pipeline_equal(
-                "score",
-                pb::Value {
-                    value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![i(7)] })),
-                },
-            )],
-            unsupported,
-        ),
-        (
-            "map literal",
-            vec![pipeline_equal(
-                "score",
-                pb::Value {
-                    value_type: Some(V::MapValue(pb::MapValue {
-                        fields: [("n".into(), i(7))].into_iter().collect(),
-                    })),
-                },
-            )],
-            unsupported,
-        ),
-        (
             "expression right",
             vec![pipeline_equal(
                 "score",
                 pipeline_function("abs", vec![i(7)]),
             )],
-            unsupported,
-        ),
-        (
-            "field right",
-            vec![pipeline_equal("score", pipeline_field("other"))],
             unsupported,
         ),
         ("zero arity", vec![expression("equal", vec![])], invalid),
@@ -6856,14 +6819,6 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
             unsupported,
         ),
         (
-            "equal in select",
-            vec![pipeline_select_map(vec![(
-                "same",
-                pipeline_function("equal", vec![pipeline_field("name"), s("a")]),
-            )])],
-            unsupported,
-        ),
-        (
             "unknown function in select",
             vec![pipeline_select_map(vec![(
                 "abs",
@@ -6900,7 +6855,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "same",
                 pipeline_function("equal", vec![pipeline_field("a..b"), s("a")]),
             )])],
-            unsupported,
+            invalid,
         ),
         (
             "equal with one argument",
@@ -7233,6 +7188,218 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                 fireemu_code,
                 "{label}"
             );
+        }
+        handle.abort();
+    }
+}
+
+/// PX1a: the six comparisons stand in where and select with literals on either side, and
+/// array and map literals compare deeply. Inputs whose production answer is unrecorded (an
+/// absent operand below the top of a where, a null operand of an ordering, an absent array
+/// element) are refused by strict and answered as the official emulator answers them by the
+/// emulator profile.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
+    use pb::value::ValueType as V;
+    let array = |values: Vec<pb::Value>| pb::Value {
+        value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+    };
+    let map = |fields: &[(&str, pb::Value)]| pb::Value {
+        value_type: Some(V::MapValue(pb::MapValue {
+            fields: fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        })),
+    };
+    let null = pb::Value {
+        value_type: Some(V::NullValue(0)),
+    };
+    let boolean = |b: bool| pb::Value {
+        value_type: Some(V::BooleanValue(b)),
+    };
+    let f = pipeline_field;
+    let call = pipeline_function;
+    let collection = || pipeline_stage("collection", s("cmp"));
+    let condition = |name: &str, args| pipeline_stage("where", call(name, args));
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let strict = policy == IndexValidationPolicy::Production;
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write(
+                        "cmp/a",
+                        &[
+                            ("i", i(1)),
+                            ("s", s("a")),
+                            ("arr", array(vec![i(1), s("a")])),
+                            ("m", map(&[("a", i(1))])),
+                            ("n", null.clone()),
+                        ],
+                    ),
+                    update_write("cmp/b", &[("i", i(5))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut run = |stages: Vec<pb::pipeline::Stage>| {
+            let mut client = client.clone();
+            async move {
+                match client.execute_pipeline(pipeline_request(stages)).await {
+                    Err(status) => Err(status),
+                    Ok(response) => {
+                        let mut stream = response.into_inner();
+                        let mut out = Vec::new();
+                        loop {
+                            match stream.message().await {
+                                Err(status) => break Err(status),
+                                Ok(None) => break Ok(out),
+                                Ok(Some(r)) => out.extend(r.results.into_iter().map(|d| d.fields)),
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let fields =
+            |entries: &[(&str, pb::Value)]| -> std::collections::HashMap<String, pb::Value> {
+                entries
+                    .iter()
+                    .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                    .collect()
+            };
+        // Both profiles: comparisons in where and select, literals on either side.
+        let got = run(vec![
+            collection(),
+            condition("less_than", vec![f("i"), i(3)]),
+            pipeline_select_map(vec![
+                ("lt", call("less_than", vec![f("i"), i(3)])),
+                ("ge", call("greater_than_or_equal", vec![f("i"), i(1)])),
+                ("ne", call("not_equal", vec![f("s"), s("b")])),
+            ]),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(
+            got,
+            vec![fields(&[
+                ("lt", boolean(true)),
+                ("ge", boolean(true)),
+                ("ne", boolean(true))
+            ])],
+            "{policy:?}"
+        );
+        for (label, cond) in [
+            ("reversed", condition("greater_than", vec![i(3), f("i")])),
+            (
+                "array literal",
+                condition("equal", vec![f("arr"), array(vec![i(1), s("a")])]),
+            ),
+            (
+                "map literal",
+                condition("equal", vec![f("m"), map(&[("a", i(1))])]),
+            ),
+            (
+                "expression literal",
+                condition("equal", vec![array(vec![f("i")]), array(vec![i(1)])]),
+            ),
+        ] {
+            let got = run(vec![
+                collection(),
+                cond,
+                pipeline_select_map(vec![("i", f("i"))]),
+            ])
+            .await
+            .unwrap();
+            assert_eq!(got, vec![fields(&[("i", i(1))])], "{policy:?} {label}");
+        }
+        let both = run(vec![
+            collection(),
+            condition("equal", vec![f("i"), f("i")]),
+            pipeline_select_map(vec![("i", f("i"))]),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(both.len(), 2, "{policy:?}");
+        let literals = run(vec![
+            collection(),
+            condition("equal", vec![f("s"), s("a")]),
+            pipeline_select_map(vec![
+                ("arr", call("array", vec![f("i"), f("s")])),
+                ("map", map(&[("k", f("i"))])),
+            ]),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(
+            literals,
+            vec![fields(&[
+                ("arr", array(vec![i(1), s("a")])),
+                ("map", map(&[("k", i(1))]))
+            ])],
+            "{policy:?}"
+        );
+        // Unrecorded inputs.
+        let only_a = || condition("equal", vec![f("s"), s("a")]);
+        let cases = [
+            (
+                "absent below the top",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![("v", call("equal", vec![f("x"), i(1)]))]),
+                ],
+                vec![fields(&[("v", boolean(false))])],
+            ),
+            (
+                "null in an ordering",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![("v", call("less_than", vec![f("n"), i(1)]))]),
+                ],
+                vec![fields(&[("v", boolean(false))])],
+            ),
+            (
+                "absent array element",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![("v", call("array", vec![f("i"), f("x")]))]),
+                ],
+                vec![fields(&[("v", array(vec![i(1), null.clone()]))])],
+            ),
+            (
+                "absent not_equal at the top",
+                vec![
+                    collection(),
+                    condition("not_equal", vec![f("x"), i(1)]),
+                    pipeline_select_map(vec![("i", f("i"))]),
+                ],
+                vec![fields(&[("i", i(1))]), fields(&[("i", i(5))])],
+            ),
+        ];
+        for (label, stages, official) in cases {
+            let got = run(stages).await;
+            if strict {
+                let err = got.unwrap_err();
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                assert_eq!(
+                    err.metadata().get("fireemu-code").unwrap(),
+                    "FS_PIPE_UNSUPPORTED_STAGE",
+                    "{label}"
+                );
+            } else {
+                assert_eq!(got.unwrap(), official, "{label}");
+            }
         }
         handle.abort();
     }

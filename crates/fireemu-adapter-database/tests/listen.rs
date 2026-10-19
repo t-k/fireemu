@@ -312,7 +312,15 @@ type Step = ((&'static str, &'static str), &'static [&'static str]);
 
 /// Replays steps recorded against the official emulator and compares what `A` receives.
 fn replay(ns: &str, steps: &[Step]) {
+    replay_indexed(ns, &[], steps);
+}
+
+/// [`replay`] with `.indexOn` declarations, `(path, child)`.
+fn replay_indexed(ns: &str, indexes: &[(&str, &str)], steps: &[Step]) {
     let mut db = Database::new(RestOptions::default(), 1);
+    for (path, child) in indexes {
+        db.declare_index(ns, &fireemu_core_database::Path::from_keys([*path]), child);
+    }
     let mut a = open(&mut db, ns);
     let mut b = open(&mut db, ns);
     for (index, ((who, text), expected)) in steps.iter().enumerate() {
@@ -514,4 +522,90 @@ fn priorities_written_to_leaves_read_as_doubles() {
         (("B", r#"{"r":3,"a":"m","b":{"p":"/s","d":{"a":{".value":7,".priority":9},"z":1}}}"#), &[r#"{"t":"d","d":{"b":{"p":"s","d":{"z":1,"a":{".value":7,".priority":9.0}},"t":1},"a":"m"}}"#]),
         (("B", r#"{"r":4,"a":"m","b":{"p":"/s","d":{"b":{".value":7,".priority":9},"c/.priority":8}}}"#), &[]),
     ]);
+}
+
+/// Nulls that change nothing: sent where a window shows a child, or where a window that is
+/// not full would show one in its range; zero and negative limits are refused.
+#[test]
+#[rustfmt::skip]
+fn nulls_reach_the_places_a_window_shows() {
+    replay_indexed("r9", &[("t", "x")], &[
+        (("REST", r#"PUT /w.json {"c":1}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","sp":"b","ep":"c"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"c":1},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"p","b":{"p":"/w/b","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":null,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":2,"a":"p","b":{"p":"/w/a","d":null}}"#), &[]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/w","q":{"i":".key","l":0,"vf":"l"},"t":2,"h":""}}"#), &[r#"{"t":"d","d":{"r":2,"b":{"s":"invalid_parameters","d":"Invalid query limit"}}}"#]),
+        (("B", r#"{"r":3,"a":"m","b":{"p":"/w","d":{"d":1}}}"#), &[]),
+        (("B", r#"{"r":4,"a":"p","b":{"p":"/w/e","d":2}}"#), &[]),
+        (("B", r#"{"r":5,"a":"p","b":{"p":"/w/f","d":null}}"#), &[]),
+        (("B", r#"{"r":6,"a":"p","b":{"p":"/x/a","d":null}}"#), &[]),
+        (("A", r#"{"r":3,"a":"q","b":{"p":"/t","q":{"i":"x","sp":1},"t":3,"h":""}}"#), &[r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":7,"a":"p","b":{"p":"/t/a","d":null}}"#), &[]),
+        (("A", r#"{"r":4,"a":"q","b":{"p":"/t","q":{"i":"x","l":2,"vf":"l"},"t":4,"h":""}}"#), &[r#"{"t":"d","d":{"r":4,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":8,"a":"p","b":{"p":"/t/b","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"t/b","d":null,"t":4},"a":"d"}}"#]),
+    ]);
+    replay("r10", &[
+        (("REST", r#"PUT /w.json {"a":1,"c":3,"d":4}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"c":3},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"p","b":{"p":"/w/b","d":null}}"#), &[]),
+        (("B", r#"{"r":2,"a":"p","b":{"p":"/w/0","d":null}}"#), &[]),
+        (("B", r#"{"r":3,"a":"p","b":{"p":"/w/e","d":null}}"#), &[]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/w","q":{"i":".key","l":0,"vf":"r"},"t":2,"h":""}}"#), &[r#"{"t":"d","d":{"r":2,"b":{"s":"invalid_parameters","d":"Invalid query limit"}}}"#]),
+        (("A", r#"{"r":3,"a":"q","b":{"p":"/w","q":{"i":".key","l":-1,"vf":"l"},"t":3,"h":""}}"#), &[r#"{"t":"d","d":{"r":3,"b":{"s":"invalid_parameters","d":"Invalid query limit"}}}"#]),
+        (("A", r#"{"r":4,"a":"g","b":{"p":"/w","q":{"i":".key","l":0,"vf":"l"}}}"#), &[r#"{"t":"d","d":{"r":4,"b":{"s":"invalid_parameters","d":"Invalid query limit"}}}"#]),
+    ]);
+    replay("r11", &[
+        (("REST", r#"PUT /w.json {"a":1,"b":{"y":1},"c":3}"#), &[]),
+        (("A", r#"{"r":1,"a":"q","b":{"p":"/w","q":{"i":".key","l":2,"vf":"l"},"t":1,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":{"y":1}},"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":1,"a":"p","b":{"p":"/w/b/x","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b/x","d":null,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":2,"a":"p","b":{"p":"/w/a/x","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/a/x","d":null,"t":1},"a":"d"}}"#]),
+        (("B", r#"{"r":3,"a":"p","b":{"p":"/w/c/x","d":null}}"#), &[]),
+        (("A", r#"{"r":2,"a":"q","b":{"p":"/w","q":{"i":".key","l":5,"vf":"l"},"t":2,"h":""}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"a":1,"b":{"y":1},"c":3},"t":2},"a":"d"}}"#, r#"{"t":"d","d":{"r":2,"b":{"s":"ok","d":{}}}}"#]),
+        (("B", r#"{"r":4,"a":"p","b":{"p":"/w/b/x","d":null}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b/x","d":null,"t":1},"a":"d"}}"#, r#"{"t":"d","d":{"b":{"p":"w/b/x","d":null,"t":2},"a":"d"}}"#]),
+        (("B", r#"{"r":5,"a":"m","b":{"p":"/w","d":{"b/x":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w","d":{"b/x":null},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w","d":{"b/x":null},"t":2},"a":"m"}}"#]),
+        (("B", r#"{"r":6,"a":"m","b":{"p":"/w","d":{"q":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/q","d":null,"t":2},"a":"d"}}"#]),
+        (("B", r#"{"r":7,"a":"m","b":{"p":"/w/b","d":{"x":null}}}"#), &[r#"{"t":"d","d":{"b":{"p":"w/b","d":{"x":null},"t":1},"a":"m"}}"#, r#"{"t":"d","d":{"b":{"p":"w/b","d":{"x":null},"t":2},"a":"m"}}"#]),
+    ]);
+}
+
+#[test]
+fn merge_members_keep_their_order_beside_other_objects() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    rest(&mut db, "PUT", "/s.json?ns=l7", r#"{"a":0,"b":0}"#);
+    let mut s = open(&mut db, "l7");
+    send(&mut db, &mut s, &request(1, "q", r#"{"p":"/s","h":""}"#));
+    // Another object member of the body, before `d`, lists the same keys the other way.
+    assert_eq!(
+        send(
+            &mut db,
+            &mut s,
+            r#"{"t":"d","d":{"r":2,"a":"m","b":{"z":{"b":1,"a":1},"p":"/s","d":{"a":1,"b":2}}}}"#
+        ),
+        vec![
+            push("m", "s", r#"{"a":1,"b":2}"#, None),
+            reply(2, "ok", r#""""#)
+        ]
+    );
+}
+
+#[test]
+fn closing_one_connection_keeps_the_pushes_queued_for_others() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let mut writer = open(&mut db, "l8");
+    let mut reader = open(&mut db, "l8");
+    send(
+        &mut db,
+        &mut reader,
+        &request(1, "q", r#"{"p":"/a","h":""}"#),
+    );
+    send(
+        &mut db,
+        &mut writer,
+        &request(1, "p", r#"{"p":"/a","d":1}"#),
+    );
+    db.close_realtime(writer.client());
+    assert_eq!(
+        db.drain_pushes(),
+        vec![(reader.client(), push("d", "a", "1", None))]
+    );
 }

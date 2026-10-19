@@ -16,8 +16,8 @@
 //!   changed first, then what was deleted, as null; a child pushed out of a limit window by
 //!   another one entering is not reported (the client trims its window itself). A put whose
 //!   child is the only change gives a `d` message at the written path, anything else an `m`
-//!   message at the location; null written where a window that is not full would show a
-//!   child is sent as written. Merges follow [`Listen::window_merge`]. An empty window is
+//!   message at the location; null that changes nothing is sent as written where the
+//!   window shows a child, or where a window that is not full would show one. Merges follow [`Listen::window_merge`]. An empty window is
 //!   null, or `{}` for a window without a limit.
 //! - A query whose order needs an index that is not declared is served as a plain listen of
 //!   the whole location, with the warning `no_index`.
@@ -59,10 +59,7 @@ impl Listen {
     /// a leaf shows nothing, as a query `g` on a leaf answers null.
     fn window_children<'a>(&self, tree: &'a Tree) -> Option<Vec<(&'a str, &'a Node)>> {
         let (query, _) = self.window.as_ref()?;
-        Some(match tree.get(&self.path) {
-            Some(node) if matches!(node.content, Content::Children(_)) => query.run(Some(node)),
-            _ => Vec::new(),
-        })
+        Some(query.run(tree.get(&self.path)))
     }
 
     /// The data the listen currently shows.
@@ -192,8 +189,8 @@ impl Listen {
                     [(key, _)] if Some(key) == written.as_ref() && shown(key) => {
                         vec![frame("d", path, &value_at(tree, path), tag)]
                     }
-                    // A child that entered arrives whole.
-                    [(key, value)] if Some(key) == written.as_ref() => {
+                    // A child that entered arrives whole (only the written child can).
+                    [(key, value)] => {
                         vec![frame("d", &location.child(key), value, tag)]
                     }
                     _ => message("m", location, &entries, tag),
@@ -217,9 +214,10 @@ impl Listen {
         }
     }
 
-    /// Whether `path`, below the location, holds nothing and lies where the window would
-    /// show a child: the window is not full and the child's key fits its range. Only the
-    /// key order can place an absent child, so other orders count only without bounds.
+    /// Whether null written to `path`, below the location, changed nothing the window
+    /// shows but lies where it shows a child: inside a child it shows, or where a window
+    /// that is not full would show one whose key fits its range. Only the key order can
+    /// place an absent child, so other orders count only without bounds.
     fn would_show_nothing_at(&self, tree: &Tree, path: &Path) -> bool {
         let Some((query, _)) = &self.window else {
             return false;
@@ -228,9 +226,12 @@ impl Listen {
             return false;
         }
         let shown = as_map(&self.last);
-        let window = OldWindow::new(query, tree, &self.path, &shown);
         let key = &path.keys()[self.path.depth()];
-        if window.bounds.is_some() || shown.contains_key(key) {
+        if shown.contains_key(key) {
+            return true;
+        }
+        let window = OldWindow::new(query, tree, &self.path, &shown);
+        if window.bounds.is_some() {
             return false;
         }
         match query.order_by {
@@ -265,7 +266,12 @@ impl Listen {
         };
         let kept: Vec<&Path> = inside.iter().filter(|path| touches(path)).collect();
         if kept.is_empty() {
-            return Vec::new();
+            // Nulls that changed nothing still reach the places the window shows.
+            return inside
+                .iter()
+                .filter(|path| self.would_show_nothing_at(tree, path))
+                .map(|path| frame("d", path, &Json::Null, tag))
+                .collect();
         }
         if base != location && location.contains(base) {
             let kept: Vec<Path> = kept.into_iter().cloned().collect();

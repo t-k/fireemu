@@ -1,4 +1,4 @@
-//! The differential corpus of the pipeline subset (coordinator ruling of 2026-10-20 for round 3 of the PX1d review):
+//! The differential corpus of the pipeline subset (coordinator ruling of 2026-10-20 for round 3 of the `PX1d` review):
 //! fixed pipelines with the official emulator's answers (conformance/fs-ent-pipeline-differential.json,
 //! recorded on loopback by conformance/src/fs-ent-pipeline/differential.mjs), run through the
 //! in-process REST surface under both profiles.

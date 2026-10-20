@@ -89,10 +89,7 @@ impl Product {
     /// Whether fireemu can import and export this product's section.
     #[must_use]
     pub fn is_served(self) -> bool {
-        matches!(
-            self,
-            Self::Firestore | Self::Auth | Self::Storage | Self::Database
-        )
+        !matches!(self, Self::DataConnect)
     }
 
     /// Every product, in the order the official CLI writes them.

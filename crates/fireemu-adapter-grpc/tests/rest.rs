@@ -7081,11 +7081,16 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                 501,
                 "UNIMPLEMENTED",
             ),
+            // The stage registry's own text: strict refuses it as unobserved.
             (
                 "input misplaced",
                 pipeline_body(&json!([{"name": "limit", "args": [{"integerValue": "1"}]}])),
-                400,
-                "INVALID_ARGUMENT",
+                if strict { 501 } else { 400 },
+                if strict {
+                    "UNIMPLEMENTED"
+                } else {
+                    "INVALID_ARGUMENT"
+                },
             ),
             ("no pipeline", json!({}), 400, "INVALID_ARGUMENT"),
             (

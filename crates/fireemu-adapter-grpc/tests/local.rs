@@ -6101,10 +6101,11 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
         .execute_pipeline(request(vec![stage("where", 1)]))
         .await
         .unwrap_err();
-    assert_eq!(misplaced.code(), tonic::Code::InvalidArgument);
+    // The stage registry's own text is unobserved in production, so strict refuses it.
+    assert_eq!(misplaced.code(), tonic::Code::Unimplemented);
     assert_eq!(
         misplaced.metadata().get("fireemu-code").unwrap(),
-        "FS_PIPE_INVALID"
+        "FS_PIPE_UNSUPPORTED_STAGE"
     );
     let empty = client
         .execute_pipeline(pb::ExecutePipelineRequest {
@@ -6176,10 +6177,22 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
         ),
     ] {
         let err = client.execute_pipeline(bad).await.unwrap_err();
-        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{what}: {err}");
+        // The stage registry's own texts are unobserved in production, so strict refuses those
+        // pipelines; the request envelope's checks keep INVALID_ARGUMENT.
+        let registry = [
+            "collection(null)",
+            "collection(document path)",
+            "unknown option",
+        ];
+        let (code, fireemu_code) = if registry.contains(&what) {
+            (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
+        } else {
+            (tonic::Code::InvalidArgument, "FS_PIPE_INVALID")
+        };
+        assert_eq!(err.code(), code, "{what}: {err}");
         assert_eq!(
             err.metadata().get("fireemu-code").unwrap(),
-            "FS_PIPE_INVALID",
+            fireemu_code,
             "{what}"
         );
     }
@@ -9275,18 +9288,15 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
             },
         ),
     ] {
+        // The stage registry's own texts are unobserved in production: strict refuses them.
         let error = client
             .execute_pipeline(execute(vec![collection_stage(), offset]))
             .await
             .unwrap_err();
-        assert_eq!(
-            error.code(),
-            tonic::Code::InvalidArgument,
-            "{label}: {error}"
-        );
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
         assert_eq!(
             error.metadata().get("fireemu-code").unwrap(),
-            "FS_PIPE_INVALID",
+            "FS_PIPE_UNSUPPORTED_STAGE",
             "{label}: {error}"
         );
         assert!(error.metadata().get("fireemu-pipeline").is_none());

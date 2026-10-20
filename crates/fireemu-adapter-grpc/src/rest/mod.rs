@@ -1570,8 +1570,7 @@ impl RestState {
         } else {
             fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
         };
-        let ast = crate::pipeline::validate_pipeline(&request)
-            .map_err(|error| crate::pipeline::registry_status(error, unrecorded))?;
+        let ast = crate::pipeline::validate_pipeline(&request, unrecorded)?;
         let canonical = ast.canonical_text();
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))
             .map_err(|e| Status::invalid_argument(e.to_string()))?;

@@ -880,9 +880,12 @@ async fn execute_pipeline_preserves_canonical_context_on_continuation_error() {
         drop(barrier.exclusive());
     }));
     let request = pipeline_request();
-    let canonical = crate::pipeline::validate_pipeline(&request)
-        .unwrap()
-        .canonical_text();
+    let canonical = crate::pipeline::validate_pipeline(
+        &request,
+        fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse,
+    )
+    .unwrap()
+    .canonical_text();
     let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
         .await
         .unwrap()

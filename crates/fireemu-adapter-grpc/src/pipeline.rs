@@ -22,32 +22,16 @@ use crate::decode::Parent;
 /// Option keys a `StructuredPipeline` may carry.
 const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 
-/// A stage-registry refusal under the given profile. The registry's texts (a stage's argument
-/// count, argument shape, options, input position) are fireemu's own, which no production row
-/// holds, so strict refuses those pipelines as unobserved; the emulator profile keeps the
-/// texts.
-#[must_use]
-pub fn registry_status(error: Status, unrecorded: Unrecorded) -> Status {
-    let invalid = error
-        .metadata()
-        .get("fireemu-code")
-        .is_some_and(|code| code == "FS_PIPE_INVALID");
-    if unrecorded == Unrecorded::Refuse && invalid {
-        return with_code(
-            Status::unimplemented(format!(
-                "{}; this text is not observed locally",
-                error.message()
-            )),
-            "FS_PIPE_UNSUPPORTED_STAGE",
-        );
-    }
-    error
-}
-
 /// Decodes and canonicalizes the request's pipeline. Errors carry the `FS_PIPE_*` code in
-/// the `fireemu-code` metadata like the gateway's rejections.
+/// the `fireemu-code` metadata like the gateway's rejections. The stage registry's refusals
+/// (a stage's argument count, argument shape, options, input position) are fireemu's own
+/// texts, which no production row holds, so under strict (`Unrecorded::Refuse`) they are
+/// UNIMPLEMENTED; the emulator profile keeps the texts.
 #[allow(clippy::too_many_lines)]
-pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst, Status> {
+pub fn validate_pipeline(
+    req: &pb::ExecutePipelineRequest,
+    unrecorded: Unrecorded,
+) -> Result<PipelineAst, Status> {
     if req.database.is_empty() {
         return Err(with_code(
             Status::invalid_argument("ExecutePipeline requires a database"),
@@ -146,6 +130,18 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
             ),
             PipelineError::WriteStage(_) => {
                 (Status::unimplemented(e.to_string()), "FS_PIPE_WRITE_0")
+            }
+            PipelineError::Empty
+            | PipelineError::InputPosition(_)
+            | PipelineError::Arity { .. }
+            | PipelineError::Argument { .. }
+            | PipelineError::Option { .. }
+                if unrecorded == Unrecorded::Refuse =>
+            {
+                (
+                    Status::unimplemented(format!("{e}; this text is not observed locally")),
+                    "FS_PIPE_UNSUPPORTED_STAGE",
+                )
             }
             PipelineError::Empty
             | PipelineError::InputPosition(_)

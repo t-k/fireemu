@@ -235,6 +235,27 @@ fn error_info(reason: &str, metadata: &[(&str, String)]) -> prost_types::Any {
     )
 }
 
+/// Production's refusal of a `select` stage that sets a field and one of its children
+/// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases#overlap`, and the official emulator alike):
+/// `INVALID_ARGUMENT` with an `ErrorInfo` naming the child path.
+#[must_use]
+pub fn select_overlapping_paths(child: &str) -> Status {
+    with_details(
+        Code::InvalidArgument,
+        &format!(
+            "The request is invalid because the 'select(...)' stage is attempting to set a \
+parent document and one of its child fields simultaneously. In this case the parent document \
+reference of '{child}' overlaps with a child field already being configured in this stage.\n\n\
+To fix this issue, either set only the parent document reference, or explicitly set all the \
+child fields individually."
+        ),
+        vec![error_info(
+            "OVERLAPPING_PROPERTY_PATHS",
+            &[("field", child.to_owned())],
+        )],
+    )
+}
+
 /// The front end's refusal of a bearer value that is not a JWT, which it takes for an OAuth
 /// access token, as REST answers it (FS-RULES production recording, 2026-09-24): an
 /// `ErrorInfo` with no domain names the service and the gRPC method the route transcodes to.
@@ -440,6 +461,25 @@ mod tests {
                     "method": "google.firestore.v1.Firestore.RunQuery",
                     "service": "firestore.googleapis.com",
                 },
+            })])
+        );
+    }
+
+    #[test]
+    fn the_overlapping_select_refusal_renders_production_details() {
+        let status = select_overlapping_paths("m.r");
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(
+            status.message(),
+            "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+        );
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {"field": "m.r"},
+                "reason": "OVERLAPPING_PROPERTY_PATHS",
             })])
         );
     }

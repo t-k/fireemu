@@ -328,7 +328,7 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
             other => Err(argument(name, i, "a field reference", other)),
         }),
         "where" => match &args[0] {
-            Arg::Function { .. } | Arg::Field(_) => Ok(()),
+            condition if condition.is_expression() => Ok(()),
             other => Err(argument(name, 0, "a boolean expression", other)),
         },
         "sort" => args.iter().enumerate().try_for_each(|(i, a)| match a {
@@ -536,7 +536,10 @@ mod tests {
         assert!(
             canonicalize(&[stage("collection", vec![Arg::String("/users/u1".into())])]).is_err()
         );
-        assert!(canonicalize(&[users(), stage("where", vec![Arg::String("x".into())])]).is_err());
+        // A where condition is any expression (the official emulator keeps the rows a
+        // constant `true` condition keeps); a nested pipeline is none.
+        assert!(canonicalize(&[users(), stage("where", vec![Arg::String("x".into())])]).is_ok());
+        assert!(canonicalize(&[users(), stage("where", vec![Arg::Pipeline])]).is_err());
         assert!(canonicalize(&[users(), stage("sort", vec![Arg::Field("age".into())])]).is_err());
         assert!(canonicalize(&[
             users(),

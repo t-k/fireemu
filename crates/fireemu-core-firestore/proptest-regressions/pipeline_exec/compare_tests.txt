@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 797dbfd1d2ed3a1f15e4e21629d2729e87923613e66f5eb1f248bd2c70cf9243 # shrinks to stored = [Some(Integer(9223372036854775807)), Some(Double(-0.0))], literal = Integer(0)

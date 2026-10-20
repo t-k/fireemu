@@ -7035,7 +7035,7 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
             (
                 "unknown function",
                 pipeline_body(
-                    &json!([collection, {"name": "where", "args": [{"functionValue": {"name": "greater_than", "args": [{"fieldReferenceValue": "name"}, {"stringValue": "a"}]}}]}]),
+                    &json!([collection, {"name": "where", "args": [{"functionValue": {"name": "regex_match", "args": [{"fieldReferenceValue": "name"}, {"stringValue": "a"}]}}]}]),
                 ),
                 501,
                 "UNIMPLEMENTED",
@@ -7069,20 +7069,189 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
             );
             assert_eq!(body.as_array().map(Vec::len), Some(1), "{label}");
         }
-        let top_parent = pipeline_body(
-            &json!([collection, {"name": "select", "args": [{"mapValue": {"fields": {
-                "up": {"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}},
-            }}}]}]),
+        // The parent of a top-level document is the documents root under both profiles
+        // (FS-ENT-ORACLE O-1); its document ID is INVALID_ARGUMENT as in production, its
+        // collection ID INVALID_ARGUMENT as in the official emulator and unrecorded under strict.
+        let up = json!({"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}});
+        let select = |v: &Value| {
+            pipeline_body(
+                &json!([collection, {"name": "select", "args": [{"mapValue": {"fields": {"v": v}}}]}]),
+            )
+        };
+        let (status, body) = run(select(&up));
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body[0],
+            json!({"results": [{"fields": {"v": {"referenceValue": "projects/demo-app/databases/(default)/documents"}}}]})
         );
-        let (status, body) = run(top_parent);
-        if strict {
-            assert_eq!(status, 501, "{body}");
-            assert_eq!(body.as_array().map(Vec::len), Some(1));
-        } else {
-            assert_eq!(status, 200, "{body}");
+        let (status, body) = run(select(
+            &json!({"functionValue": {"name": "document_id", "args": [up]}}),
+        ));
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            stream_error(&body)["error"]["message"],
+            "document_id(...) requires a non-empty path."
+        );
+        let (status, body) = run(select(
+            &json!({"functionValue": {"name": "collection_id", "args": [up]}}),
+        ));
+        assert_eq!(status, if strict { 501 } else { 400 }, "{body}");
+        assert_eq!(body.as_array().map(Vec::len), Some(1));
+    }
+}
+
+/// Over REST, the recorded select refusals answer production's bodies: the one-element error
+/// array, the text, and the overlap's `ErrorInfo` (FS-ENT-ORACLE O-1,
+/// `fs-ent-pipeline/px0/aliases#overlap`).
+#[test]
+fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        let select = |fields: Value| {
+            pipeline_body(&json!([
+                {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+                {"name": "select", "args": [{"mapValue": {"fields": fields}}]},
+            ]))
+        };
+        let field = json!({"fieldReferenceValue": "name"});
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            select(json!({"m": field, "m.r": field})),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {"field": "m.r"},
+                    "reason": "OVERLAPPING_PROPERTY_PATHS",
+                }],
+            }}]),
+            "strict={strict}"
+        );
+        let wide: serde_json::Map<String, Value> = (0..65)
+            .map(|k| (format!("a{k:02}"), field.clone()))
+            .collect();
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            select(Value::Object(wide)),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "The 'select(...)' stage is limited to 64 fields but this stage has 65.",
+                "status": "INVALID_ARGUMENT",
+            }}]),
+            "strict={strict}"
+        );
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            select(json!({"__x__": field})),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT",
+            }}]),
+            "strict={strict}"
+        );
+    }
+}
+
+/// FS-ENT-ORACLE O-2 rows over REST, both profiles: a `where` on a non-boolean function result
+/// (`document_id`, `parent`, `array`, `map`) answers 200 with no rows; a stored -0.0 reads back
+/// with its sign; strict answers the literal select values production recorded (integers,
+/// finite doubles, arrays of them) and refuses the other kinds, which the emulator profile
+/// answers.
+#[test]
+fn rest_execute_pipeline_answers_the_o2_rows() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/kinds/d"),
+            json!({"fields": {"b2": {"booleanValue": true}, "nz": {"doubleValue": "-0"}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let run = |stages: Value| {
+            let mut all =
+                vec![json!({"name": "collection", "args": [{"referenceValue": "/kinds"}]})];
+            all.extend(stages.as_array().unwrap().iter().cloned());
+            call(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                pipeline_body(&Value::Array(all)),
+            )
+        };
+        let name = json!({"fieldReferenceValue": "__name__"});
+        let b2 = json!({"fieldReferenceValue": "b2"});
+        for condition in [
+            json!({"functionValue": {"name": "document_id", "args": [name]}}),
+            json!({"functionValue": {"name": "parent", "args": [name]}}),
+            json!({"functionValue": {"name": "array", "args": [b2]}}),
+            json!({"functionValue": {"name": "map", "args": [{"stringValue": "k"}, b2]}}),
+        ] {
+            let (status, body) = run(json!([{"name": "where", "args": [condition]}]));
+            assert_eq!(status, 200, "strict={strict} {condition}: {body}");
+            assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+            assert!(body[0].get("results").is_none(), "strict={strict} {body}");
+        }
+        let select = |v: Value| {
+            run(json!([{"name": "select", "args": [{"mapValue": {"fields": {"v": v}}}]}]))
+        };
+        let (status, body) = select(json!({"fieldReferenceValue": "nz"}));
+        assert_eq!(status, 200, "{body}");
+        let zero = body[0]["results"][0]["fields"]["v"]["doubleValue"]
+            .as_f64()
+            .unwrap();
+        assert!(
+            zero == 0.0 && zero.is_sign_negative(),
+            "strict={strict} {body}"
+        );
+        for literal in [
+            json!({"integerValue": "7"}),
+            json!({"doubleValue": -0.5}),
+            json!({"arrayValue": {"values": [{"integerValue": "1"}, {"arrayValue": {"values": [{"integerValue": "2"}]}}]}}),
+        ] {
+            let (status, body) = select(literal.clone());
+            assert_eq!(status, 200, "strict={strict} {literal}: {body}");
             assert_eq!(
-                body[0],
-                json!({"results": [{"fields": {"up": {"referenceValue": "projects/demo-app/databases/(default)/documents"}}}]})
+                body[0]["results"][0]["fields"]["v"], literal,
+                "strict={strict}"
+            );
+        }
+        for literal in [
+            json!({"stringValue": "x"}),
+            json!({"booleanValue": true}),
+            json!({"nullValue": null}),
+            json!({"doubleValue": "Infinity"}),
+            json!({"mapValue": {"fields": {"a": {"integerValue": "1"}}}}),
+            json!({"arrayValue": {"values": [{"stringValue": "x"}]}}),
+        ] {
+            let (status, body) = select(literal.clone());
+            assert_eq!(
+                status,
+                if strict { 501 } else { 200 },
+                "strict={strict} {literal}: {body}"
             );
         }
     }
@@ -7362,6 +7531,14 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
         let empty = write("time/b", json!({}));
         let second = query_read_time();
         assert_ne!(second, first, "strict={strict}");
+        // At or after the commit time of the write (both are fireemu's fixed-width RFC 3339
+        // UTC text, so their order is the text order).
+        let committed = empty["updateTime"].as_str().unwrap();
+        assert_eq!(second.len(), committed.len(), "{second} {committed}");
+        assert!(
+            second.as_str() >= committed,
+            "strict={strict}: {second} < {committed}"
+        );
         for times in answers() {
             assert!(!times.is_empty(), "strict={strict}");
             assert!(

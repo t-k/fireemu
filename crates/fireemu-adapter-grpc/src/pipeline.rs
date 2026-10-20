@@ -11,7 +11,9 @@
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
-use fireemu_core_firestore::pipeline_exec::{self, Expr, ExprError, Placement, Stage, Unrecorded};
+use fireemu_core_firestore::pipeline_exec::{
+    self, Arity, Expr, ExprError, Placement, Stage, Unrecorded,
+};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
@@ -421,12 +423,12 @@ pub struct CompiledExecution {
 }
 
 /// Compiles the finite local Enterprise subset for the core executor: collection input,
-/// then an optional single `where(equal(operand, scalar literal))`, an optional `select`,
-/// an optional `offset` and an optional `limit`, in that order. Operands are field
-/// references (nested paths included) and the table's value functions (`document_id`,
-/// `collection_id`, `parent`). Every other stage, function or arrangement is refused.
-/// `unrecorded` decides whether shapes with unrecorded production behavior (dotted or quoted
-/// select aliases) are refused or answered as the official emulator answers them.
+/// then an optional single `where(comparison)`, an optional `select`, an optional `offset`
+/// and an optional `limit`, in that order. Operands are field references (nested paths
+/// included), literals and the table's functions. Every other stage, function or arrangement
+/// is refused. `unrecorded` decides whether shapes with unrecorded production behavior
+/// (a constant `where` condition, a literal holding expressions) are refused or answered as
+/// the official emulator answers them.
 pub fn compile_pipeline(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
@@ -457,7 +459,7 @@ pub fn compile_pipeline(
                     return Err(Status::unimplemented("duplicate or misplaced where stage"));
                 }
                 seen_where = true;
-                let (condition, filter) = decode_condition(stage)?;
+                let (condition, filter) = decode_condition(stage, unrecorded)?;
                 pushdown = filter;
                 stages.push(Stage::Where(condition));
             }
@@ -535,46 +537,80 @@ fn expr_status(error: ExprError) -> Status {
     }
 }
 
-/// Where an operand stands: directly in a stage (`where` operand, `select` value) or as a
-/// function argument.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Position {
-    Stage,
-    Argument,
+/// The status of an evaluation error: `UNIMPLEMENTED` for an input whose production answer is
+/// unrecorded, `INVALID_ARGUMENT` for one production or the official emulator refuses.
+#[must_use]
+pub fn eval_status(error: &pipeline_exec::EvalError) -> Status {
+    match error {
+        pipeline_exec::EvalError::Unobserved { .. } => Status::unimplemented(error.to_string()),
+        pipeline_exec::EvalError::Invalid(message) => Status::invalid_argument(message.clone()),
+    }
 }
 
-/// Decodes an operand expression: a field reference, a call of a table value function or,
-/// as a function argument only, a reference literal. `__name__` is accepted only as a
-/// function argument.
-fn decode_operand(value: &pb::Value, position: Position) -> Result<Expr, Status> {
+/// Whether a wire value holds no expression at any depth (a literal the core can decode).
+fn is_literal(value: &pb::Value) -> bool {
+    expression_kind(value).is_none()
+}
+
+/// The wire name of the first expression a value holds at any depth, if any.
+fn expression_kind(value: &pb::Value) -> Option<&'static str> {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().find_map(expression_kind),
+        Some(V::MapValue(map)) => {
+            let mut keys: Vec<_> = map.fields.keys().collect();
+            keys.sort();
+            keys.into_iter()
+                .find_map(|key| expression_kind(&map.fields[key]))
+        }
+        Some(V::FieldReferenceValue(_)) => Some("FIELD_REFERENCE_VALUE"),
+        Some(V::VariableReferenceValue(_)) => Some("VARIABLE_REFERENCE_VALUE"),
+        Some(V::FunctionValue(_)) => Some("FUNCTION_VALUE"),
+        Some(V::PipelineValue(_)) => Some("PIPELINE_VALUE"),
+        Some(_) => None,
+        None => Some("VALUE_TYPE_NOT_SET"),
+    }
+}
+
+/// The literal shape production refused with `Value type is not supported:
+/// FIELD_REFERENCE_VALUE` (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px1/select#map-literal`): a map
+/// literal whose entries are all field references, as a select value.
+fn is_recorded_map_literal(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    matches!(
+        value.value_type.as_ref(),
+        Some(V::MapValue(map))
+            if !map.fields.is_empty()
+                && map
+                    .fields
+                    .values()
+                    .all(|entry| matches!(entry.value_type, Some(V::FieldReferenceValue(_))))
+    )
+}
+
+/// Decodes an operand expression: a field reference (`__name__` is the document reference),
+/// a call of a table function or a literal. An array or map literal that holds an
+/// expression is refused with `INVALID_ARGUMENT`, as the official emulator refuses every such
+/// literal; under strict only the shape production refused (a select value that is a map of
+/// fields) is, and the others are `UNIMPLEMENTED`. `select_value` says whether the operand is
+/// a select value itself (not an argument).
+fn decode_operand(
+    value: &pb::Value,
+    unrecorded: Unrecorded,
+    select_value: bool,
+) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         None => Err(Status::invalid_argument("expression argument is missing")),
-        Some(V::FieldReferenceValue(field)) => {
-            let path =
-                FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?;
-            if path.is_document_name() && position == Position::Stage {
-                return Err(Status::unimplemented(
-                    "__name__ field references are unsupported locally outside document functions",
-                ));
-            }
-            Ok(Expr::Field(path))
-        }
+        Some(V::FieldReferenceValue(field)) => Ok(Expr::Field(
+            FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?,
+        )),
         Some(V::FunctionValue(function)) => {
-            match pipeline_exec::function(&function.name) {
-                None => {
-                    return Err(Status::unimplemented(format!(
-                        "function {:?} is unsupported locally",
-                        function.name
-                    )))
-                }
-                Some(def) if def.placement != Placement::Value => {
-                    return Err(Status::unimplemented(format!(
-                        "function {:?} is unsupported in this position locally",
-                        function.name
-                    )))
-                }
-                Some(_) => {}
+            if pipeline_exec::function(&function.name).is_none() {
+                return Err(Status::unimplemented(format!(
+                    "function {:?} is unsupported locally",
+                    function.name
+                )));
             }
             if !function.options.is_empty() {
                 return Err(Status::invalid_argument(format!(
@@ -585,90 +621,107 @@ fn decode_operand(value: &pb::Value, position: Position) -> Result<Expr, Status>
             let args = function
                 .args
                 .iter()
-                .map(|arg| decode_operand(arg, Position::Argument))
+                .map(|arg| decode_operand(arg, unrecorded, false))
                 .collect::<Result<Vec<_>, _>>()?;
             Expr::call(&function.name, args, Placement::Value).map_err(expr_status)
         }
-        Some(V::ReferenceValue(reference)) if position == Position::Argument => Ok(Expr::Constant(
-            fireemu_core_firestore::value::Value::Reference(reference.clone()),
+        Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
+            "variable and pipeline operands are unsupported locally",
         )),
-        Some(_) => Err(Status::unimplemented(
-            "literal expression operands are unsupported locally",
-        )),
+        Some(_) => match expression_kind(value) {
+            None => Ok(Expr::Constant(
+                crate::decode::decode_value(value)
+                    .map_err(|e| Status::invalid_argument(e.to_string()))?,
+            )),
+            Some(kind)
+                if unrecorded == Unrecorded::OfficialEmulator
+                    || (select_value && is_recorded_map_literal(value)) =>
+            {
+                Err(Status::invalid_argument(format!(
+                    "Value type is not supported: {kind}"
+                )))
+            }
+            Some(_) => Err(Status::unimplemented(
+                "array and map literals holding expressions are not observed locally",
+            )),
+        },
     }
 }
 
-/// Decodes `where(equal(operand, scalar literal))`. A field operand also gives the same
-/// filter the `RunQuery` lowering sends, for the scan to apply before it copies documents.
+/// Decodes `where(condition)`: a field or a call of a table function (production keeps the
+/// rows where it is `true`), or (under the emulator profile, as the official emulator answers
+/// it) a literal. An `equal(field, scalar literal)` also gives the
+/// same filter the `RunQuery` lowering sends, for the scan to apply before it copies
+/// documents.
 fn decode_condition(
     stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
 ) -> Result<(Expr, Option<pb::structured_query::Filter>), Status> {
-    let Some(pb::value::ValueType::FunctionValue(function)) =
-        stage.args.first().and_then(|v| v.value_type.as_ref())
-    else {
-        return Err(Status::invalid_argument(
-            "where requires an equal expression",
-        ));
+    use pb::value::ValueType as V;
+    let Some(condition) = stage.args.first() else {
+        return Err(Status::invalid_argument("where requires a condition"));
     };
-    let Some(def) =
-        pipeline_exec::function(&function.name).filter(|def| def.placement == Placement::Condition)
-    else {
+    let function = match condition.value_type.as_ref() {
+        Some(V::FunctionValue(function)) => function,
+        Some(V::FieldReferenceValue(_)) => {
+            return Ok((decode_operand(condition, unrecorded, false)?, None))
+        }
+        _ if is_literal(condition) && unrecorded == Unrecorded::OfficialEmulator => {
+            return Ok((decode_operand(condition, unrecorded, false)?, None))
+        }
+        _ => {
+            return Err(Status::unimplemented(
+                "this where condition is not observed locally",
+            ))
+        }
+    };
+    let Some(def) = pipeline_exec::function(&function.name) else {
         return Err(Status::unimplemented(
             "where expression is unsupported locally",
         ));
     };
-    // `equal` is the table's only condition and takes two arguments; the wording is the
-    // finite subset's.
-    if function.args.len() != def.arity || !function.options.is_empty() {
+    if !def.returns_boolean {
+        // A function of another value: production drops the row for the kinds it recorded
+        // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
+        // cursor decides by the value's kind.
+        return Ok((decode_operand(condition, unrecorded, false)?, None));
+    }
+    // Every boolean function of the table is a comparison of two arguments; the wording is
+    // the finite subset's.
+    if def.arity != Arity::Exact(function.args.len()) || !function.options.is_empty() {
         return Err(Status::invalid_argument(format!(
             "{} requires exactly two arguments and no options",
             def.name
         )));
     }
-    let left = match function.args[0].value_type.as_ref() {
-        None => return Err(Status::invalid_argument("equal first argument is missing")),
-        Some(
-            pb::value::ValueType::FieldReferenceValue(_) | pb::value::ValueType::FunctionValue(_),
-        ) => decode_operand(&function.args[0], Position::Stage)?,
-        Some(_) => {
-            return Err(Status::unimplemented(
-                "equal first argument is unsupported locally",
-            ))
+    let args = function
+        .args
+        .iter()
+        .map(|arg| decode_operand(arg, unrecorded, false))
+        .collect::<Result<Vec<_>, _>>()?;
+    let scalar_literal = |value: &pb::Value| {
+        is_literal(value)
+            && !matches!(
+                value.value_type,
+                Some(pb::value::ValueType::ArrayValue(_) | pb::value::ValueType::MapValue(_))
+            )
+    };
+    let pushdown = match (&args[..], &function.args[..]) {
+        ([Expr::Field(path), _], [_, literal])
+            if def.name == "equal" && !path.is_document_name() && scalar_literal(literal) =>
+        {
+            Some(equal_filter(path.canonical(), literal))
         }
+        _ => None,
     };
-    let right = match function.args[1].value_type.as_ref() {
-        None => return Err(Status::invalid_argument("where literal is missing")),
-        Some(
-            pb::value::ValueType::ArrayValue(_)
-            | pb::value::ValueType::MapValue(_)
-            | pb::value::ValueType::FieldReferenceValue(_)
-            | pb::value::ValueType::VariableReferenceValue(_)
-            | pb::value::ValueType::FunctionValue(_)
-            | pb::value::ValueType::PipelineValue(_),
-        ) => {
-            return Err(Status::unimplemented(
-                "where literal is unsupported locally",
-            ))
-        }
-        Some(_) => Expr::Constant(
-            crate::decode::decode_value(&function.args[1])
-                .map_err(|e| Status::invalid_argument(e.to_string()))?,
-        ),
-    };
-    let pushdown = match &left {
-        Expr::Field(path) => Some(equal_filter(path.canonical(), &function.args[1])),
-        Expr::Constant(_) | Expr::Call { .. } => None,
-    };
-    let condition =
-        Expr::call(def.name, vec![left, right], Placement::Condition).map_err(expr_status)?;
+    let condition = Expr::call(def.name, args, Placement::Condition).map_err(expr_status)?;
     Ok((condition, pushdown))
 }
 
-/// Decodes `select({alias: operand, ...})`. An alias is a field path, as the official
-/// emulator treats it: an invalid path, `__name__`, a repeated path and an alias inside
-/// another are refused as it refuses them. A dotted or quoted alias nests or unquotes the
-/// output key there; production is unobserved, so it is refused unless `unrecorded` follows
-/// the official emulator.
+/// Decodes `select({alias: operand, ...})`. An alias is a field path, as production and the
+/// official emulator read it (FS-ENT-ORACLE O-1 recorded the same answers from both): a
+/// dotted alias nests, a quoted one unquotes, and an invalid path, a reserved name, a
+/// repeated path and an alias inside another are refused.
 fn decode_select(
     stage: &pb::pipeline::Stage,
     unrecorded: Unrecorded,
@@ -678,33 +731,31 @@ fn decode_select(
     else {
         return Err(Status::invalid_argument("select requires an alias map"));
     };
+    // Production and the official emulator refuse a wider select (FS-ENT-ORACLE O-2,
+    // `fs-ent-pipeline/o2/select-width`).
+    if map.fields.len() > MAX_SELECT_FIELDS {
+        return Err(Status::invalid_argument(format!(
+            "The 'select(...)' stage is limited to {MAX_SELECT_FIELDS} fields but this stage has {}.",
+            map.fields.len()
+        )));
+    }
     let mut aliases = Vec::with_capacity(map.fields.len());
     for (alias, value) in &map.fields {
-        // Strict answers only aliases whose output key cannot depend on how production
-        // reads an alias; every other alias, invalid ones included, is unobserved.
-        if unrecorded == Unrecorded::Refuse && !is_plain_alias(alias) {
-            return Err(Status::unimplemented(format!(
-                "select alias {alias:?} is not a plain identifier; its output shape is not observed locally"
-            )));
-        }
         if value.value_type.is_none() {
             return Err(Status::unimplemented(
                 "select expressions are unsupported locally",
             ));
         }
-        let path = FieldPath::parse(alias).map_err(|e| {
-            Status::invalid_argument(format!("select alias {alias:?} is not a field path: {e}"))
-        })?;
-        if path
-            .segments()
-            .iter()
-            .any(|segment| is_reserved_name(segment))
+        let path = decode_alias(alias, unrecorded)?;
+        if unrecorded == Unrecorded::Refuse
+            && is_literal(value)
+            && !is_recorded_select_literal(value)
         {
-            return Err(Status::invalid_argument(format!(
-                "select alias {alias:?} uses a reserved field name"
-            )));
+            return Err(Status::unimplemented(
+                "a select value literal of this kind is not observed locally",
+            ));
         }
-        aliases.push((alias, path, decode_operand(value, Position::Stage)?));
+        aliases.push((alias, path, decode_operand(value, unrecorded, true)?));
     }
     if aliases.is_empty() {
         return Err(Status::invalid_argument(
@@ -713,11 +764,16 @@ fn decode_select(
     }
     aliases.sort_by(|a, b| a.1.cmp(&b.1));
     for pair in aliases.windows(2) {
-        if pair[0].1.is_prefix_of(&pair[1].1) {
+        if pair[0].1 == pair[1].1 {
             return Err(Status::invalid_argument(format!(
-                "select aliases {:?} and {:?} set a field and itself or one of its children",
+                "select aliases {:?} and {:?} set the same field",
                 pair[0].0, pair[1].0
             )));
+        }
+        if pair[0].1.is_prefix_of(&pair[1].1) {
+            return Err(crate::production_status::select_overlapping_paths(
+                pair[1].0,
+            ));
         }
     }
     Ok(aliases
@@ -726,20 +782,66 @@ fn decode_select(
         .collect())
 }
 
+/// Reads a select alias as a field path. Production's refusals are recorded for a single
+/// unquoted segment (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`): an invalid name, a
+/// reserved `__x__` and `__name__`; their texts are production's, which the official emulator
+/// answers too. The official emulator also refuses a quoted reserved name, and accepts a
+/// reserved name below another field (`a.__x__`, `a.__name__`); production has not answered
+/// those shapes, nor an invalid quoted or dotted alias, so strict refuses them as unobserved.
+fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
+    let strict = unrecorded == Unrecorded::Refuse;
+    let unobserved = || {
+        Status::unimplemented(format!(
+            "select alias {alias:?}: this alias shape is not observed locally"
+        ))
+    };
+    let plain = !alias.contains(['.', '`']);
+    let path = match FieldPath::parse_allowing_reserved(alias) {
+        Ok(path) => path,
+        Err(_) if strict && !plain => return Err(unobserved()),
+        Err(_) => {
+            return Err(Status::invalid_argument(format!(
+                r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+            )))
+        }
+    };
+    let reserved = path
+        .segments()
+        .iter()
+        .any(|segment| is_reserved_name(segment));
+    match path.segments() {
+        _ if !reserved => Ok(path),
+        _ if strict && !plain => Err(unobserved()),
+        [name] if name == "__name__" => Err(Status::invalid_argument(format!(
+            "Stage 'select': field name '{name}' is reserved and can not be overwritten."
+        ))),
+        [name] => Err(Status::invalid_argument(format!(
+            "Stage 'select': field name '{name}' is reserved."
+        ))),
+        // A reserved name below another field, as the official emulator answers it.
+        _ => Ok(path),
+    }
+}
+
+/// The literal select values production answered (FS-ENT-ORACLE O-1
+/// `px1/select#constant-nested-array`, `[1, [2]]`): integers, finite doubles and arrays of them.
+/// Strict refuses literal select values of other kinds until production answers them.
+fn is_recorded_select_literal(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::IntegerValue(_)) => true,
+        Some(V::DoubleValue(d)) => d.is_finite(),
+        Some(V::ArrayValue(array)) => array.values.iter().all(is_recorded_select_literal),
+        _ => false,
+    }
+}
+
+/// The most fields one `select` stage sets.
+const MAX_SELECT_FIELDS: usize = 64;
+
 /// A name like `__x__`, which Firestore reserves.
 fn is_reserved_name(segment: &str) -> bool {
     segment.len() >= 4 && segment.starts_with("__") && segment.ends_with("__")
-}
-
-/// An alias that is one unquoted identifier (`[A-Za-z_][A-Za-z0-9_]*`) and not reserved:
-/// its output key is the alias itself whether production reads aliases as keys or as paths.
-fn is_plain_alias(alias: &str) -> bool {
-    let mut chars = alias.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !is_reserved_name(alias)
 }
 
 /// A projected output row as a pipeline result document: fields only, without a name or

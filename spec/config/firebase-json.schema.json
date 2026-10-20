@@ -99,7 +99,9 @@
       "properties": {
         "rules": { "type": "string" },
         "instance": { "type": "string" },
-        "target": { "type": "string" }
+        "target": { "type": "string" },
+        "predeploy": {},
+        "postdeploy": {}
       }
     },
     "functionsEntry": {

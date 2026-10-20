@@ -328,3 +328,30 @@ fn the_hub_lists_the_database() {
         "{emulators}"
     );
 }
+
+#[test]
+fn database_deploy_hooks_in_firebase_json_are_accepted_whatever_is_selected() {
+    let dir = Scratch::new("database", "deploy-hooks");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":{"rules":"database.rules.json","predeploy":["echo hi"],"postdeploy":"echo bye"}}"#,
+    )
+    .unwrap();
+    for only in ["auth", "database"] {
+        let daemon = Daemon::start(&[
+            "--firebase-json",
+            firebase_json.to_str().unwrap(),
+            "--only",
+            only,
+            "--database-port",
+            "0",
+        ]);
+        let line = daemon.database_line();
+        assert_eq!(
+            line.contains("not started"),
+            only == "auth",
+            "{only}: {line}"
+        );
+    }
+}

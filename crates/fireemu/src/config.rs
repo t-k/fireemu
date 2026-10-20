@@ -2427,7 +2427,9 @@ const STORAGE_ENTRY_KEYS: [&str; 2] = ["target", "rules"];
 
 /// The official keys of one Realtime Database configuration entry: `rules` for every
 /// instance, or `instance` / `target` naming the instance an entry of the array form serves.
-const DATABASE_ENTRY_KEYS: [&str; 3] = ["rules", "instance", "target"];
+/// The deploy hooks (`predeploy`, `postdeploy`) belong to `firebase deploy`; firebase-tools
+/// 15.28.2 accepts them here, so they are accepted and ignored, as for Functions.
+const DATABASE_ENTRY_KEYS: [&str; 5] = ["rules", "instance", "target", "predeploy", "postdeploy"];
 
 /// The `firebase.json` keys of one Functions codebase that fireemu reads; the deploy hooks
 /// (`predeploy`, `postdeploy`) belong to `firebase deploy` and are not emulator settings.
@@ -8599,13 +8601,21 @@ mod tests {
             "{:?}",
             report.notices
         );
-        let ok = json!({"database": [
-            {"instance": "demo-default-rtdb", "rules": "a.json"},
-            {"target": "main", "rules": "b.json"}
-        ]});
-        assert!(RuntimeConfig::default()
-            .apply_firebase_json(&ok, base, &Selection::default())
-            .is_ok());
+        // The deploy hooks firebase-tools 15.28.2 accepts belong to `firebase deploy`.
+        for ok in [
+            json!({"database": [
+                {"instance": "demo-default-rtdb", "rules": "a.json", "predeploy": ["echo a"]},
+                {"target": "main", "rules": "b.json", "postdeploy": "echo b"}
+            ]}),
+            json!({"database": {"rules": "r", "predeploy": "echo", "postdeploy": ["x", "y"]}}),
+        ] {
+            assert!(
+                RuntimeConfig::default()
+                    .apply_firebase_json(&ok, base, &Selection::default())
+                    .is_ok(),
+                "{ok}"
+            );
+        }
         for (bad, message) in [
             (
                 json!({"database": 1}),

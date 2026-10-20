@@ -510,6 +510,9 @@ mod tests {
             "{\"rules\":{\".read\":\"true\"}} ",
             r#"{"rules": {".read": true} } // c"#,
             r#"{"rules":{".read":"\u0074rue"}}"#,
+            r#"{"rules":{".read":true /* a * b */}}"#,
+            r#"{"rules":{".read":true /** c **/}}"#,
+            r#"/* x */{"rules":{}}"#,
         ] {
             assert!(compile(text).is_ok(), "{text}");
         }

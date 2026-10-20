@@ -411,6 +411,7 @@ fn comparison_errors_propagate_first() {
 /// refuses them as unobserved and the emulator profile refuses them as the official emulator
 /// does.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn array_and_map_literals() {
     let r = row(vec![
         ("i".to_owned(), Value::Integer(1)),

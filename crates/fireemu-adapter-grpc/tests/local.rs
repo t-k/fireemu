@@ -7729,7 +7729,8 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
         })),
     };
     // Answered by the official emulator: (label, stages, the emulator profile's result fields).
-    let answered: Vec<(&str, Vec<pb::pipeline::Stage>, Vec<(String, pb::Value)>)> = vec![
+    type Answered<'a> = (&'a str, Vec<pb::pipeline::Stage>, Vec<(String, pb::Value)>);
+    let answered: Vec<Answered> = vec![
         (
             "repeated key, first value missing",
             select(map_of(vec![s("k"), missing(), s("k"), f("i")])),

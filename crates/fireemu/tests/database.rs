@@ -5,6 +5,9 @@
 //! credential the official tooling uses).
 
 mod scratch;
+#[cfg(unix)]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
 
 use scratch::Scratch;
 
@@ -449,11 +452,19 @@ fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_serve
     assert!(!stderr.contains("database.rules.json"), "{stderr}");
 }
 
+/// Exports go under a parent only this user can write: fireemu refuses to publish an export
+/// below a world-writable ancestor such as Linux's `/tmp`.
+#[cfg(unix)]
+fn export_parent(label: &str) -> trusted_temp::TrustedTempDir {
+    trusted_temp::TrustedTempDir::new(label)
+}
+
+#[cfg(unix)]
 #[test]
 fn an_export_with_the_database_served_warns_that_its_data_is_not_exported() {
-    let dir = Scratch::new("database", "export-warning");
+    let dir = export_parent("database-export-warning");
     let run = |only: &str| {
-        let export = dir.join(format!("export-{only}"));
+        let export = dir.path().join(format!("export-{only}"));
         let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args(["exec", "--no-config-discovery", "--project", PROJECT])
             .args(["--only", only, "--database-port", "0", "--http-port", "0"])
@@ -553,10 +564,11 @@ fn production_exact_holds_the_realtime_protocol_to_the_owner_too() {
     assert!(wrote.contains(r#""r":3,"b":{"s":"ok""#), "{wrote}");
 }
 
+#[cfg(unix)]
 #[test]
 fn emulators_export_prints_the_database_warning_the_hub_answers() {
-    let dir = Scratch::new("database", "hub-export-warning");
-    let export = dir.join("export");
+    let export_dir = export_parent("database-hub-export-warning");
+    let export = export_dir.path().join("export");
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(["exec", "--no-config-discovery", "--project", PROJECT])
         .args(["--only", "database,firestore", "--database-port", "0"])

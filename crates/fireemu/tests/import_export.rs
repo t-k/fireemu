@@ -1623,6 +1623,25 @@ fn a_realtime_database_file_named_after_an_invalid_namespace_refuses_the_import(
     assert!(!log.contains("running: "), "{log}");
 }
 
+/// firebase-tools passes the file name as `?ns=`, and the official emulator lowercases it.
+#[cfg(unix)]
+#[test]
+fn a_realtime_database_file_name_is_lowercased_into_its_namespace() {
+    let dir = scratch("rtdb-case");
+    let export = database_export_dir(&dir, &[("Mixed-Case.json", r#"{"a":1}"#)]);
+    let probe = r#"curl -s -H "Authorization: Bearer owner" "http://$FIREBASE_DATABASE_EMULATOR_HOST/.json?ns=mixed-case"; echo"#;
+
+    let output = exec()
+        .args(["--only", "database", "--database-port", "0", "--import"])
+        .arg(&export)
+        .args(["--", "/bin/sh", "-c", probe])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(log.contains(r#"{"a":1}"#), "{log}");
+}
+
 #[test]
 fn a_realtime_database_file_that_is_not_json_refuses_the_import() {
     let dir = scratch("rtdb-bad-json");

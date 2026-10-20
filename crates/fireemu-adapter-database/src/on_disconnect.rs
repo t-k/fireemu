@@ -204,7 +204,11 @@ mod tests {
         assert_eq!(update_child(json("1"), &[], json("2")), json("2"));
         assert_eq!(update_child(json("1"), &keys("a/b"), Json::Null), json("1"));
         assert_eq!(
-            update_child(json(r#"{".value":1,".priority":2}"#), &keys("a"), Json::Null),
+            update_child(
+                json(r#"{".value":1,".priority":2}"#),
+                &keys("a"),
+                Json::Null
+            ),
             json(r#"{".value":1,".priority":2}"#)
         );
     }

@@ -836,6 +836,35 @@ fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
         );
         // Under strict it is refused there; under the emulator profile it is a user, not anonymous.
         assert_eq!(read(other, "/anon", &auth(&mock), &[]), 401, "{name}");
+        // An unsigned token without `aud` (expired, even): the user its `sub` names under the
+        // emulator profile, as on the official emulator, which reads the claims unverified;
+        // without `sub` it names no one. Under strict it names no one either way.
+        let unsigned = |claims: &str| {
+            format!(
+                "{}.{}.",
+                segment(r#"{"alg":"none","typ":"JWT"}"#).trim_end_matches('.'),
+                segment(claims).trim_end_matches('.')
+            )
+        };
+        let no_aud = unsigned(r#"{"sub":"u1","iat":1,"exp":2}"#);
+        let user = if strict { 401 } else { 200 };
+        assert_eq!(
+            read(default, "/users/u1", &auth(&no_aud), &[]),
+            user,
+            "{name}"
+        );
+        assert_eq!(read(default, "/anon", &auth(&no_aud), &[]), 401, "{name}");
+        let no_sub = unsigned(r#"{"iat":1,"exp":9999999999}"#);
+        assert_eq!(
+            read(default, "/users/u1", &auth(&no_sub), &[]),
+            401,
+            "{name}"
+        );
+        assert_eq!(
+            read(default, "/anon", &auth(&no_sub), &[]),
+            nobody,
+            "{name}"
+        );
         // Access tokens: any one is an administrator under the emulator profile, only `owner`
         // under strict; `auth=owner` names no one.
         let other_bearer = ["Authorization: Bearer ya29.other"];

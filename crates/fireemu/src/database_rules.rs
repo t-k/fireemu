@@ -55,8 +55,21 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
                 };
                 (claim(&["firebase", "tenant"]), claim(&["aud"]))
             };
+            let unsigned_mock = any_mock_audience && is_unsigned_token(token);
+            if unsigned_mock && audience.is_none() {
+                // The official emulator reads an unsigned token's claims unverified: one that
+                // names a subject is that user even without `aud` (review r6 S16b). The emulator
+                // profile does the same; a session signer refuses unsigned tokens altogether.
+                let store = default.lock().ok()?;
+                if store.signer().is_some() {
+                    return None;
+                }
+                let decoded = decode_token(token, None).ok()?;
+                decoded.sub()?;
+                return Some(decoded.payload_json);
+            }
             let project = match &audience {
-                Some(audience) if any_mock_audience && is_unsigned_token(token) => audience,
+                Some(audience) if unsigned_mock => audience,
                 _ => project_of_instance(instance, &daemon_project),
             };
             let store = match tenant {

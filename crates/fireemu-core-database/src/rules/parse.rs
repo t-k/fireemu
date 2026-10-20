@@ -282,11 +282,10 @@ impl Lexer<'_> {
         // A format character inside an operator is skipped, as there (review r7 S19).
         for punct in PUNCTUATION.iter().chain(&[">"]) {
             let mut at = self.at;
-            let matched = punct.chars().enumerate().all(|(i, expected)| {
-                if i > 0 {
-                    while self.chars.get(at).copied().is_some_and(is_format) {
-                        at += 1;
-                    }
+            // (The first character is never one: the space before a token was skipped.)
+            let matched = punct.chars().all(|expected| {
+                while self.chars.get(at).copied().is_some_and(is_format) {
+                    at += 1;
                 }
                 let found = self.chars.get(at) == Some(&expected);
                 at += 1;

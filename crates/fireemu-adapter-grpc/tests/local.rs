@@ -7286,6 +7286,19 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
         // Literals holding expressions in shapes production has not answered.
         for (label, stages) in [
             (
+                "array mixing a field and a function",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![(
+                        "v",
+                        array(vec![
+                            f("i"),
+                            pipeline_function("document_id", vec![f("__name__")]),
+                        ]),
+                    )]),
+                ],
+            ),
+            (
                 "map mixing a field and a function",
                 vec![
                     collection(),

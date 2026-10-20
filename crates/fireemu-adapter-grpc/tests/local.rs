@@ -7788,6 +7788,26 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
         value_type: Some(pb::value::ValueType::DoubleValue(d)),
     };
     let missing = || f("missing");
+    let array_value = |values: Vec<pb::Value>| pb::Value {
+        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue { values })),
+    };
+    let vector = || pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: [
+                ("__type__".to_owned(), s("__vector__")),
+                (
+                    "value".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                            values: vec![double(1.0), double(2.0)],
+                        })),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        })),
+    };
     let lacks = |relative: &str| {
         let name = format!("{DOCS}/{relative}");
         format!(
@@ -7828,6 +7848,35 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 pipeline_stage("limit", i(5_000_000_000)),
             ],
             vec![("i".to_owned(), i(1))],
+        ),
+        (
+            "an array of a literal map with a __type__ key",
+            select(array_value(vec![map_value(&[("__type__", s("x"))])])),
+            vec![(
+                "v".to_owned(),
+                array_value(vec![map_value(&[("__type__", s("x"))])]),
+            )],
+        ),
+        (
+            "a map holding an array of a literal map with a __type__ key",
+            select(map_value(&[(
+                "a",
+                array_value(vec![map_value(&[("__type__", s("x"))])]),
+            )])),
+            vec![(
+                "v".to_owned(),
+                map_value(&[("a", array_value(vec![map_value(&[("__type__", s("x"))])]))]),
+            )],
+        ),
+        (
+            "two vector literals compare",
+            select(pipeline_function("equal", vec![vector(), vector()])),
+            vec![(
+                "v".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::BooleanValue(true)),
+                },
+            )],
         ),
         (
             "a literal map with a __type__ key",
@@ -8009,6 +8058,29 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 pipeline_stage("limit", s("x")),
             ],
             "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.".to_owned(),
+        ),
+        (
+            "an array of a map with a reserved key holding a field",
+            select(array_value(vec![map_value(&[("__x__", f("i"))])])),
+            "field name '__x__' is reserved.".to_owned(),
+        ),
+        (
+            "an array of a literal map with an empty key",
+            select(array_value(vec![map_value(&[("", i(1))])])),
+            "Property names cannot be empty.".to_owned(),
+        ),
+        (
+            "a literal map with the key __name__",
+            select(map_value(&[("__name__", i(1))])),
+            "field name '__name__' is reserved.".to_owned(),
+        ),
+        (
+            "an argument literal map with an empty key",
+            select(pipeline_function(
+                "equal",
+                vec![f("m"), map_value(&[("", i(1))])],
+            )),
+            "Property names cannot be empty.".to_owned(),
         ),
         (
             "a literal map with an empty key",

@@ -677,6 +677,10 @@ fn decode_operand(
             None if unrecorded == Unrecorded::OfficialEmulator => {
                 Ok(Expr::Constant(decode_official_literal(value)?))
             }
+            // Production answered literal maps with plain keys only.
+            None if !literal_keys_are_plain(value) => Err(Status::unimplemented(
+                "a literal map key of this kind is not observed locally",
+            )),
             None => Ok(Expr::Constant(
                 crate::decode::decode_value(value)
                     .map_err(|e| Status::invalid_argument(e.to_string()))?,
@@ -749,6 +753,11 @@ fn decode_official_literal(
     if has(value, &|key, _| key.is_empty()) {
         return Err(Status::invalid_argument("Property names cannot be empty."));
     }
+    if let Some(key) = reserved_key(value) {
+        return Err(Status::invalid_argument(format!(
+            "field name '{key}' is reserved."
+        )));
+    }
     if !has(value, &typed) {
         return crate::decode::decode_value(value)
             .map_err(|e| Status::invalid_argument(e.to_string()));
@@ -776,6 +785,19 @@ fn decode_official_literal(
         _ => {
             crate::decode::decode_value(value).map_err(|e| Status::invalid_argument(e.to_string()))
         }
+    }
+}
+
+/// Whether every map key a literal holds, at any depth, is plain.
+fn literal_keys_are_plain(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().all(literal_keys_are_plain),
+        Some(V::MapValue(map)) => map
+            .fields
+            .iter()
+            .all(|(key, inner)| is_plain_key(key) && literal_keys_are_plain(inner)),
+        _ => true,
     }
 }
 

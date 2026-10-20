@@ -4,6 +4,8 @@ import { test } from "node:test";
 import {
   CELLS_PER_STEP,
   O3_ALIASES,
+  O4_ALIASES,
+  O4_CELLS,
   O3_CELLS,
   O3_CONDITIONS,
   O3_KIND_DOC,
@@ -139,15 +141,25 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 300);
+  assert.equal(requests, 384);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
-  assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline"]);
-  // The only writes are the order program's single-document commits into `ord`.
+  assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get"]);
+  // The only writes are single-document commits into the program's own collection: the order
+  // program's into `ord`, and the O-4 geo rows into `geo4`, each read back by a get of that
+  // document.
+  const own = {
+    "fs-ent-pipeline/results/order": /^\{docs\}\/ord\/[a-z]+$/,
+    "fs-ent-pipeline/o4/documents": /^\{docs\}\/geo4\/[a-z-]+$/,
+  };
   for (const program of PROGRAMS) {
     for (const step of program.steps.filter((s) => s.rpc === "commit")) {
-      assert.equal(program.id, "fs-ent-pipeline/results/order");
+      assert.ok(own[program.id], program.id);
       assert.equal(step.body.writes.length, 1);
-      assert.match(step.body.writes[0].update.name, /^\{docs\}\/ord\/[a-z]+$/);
+      assert.match(step.body.writes[0].update.name, own[program.id]);
+    }
+    for (const step of program.steps.filter((s) => s.rpc === "get")) {
+      assert.equal(program.id, "fs-ent-pipeline/o4/documents");
+      assert.match(step.parent, /^geo4\/[a-z-]+$/);
     }
   }
   const labels = (pairs) => pairs.map(([label]) => label);
@@ -188,7 +200,7 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
       await import("node:fs/promises")
     ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
-  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[23]\//.test(p.id));
+  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[234]\//.test(p.id));
   assert.equal(o1.length, 6);
   for (const program of o1) {
     assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
@@ -368,7 +380,7 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   // S0 one describe, the preflight two reads, two recordings, A1 two read-backs.
   const worst = 1 + 2 + 2 * (80 + 60) + 2;
   assert.equal(worst, 285);
-  // Every program, O-3 included since its recording (2026-10-20), is recorded under its
+  // Every program (O-3 and O-4 since their recordings, 2026-10-20) is recorded under its
   // current digest, and O-3 under the request layer that recorded O-1.
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
@@ -451,12 +463,88 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   assert.deepEqual(literals["negative-zero-in-array"].arrayValue.values[1], { doubleValue: "-0" });
 });
 
+test("O-4 records only its seven new programs, comparisons last, within its request cap: 2 x (84 + 88) + 5", async () => {
+  const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const o4 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o4/");
+  // The comparisons program (the only vector seed) comes last (O-3 presend Should Fix 2).
+  assert.deepEqual(
+    o4.map((p) => p.id),
+    [
+      "fs-ent-pipeline/o4/aliases",
+      "fs-ent-pipeline/o4/stages",
+      "fs-ent-pipeline/o4/conditions",
+      "fs-ent-pipeline/o4/literals",
+      "fs-ent-pipeline/o4/functions",
+      "fs-ent-pipeline/o4/documents",
+      "fs-ent-pipeline/o4/comparisons",
+    ],
+  );
+  const vectorSeeds = o4.filter((p) =>
+    (p.seed ?? []).some(([, fields]) => JSON.stringify(fields).includes("__vector__")),
+  );
+  assert.deepEqual(
+    vectorSeeds.map((p) => p.id),
+    ["fs-ent-pipeline/o4/comparisons"],
+  );
+  // The harness ceiling is a base of 20 plus 8 and the seed batches per program.
+  assert.deepEqual(ceilings(o4), { maxRequests: 84, maxHarnessRequests: 88 });
+  // S0 one describe, the preflight two reads, two recordings, A1 two read-backs.
+  const worst = 1 + 2 + 2 * (84 + 88) + 2;
+  assert.equal(worst, 349);
+  // O-1 to O-4 are recorded and keep their digests.
+  const recorded = JSON.parse(
+    await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  ).programs;
+  for (const program of PROGRAMS) {
+    assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
+  }
+  // O-4 recorded under the request layer that recorded O-1 (2026-10-20).
+  for (const program of o4) {
+    assert.equal(
+      recorded[program.id].harnessDigest,
+      recorded["fs-ent-pipeline/px0/aliases"].harnessDigest,
+      program.id,
+    );
+  }
+  // The multibyte rows separate bytes from characters (O-3 presend Should Fix 1).
+  const unquoted = (alias) => alias.replace(/`/g, "");
+  const lengths = Object.fromEntries(
+    O4_ALIASES.filter(([label]) => label.startsWith("multibyte")).map(([label, alias]) => [
+      label,
+      [Buffer.byteLength(unquoted(alias)), [...unquoted(alias)].length],
+    ]),
+  );
+  assert.deepEqual(lengths, {
+    "multibyte-1497": [1497, 499],
+    "multibyte-1499": [1499, 501],
+    "multibyte-1500": [1500, 500],
+    "multibyte-dotted-1499": [1499, 501],
+    "multibyte-plain-1500": [1500, 500],
+  });
+  // Different-length vectors under every comparison, both ways.
+  assert.equal(O4_CELLS.length, 6 * 4);
+  // The geo rows write and read back their own documents only.
+  const documents = o4.find((p) => p.id === "fs-ent-pipeline/o4/documents");
+  assert.deepEqual(
+    documents.steps.map((s) => [s.rpc, s.parent ?? s.body.writes[0].update.name]),
+    [
+      ["commit", "{docs}/geo4/empty"],
+      ["get", "geo4/empty"],
+      ["commit", "{docs}/geo4/longitude-only"],
+      ["get", "geo4/longitude-only"],
+      ["commit", "{docs}/geo4/zero-latitude"],
+      ["get", "geo4/zero-latitude"],
+    ],
+  );
+});
+
 test("the committed REST request export is the corpus's", async () => {
   const { EXPORT, exportText } = await import("./fs-ent-pipeline/export-requests.mjs");
   const { readFile } = await import("node:fs/promises");
   assert.equal(await readFile(EXPORT, "utf8"), exportText());
   const exported = JSON.parse(exportText());
-  // Only the programs the fixture records (O-3 since its recording).
+  // Only the programs the fixture records (O-3 and O-4 since their recordings).
   const recordedIds = Object.keys(
     JSON.parse(
       await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
@@ -464,7 +552,7 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 13);
+  assert.equal(recordedPrograms.length, 20);
   const rest = recordedPrograms
     .flatMap((p) => p.steps)
     .filter((s) => (s.transport ?? "rest") === "rest");

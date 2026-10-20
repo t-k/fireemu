@@ -7490,6 +7490,18 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         // emulator profile answers as the official emulator does (a quoted reserved name is
         // refused, a reserved name below another field is a nested key).
         let strict = policy == IndexValidationPolicy::Production;
+        // An empty alias is refused by the request validator in both profiles, before any
+        // alias rule (the official emulator answers "Invalid empty property path string.";
+        // production is unrecorded).
+        let err = pipeline_error(&mut client, stages(vec![("", pipeline_field("top"))])).await;
+        assert_eq!(
+            err.code(),
+            tonic::Code::InvalidArgument,
+            "{policy:?}: {err}"
+        );
+        // A plain alias over the 1500-byte limit (the official emulator: "The field reference
+        // '...' is longer than 1500 bytes.").
+        let long_alias = "a".repeat(1501);
         for (alias, official) in [
             ("a..b", Some("Invalid property path")),
             (
@@ -7504,6 +7516,7 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             ),
             ("a.__x__", None),
             ("a.__name__", None),
+            (long_alias.as_str(), Some("The field reference 'aaaa")),
         ] {
             let request = stages(vec![(alias, pipeline_field("top"))]);
             if strict {

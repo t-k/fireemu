@@ -8,7 +8,7 @@
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
-use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::field_path::{FieldPath, FieldPathError};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
 use fireemu_core_firestore::pipeline_exec::{
@@ -787,7 +787,9 @@ fn decode_select(
 /// reserved `__x__` and `__name__`; their texts are production's, which the official emulator
 /// answers too. The official emulator also refuses a quoted reserved name, and accepts a
 /// reserved name below another field (`a.__x__`, `a.__name__`); production has not answered
-/// those shapes, nor an invalid quoted or dotted alias, so strict refuses them as unobserved.
+/// those shapes, nor an invalid quoted or dotted alias, nor a name over the length limit, so
+/// strict refuses them as unobserved. Production's regex text answers only a plain name that
+/// fails the path rules, the shape it was recorded for (`total-count`, `名前`, `1st`).
 fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
     let strict = unrecorded == Unrecorded::Refuse;
     let unobserved = || {
@@ -799,6 +801,17 @@ fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status
     let path = match FieldPath::parse_allowing_reserved(alias) {
         Ok(path) => path,
         Err(_) if strict && !plain => return Err(unobserved()),
+        // Production's regex text is recorded only for a name the regex refuses; a name over
+        // the length limit is unrecorded (the official emulator names the length).
+        Err(FieldPathError::SegmentTooLong { .. } | FieldPathError::PathTooLong { .. }) => {
+            return Err(if strict {
+                unobserved()
+            } else {
+                Status::invalid_argument(format!(
+                    "The field reference '{alias}' is longer than 1500 bytes."
+                ))
+            })
+        }
         Err(_) => {
             return Err(Status::invalid_argument(format!(
                 r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#

@@ -835,3 +835,75 @@ async fn a_closing_websocket_writes_what_it_registered_and_listeners_hear_it() {
         r#"{"me":"offline","other":"online"}"#
     );
 }
+
+/// Reads `target` until it answers `expected`, for writes that land after a connection ends.
+async fn eventually(address: &str, target: &str, expected: &str) {
+    for _ in 0..100 {
+        let response = exchange(address, "GET", target, "").await;
+        if response.rsplit("\r\n\r\n").next() == Some(expected) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{target} never answered {expected}");
+}
+
+#[tokio::test]
+async fn an_idle_websocket_writes_what_it_registered_when_it_is_closed() {
+    let (address, _) = start_with(ServerConfig {
+        realtime_idle: Duration::from_millis(300),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w21").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/idle","d":1}}}"#)
+        .await;
+    client.next_text().await;
+    eventually(&address, "/idle.json?ns=w21", "1").await;
+}
+
+#[tokio::test]
+async fn a_websocket_dropped_for_falling_behind_writes_what_it_registered_once() {
+    let (address, database) = start_with(ServerConfig {
+        stream_queue: 2,
+        realtime_idle: Duration::from_secs(120),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut reader, _) = Client::connect(&address, "/.ws?v=5&ns=w22").await;
+    reader.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/presence","d":"offline"}}}"#)
+        .await;
+    reader.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/a","h":""}}}"#)
+        .await;
+    while !reader.next_text().await.contains(r#""r":2"#) {}
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // The reader stops reading; large writes fill its socket, then its queue.
+    for n in 0..200 {
+        if database.lock().unwrap().listen_count() == 0 {
+            break;
+        }
+        // A different value each time: an equal write is no write and pushes nothing.
+        let big = format!("\"{n}{}\"", "x".repeat(300_000));
+        exchange(&address, "PUT", "/a.json?ns=w22&print=silent", &big).await;
+    }
+    assert_eq!(database.lock().unwrap().listen_count(), 0, "never dropped");
+    eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
+    // What the dropped socket still sends is not applied after it.
+    reader
+        .text(r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/presence","d":"online"}}}"#)
+        .await;
+    // Reading again lets the server finish the pushes it was writing and read that frame.
+    loop {
+        let (opcode, _) = reader.next().await;
+        if opcode == 0x8 || opcode == 0xFF {
+            break;
+        }
+    }
+    eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
+}

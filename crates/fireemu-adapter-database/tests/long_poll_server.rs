@@ -710,3 +710,34 @@ async fn a_long_polling_connection_writes_what_it_registered_when_it_ends() {
     lp.poll(&[]).await;
     assert_eq!(get(&address, "GET", "/idle.json?ns=lpo", "").await.2, "1");
 }
+
+#[tokio::test]
+async fn reaped_and_overflowing_long_polling_connections_write_what_they_registered() {
+    // The reaper: no request for twice the hold time.
+    let (address, _) = start(ServerConfig {
+        long_poll_hold: Duration::from_millis(200),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lpr").await;
+    lp.poll(&[&request(1, "o", r#"{"p":"/reaped","d":1}"#)])
+        .await;
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(get(&address, "GET", "/reaped.json?ns=lpr", "").await.2, "1");
+    // A full outbox.
+    let (address, _) = start(ServerConfig {
+        stream_queue_bytes: 10_000,
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lpf").await;
+    lp.poll(&[
+        &request(1, "o", r#"{"p":"/over","d":1}"#),
+        &request(2, "q", r#"{"p":"/a","h":""}"#),
+    ])
+    .await;
+    let big = format!("\"{}\"", "x".repeat(20_000));
+    get(&address, "PUT", "/a.json?ns=lpf", &big).await;
+    get(&address, "PUT", "/a.json?ns=lpf", "1").await;
+    assert_eq!(get(&address, "GET", "/over.json?ns=lpf", "").await.2, "1");
+}

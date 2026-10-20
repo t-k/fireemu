@@ -1030,7 +1030,7 @@ fn is_empty_map(value: &pb::Value) -> bool {
 /// `{a: 1}` and empty maps and arrays (FS-ENT-ORACLE O-3, `fs-ent-pipeline/o3/literals`).
 /// Arrays of them are compositions of recorded shapes (rulings (5)), and so are maps of them
 /// whose keys are plain, non-empty and unreserved (a named coordinator inference, rulings (5),
-/// PX1b review M3). A vector literal, and a map with another key (empty, reserved such as
+/// `PX1b` review M3). A vector literal, and a map with another key (empty, reserved such as
 /// `__type__`, or holding dots or backticks), is unrecorded; strict refuses it.
 fn is_recorded_select_literal(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;

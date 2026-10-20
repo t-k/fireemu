@@ -26,7 +26,7 @@ const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 /// the `fireemu-code` metadata like the gateway's rejections. The stage registry's refusals
 /// (a stage's argument count, argument shape, options, input position) are fireemu's own
 /// texts, which no production row holds, so under strict (`Unrecorded::Refuse`) they are
-/// UNIMPLEMENTED; the emulator profile keeps the texts.
+/// `UNIMPLEMENTED`; the emulator profile keeps the texts.
 #[allow(clippy::too_many_lines)]
 pub fn validate_pipeline(
     req: &pb::ExecutePipelineRequest,
@@ -561,7 +561,8 @@ pub fn compile_pipeline(
     if let Err(error) = outcome {
         if unrecorded == Unrecorded::Refuse
             && error.code() == tonic::Code::InvalidArgument
-            && holds_unobserved_part(&pipeline.stages)
+            && (holds_unobserved_part(&pipeline.stages)
+                || !refusals_recorded(&refusals(&pipeline.stages)))
         {
             return Err(Status::unimplemented(
                 "a refusal beside a part whose order production has not answered is not observed locally",
@@ -651,6 +652,7 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
 /// expression is refused with `INVALID_ARGUMENT`, as production and the official emulator
 /// refuse every such literal; under strict one with a map key that is not plain is
 /// `UNIMPLEMENTED` (production answered plain keys only).
+#[allow(clippy::too_many_lines)]
 fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
@@ -679,6 +681,14 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                     function.name
                 )));
             }
+            // The official emulator answers a function's argument count before its arguments'
+            // own checks.
+            let placeholders = vec![
+                Expr::Constant(fireemu_core_firestore::value::Value::Null);
+                function.args.len()
+            ];
+            Expr::call(&function.name, placeholders, Placement::Value)
+                .map_err(|e| expr_status(e, unrecorded))?;
             // A `map(...)` key that is no literal is refused before anything is evaluated
             // (FS-ENT-ORACLE O-4, `o4/functions#map-key-*-field`).
             if function.name == "map" && function.args.iter().step_by(2).any(|key| !is_literal(key))
@@ -695,10 +705,23 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                     function.name
                 )));
             }
+            // A reference argument of a document function is answered per row, as production
+            // recorded it (O-3 and O-4 `functions#*-collection`), not refused as a literal.
+            let document_function =
+                matches!(function.name.as_str(), "document_id" | "collection_id" | "parent");
             let args = function
                 .args
                 .iter()
-                .map(|arg| decode_operand(arg, unrecorded))
+                .map(|arg| match &arg.value_type {
+                    Some(V::ReferenceValue(name))
+                        if document_function && unrecorded == Unrecorded::Refuse =>
+                    {
+                        Ok(Expr::Constant(fireemu_core_firestore::value::Value::Reference(
+                            name.clone(),
+                        )))
+                    }
+                    _ => decode_operand(arg, unrecorded),
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             Expr::call(&function.name, args, Placement::Value)
                 .map_err(|e| expr_status(e, unrecorded))
@@ -706,16 +729,19 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
-        // The official emulator checks the vectors a literal holds before anything else of
-        // it; production recorded well-formed vectors only, so strict refuses the rest.
-        Some(_) if vector_literal_error(value).is_some() => match unrecorded {
-            Unrecorded::Refuse => Err(Status::unimplemented(
-                "a malformed vector is not observed locally",
-            )),
-            Unrecorded::OfficialEmulator => Err(Status::invalid_argument(
-                vector_literal_error(value).unwrap_or_default(),
-            )),
-        },
+        // A literal of literals: the official emulator checks its vectors and `__type__` keys
+        // before its other keys; production recorded well-formed vectors and a string
+        // `__type__` only, so strict refuses the rest.
+        Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
+            match unrecorded {
+                Unrecorded::Refuse => Err(Status::unimplemented(
+                    "a malformed vector or __type__ is not observed locally",
+                )),
+                Unrecorded::OfficialEmulator => Err(Status::invalid_argument(
+                    literal_value_error(value).unwrap_or_default(),
+                )),
+            }
+        }
         Some(_) => match expression_kind(value) {
             // Production read literals of every kind, maps keyed by any name but an empty or a
             // reserved one (FS-ENT-ORACLE O-3, O-4 `o4/literals#*`); strict answers the shapes
@@ -723,7 +749,14 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
             None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value) => Err(
                 Status::unimplemented("a literal of this shape is not observed locally"),
             ),
-            None => Ok(Expr::Constant(decode_official_literal(value)?)),
+            // fireemu's nesting limit is its own text: strict refuses it as unobserved.
+            None => Ok(Expr::Constant(decode_official_literal(value).map_err(|e| {
+                if e.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH") {
+                    own_text(e.message().to_owned(), unrecorded)
+                } else {
+                    e
+                }
+            })?)),
             // A literal holding an expression with a key that is not plain: the official
             // emulator names a reserved key before the value type; production has not answered
             // such a key, so strict refuses it as unobserved.
@@ -732,15 +765,23 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                     "a literal holding an expression with this key is not observed locally",
                 ))
             }
+            // A literal of literals inside it that strict does not answer on its own.
+            Some(_) if unrecorded == Unrecorded::Refuse && holds_unrecorded_literal(value) => {
+                Err(Status::unimplemented(
+                    "a literal holding an expression and an unrecorded value is not observed locally",
+                ))
+            }
             Some(_) if reserved_key(value).is_some() => Err(Status::invalid_argument(format!(
                 "field name '{}' is reserved.",
                 reserved_key(value).unwrap_or_default()
             ))),
             // A field or function anywhere in a literal, named by the first in document order
-            // (FS-ENT-ORACLE O-1, O-3 and O-4 `o4/literals#*`).
-            Some(kind) => Err(Status::invalid_argument(format!(
-                "Value type is not supported: {kind}"
-            ))),
+            // (FS-ENT-ORACLE O-1, O-3 and O-4 `o4/literals#*`); a malformed vector or
+            // `__type__` met before it is named instead, as the official emulator does.
+            Some(kind) => Err(Status::invalid_argument(
+                expression_literal_error(value)
+                    .unwrap_or_else(|| format!("Value type is not supported: {kind}")),
+            )),
         },
     }
 }
@@ -823,44 +864,155 @@ fn decode_official_literal(
     }
 }
 
-/// The official emulator's refusal of the first malformed vector a literal holds (arrays in
-/// order, maps in key order: the wire map keeps no order), in its order of checks: a missing
-/// `value`, a `value` that is no array, another key, no element, an element that is no double,
-/// a NaN element (firebase-tools 15.28.2, Firestore emulator 1.22.0).
-fn vector_literal_error(value: &pb::Value) -> Option<&'static str> {
+/// The official emulator's refusal of the first malformed vector or `__type__` key a literal of
+/// literals holds (arrays in order, maps in key order: the wire map keeps no order), in its
+/// order of checks: a `__type__` that is no string, then for a vector a missing `value`, a
+/// `value` that is no array, another key, no element, an element that is no double, a NaN
+/// element (firebase-tools 15.28.2, Firestore emulator 1.22.0).
+fn literal_value_error(value: &pb::Value) -> Option<String> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
-        Some(V::ArrayValue(array)) => array.values.iter().find_map(vector_literal_error),
-        Some(V::MapValue(map)) if is_vector_literal(value) => {
-            let elements = match map.fields.get("value").map(|v| v.value_type.as_ref()) {
-                None => return Some("Vector map is missing key 'value'."),
-                Some(Some(V::ArrayValue(array))) => &array.values,
-                Some(_) => return Some("Vector value type must be an array."),
-            };
-            if map.fields.len() != 2 {
-                return Some("Vector value map has extraneous entries.");
-            }
-            if elements.is_empty() {
-                return Some("Cannot have a zero length vector.");
-            }
-            if !elements
-                .iter()
-                .all(|e| matches!(e.value_type, Some(V::DoubleValue(_))))
-            {
-                return Some("Vector must only contain values of type 'double'");
-            }
-            elements
-                .iter()
-                .any(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_nan()))
-                .then_some("Vectors cannot contain NaN values.")
-        }
+        Some(V::ReferenceValue(name)) => reference_literal_error(name),
+        Some(V::ArrayValue(array)) => array.values.iter().find_map(literal_value_error),
         Some(V::MapValue(map)) => {
+            if let Some(kind) = map
+                .fields
+                .get("__type__")
+                .and_then(|t| match &t.value_type {
+                    Some(V::StringValue(_)) => None,
+                    other => Some(official_type_name(other.as_ref())),
+                })
+            {
+                return Some(format!("Field __type__ must be a string; founds {kind}."));
+            }
+            if is_vector_literal(value) {
+                return vector_error(map).map(str::to_owned);
+            }
             let mut keys: Vec<_> = map.fields.keys().collect();
             keys.sort();
             keys.into_iter()
-                .find_map(|key| vector_literal_error(&map.fields[key]))
+                .find_map(|key| literal_value_error(&map.fields[key]))
         }
         _ => None,
+    }
+}
+
+/// The official emulator's refusal of a reference literal that names no document: a name that
+/// does not start with `projects`, an empty segment, or a collection (the index counts UTF-16
+/// units, as the official emulator's Java does). The documents root is a reference too.
+fn reference_literal_error(name: &str) -> Option<String> {
+    let units = |text: &str| text.encode_utf16().count();
+    if !name.starts_with("projects/") {
+        return Some(format!(
+            "Document parent name \"{name}\" lacks \"projects\" at index 0."
+        ));
+    }
+    let segments: Vec<&str> = name.split('/').collect();
+    let ["projects", _, "databases", _, "documents", rest @ ..] = segments.as_slice() else {
+        return None;
+    };
+    if let Some(empty) = rest.iter().position(|segment| segment.is_empty()) {
+        let before = segments[..5 + empty].join("/");
+        return Some(format!(
+            "Document parent name \"{name}\" lacks a resource id at index {}.",
+            units(&before) + 1
+        ));
+    }
+    (rest.len() % 2 == 1).then(|| {
+        format!(
+            "Document parent name \"{name}\" lacks \"/\" at index {}.",
+            units(name)
+        )
+    })
+}
+
+/// The official emulator's refusal of a vector map, in its order of checks.
+fn vector_error(map: &pb::MapValue) -> Option<&'static str> {
+    use pb::value::ValueType as V;
+    let elements = match map.fields.get("value").map(|v| v.value_type.as_ref()) {
+        None => return Some("Vector map is missing key 'value'."),
+        Some(Some(V::ArrayValue(array))) => &array.values,
+        Some(_) => return Some("Vector value type must be an array."),
+    };
+    if map.fields.len() != 2 {
+        return Some("Vector value map has extraneous entries.");
+    }
+    if elements.is_empty() {
+        return Some("Cannot have a zero length vector.");
+    }
+    if !elements
+        .iter()
+        .all(|e| matches!(e.value_type, Some(V::DoubleValue(_))))
+    {
+        return Some("Vector must only contain values of type 'double'");
+    }
+    elements
+        .iter()
+        .any(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_nan()))
+        .then_some("Vectors cannot contain NaN values.")
+}
+
+/// A wire value's type as the official emulator names it in its `__type__` refusal.
+fn official_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
+    use pb::value::ValueType as V;
+    match value {
+        Some(V::NullValue(_)) => "NULL",
+        Some(V::BooleanValue(_)) => "BOOLEAN",
+        Some(V::IntegerValue(_)) => "LONG",
+        Some(V::DoubleValue(_)) => "DOUBLE",
+        Some(V::TimestampValue(_)) => "TIMESTAMP",
+        Some(V::StringValue(_)) => "STRING",
+        Some(V::BytesValue(_)) => "BYTES",
+        Some(V::ReferenceValue(_)) => "REFERENCE",
+        Some(V::GeoPointValue(_)) => "GEO_POINT",
+        Some(V::ArrayValue(_)) => "ARRAY",
+        Some(V::MapValue(_)) => "MAP",
+        _ => "UNKNOWN",
+    }
+}
+
+/// The official emulator's refusal of a literal holding an expression: its entries are read in
+/// order (arrays in order, maps in key order), a field or function names its kind, and a
+/// literal of literals inside it gets the vector and `__type__` checks first.
+fn expression_literal_error(value: &pb::Value) -> Option<String> {
+    use pb::value::ValueType as V;
+    let entry = |inner: &pb::Value| match inner.value_type.as_ref() {
+        Some(V::ArrayValue(_) | V::MapValue(_)) if expression_kind(inner).is_some() => {
+            expression_literal_error(inner)
+        }
+        _ => match expression_kind(inner) {
+            Some(kind) => Some(format!("Value type is not supported: {kind}")),
+            None => literal_value_error(inner),
+        },
+    };
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().find_map(entry),
+        Some(V::MapValue(map)) => {
+            let mut keys: Vec<_> = map.fields.keys().collect();
+            keys.sort();
+            keys.into_iter().find_map(|key| entry(&map.fields[key]))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a literal holding an expression holds a literal of literals strict does not answer
+/// on its own (a malformed vector, a `__type__` that is no string, an unrecorded shape).
+fn holds_unrecorded_literal(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    let entry = |inner: &pb::Value| match inner.value_type.as_ref() {
+        Some(V::ArrayValue(_) | V::MapValue(_)) if expression_kind(inner).is_some() => {
+            holds_unrecorded_literal(inner)
+        }
+        _ => {
+            expression_kind(inner).is_none()
+                && (literal_value_error(inner).is_some() || !literal_shape_recorded(inner))
+        }
+    };
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().any(entry),
+        Some(V::MapValue(map)) => map.fields.values().any(entry),
+        _ => false,
     }
 }
 
@@ -884,11 +1036,21 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
                             && array.values.iter().all(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_finite() && !(d == 0.0 && d.is_sign_negative())))
                     )
             }
+            // Production read reference literals naming a document (O-3 `literals#*`).
+            Some(V::ReferenceValue(name)) => {
+                name.is_ascii()
+                    && reference_literal_error(name).is_none()
+                    && name.split('/').count() > 5
+                    && name.split('/').count() % 2 == 1
+            }
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
                 if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
                     *refusable += 1;
                 }
-                key != "__name__" && walk(inner, refusable)
+                // Production answered a string `__type__` only (O-4 `literals#key-type`).
+                let typed =
+                    key != "__type__" || matches!(inner.value_type, Some(V::StringValue(_)));
+                typed && key != "__name__" && walk(inner, refusable)
             }),
             _ => true,
         }
@@ -955,7 +1117,7 @@ fn decode_condition(
     // the finite subset's.
     if def.arity != Arity::Exact(function.args.len()) {
         return Err(own_text(
-            format!("{} requires exactly two arguments and no options", def.name),
+            format!("{} requires exactly two arguments", def.name),
             unrecorded,
         ));
     }
@@ -1012,14 +1174,34 @@ fn decode_select(
             map.fields.len()
         )));
     }
-    let mut aliases = Vec::with_capacity(map.fields.len());
-    for (alias, value) in &map.fields {
+    // The official emulator keeps `__name__` selected as itself (the result carries the name
+    // and no field); production has not answered it, and fireemu refuses it as an alias in the
+    // emulator profile (a known difference), so strict refuses it as unobserved.
+    if unrecorded == Unrecorded::Refuse
+        && map.fields.iter().any(|(alias, value)| {
+            parse_alias(alias).is_ok_and(|path| path.segments() == ["__name__"])
+                && matches!(&value.value_type, Some(pb::value::ValueType::FieldReferenceValue(f)) if f == "__name__")
+        })
+    {
+        return Err(Status::unimplemented(
+            "selecting __name__ as itself is not observed locally",
+        ));
+    }
+    // Every alias is checked before any value, as the official emulator does, in key order (the
+    // wire map keeps no order).
+    let mut entries: Vec<_> = map.fields.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let mut paths = Vec::with_capacity(map.fields.len());
+    for (alias, value) in entries {
         if value.value_type.is_none() {
             return Err(Status::unimplemented(
                 "select expressions are unsupported locally",
             ));
         }
-        let path = decode_alias(alias)?;
+        paths.push((alias, value, decode_alias(alias)?));
+    }
+    let mut aliases = Vec::with_capacity(paths.len());
+    for (alias, value, path) in paths {
         aliases.push((alias, path, decode_operand(value, unrecorded)?));
     }
     if aliases.is_empty() {
@@ -1173,7 +1355,7 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
     }
 }
 
-/// Whether a stage after the collection input fails strict's own checks with UNIMPLEMENTED
+/// Whether a stage after the collection input fails strict's own checks with `UNIMPLEMENTED`
 /// (an unknown or unrun function, an unrecorded literal or argument, a stage out of the
 /// subset's order, a call that fails on its constants), checked through the whole pipeline
 /// however an earlier stage was refused. The recorded orders are left out: an unrun
@@ -1197,10 +1379,19 @@ fn holds_unobserved_part(stages: &[pb::pipeline::Stage]) -> bool {
         }
         last_rank = rank;
         let part_unobserved = match stage.name.as_str() {
-            "where" => unobserved(decode_condition(stage, strict).map(|_| ())),
+            "where" => {
+                unobserved(decode_condition(stage, strict).map(|_| ()))
+                    || stage.args.iter().any(subtree_unobserved)
+            }
             "select" => {
                 !stage.args.first().is_some_and(is_empty_map)
-                    && unobserved(decode_select(stage, strict).map(|_| ()))
+                    && (unobserved(decode_select(stage, strict).map(|_| ()))
+                        || stage
+                            .args
+                            .iter()
+                            .filter_map(map_fields)
+                            .flat_map(|fields| fields.values())
+                            .any(subtree_unobserved))
             }
             "offset" | "limit" => unobserved(count_argument(stage, strict).map(|_| ())),
             _ => {
@@ -1229,6 +1420,195 @@ fn holds_unobserved_part(stages: &[pb::pipeline::Stage]) -> bool {
     false
 }
 
+/// A part of the pipeline that would be refused with `INVALID_ARGUMENT` on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Refusal {
+    /// An empty alias map.
+    EmptyMap,
+    /// A `limit` or `offset` argument.
+    Count,
+    /// An alias path that is empty or invalid.
+    AliasPath,
+    /// Any other.
+    Other,
+}
+
+/// The parts of the pipeline that would each be refused with `INVALID_ARGUMENT` on their own,
+/// with their stage, checked independently (each alias, each value, each empty map, each run
+/// stage's argument; a one-argument `aggregate` as one part).
+fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<(usize, Refusal)> {
+    fn values(stage: &pb::pipeline::Stage) -> Vec<&pb::Value> {
+        stage
+            .args
+            .iter()
+            .filter_map(map_fields)
+            .flat_map(|fields| fields.values())
+            .collect()
+    }
+    fn aliases(stage: &pb::pipeline::Stage) -> Vec<&String> {
+        stage
+            .args
+            .iter()
+            .filter_map(map_fields)
+            .flat_map(|fields| fields.keys())
+            .collect()
+    }
+    let strict = Unrecorded::Refuse;
+    let invalid = |result: &Result<(), Status>| matches!(result, Err(e) if e.code() == tonic::Code::InvalidArgument);
+    let alias_kind = |error: &Status| {
+        if error.message().starts_with("Invalid empty property path")
+            || error.message().starts_with("Invalid property path")
+        {
+            Refusal::AliasPath
+        } else {
+            Refusal::Other
+        }
+    };
+    let mut out = Vec::new();
+    for (position, stage) in stages.iter().enumerate().skip(1) {
+        let name = stage.name.as_str();
+        match name {
+            "aggregate" if stage.args.len() == 1 => out.push((position, Refusal::Other)),
+            "where" => {
+                let own: usize = stage.args.iter().map(own_refusals).sum();
+                let whole = usize::from(invalid(&decode_condition(stage, strict).map(|_| ())));
+                for _ in 0..own.max(whole) {
+                    out.push((position, Refusal::Other));
+                }
+            }
+            "limit" | "offset" => {
+                // Production answered a string argument before an earlier empty map; a
+                // negative one comes after it in the official emulator.
+                if let Err(error) = count_argument(stage, strict) {
+                    if error.code() == tonic::Code::InvalidArgument {
+                        out.push((
+                            position,
+                            if error.message().starts_with("Expected ") {
+                                Refusal::Count
+                            } else {
+                                Refusal::Other
+                            },
+                        ));
+                    }
+                }
+            }
+            "select" | "add_fields" | "distinct" | "aggregate" => {
+                if stage.args.iter().any(is_empty_map)
+                    && !(name == "aggregate"
+                        && stage.args.get(1).is_some_and(is_empty_map)
+                        && !stage.args.first().is_some_and(is_empty_map))
+                {
+                    out.push((position, Refusal::EmptyMap));
+                }
+                for alias in aliases(stage) {
+                    let result = if name == "select" {
+                        decode_alias(alias).map(|_| ())
+                    } else {
+                        parse_alias(alias).map(|_| ())
+                    };
+                    if let Err(error) = &result {
+                        if invalid(&result) {
+                            out.push((position, alias_kind(error)));
+                        }
+                    } else if name != "select" && reserved_alias(name, alias).is_some() {
+                        out.push((position, Refusal::Other));
+                    }
+                }
+                for value in values(stage) {
+                    for _ in 0..own_refusals(value) {
+                        out.push((position, Refusal::Other));
+                    }
+                }
+                if unrun_stage_name_error(stage).is_some() {
+                    out.push((position, Refusal::Other));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// How many checks inside a value would each refuse it with `INVALID_ARGUMENT`: a function's own
+/// checks (its argument count, a `map(...)` key that is no literal) with its arguments put
+/// aside, a literal holding an expression, a malformed literal of literals, an invalid field
+/// path, counted at every depth. Production named one refusal per recorded row, so two in one
+/// value leave the order unrecorded too.
+fn own_refusals(value: &pb::Value) -> usize {
+    use pb::value::ValueType as V;
+    let strict = Unrecorded::Refuse;
+    let invalid = |result: Result<Expr, Status>| {
+        usize::from(matches!(result, Err(e) if e.code() == tonic::Code::InvalidArgument))
+    };
+    match value.value_type.as_ref() {
+        Some(V::FunctionValue(function)) => {
+            // The arguments put aside: a field where one stood that is no literal, null for a
+            // literal, so only the function's own checks remain.
+            let mut alone = function.clone();
+            for arg in &mut alone.args {
+                *arg = if is_literal(arg) {
+                    pb::Value {
+                        value_type: Some(V::NullValue(0)),
+                    }
+                } else {
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("p".to_owned())),
+                    }
+                };
+            }
+            let own = invalid(decode_operand(
+                &pb::Value {
+                    value_type: Some(V::FunctionValue(alone)),
+                },
+                strict,
+            ));
+            own + function.args.iter().map(own_refusals).sum::<usize>()
+        }
+        // A literal holding an expression is one refusal however deep the expressions sit
+        // (production named the first, O-4 `literals#*`); the functions inside it keep their
+        // own checks.
+        Some(V::ArrayValue(_) | V::MapValue(_)) if expression_kind(value).is_some() => {
+            fn functions_inside(value: &pb::Value) -> usize {
+                match value.value_type.as_ref() {
+                    Some(V::FunctionValue(_)) => own_refusals(value),
+                    Some(V::ArrayValue(array)) => array.values.iter().map(functions_inside).sum(),
+                    Some(V::MapValue(map)) => map.fields.values().map(functions_inside).sum(),
+                    _ => 0,
+                }
+            }
+            1 + functions_inside(value)
+        }
+        _ => invalid(decode_operand(value, strict)),
+    }
+}
+
+/// Whether production answered the order of these refusals: one alone, or an empty map and,
+/// in another stage, a `limit` or `offset` argument or an alias path, which production
+/// answered before the empty map (O-4 `o4/stages#select-empty-then-limit-string`,
+/// `#select-empty-then-add-fields-empty-alias`).
+fn refusals_recorded(refusals: &[(usize, Refusal)]) -> bool {
+    match refusals {
+        [] | [_] => true,
+        [(a, Refusal::EmptyMap), (b, Refusal::Count | Refusal::AliasPath)]
+        | [(b, Refusal::Count | Refusal::AliasPath), (a, Refusal::EmptyMap)] => a != b,
+        _ => false,
+    }
+}
+
+/// Whether a value, or any function call or literal inside it, is refused by strict as
+/// unobserved on its own: an alias or other check of the same stage must not answer past it,
+/// since production's order between the two is unrecorded.
+fn subtree_unobserved(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    matches!(decode_operand(value, Unrecorded::Refuse), Err(e) if e.code() == tonic::Code::Unimplemented)
+        || match value.value_type.as_ref() {
+            Some(V::FunctionValue(function)) => function.args.iter().any(subtree_unobserved),
+            Some(V::ArrayValue(array)) => array.values.iter().any(subtree_unobserved),
+            Some(V::MapValue(map)) => map.fields.values().any(subtree_unobserved),
+            _ => false,
+        }
+}
+
 /// The subset's order of stages after the input: `where` and `select`, then `offset`, then
 /// `limit` (which shares the last rank with the stages fireemu does not run: the checks end
 /// at the first such stage, and a second `limit` is refused as repeated).
@@ -1243,7 +1623,10 @@ fn stage_rank(name: &str) -> u8 {
 /// Whether a function call a stage holds (at any depth of its arguments and alias maps) fails
 /// when evaluated with every field absent: under strict, as decoded for the executor, so the
 /// error can only come from the call's constants (a missing value gives null or leaves its
-/// entry out, and a `map(...)` key from a field is refused before).
+/// entry out, and a `map(...)` key from a field is refused before). `__name__` is the
+/// top-level document `constants/row` of `(default)`, so a call that depends on the document's
+/// depth may fail here and not per row, or the other way; both directions are accepted, as for
+/// a type that depends on the data.
 fn constant_call_fails(stage: &pb::pipeline::Stage) -> bool {
     use pb::value::ValueType as V;
     fn fails(value: &pb::Value, row: &pipeline_exec::Row) -> bool {
@@ -1284,6 +1667,7 @@ fn constant_call_fails(stage: &pb::pipeline::Stage) -> bool {
 /// make for what it does not decode is unrecorded. So under strict a stage's values must pass
 /// fireemu's own checks (an accumulator must be `count` of at most one field, as recorded),
 /// and any other stage ends the checks: the pipeline is refused as unobserved there.
+#[allow(clippy::too_many_lines)]
 fn check_unrun_alias_stage(
     stage: &pb::pipeline::Stage,
     deferred: &mut Option<Status>,
@@ -1318,13 +1702,25 @@ fn check_unrun_alias_stage(
     // A select after an unrun stage: the official emulator checks its aliases too, with the
     // select texts, and answers an empty map last.
     if name == "select" {
-        for alias in stage
+        let mut aliases: Vec<&String> = stage
             .args
             .iter()
             .filter_map(map_fields)
             .flat_map(|fields| fields.keys())
-        {
+            .collect();
+        aliases.sort();
+        for alias in aliases {
             decode_alias(alias)?;
+        }
+        if let Some(text) = stage
+            .args
+            .iter()
+            .filter_map(map_fields)
+            .flat_map(|fields| fields.values())
+            .filter(|value| expression_kind(value).is_none())
+            .find_map(literal_value_error)
+        {
+            return Err(Status::invalid_argument(text));
         }
         if stage.args.first().is_some_and(is_empty_map) {
             deferred.get_or_insert_with(|| {
@@ -1333,13 +1729,67 @@ fn check_unrun_alias_stage(
         }
         return Ok(());
     }
-    for alias in stage
+    let mut stage_aliases: Vec<&String> = stage
         .args
         .iter()
         .filter_map(map_fields)
         .flat_map(|fields| fields.keys())
-    {
+        .collect();
+    stage_aliases.sort();
+    // The official emulator checks each alias's syntax, then its reserved first segment, then
+    // its length (firebase-tools 15.28.2, Firestore emulator 1.22.0; production recorded the
+    // syntax and length texts alone, O-4 `o4/stages#add-fields-*-alias*`).
+    for alias in &stage_aliases {
+        match parse_alias(alias) {
+            Err(e) if !is_length_refusal(&e) => return Err(e),
+            _ => {}
+        }
+    }
+    let values_of = |alias: &str| {
+        stage
+            .args
+            .iter()
+            .filter_map(map_fields)
+            .find_map(|fields| fields.get(alias))
+    };
+    for alias in &stage_aliases {
+        // `__name__` assigned itself is no overwrite: the official emulator accepts it.
+        let itself = alias.as_str() == "__name__"
+            && values_of(alias).is_some_and(|v| {
+                matches!(&v.value_type, Some(pb::value::ValueType::FieldReferenceValue(f)) if f == "__name__")
+            });
+        if let Some(text) = reserved_alias(name, alias).filter(|_| !itself) {
+            // Production has not answered a reserved alias of a stage fireemu does not run.
+            return Err(if strict {
+                Status::unimplemented(format!("{text}; this text is not observed locally"))
+            } else {
+                Status::invalid_argument(text)
+            });
+        }
+    }
+    // The official emulator's checks of the stages that assign top-level fields only, and of an
+    // aggregate's names (production has not answered them, so strict refuses them).
+    if let Some(text) = unrun_stage_name_error(stage) {
+        return Err(if strict {
+            Status::unimplemented(format!("{text}; this text is not observed locally"))
+        } else {
+            Status::invalid_argument(text)
+        });
+    }
+    for alias in &stage_aliases {
         parse_alias(alias)?;
+    }
+    // A malformed vector or `__type__` among the stage's values: the official emulator refuses
+    // it after the aliases and before an empty map (strict refused such a value above).
+    if let Some(text) = stage
+        .args
+        .iter()
+        .filter_map(map_fields)
+        .flat_map(|fields| fields.values())
+        .filter(|value| expression_kind(value).is_none())
+        .find_map(literal_value_error)
+    {
+        return Err(Status::invalid_argument(text));
     }
     let empty = match name {
         "aggregate" => map_fields(&stage.args[0])
@@ -1391,6 +1841,72 @@ fn unrun_values_validated(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -
         // A one-argument aggregate never gets here: its arity text comes first.
         (_, [aliases]) => operands(aliases),
         _ => false,
+    }
+}
+
+/// The official emulator's refusal of a `distinct` or `aggregate` alias that names a nested
+/// field, and of an `aggregate` whose accumulators and groups share a name.
+fn unrun_stage_name_error(stage: &pb::pipeline::Stage) -> Option<String> {
+    let name = stage.name.as_str();
+    if !matches!(name, "distinct" | "aggregate") {
+        return None;
+    }
+    let mut aliases: Vec<&String> = stage
+        .args
+        .iter()
+        .filter_map(map_fields)
+        .flat_map(|fields| fields.keys())
+        .collect();
+    aliases.sort();
+    if let Some(nested) = aliases.iter().find(|alias| {
+        FieldPath::parse_allowing_reserved(alias).is_ok_and(|path| path.segments().len() > 1)
+    }) {
+        return Some(format!(
+            "The nested field reference '{nested}' is not supported in its current use case.\n\nCertain stages like `aggregate(...)` or `unnest(...)` only support assigning to top-level fields. This means you cannot use an alias like 'foo.bar' to assign the result to a nested field. If you want to use an alias that has a dot in it, escape the path with backticks, like `foo.bar`.\n\nDepending on the SDK, this can be done like so:`.distinct(field(\"address.city\").as(\"`address.city`\"))`"
+        ));
+    }
+    if let [accumulators, groups] = stage.args.as_slice() {
+        if let (Some(a), Some(g)) = (map_fields(accumulators), map_fields(groups)) {
+            let mut shared: Vec<&String> = a.keys().filter(|k| g.contains_key(*k)).collect();
+            shared.sort();
+            if !shared.is_empty() {
+                let list = shared
+                    .iter()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Some(format!(
+                    "The 'aggregate(...)' stage cannot have overlapping field names: [{list}]"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Whether an alias refusal is the length one (`PROPERTY_PATH_TOO_LONG`).
+fn is_length_refusal(error: &Status) -> bool {
+    error.message().starts_with("The field reference '")
+}
+
+/// The official emulator's refusal of an alias whose first segment is reserved, in a stage
+/// fireemu does not run (`__name__` cannot be overwritten, `__x__` is reserved).
+fn reserved_alias(stage: &str, alias: &str) -> Option<String> {
+    let unquoted = unquoted_alias(alias);
+    let first = match FieldPath::parse_allowing_reserved(alias) {
+        Ok(path) => path.segments().first().cloned()?,
+        Err(_) => unquoted.split('.').next()?.to_owned(),
+    };
+    if first == "__name__" {
+        Some(format!(
+            "Stage '{stage}': field name '__name__' is reserved and can not be overwritten."
+        ))
+    } else if is_reserved_name(&first) {
+        Some(format!(
+            "Stage '{stage}': field name '{first}' is reserved."
+        ))
+    } else {
+        None
     }
 }
 

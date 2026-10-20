@@ -223,9 +223,11 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
             }),
             "{name}(str)"
         );
-        // Every other argument type too (O-4 an integer, a map, a boolean).
+        // Every other argument type too in the emulator profile (O-4 recorded an integer for
+        // document_id; strict refuses the other pairs, see
+        // strict_answers_only_the_argument_and_key_types_production_recorded).
         assert_eq!(
-            call(name, vec![field("num")]).eval(&r),
+            call(name, vec![field("num")]).eval_in(&r, Unrecorded::OfficialEmulator),
             Eval::Error(EvalError::WrongType {
                 function: name,
                 expected: "Reference",
@@ -861,7 +863,12 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
         assert_eq!(text.eval(&r), wrong(name, "STRING"));
         let number = call(name, vec![field("num")]);
         assert_eq!(official(&number), wrong(name, "LONG"));
-        assert_eq!(number.eval(&r), wrong(name, "LONG"), "{name}(num)");
+        // Strict answers the integer for document_id only (O-4 `functions#document-id-integer`).
+        if name == "document_id" {
+            assert_eq!(number.eval(&r), wrong(name, "LONG"), "{name}(num)");
+        } else {
+            assert!(unobserved(&number.eval(&r)), "{name}(num)");
+        }
     }
     assert_eq!(
         wrong("parent", "STRING"),
@@ -972,14 +979,33 @@ fn strict_answers_only_the_argument_and_key_types_production_recorded() {
         Value::Array(vec![Value::Integer(1)]),
         Value::Vector(vec![1.0]),
     ];
-    let recorded = [
-        s("c/x"),
-        Value::Integer(1),
-        Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))])),
-        Value::Boolean(true),
-    ];
+    let map = Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))]));
     let r = row("c/x", &[]);
-    for name in ["document_id", "collection_id", "parent"] {
+    for (name, recorded, unrecorded) in [
+        (
+            "document_id",
+            vec![s("c/x"), Value::Integer(1)],
+            vec![map.clone(), Value::Boolean(true)],
+        ),
+        (
+            "collection_id",
+            vec![s("c/x"), map.clone()],
+            vec![Value::Integer(1), Value::Boolean(true)],
+        ),
+        (
+            "parent",
+            vec![s("c/x"), Value::Boolean(true)],
+            vec![Value::Integer(1), map.clone()],
+        ),
+    ] {
+        // The pairs production did not record for this function are refused under strict.
+        for value in &unrecorded {
+            let e = call(name, vec![constant(value.clone())]);
+            assert!(
+                unobserved(&e.eval_in(&r, Unrecorded::Refuse)),
+                "{name}({value:?})"
+            );
+        }
         for value in &recorded {
             let e = call(name, vec![constant(value.clone())]);
             let wrong = Eval::Error(EvalError::WrongType {

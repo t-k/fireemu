@@ -63,6 +63,9 @@ The answers follow production as recorded by fireemu's production observations (
 | A document function of a double, timestamp, geo point, bytes, array or vector | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
 | A `map(...)` key that is a double, null or another type than an integer or boolean | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
 | A vector literal with integer or NaN elements, no element, without `value` or with another key | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| A vector literal with an infinite element | `UNIMPLEMENTED` | The vector |
+| A `__type__` key that is not a string, or a reference literal that names no document | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| Two refusals in one pipeline | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, one of them |
 | A vector literal with a negative-zero element | `UNIMPLEMENTED` | The vector |
 | A literal with more than one empty or reserved key, or the key `__name__` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
 | A `limit` of another type than an integer or string; an `offset` that is negative or of another type than an integer or string | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |

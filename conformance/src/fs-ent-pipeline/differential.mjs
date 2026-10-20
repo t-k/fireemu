@@ -23,11 +23,12 @@ export const SEED = {
 const DOCS = "projects/demo-app/databases/(default)/documents";
 
 async function call(host, method, path, body) {
-  const response = await fetch(`http://${host}/v1/${path}`, {
+  const init = {
     method,
     headers: { authorization: "Bearer owner", "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const response = await fetch(`http://${host}/v1/${path}`, init);
   const text = await response.text();
   let parsed;
   try {
@@ -46,6 +47,11 @@ function answer({ status, body }) {
   return { status, results };
 }
 
+const depth = (value) =>
+  value !== null && typeof value === "object"
+    ? 1 + Math.max(0, ...Object.values(value).map(depth))
+    : 0;
+
 async function record(host, inputs) {
   if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host ?? "")) {
     throw new Error("FIRESTORE_EMULATOR_HOST must be a loopback emulator");
@@ -57,7 +63,8 @@ async function record(host, inputs) {
     for (const line of (await readFile(input, "utf8")).split("\n").filter(Boolean)) {
       const { label, stages } = JSON.parse(line);
       const key = JSON.stringify(stages);
-      if (seen.has(key)) continue;
+      // The Rust test reads the corpus with serde_json, which stops at 128 levels of nesting.
+      if (seen.has(key) || depth(stages) > 100) continue;
       if (rows.some((row) => row.id === label)) throw new Error(`duplicate row id ${label}`);
       seen.add(key);
       rows.push({ id: label, stages });

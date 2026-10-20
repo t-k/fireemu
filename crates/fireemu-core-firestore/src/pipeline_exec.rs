@@ -280,10 +280,16 @@ impl Expr {
             Arity::Pairs => args.len() % 2 == 0,
         };
         if !fits {
+            // The official emulator's text for an odd number of `map(...)` arguments.
+            if function.arity == Arity::Pairs {
+                return Err(ExprError::Invalid(format!(
+                    "'{name}' function must have an even number of arguments"
+                )));
+            }
             let expected = match function.arity {
                 Arity::Exact(n) => format!("{n} argument(s)"),
                 Arity::Any => "any number of arguments".to_owned(),
-                Arity::Pairs => "key and value pairs".to_owned(),
+                Arity::Pairs => unreachable!("answered above"),
             };
             return Err(ExprError::Invalid(format!(
                 "function {name:?} takes {expected}, got {} argument(s)",
@@ -441,10 +447,18 @@ fn type_name(value: &Value) -> &'static str {
 /// `functions#map-integer-key`, O-4 `functions#map-key-boolean`).
 const RECORDED_MAP_KEY_TYPES: [&str; 2] = ["LONG", "BOOLEAN"];
 
-/// The argument types production named when a document function refused one (FS-ENT-ORACLE
-/// O-3 `functions#*-string`, O-4 `functions#document-id-integer`, `#collection-id-map`,
-/// `#parent-boolean`).
-const RECORDED_DOCUMENT_ARGUMENT_TYPES: [&str; 4] = ["STRING", "LONG", "MAP", "BOOLEAN"];
+/// The argument types production named, per document function, when it refused one: the
+/// text names the function, so each pair is its own row (FS-ENT-ORACLE O-3
+/// `functions#document-id-string`, `#collection-id-string`, `#parent-string`, O-4
+/// `functions#document-id-integer`, `#collection-id-map`, `#parent-boolean`).
+const RECORDED_DOCUMENT_ARGUMENT_TYPES: [(&str, &str); 6] = [
+    ("document_id", "STRING"),
+    ("document_id", "LONG"),
+    ("collection_id", "STRING"),
+    ("collection_id", "MAP"),
+    ("parent", "STRING"),
+    ("parent", "BOOLEAN"),
+];
 
 /// `map(key, value, ...)`, as production answered it (FS-ENT-ORACLE O-1, O-3 and O-4
 /// `functions#map-*`) and the official emulator alike: a key whose value is absent is left out
@@ -546,11 +560,11 @@ fn document_argument(
         },
         [Eval::Absent | Eval::Value(Value::Null)] => Err(Eval::Value(Value::Null)),
         // Production refused every argument type it was given but a reference, naming the
-        // type (O-3 a string, O-4 an integer, a map and a boolean); strict refuses the other
-        // types as unobserved.
+        // type (O-3 a string, O-4 an integer, a map and a boolean, each with one function);
+        // strict refuses the other pairs as unobserved.
         [Eval::Value(other)]
             if unrecorded == Unrecorded::Refuse
-                && !RECORDED_DOCUMENT_ARGUMENT_TYPES.contains(&type_name(other)) =>
+                && !RECORDED_DOCUMENT_ARGUMENT_TYPES.contains(&(function, type_name(other))) =>
         {
             unobserved("an argument of this type")
         }

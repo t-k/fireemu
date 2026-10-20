@@ -1563,13 +1563,28 @@ impl RestState {
         if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Enterprise {
             return Err(crate::production_status::pipeline_requires_enterprise());
         }
-        let body = self.transcoded("executePipeline", body)?;
-        let request = pipeline_json::request_from_json(database, &body).map_err(|e| bad(&e))?;
         let unrecorded = if self.gateway.production_refusals() {
             fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
         } else {
             fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
         };
+        // fireemu's nesting limit is its own text (the official emulator allows expressions 32
+        // levels deep and values 20, with other words); strict refuses it as unobserved.
+        let nesting = |error: Status| {
+            if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
+                && error.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH")
+            {
+                Status::unimplemented(format!(
+                    "{}; this text is not observed locally",
+                    error.message()
+                ))
+            } else {
+                error
+            }
+        };
+        let body = self.transcoded("executePipeline", body).map_err(nesting)?;
+        let request =
+            pipeline_json::request_from_json(database, &body).map_err(|e| nesting(bad(&e)))?;
         let ast = crate::pipeline::validate_pipeline(&request, unrecorded)?;
         let canonical = ast.canonical_text();
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))

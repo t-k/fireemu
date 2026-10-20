@@ -1,0 +1,367 @@
+// A seeded sweep of generated pipelines (coordinator ruling of 2026-10-20 for round 3 of the
+// PX1d review): it draws pipelines from the grammar fireemu accepts (stages, literals, vectors,
+// `__type__` and reserved keys, aliases, functions with options, nesting), sends each to one
+// loopback target and saves the answers, then compares the official emulator's answers with
+// fireemu's under both profiles. Local use only: CI cannot run the official emulator, so the
+// interesting rows go into conformance/fs-ent-pipeline-differential.json (differential.mjs).
+//
+//   FIRESTORE_EMULATOR_HOST=127.0.0.1:<port> node src/fs-ent-pipeline/differential-sweep.mjs \
+//     collect <seed> <count> <answers.json>
+//   node src/fs-ent-pipeline/differential-sweep.mjs compare <official.json> <emulator.json> \
+//     <strict.json> <report.json> [rows.jsonl]
+//
+// `compare` lists the rows where the emulator profile accepts what the official emulator
+// refuses or refuses what it accepts (rows outside the local subset, a stage or function
+// fireemu does not run, are counted apart), and the strict answers that are not UNIMPLEMENTED
+// and either differ from the official answer or carry a refusal text no production row holds.
+// With rows.jsonl it also writes those rows as {label, stages} for differential.mjs record.
+
+import { readFile, writeFile } from "node:fs/promises";
+
+import { SEED } from "./differential.mjs";
+
+const DOCS = "projects/demo-app/databases/(default)/documents";
+
+/** mulberry32: a small seeded generator, so a run can be repeated from its seed. */
+function generator(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function grammar(random) {
+  const pick = (items) => items[Math.floor(random() * items.length)];
+  const chance = (p) => random() < p;
+  const int = (n) => ({ integerValue: String(n) });
+  const dbl = (d) => ({ doubleValue: d });
+  const str = (s) => ({ stringValue: s });
+  const map = (fields) => ({ mapValue: { fields } });
+  const arr = (...values) => ({ arrayValue: { values } });
+  const field = () => ({
+    fieldReferenceValue: pick(["i", "n", "top", "dbl", "x", "__name__", "a..b", "i.j"]),
+  });
+  const key = () => pick(["a", "b", "v", "", "__x__", "__name__", "__type__", "a.b", "a-b", "1a"]);
+  const scalar = () =>
+    pick([
+      () => int(pick([0, 1, -1, 5000000000])),
+      () => dbl(pick([1.5, 0, "NaN", "Infinity", "-Infinity", -0.5])),
+      () => str(pick(["s", "", "あ"])),
+      () => ({ booleanValue: chance(0.5) }),
+      () => ({ nullValue: null }),
+      () => ({ timestampValue: "2020-01-01T00:00:00Z" }),
+      () => ({ bytesValue: "AA==" }),
+      () => ({ geoPointValue: pick([{ latitude: 1, longitude: 1 }, {}]) }),
+      () => ({ referenceValue: `${DOCS}/${pick(["c/d", "c", "c/x/s", "あ", "c/d/s/e"])}` }),
+    ])();
+  const vector = () =>
+    pick([
+      () => map({ __type__: str("__vector__"), value: arr(dbl(1), dbl(2)) }),
+      () => map({ __type__: str("__vector__"), value: arr(int(1)) }),
+      () => map({ __type__: str("__vector__"), value: arr() }),
+      () => map({ __type__: str("__vector__") }),
+      () => map({ __type__: str("__vector__"), value: str("x") }),
+      () => map({ __type__: str("__vector__"), value: arr(dbl(1)), x: int(1) }),
+      () => map({ __type__: str("__vector__"), value: arr(dbl("NaN")) }),
+      () => map({ __type__: str("__vector__"), value: arr(dbl("Infinity")) }),
+      () => map({ __type__: str("__vector__"), value: arr(field()) }),
+      () =>
+        map({
+          __type__: pick([int(1), { booleanValue: true }, { nullValue: null }, dbl(1.5), map({})]),
+        }),
+      () => map({ __type__: str("x"), value: arr(int(1)) }),
+    ])();
+  const functionNames = [
+    "equal",
+    "not_equal",
+    "less_than",
+    "greater_than_or_equal",
+    "array",
+    "map",
+    "document_id",
+    "collection_id",
+    "parent",
+    "nope_fn",
+    "add",
+    "sqrt",
+    "count",
+    "and",
+    "exists",
+  ];
+  const value = (depth, expressions) => {
+    const options = [scalar, scalar, vector];
+    if (depth < 3) {
+      options.push(
+        () =>
+          arr(
+            ...Array.from({ length: Math.floor(random() * 3) }, () =>
+              value(depth + 1, expressions),
+            ),
+          ),
+        () =>
+          map(
+            Object.fromEntries(
+              Array.from({ length: 1 + Math.floor(random() * 2) }, () => [
+                key(),
+                value(depth + 1, expressions),
+              ]),
+            ),
+          ),
+      );
+      if (expressions)
+        options.push(
+          () => functionCall(depth + 1),
+          () => functionCall(depth + 1),
+        );
+    }
+    if (expressions) options.push(field, field);
+    return pick(options)();
+  };
+  const functionCall = (depth) => {
+    const name = pick(functionNames);
+    const arity = pick([0, 1, 2, 2, 2, 3]);
+    const f = { name, args: Array.from({ length: arity }, () => value(depth, true)) };
+    if (chance(0.15)) f.options = { x: value(depth, chance(0.5)) };
+    return { functionValue: f };
+  };
+  const alias = () =>
+    pick(["v", "v", "a.b", "", "__x__", "__name__", "a..b", "`x`", "a".repeat(1500)]);
+  const aliases = (n) =>
+    map(Object.fromEntries(Array.from({ length: n }, () => [alias(), value(1, true)])));
+  const count = () =>
+    pick([
+      int(1),
+      int(-1),
+      int(0),
+      int(5000000000),
+      str("x"),
+      { booleanValue: true },
+      dbl(1.5),
+      { nullValue: null },
+      map({}),
+    ]);
+  const stage = () => {
+    const name = pick([
+      "where",
+      "where",
+      "select",
+      "select",
+      "limit",
+      "offset",
+      "add_fields",
+      "distinct",
+      "aggregate",
+      "sort",
+      "remove_fields",
+    ]);
+    switch (name) {
+      case "where":
+        return { name, args: [chance(0.7) ? functionCall(1) : value(1, true)] };
+      case "select":
+      case "add_fields":
+      case "distinct":
+        return { name, args: [aliases(Math.floor(random() * 3))] };
+      case "limit":
+      case "offset":
+        return { name, args: [count()] };
+      case "aggregate":
+        return {
+          name,
+          args: chance(0.5)
+            ? [
+                map({
+                  c: {
+                    functionValue: {
+                      name: pick(["count", "sum", "nope_fn"]),
+                      args: chance(0.5) ? [field()] : [],
+                    },
+                  },
+                }),
+              ]
+            : [
+                map({ [alias()]: { functionValue: { name: "count", args: [] } } }),
+                aliases(Math.floor(random() * 2)),
+              ],
+        };
+      case "sort":
+        return { name, args: [{ functionValue: { name: "ascending", args: [field()] } }] };
+      default:
+        return { name, args: [field()] };
+    }
+  };
+  return () => {
+    const stages = [{ name: "collection", args: [{ referenceValue: "/c" }] }];
+    const n = 1 + Math.floor(random() * 3);
+    for (let i = 0; i < n; i += 1) stages.push(stage());
+    if (chance(0.05)) stages.at(-1).options = { x: int(1) };
+    return stages;
+  };
+}
+
+async function call(host, method, path, body) {
+  const init = {
+    method,
+    headers: { authorization: "Bearer owner", "content-type": "application/json" },
+  };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const response = await fetch(`http://${host}/v1/${path}`, init);
+  const text = await response.text();
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = text;
+  }
+  return { status: response.status, body: parsed };
+}
+
+function answer({ status, body }) {
+  const element = Array.isArray(body) ? body[0] : body;
+  if (status !== 200) return { status, message: element?.error?.message ?? String(body) };
+  const strip = (v) =>
+    Array.isArray(v)
+      ? v.map(strip)
+      : v && typeof v === "object"
+        ? Object.fromEntries(
+            Object.entries(v)
+              .filter(([k]) => !["name", "createTime", "updateTime"].includes(k))
+              .map(([k, x]) => [k, k === "doubleValue" && typeof x === "number" ? x : strip(x)]),
+          )
+        : v;
+  return {
+    status,
+    results: strip((Array.isArray(body) ? body : [body]).flatMap((e) => e.results ?? [])),
+  };
+}
+
+async function collect(host, seed, count, out) {
+  if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host ?? "")) throw new Error("loopback only");
+  const next = grammar(generator(Number(seed)));
+  const seeded = await call(host, "PATCH", `${DOCS}/c/d`, { fields: SEED });
+  if (seeded.status !== 200) throw new Error(`seed: ${JSON.stringify(seeded)}`);
+  const rows = [];
+  for (let i = 0; i < Number(count); i += 1) {
+    const stages = next();
+    const body = { structuredPipeline: { pipeline: { stages } } };
+    rows.push({
+      id: `sweep-${seed}-${i}`,
+      stages,
+      answer: answer(await call(host, "POST", `${DOCS}:executePipeline`, body)),
+    });
+  }
+  await writeFile(out, JSON.stringify({ seed: Number(seed), count: Number(count), rows }));
+  console.log(JSON.stringify({ seed: Number(seed), count: rows.length }));
+}
+
+/** JSON with sorted keys, so that two answers compare whatever order their maps were written in. */
+const canonical = (value) =>
+  JSON.stringify(value, (_, v) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).toSorted(([a], [b]) => a.localeCompare(b)))
+      : v,
+  );
+
+async function compare(officialPath, emulatorPath, strictPath, reportPath, rowsPath) {
+  const [official, emulator, strict] = await Promise.all(
+    [officialPath, emulatorPath, strictPath].map(async (p) =>
+      JSON.parse(await readFile(p, "utf8")),
+    ),
+  );
+  const production = JSON.parse(
+    await readFile(new URL("../../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  );
+  const normalize = (m) =>
+    String(m)
+      .replaceAll(
+        "projects/demo-fs-query-index/databases/entpipe1",
+        "projects/demo-app/databases/(default)",
+      )
+      .replace(/ at index \d+\.$/, "");
+  const recordedTexts = new Set(
+    Object.values(production.programs).flatMap((p) =>
+      Object.values(p.steps).flatMap((r) => {
+        const e = Array.isArray(r.body) ? r.body[0] : r.body;
+        return e?.error?.message ? [normalize(e.error.message)] : [];
+      }),
+    ),
+  );
+  const report = {
+    seed: official.seed,
+    count: official.rows.length,
+    acceptsMore: [],
+    refusesMore: [],
+    outsideSubset: 0,
+    strictDiffers: [],
+    strictUntraced: [],
+    strict501: 0,
+    strictAnswered: 0,
+  };
+  const interesting = [];
+  official.rows.forEach((row, i) => {
+    const o = row.answer;
+    const e = emulator.rows[i].answer;
+    const s = strict.rows[i].answer;
+    const line = { id: row.id, official: o, emulator: e, strict: s };
+    if (e.status === 200 && o.status !== 200) {
+      report.acceptsMore.push(line);
+      interesting.push(row);
+    } else if (e.status !== 200 && o.status === 200) {
+      // fireemu answers UNIMPLEMENTED only for what its local subset does not run.
+      if (e.status === 501) report.outsideSubset += 1;
+      else {
+        report.refusesMore.push(line);
+        interesting.push(row);
+      }
+    }
+    if (s.status === 501) report.strict501 += 1;
+    else {
+      report.strictAnswered += 1;
+      if (canonical(s) !== canonical(o)) {
+        report.strictDiffers.push(line);
+        interesting.push(row);
+      } else if (s.status !== 200 && !recordedTexts.has(normalize(s.message))) {
+        report.strictUntraced.push(line);
+        interesting.push(row);
+      }
+    }
+  });
+  await writeFile(reportPath, JSON.stringify(report, null, 1));
+  if (rowsPath) {
+    await writeFile(
+      rowsPath,
+      [...new Set(interesting)]
+        .map((r) => JSON.stringify({ label: r.id, stages: r.stages }))
+        .join("\n") + "\n",
+    );
+  }
+  console.log(
+    JSON.stringify({
+      seed: report.seed,
+      count: report.count,
+      acceptsMore: report.acceptsMore.length,
+      refusesMore: report.refusesMore.length,
+      outsideSubset: report.outsideSubset,
+      strict501: report.strict501,
+      strictAnswered: report.strictAnswered,
+      strictDiffers: report.strictDiffers.length,
+      strictUntraced: report.strictUntraced.length,
+    }),
+  );
+}
+
+if (import.meta.main) {
+  const [mode, ...args] = process.argv.slice(2);
+  if (mode === "collect" && args.length === 3)
+    await collect(process.env.FIRESTORE_EMULATOR_HOST, ...args);
+  else if (mode === "compare" && args.length >= 4) await compare(...args);
+  else {
+    console.error(
+      "usage: differential-sweep.mjs collect <seed> <count> <out> | compare <official> <emulator> <strict> <report> [rows.jsonl]",
+    );
+    process.exitCode = 2;
+  }
+}

@@ -6827,14 +6827,15 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     };
     function.options.insert("unexpected".into(), i(1));
     let cases = [
-        // Every argument type but a reference is refused naming it (O-3, O-4).
+        // A document function of a map: recorded for collection_id only (O-4), so strict
+        // refuses document_id of one as unobserved.
         (
             "document_id of a map or integer field",
             vec![pipeline_select_map(vec![(
                 "id",
                 pipeline_function("document_id", vec![pipeline_field("profile")]),
             )])],
-            invalid,
+            unsupported,
         ),
         (
             "document_id of a string field",
@@ -6919,7 +6920,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         if label == "equal with one argument" {
             assert_eq!(
                 err.message(),
-                "equal requires exactly two arguments and no options; this text is not observed locally"
+                "equal requires exactly two arguments; this text is not observed locally"
             );
         }
         assert_eq!(
@@ -8548,7 +8549,18 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             // Production answered every one of these as the official emulator does
             // (FS-ENT-ORACLE O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`), so both
             // profiles answer them; the stages themselves are not run locally.
+            // Two refusals whose order production has not answered: strict refuses them.
+            let unrecorded_order = [
+                "distinct empty map, then select empty map",
+                "aggregate empty accumulators and an empty group alias",
+            ];
             match official {
+                Some(_)
+                    if policy == IndexValidationPolicy::Production
+                        && unrecorded_order.contains(label) =>
+                {
+                    assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                }
                 Some(text) => {
                     assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
                     assert_eq!(err.message(), text, "{label}");

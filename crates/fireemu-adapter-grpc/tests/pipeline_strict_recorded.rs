@@ -357,22 +357,33 @@ fn strict_answers_only_the_argument_types_production_recorded() {
         format!("The function {function}(...) requires `Reference` but got `{got}`.")
     };
     let mut cases = Vec::new();
-    // Recorded: STRING (O-3), LONG, MAP and BOOLEAN (O-4).
-    for (label, arg, got) in [
-        ("document_id(\"s\")", string("s"), "STRING"),
-        ("document_id(1)", int(1), "LONG"),
-        ("document_id({a: 1})", map(vec![("a", int(1))]), "MAP"),
+    // Recorded per function, since the text names it: document_id of a string (O-3) and an
+    // integer (O-4), collection_id of a string (O-3) and a map (O-4), parent of a string (O-3)
+    // and a boolean (O-4). Every other pair is unrecorded.
+    let call_of = |function: &str, arg: Value| select(func(function, vec![arg]));
+    for (function, arg, got, recorded) in [
+        ("document_id", string("s"), "STRING", true),
+        ("document_id", int(1), "LONG", true),
+        ("document_id", map(vec![("a", int(1))]), "MAP", false),
         (
-            "document_id(true)",
+            "document_id",
             json!({ "booleanValue": true }),
             "BOOLEAN",
+            false,
         ),
+        ("collection_id", string("s"), "STRING", true),
+        ("collection_id", map(vec![("a", int(1))]), "MAP", true),
+        ("collection_id", int(1), "LONG", false),
+        ("parent", string("s"), "STRING", true),
+        ("parent", json!({ "booleanValue": true }), "BOOLEAN", true),
+        ("parent", int(1), "LONG", false),
     ] {
-        let text: &'static str = Box::leak(wrong("document_id", got).into_boxed_str());
+        let label: &'static str = Box::leak(format!("{function}({got})").into_boxed_str());
+        let text: &'static str = Box::leak(wrong(function, got).into_boxed_str());
         cases.push(Case {
             label,
-            stages: vec![doc_id(arg)],
-            strict: Some((400, text)),
+            stages: vec![call_of(function, arg)],
+            strict: recorded.then_some((400, text)),
             emulator: (400, text),
         });
     }
@@ -814,16 +825,13 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
             label: "map(\"k\")",
             stages: vec![select(func("map", vec![string("k")]))],
             strict: None,
-            emulator: (
-                400,
-                "function \"map\" takes key and value pairs, got 1 argument(s)",
-            ),
+            emulator: (400, "'map' function must have an even number of arguments"),
         },
         Case {
             label: "where(equal(i))",
             stages: vec![stage("where", vec![func("equal", vec![field("i")])])],
             strict: None,
-            emulator: (400, "equal requires exactly two arguments and no options"),
+            emulator: (400, "equal requires exactly two arguments"),
         },
         Case {
             label: "select {} then where(equal())",
@@ -1305,4 +1313,183 @@ fn strict_refuses_the_stage_registry_texts_and_unrecorded_empty_constructions() 
             emulator: (200, ""),
         },
     ]);
+}
+
+#[test]
+fn type_keys_references_and_the_official_order_of_literal_checks() {
+    let double = |d: f64| json!({ "doubleValue": d });
+    let reference = |path: &str| json!({ "referenceValue": format!("{DOCS}/{path}") });
+    let typed = |value: Value| map(vec![("__type__", value)]);
+    let vec_int = || vector(vec![int(1)]);
+    let doubles = "Vector must only contain values of type 'double'";
+    let mut cases = Vec::new();
+    // A `__type__` that is no string (r3 review M1): the official text, 501 under strict.
+    for (label, value, kind) in [
+        ("{__type__: 1}", int(1), "LONG"),
+        (
+            "{__type__: true}",
+            json!({ "booleanValue": true }),
+            "BOOLEAN",
+        ),
+        ("{__type__: null}", json!({ "nullValue": null }), "NULL"),
+        ("{__type__: 1.5}", double(1.5), "DOUBLE"),
+        ("{__type__: {a: 1}}", map(vec![("a", int(1))]), "MAP"),
+        (
+            "{__type__: [1]}",
+            json!({ "arrayValue": { "values": [int(1)] } }),
+            "ARRAY",
+        ),
+    ] {
+        let text: &'static str =
+            Box::leak(format!("Field __type__ must be a string; founds {kind}.").into_boxed_str());
+        cases.push(Case {
+            label,
+            stages: vec![select(typed(value))],
+            strict: None,
+            emulator: (400, text),
+        });
+    }
+    cases.extend([
+        Case {
+            label: "{__type__: \"x\"} stays answered",
+            stages: vec![select(typed(string("x")))],
+            strict: Some((200, "")),
+            emulator: (200, ""),
+        },
+        Case {
+            label: "{a: {__type__: 1}}",
+            stages: vec![select(map(vec![("a", typed(int(1)))]))],
+            strict: None,
+            emulator: (400, "Field __type__ must be a string; founds LONG."),
+        },
+        Case {
+            label: "where({__type__: 1})",
+            stages: vec![stage("where", vec![typed(int(1))])],
+            strict: None,
+            emulator: (400, "Field __type__ must be a string; founds LONG."),
+        },
+        Case {
+            label: "equal(i, {__type__: 1})",
+            stages: vec![select(func("equal", vec![field("i"), typed(int(1))]))],
+            strict: None,
+            emulator: (400, "Field __type__ must be a string; founds LONG."),
+        },
+        Case {
+            label: "{__type__: 1, b: field} names the field",
+            stages: vec![select(map(vec![("__type__", int(1)), ("b", field("i"))]))],
+            strict: None,
+            emulator: (400, "Value type is not supported: FIELD_REFERENCE_VALUE"),
+        },
+        // The official order (r3 review S1).
+        Case {
+            label: "equal(vector of integers): the argument count first",
+            stages: vec![select(func("equal", vec![vec_int()]))],
+            strict: None,
+            emulator: (400, "function \"equal\" takes 2 argument(s), got 1 argument(s)"),
+        },
+        Case {
+            label: "{__x__: field, a: vector of integers}: the reserved key first",
+            stages: vec![select(map(vec![("__x__", field("i")), ("a", vec_int())]))],
+            strict: None,
+            emulator: (400, "field name '__x__' is reserved."),
+        },
+        Case {
+            label: "select {a..b: field, c: vector of integers}: the alias first",
+            stages: vec![stage("select", vec![map(vec![("a..b", field("i")), ("c", vec_int())])])],
+            strict: None,
+            emulator: (400, "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"),
+        },
+        Case {
+            label: "a vector map holding a field names the field",
+            stages: vec![select(map(vec![("__type__", string("__vector__")), ("value", field("i"))]))],
+            strict: None,
+            emulator: (400, "Value type is not supported: FIELD_REFERENCE_VALUE"),
+        },
+        Case {
+            label: "add_fields {a: vector of integers} then select {}",
+            stages: vec![stage("add_fields", vec![map(vec![("a", vec_int())])]), stage("select", vec![map(vec![])])],
+            strict: None,
+            emulator: (400, doubles),
+        },
+        Case {
+            label: "vector of Infinity",
+            stages: vec![select(vector(vec![json!({ "doubleValue": "Infinity" })]))],
+            strict: None,
+            emulator: (200, ""),
+        },
+        // An alias error beside a value strict refuses (r3 review M2).
+        Case {
+            label: "select {\"\": nope_fn()}",
+            stages: vec![stage("select", vec![map(vec![("", func("nope_fn", vec![]))])])],
+            strict: None,
+            emulator: (400, "Invalid empty property path string."),
+        },
+        Case {
+            label: "select {\"\": {__name__: 1}}",
+            stages: vec![stage("select", vec![map(vec![("", map(vec![("__name__", int(1))]))])])],
+            strict: None,
+            emulator: (400, "Invalid empty property path string."),
+        },
+        // Reference literals that name no document.
+        Case {
+            label: "select {v: ref c}",
+            stages: vec![select(reference("c"))],
+            strict: None,
+            emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."),
+        },
+        Case {
+            label: "select {v: ref c//d}",
+            stages: vec![select(reference("c//d"))],
+            strict: None,
+            emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50."),
+        },
+        Case {
+            label: "select {v: ref garbage}",
+            stages: vec![select(json!({ "referenceValue": "garbage" }))],
+            strict: None,
+            emulator: (400, "Document parent name \"garbage\" lacks \"projects\" at index 0."),
+        },
+        Case {
+            label: "select {v: ref c/d}",
+            stages: vec![select(reference("c/d"))],
+            strict: Some((200, "")),
+            emulator: (200, ""),
+        },
+        // The official checks of stages fireemu does not run.
+        Case {
+            label: "add_fields {__x__: top}",
+            stages: vec![stage("add_fields", vec![map(vec![("__x__", field("top"))])])],
+            strict: None,
+            emulator: (400, "Stage 'add_fields': field name '__x__' is reserved."),
+        },
+        Case {
+            label: "aggregate {v: count()} by {v: top}",
+            stages: vec![stage(
+                "aggregate",
+                vec![map(vec![("v", func("count", vec![]))]), map(vec![("v", field("top"))])],
+            )],
+            strict: None,
+            emulator: (400, "The 'aggregate(...)' stage cannot have overlapping field names: [v]"),
+        },
+        // Two refusals whose order production has not answered.
+        Case {
+            label: "select {\"\": 1, \"a..b\": 1}",
+            stages: vec![stage("select", vec![map(vec![("", int(1)), ("a..b", int(1))])])],
+            strict: None,
+            emulator: (400, "Invalid empty property path string."),
+        },
+        Case {
+            label: "add_fields {} then limit(-1)",
+            stages: vec![stage("add_fields", vec![map(vec![])]), stage("limit", vec![int(-1)])],
+            strict: None,
+            emulator: (400, "The 'limit(...)' cannot have a negative value: -1"),
+        },
+        Case {
+            label: "map(n): the argument count first",
+            stages: vec![stage("where", vec![func("map", vec![field("n")])])],
+            strict: None,
+            emulator: (400, "'map' function must have an even number of arguments"),
+        },
+    ]);
+    check(cases);
 }

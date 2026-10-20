@@ -405,8 +405,16 @@ pub fn value_to_json(v: &pb::Value) -> Value {
         Some(V::StringValue(s)) => json!({"stringValue": s}),
         Some(V::BytesValue(b)) => json!({"bytesValue": base64_encode(b)}),
         Some(V::ReferenceValue(r)) => json!({"referenceValue": r}),
+        // A zero coordinate is left out, as proto3 JSON leaves out a default value
+        // (FS-ENT-ORACLE O-3: production answered the point (0, 1) as `{"longitude": 1}`).
         Some(V::GeoPointValue(g)) => {
-            json!({"geoPointValue": {"latitude": g.latitude, "longitude": g.longitude}})
+            let mut point = serde_json::Map::new();
+            for (name, coordinate) in [("latitude", g.latitude), ("longitude", g.longitude)] {
+                if coordinate.to_bits() != 0 {
+                    point.insert(name.to_owned(), json!(coordinate));
+                }
+            }
+            json!({"geoPointValue": point})
         }
         Some(V::ArrayValue(a)) => {
             if a.values.is_empty() {
@@ -618,11 +626,18 @@ fn value_from_json_at(
                 .to_owned(),
         ),
         "geoPointValue" => {
+            if !inner.is_object() {
+                return err("geoPointValue must be an object");
+            }
+            // A missing coordinate is zero, as proto3 JSON reads a left-out default (and as
+            // fireemu writes a zero coordinate).
             let coordinate = |key: &str, range: f64| -> Result<f64, JsonError> {
-                let v = inner
-                    .get(key)
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| JsonError(format!("geoPointValue.{key} must be a number")))?;
+                let v = match inner.get(key) {
+                    None => 0.0,
+                    Some(value) => value.as_f64().ok_or_else(|| {
+                        JsonError(format!("geoPointValue.{key} must be a number"))
+                    })?,
+                };
                 if !v.is_finite() || v.abs() > range {
                     return err(format!("geoPointValue.{key} out of range"));
                 }

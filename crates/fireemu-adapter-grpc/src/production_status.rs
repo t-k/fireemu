@@ -235,6 +235,36 @@ fn error_info(reason: &str, metadata: &[(&str, String)]) -> prost_types::Any {
     )
 }
 
+/// Production's refusal of a function argument of the wrong type (FS-ENT-ORACLE O-3,
+/// `fs-ent-pipeline/o3/functions#parent-string` and the other document functions):
+/// `INVALID_ARGUMENT` with an `ErrorInfo` naming the function.
+#[must_use]
+pub fn function_wrong_type(message: &str, function: &str) -> Status {
+    with_details(
+        Code::InvalidArgument,
+        message,
+        vec![error_info(
+            "FUNCTION_WRONG_TYPE",
+            &[("function_name", function.to_owned())],
+        )],
+    )
+}
+
+/// Production's refusal of a field path of 1500 bytes or more (FS-ENT-ORACLE O-3,
+/// `fs-ent-pipeline/o3/aliases#plain-1500` and the other length rows): `INVALID_ARGUMENT` with
+/// an `ErrorInfo` naming the path, unquoted and joined with '.', and the limit.
+#[must_use]
+pub fn property_path_too_long(field: &str) -> Status {
+    with_details(
+        Code::InvalidArgument,
+        &format!("The field reference '{field}' is longer than 1500 bytes."),
+        vec![error_info(
+            "PROPERTY_PATH_TOO_LONG",
+            &[("field", field.to_owned()), ("limit", "1500".to_owned())],
+        )],
+    )
+}
+
 /// Production's refusal of a `select` stage that sets a field and one of its children
 /// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases#overlap`, and the official emulator alike):
 /// `INVALID_ARGUMENT` with an `ErrorInfo` naming the child path.

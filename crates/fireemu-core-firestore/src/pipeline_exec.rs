@@ -50,6 +50,16 @@ pub enum EvalError {
     /// The input is invalid, as production or the official emulator refuses it with
     /// `INVALID_ARGUMENT` (the message is the official emulator's).
     Invalid(String),
+    /// A function met an argument of a type it does not take: `INVALID_ARGUMENT`, which
+    /// production details with a `FUNCTION_WRONG_TYPE` `ErrorInfo` naming the function.
+    WrongType {
+        /// The function.
+        function: &'static str,
+        /// The type it takes.
+        expected: &'static str,
+        /// The type name of the argument it got.
+        got: &'static str,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -60,6 +70,14 @@ impl fmt::Display for EvalError {
                 "{function}: {reason}; this behavior is not observed locally"
             ),
             Self::Invalid(message) => f.write_str(message),
+            Self::WrongType {
+                function,
+                expected,
+                got,
+            } => write!(
+                f,
+                "The function {function}(...) requires `{expected}` but got `{got}`."
+            ),
         }
     }
 }
@@ -115,9 +133,6 @@ pub struct Context {
     pub unrecorded: Unrecorded,
     /// Whether the call is the whole condition of a `where` stage (its arguments are not).
     pub condition: bool,
-    /// Whether the call's arguments are a field (or a document function of one) and a scalar
-    /// literal, in either order: the shape a classic query filter expresses.
-    pub field_literal: bool,
 }
 
 /// One entry of the static function table.
@@ -278,22 +293,6 @@ impl Expr {
         Ok(Self::Call { function, args })
     }
 
-    /// A field, or a document function of an operand or a literal: the operands the finite
-    /// subset compared with a literal before `PX1a`, whose classic-shaped comparisons strict
-    /// keeps answering.
-    fn is_operand(&self) -> bool {
-        match self {
-            Self::Field(_) => true,
-            Self::Call { function, args } => {
-                matches!(function.name, "document_id" | "collection_id" | "parent")
-                    && args
-                        .iter()
-                        .all(|arg| matches!(arg, Self::Constant(_)) || arg.is_operand())
-            }
-            Self::Constant(_) => false,
-        }
-    }
-
     /// Adds every field path the expression reads.
     fn collect_fields(&self, out: &mut Vec<FieldPath>) {
         match self {
@@ -332,13 +331,6 @@ impl Expr {
                 .map_or(Eval::Absent, Eval::Value),
             Self::Constant(value) => Eval::Value(value.clone()),
             Self::Call { function, args } => {
-                let field_literal = matches!(
-                    args.as_slice(),
-                    [operand, Self::Constant(literal)] | [Self::Constant(literal), operand]
-                        if operand.is_operand()
-                            && (Class::of_value(literal).is_ordered_scalar()
-                                || matches!(literal, Value::Null | Value::Double(_)))
-                );
                 let args: Vec<Eval> = args
                     .iter()
                     .map(|arg| arg.eval_in(row, unrecorded))
@@ -346,7 +338,6 @@ impl Expr {
                 let cx = Context {
                     unrecorded,
                     condition,
-                    field_literal,
                 };
                 (function.eval)(&args, cx)
             }
@@ -373,17 +364,6 @@ enum Comparison {
 }
 
 impl Comparison {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Equal => "equal",
-            Self::NotEqual => "not_equal",
-            Self::Less => "less_than",
-            Self::LessOrEqual => "less_than_or_equal",
-            Self::Greater => "greater_than",
-            Self::GreaterOrEqual => "greater_than_or_equal",
-        }
-    }
-
     /// The answer for two operands whose order is `order` (`None`: incomparable).
     fn holds(self, order: Option<Ordering>) -> bool {
         match self {
@@ -409,122 +389,17 @@ fn official_order(a: &Eval, b: &Eval) -> Option<Ordering> {
     }
 }
 
-/// The class of a comparison operand: absent, null, NaN, or the kind of a value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Class {
-    Absent,
-    Null,
-    Nan,
-    Boolean,
-    Number,
-    Timestamp,
-    String,
-    Bytes,
-    Reference,
-    GeoPoint,
-    Array,
-    Vector,
-    Map,
-}
-
-impl Class {
-    fn of(operand: &Eval) -> Self {
-        match operand {
-            Eval::Value(value) => Self::of_value(value),
-            _ => Self::Absent,
-        }
-    }
-
-    fn of_value(value: &Value) -> Self {
-        match value {
-            Value::Null => Self::Null,
-            Value::Double(d) if d.is_nan() => Self::Nan,
-            Value::Boolean(_) => Self::Boolean,
-            Value::Integer(_) | Value::Double(_) => Self::Number,
-            Value::Timestamp(_) => Self::Timestamp,
-            Value::String(_) => Self::String,
-            Value::Bytes(_) => Self::Bytes,
-            Value::Reference(_) => Self::Reference,
-            Value::GeoPoint(_) => Self::GeoPoint,
-            Value::Array(_) => Self::Array,
-            Value::Vector(_) => Self::Vector,
-            Value::Map(_) => Self::Map,
-        }
-    }
-
-    /// A kind classic queries order a field by against a literal of the same kind.
-    const fn is_ordered_scalar(self) -> bool {
-        matches!(
-            self,
-            Self::Boolean
-                | Self::Number
-                | Self::Timestamp
-                | Self::String
-                | Self::Bytes
-                | Self::Reference
-                | Self::GeoPoint
-        )
-    }
-}
-
-impl Class {
-    /// The kinds FS-ENT-ORACLE O-2 (2026-10-20) compared with each other, both ways, under all
-    /// six comparisons (`fs-ent-pipeline/o2/comparisons`): every kind but vectors.
-    const fn is_recorded_kind(self) -> bool {
-        !matches!(self, Self::Absent | Self::Vector)
-    }
-}
-
-/// Whether production recorded the comparison of these operand classes: FS-ENT-ORACLE O-2
-/// (2026-10-20) answered all six comparisons for every ordered pair of kinds but vectors (each
-/// kind with itself too) and for a missing field against another missing field, an integer
-/// and null, both ways; FS-ENT-ORACLE O-1 (2026-10-19) recorded a subset of the same cells.
-/// The official order answered every one of them.
-fn recorded_cell(left: Class, right: Class) -> bool {
-    match (left, right) {
-        (Class::Absent, other) | (other, Class::Absent) => {
-            matches!(other, Class::Absent | Class::Number | Class::Null)
-        }
-        _ => left.is_recorded_kind() && right.is_recorded_kind(),
-    }
-}
-
-/// Whether a classic query filter decides the comparison the same way (PX1 plan, ruling of
-/// 2026-10-19 (2)): a field against a scalar literal of the same orderable kind, anywhere; as
-/// the whole `where` condition also an equality of any two values (classic `==`, `IS_NULL`,
-/// `IS_NAN`) and a missing field under every comparison but `not_equal` (the row is dropped).
-fn classic_cell(op: Comparison, a: &Eval, b: &Eval, cx: Context) -> bool {
-    if !cx.field_literal {
-        return false;
-    }
-    match (Class::of(a), Class::of(b)) {
-        (Class::Absent, Class::Absent) => false,
-        (Class::Absent, _) | (_, Class::Absent) => cx.condition && op != Comparison::NotEqual,
-        (left, right) => {
-            (cx.condition && op == Comparison::Equal) || (left == right && left.is_ordered_scalar())
-        }
-    }
-}
-
-/// A comparison. The emulator profile answers the official emulator's order everywhere.
-/// Strict answers the cells production recorded ([`recorded_cell`]) and the shapes a classic
-/// query decides the same way ([`classic_cell`]); every other cell (a vector, a missing field
-/// against another kind than a number or null) is unobserved until a production recording
-/// answers it.
-fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
+/// A comparison, in the official emulator's order under both profiles: production answered
+/// every pair of operand kinds, a missing field included, under all six comparisons as the
+/// official emulator does (FS-ENT-ORACLE O-2 for every kind but vectors, O-3 for vectors and a
+/// missing field against every other kind, 2026-10-20).
+fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
     let [a, b] = args else {
         unreachable!("the table checks the arity");
     };
-    let recorded = recorded_cell(Class::of(a), Class::of(b));
-    if cx.unrecorded == Unrecorded::Refuse && !recorded && !classic_cell(op, a, b, cx) {
-        return Eval::Error(EvalError::Unobserved {
-            function: op.name(),
-            reason: "production has not answered this comparison of these operand kinds",
-        });
-    }
     Eval::Value(Value::Boolean(op.holds(official_order(a, b))))
 }
 
@@ -563,22 +438,26 @@ fn type_name(value: &Value) -> &'static str {
 }
 
 /// `map(key, value, ...)`: a key whose value is absent is left out (production and the
-/// official emulator answer `{k: 1}` for `map("k", i, "k2", x)`). A repeated key and a key
-/// that is not a string are unrecorded in production; the official emulator refuses both.
+/// official emulator answer `{k: 1}` for `map("k", i, "k2", x)`). Production refused an integer
+/// key and a key repeated with both values present as the official emulator does
+/// (FS-ENT-ORACLE O-3, `fs-ent-pipeline/o3/functions#map-integer-key`, `#map-repeated-key`);
+/// another key type, or a repeated key with a value absent, is unrecorded, and the official
+/// emulator refuses those too.
 fn eval_map(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let refuse = |reason, message: String| {
+    let refuse = |recorded: bool, reason, message: String| {
         Eval::Error(match cx.unrecorded {
-            Unrecorded::Refuse => EvalError::Unobserved {
+            Unrecorded::Refuse if !recorded => EvalError::Unobserved {
                 function: "map",
                 reason,
             },
-            Unrecorded::OfficialEmulator => EvalError::Invalid(message),
+            _ => EvalError::Invalid(message),
         })
     };
     let mut keys = std::collections::BTreeSet::new();
+    let mut absent = std::collections::BTreeSet::new();
     let mut fields = BTreeMap::new();
     for pair in args.chunks(2) {
         let [key, value] = pair else {
@@ -588,6 +467,7 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
             Eval::Value(Value::String(key)) => key,
             Eval::Value(other) => {
                 return refuse(
+                    matches!(other, Value::Integer(_)),
                     "a key is not a string",
                     format!(
                         "map key must be of type STRING, given type is {}",
@@ -602,27 +482,44 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
                 })
             }
         };
-        if !keys.insert(key.clone()) {
+        // The official emulator counts a key only where its value is present: a repeat is two
+        // present values. Production answered a key repeated with both values present; a
+        // repeat that involves a missing value is unrecorded.
+        let repeated = !keys.insert(key.clone());
+        let present = matches!(value, Eval::Value(_));
+        let twice_present = present && fields.contains_key(key);
+        if repeated && (twice_present || cx.unrecorded == Unrecorded::Refuse) {
             return refuse(
+                twice_present && !absent.contains(key),
                 "a key repeats",
                 format!("map(...) constructor given duplicate key: {key}"),
             );
         }
-        if let Eval::Value(value) = value {
-            fields.insert(key.clone(), value.clone());
+        match value {
+            Eval::Value(value) => {
+                fields.insert(key.clone(), value.clone());
+            }
+            _ => {
+                absent.insert(key.clone());
+            }
         }
     }
     Eval::Value(Value::Map(fields))
 }
 
-/// The document a reference argument names, or the answer for any other argument:
-/// - absent or null: null (production answers null for `document_id`; the official emulator
-///   for every document function);
+/// The document a reference argument names, or the answer for any other argument, as
+/// production answered them (FS-ENT-ORACLE O-1 and O-3) and the official emulator answers
+/// them alike:
+/// - absent or null: null;
 /// - the documents root (the parent of a top-level document): `INVALID_ARGUMENT` for
-///   `document_id` (production) and `collection_id` (the official emulator);
-/// - another type: `INVALID_ARGUMENT` (the official emulator).
+///   `document_id` and `collection_id`, null for `parent`;
+/// - a top-level collection: `INVALID_ARGUMENT` for `document_id`, naming the reference and
+///   its length as the index where the separator is missing;
+/// - a string: `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail.
 ///
-/// What production has not answered stays unrecorded under strict.
+/// Another argument type is refused as the official emulator refuses it under the emulator
+/// profile and stays unrecorded under strict; another reference that names no document is
+/// unrecorded in both.
 fn document_argument(
     function: &'static str,
     args: &[Eval],
@@ -631,25 +528,65 @@ fn document_argument(
     if let Some(error) = first_error(args) {
         return Err(error);
     }
-    let recorded = function == "document_id" || unrecorded == Unrecorded::OfficialEmulator;
     let unobserved = |reason| Err(Eval::Error(EvalError::Unobserved { function, reason }));
     let invalid = |message: String| Err(Eval::Error(EvalError::Invalid(message)));
     match args {
         [Eval::Value(Value::Reference(name))] => match DocumentPath::from_resource_name(name) {
             Some(path) => Ok(path),
-            None if is_documents_root(name) && function != "parent" && recorded => {
+            None if is_documents_root(name) && function == "parent" => {
+                Err(Eval::Value(Value::Null))
+            }
+            None if is_documents_root(name) => {
                 invalid(format!("{function}(...) requires a non-empty path."))
+            }
+            // Production answered `document_id` of a top-level collection; the official emulator
+            // answers every document function of any collection alike.
+            None if (function == "document_id" && is_top_level_collection(name))
+                || (unrecorded == Unrecorded::OfficialEmulator && is_collection(name)) =>
+            {
+                invalid(format!(
+                    "Document parent name \"{name}\" lacks \"/\" at index {}.",
+                    name.len()
+                ))
             }
             None => unobserved("the reference does not name a document"),
         },
-        [Eval::Absent | Eval::Value(Value::Null)] if recorded => Err(Eval::Value(Value::Null)),
-        [Eval::Absent | Eval::Value(Value::Null)] => unobserved("the argument is absent or null"),
-        [Eval::Value(other)] if unrecorded == Unrecorded::OfficialEmulator => invalid(format!(
-            "The function {function}(...) requires `Reference` but got `{}`.",
-            type_name(other)
-        )),
+        [Eval::Absent | Eval::Value(Value::Null)] => Err(Eval::Value(Value::Null)),
+        [Eval::Value(other)]
+            if unrecorded == Unrecorded::OfficialEmulator || matches!(other, Value::String(_)) =>
+        {
+            Err(Eval::Error(EvalError::WrongType {
+                function,
+                expected: "Reference",
+                got: type_name(other),
+            }))
+        }
         _ => unobserved("the argument is not a document reference"),
     }
+}
+
+/// Whether `name` is a collection of a database, at any depth
+/// (`projects/{p}/databases/{d}/documents/{collection}[/{document}/{collection}...]`).
+fn is_collection(name: &str) -> bool {
+    match name.split('/').collect::<Vec<_>>().as_slice() {
+        ["projects", project, "databases", database, "documents", rest @ ..] => {
+            !project.is_empty()
+                && !database.is_empty()
+                && rest.len() % 2 == 1
+                && rest.iter().all(|segment| !segment.is_empty())
+        }
+        _ => false,
+    }
+}
+
+/// Whether `name` is a top-level collection of a database
+/// (`projects/{p}/databases/{d}/documents/{collection}`).
+fn is_top_level_collection(name: &str) -> bool {
+    matches!(
+        name.split('/').collect::<Vec<_>>().as_slice(),
+        ["projects", project, "databases", database, "documents", collection]
+            if !project.is_empty() && !database.is_empty() && !collection.is_empty()
+    )
 }
 
 /// Whether `name` is a database's documents root (`projects/{p}/databases/{d}/documents`), the
@@ -774,26 +711,10 @@ impl Cursor {
                 Stage::Where(condition) => {
                     match condition.eval_condition_in(&row, self.unrecorded) {
                         Eval::Value(Value::Boolean(true)) => {}
-                        Eval::Value(
-                            Value::Boolean(false)
-                            | Value::Null
-                            | Value::Integer(_)
-                            | Value::String(_)
-                            | Value::Reference(_)
-                            | Value::Array(_)
-                            | Value::Map(_),
-                        )
-                        | Eval::Absent => return Ok(None),
-                        // Production dropped the row for these kinds (FS-ENT-ORACLE O-1 and
-                        // O-2); the others (double, vector, timestamp, bytes, geo point) are
-                        // unrecorded.
-                        Eval::Value(_) if self.unrecorded == Unrecorded::Refuse => {
-                            return Err(EvalError::Unobserved {
-                                function: "where",
-                                reason: "a condition of this kind is not recorded in production",
-                            })
-                        }
-                        Eval::Value(_) => return Ok(None),
+                        // Production dropped the row for a condition of every other kind
+                        // (FS-ENT-ORACLE O-1 and O-2; O-3 for doubles, NaN, timestamps, bytes,
+                        // geo points and vectors) and for a missing one.
+                        Eval::Value(_) | Eval::Absent => return Ok(None),
                         Eval::Error(error) => return Err(error),
                     }
                 }

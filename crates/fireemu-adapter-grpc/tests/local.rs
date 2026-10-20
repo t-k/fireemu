@@ -6810,14 +6810,14 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     };
     function.options.insert("unexpected".into(), i(1));
     let cases = [
-        // A map or an integer argument is unrecorded; production refused a string (O-3).
+        // Every argument type but a reference is refused naming it (O-3, O-4).
         (
             "document_id of a map or integer field",
             vec![pipeline_select_map(vec![(
                 "id",
                 pipeline_function("document_id", vec![pipeline_field("profile")]),
             )])],
-            unsupported,
+            invalid,
         ),
         (
             "document_id of a string field",
@@ -6930,12 +6930,11 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     assert!(handle.await.unwrap_err().is_cancelled());
 }
 
-/// Document functions: both profiles answer what production answered in FS-ENT-ORACLE O-1 and
-/// O-3: null for a missing or null value, the documents root for the parent of a top-level
+/// Document functions: both profiles answer what production answered in FS-ENT-ORACLE O-1, O-3
+/// and O-4: null for a missing or null value, the documents root for the parent of a top-level
 /// document and null for its parent, `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail for
-/// a string, and for `document_id` of a top-level collection a refusal naming the reference and
-/// its length. Another argument type is unrecorded: strict refuses it, the emulator profile
-/// refuses it as the official emulator (firebase-tools 15.28.2, Enterprise) does.
+/// every argument type but a reference, and for a collection a refusal naming the reference and
+/// its length.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
@@ -7037,26 +7036,25 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
                 collection.len()
             )
         );
-        // An integer argument: unrecorded in production, INVALID_ARGUMENT in the official
-        // emulator.
+        // An integer argument: refused naming its type, as production refused it (O-4).
         let err = pipeline_error(
             &mut client,
             select(call("document_id", pipeline_field("num"))),
         )
         .await;
-        let (code, fireemu_code) = if policy == IndexValidationPolicy::Production {
-            (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
-        } else {
-            (tonic::Code::InvalidArgument, "FS_PIPE_INVALID")
-        };
-        assert_eq!(err.code(), code, "{policy:?}: {err}");
-        assert_eq!(err.metadata().get("fireemu-code").unwrap(), fireemu_code);
-        if code == tonic::Code::InvalidArgument {
-            assert_eq!(
-                err.message(),
-                "The function document_id(...) requires `Reference` but got `LONG`."
-            );
-        }
+        assert_eq!(
+            err.code(),
+            tonic::Code::InvalidArgument,
+            "{policy:?}: {err}"
+        );
+        assert_eq!(
+            err.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_INVALID"
+        );
+        assert_eq!(
+            err.message(),
+            "The function document_id(...) requires `Reference` but got `LONG`."
+        );
         handle.abort();
     }
 }
@@ -7177,7 +7175,6 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
         IndexValidationPolicy::Production,
         IndexValidationPolicy::Emulator,
     ] {
-        let strict = policy == IndexValidationPolicy::Production;
         let (mut client, _, handle) =
             start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
         client
@@ -7274,8 +7271,7 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
                 "{label}"
             );
         }
-        // Literals holding expressions in shapes production has not answered (PX1a r3 M2,
-        // PX1b r2 M2): compositions beyond the recorded shapes.
+        // Compositions beyond the O-1 and O-3 shapes, recorded by O-4.
         for (label, stages) in [
             (
                 "map holding an array of a field",
@@ -7368,16 +7364,20 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
                 ],
             ),
         ] {
+            // Production refused every composition naming the first expression in document
+            // order (O-4 `literals#*`, `#argument-map-of-field`).
             let err = pipeline_error(&mut client, stages).await;
-            if strict {
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+            let kind = if matches!(label, "array of a function" | "map of two functions") {
+                "FUNCTION_VALUE"
             } else {
-                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
-                assert!(
-                    err.message().starts_with("Value type is not supported: "),
-                    "{label}: {err}"
-                );
-            }
+                "FIELD_REFERENCE_VALUE"
+            };
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
+            assert_eq!(
+                err.message(),
+                format!("Value type is not supported: {kind}"),
+                "{policy:?} {label}"
+            );
         }
         // The select width: 64 fields answer, 65 are refused with production's text
         // (FS-ENT-ORACLE O-2, `fs-ent-pipeline/o2/select-width`).
@@ -7576,7 +7576,6 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         // Alias shapes production has not answered: strict refuses them as unobserved; the
         // emulator profile answers as the official emulator does (a quoted reserved name is
         // refused, a reserved name below another field is a nested key).
-        let strict = policy == IndexValidationPolicy::Production;
         // An empty alias: production answered the official text over REST and gRPC (O-3).
         let err = pipeline_error(&mut client, stages(vec![("", pipeline_field("top"))])).await;
         assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
@@ -7647,9 +7646,8 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             let request = stages(vec![(alias.as_str(), pipeline_field("top"))]);
             if let Some(reference) = refused {
                 let err = pipeline_error(&mut client, request).await;
-                if strict && !reference.is_ascii() {
-                    assert_eq!(err.code(), tonic::Code::Unimplemented, "{}", alias.len());
-                } else {
+                // Bytes, whatever the characters (O-4 `aliases#multibyte-*`).
+                {
                     assert_eq!(err.code(), tonic::Code::InvalidArgument, "{}", alias.len());
                     assert_eq!(
                         err.message(),
@@ -7735,8 +7733,8 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                 );
             }
         }
-        // A reserved first segment with a child: unrecorded, so strict refuses it; the emulator
-        // profile refuses it as the official emulator does, with the top-level texts.
+        // A reserved first segment with a child is refused with the top-level texts, as
+        // production refused it (O-4 `aliases#*-first-segment`).
         for (alias, text) in [
             ("__x__.a", "Stage 'select': field name '__x__' is reserved."),
             (
@@ -7750,12 +7748,8 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         ] {
             let err =
                 pipeline_error(&mut client, stages(vec![(alias, pipeline_field("top"))])).await;
-            if strict {
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{alias}: {err}");
-            } else {
-                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{alias}: {err}");
-                assert_eq!(err.message(), text, "{alias}");
-            }
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{alias}: {err}");
+            assert_eq!(err.message(), text, "{alias}");
         }
         handle.abort();
     }
@@ -7764,11 +7758,13 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
 /// A labelled pipeline and the fields of its one result.
 type Answered<'a> = (&'a str, Vec<pb::pipeline::Stage>, Vec<(String, pb::Value)>);
 
-/// Inputs production has not answered, where the emulator profile answers as the official
-/// emulator (1.22.0, probed locally) answers them and strict refuses them as unobserved: a
-/// repeated `map(...)` key with a missing value (only two present values repeat), a key that
-/// is no literal, `limit` and `offset` beyond int32, of another type or negative, and a
-/// document function of a collection reference.
+/// Argument checks the official emulator (1.22.0, probed locally) answers, which production
+/// answered alike (FS-ENT-ORACLE O-4): a repeated `map(...)` key with a missing value (only two
+/// present values repeat), a key that is no literal, `limit` and `offset` beyond int32, of
+/// another type or negative, document functions of a collection reference, and literal map
+/// keys. Both profiles answer them; strict refuses as unobserved the shapes production has not
+/// answered (a non-ASCII collection name, a literal holding an expression under a key that is
+/// not plain).
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks() {
@@ -8153,10 +8149,7 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
             .await
             .unwrap();
         for (label, stages, fields) in &answered {
-            if strict {
-                let err = pipeline_error(&mut client, stages.clone()).await;
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
-            } else {
+            {
                 let docs = drain_pipeline(
                     client
                         .execute_pipeline(pipeline_request(stages.clone()))
@@ -8182,10 +8175,7 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
         // An offset beyond int32 skips every row in the emulator profile, up to int64 max.
         for value in [5_000_000_000, i64::MAX] {
             let offset = vec![collection(), pipeline_stage("offset", i(value))];
-            if strict {
-                let err = pipeline_error(&mut client, offset).await;
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
-            } else {
+            {
                 let docs = drain_pipeline(
                     client
                         .execute_pipeline(pipeline_request(offset))
@@ -8198,9 +8188,21 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 assert!(docs.is_empty());
             }
         }
+        // Unrecorded in production: a non-ASCII collection name, and a key that is not plain
+        // in a literal holding an expression.
+        let unrecorded = [
+            "document_id of a non-ASCII collection",
+            "document_id of a collection outside the BMP",
+            "an array of a map with a reserved key holding a field",
+            "an expression literal with a reserved key",
+            "an expression literal with a reserved inner key",
+            "an expression literal with an empty key",
+            "an expression literal with a __type__ key",
+            "an expression literal with a dotted key",
+        ];
         for (label, stages, text) in &refused {
             let err = pipeline_error(&mut client, stages.clone()).await;
-            if strict {
+            if strict && unrecorded.contains(label) {
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
             } else {
                 assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
@@ -8212,11 +8214,9 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
 }
 
 /// Alias maps of the stages the local executor does not run (`add_fields`, `distinct`,
-/// `aggregate`) and empty alias maps. Production has not answered these shapes, so strict
-/// refuses them as unobserved; the emulator profile answers the official emulator's texts
-/// (probed against cloud-firestore-emulator 1.22.0) before the stage itself is refused as
-/// unsupported locally. Production answered an `aggregate` without groups, so both profiles
-/// answer that one with its text.
+/// `aggregate`) and empty alias maps: production answered them as the official emulator
+/// (1.22.0, probed locally) does (FS-ENT-ORACLE O-4), so both profiles answer its texts before
+/// the stage itself is refused as unsupported locally.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
@@ -8506,10 +8506,11 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
         for (label, stages, official) in &rows {
             let err = pipeline_error(&mut client, stages.clone()).await;
-            // Production answered the aggregate arity refusal (O-1 `results/metadata#aggregate`).
-            let recorded = *label == "aggregate without groups";
+            // Production answered every one of these as the official emulator does
+            // (FS-ENT-ORACLE O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`), so both
+            // profiles answer them; the stages themselves are not run locally.
             match official {
-                Some(text) if recorded || policy == IndexValidationPolicy::Emulator => {
+                Some(text) => {
                     assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
                     assert_eq!(err.message(), text, "{label}");
                 }
@@ -8557,7 +8558,6 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
         IndexValidationPolicy::Production,
         IndexValidationPolicy::Emulator,
     ] {
-        let strict = policy == IndexValidationPolicy::Production;
         let (mut client, _, handle) =
             start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
         client
@@ -8785,8 +8785,7 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
         }
         // A literal holding an expression: production refused a map literal holding a field
         // (O-1) and an array holding one (O-3) as the official emulator does. A `true`
-        // condition keeps the rows and an integer one is unrecorded (O-3 recorded `true`,
-        // `false`, null, a double and a string).
+        // condition keeps the rows.
         let refused = |stages| async {
             let err = run(stages).await.unwrap_err();
             (err.code(), err.message().to_owned())
@@ -8802,15 +8801,9 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
         }
         let constant_where = run(vec![collection(), pipeline_stage("where", boolean(true))]).await;
         assert_eq!(constant_where.unwrap().len(), 2, "{policy:?}");
+        // A constant of any other kind drops the row (O-4 `o4/conditions#where-*`).
         let integer_where = run(vec![collection(), pipeline_stage("where", i(1))]).await;
-        if strict {
-            assert_eq!(
-                integer_where.unwrap_err().code(),
-                tonic::Code::Unimplemented
-            );
-        } else {
-            assert!(integer_where.unwrap().is_empty());
-        }
+        assert!(integer_where.unwrap().is_empty(), "{policy:?}");
         handle.abort();
     }
 }
@@ -9185,33 +9178,38 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         );
         assert!(error.metadata().get("fireemu-pipeline").is_some());
     }
+    // An offset beyond int32 is answered, as production answered 5000000000 (O-4).
     let too_large = client
         .execute_pipeline(execute(vec![
             collection_stage(),
             pipeline_offset(i64::from(i32::MAX) + 1),
         ]))
         .await
-        .unwrap_err();
-    assert_eq!(too_large.code(), tonic::Code::Unimplemented);
-    assert_eq!(
-        too_large.metadata().get("fireemu-code").unwrap(),
-        "FS_PIPE_UNSUPPORTED_STAGE"
-    );
-    assert!(too_large.metadata().get("fireemu-pipeline").is_some());
+        .unwrap()
+        .into_inner();
+    assert!(drain_pipeline(too_large, 1).await.is_empty());
 
-    for (label, value) in [
-        ("negative", i(-1)),
+    for (label, value, text) in [
+        (
+            "negative",
+            i(-1),
+            "The 'offset(...)' cannot have a negative value: -1",
+        ),
         (
             "double",
             pb::Value {
                 value_type: Some(pb::value::ValueType::DoubleValue(1.0)),
             },
+            "Expected offset to be INTEGER_VALUE, but was DOUBLE_VALUE.",
         ),
-        ("unset", pb::Value::default()),
+        (
+            "unset",
+            pb::Value::default(),
+            "Expected offset to be INTEGER_VALUE, but was VALUE_TYPE_NOT_SET.",
+        ),
     ] {
-        // Production has not answered these offsets: strict refuses them as unobserved (the
-        // emulator profile answers the official texts, pinned in
-        // execute_pipeline_emulator_profile_answers_the_official_argument_checks).
+        // Production refused these offsets with the official texts (O-4 `stages#offset-*`,
+        // `#limit-*`).
         let error = client
             .execute_pipeline(execute(vec![
                 collection_stage(),
@@ -9219,12 +9217,12 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
             ]))
             .await
             .unwrap_err();
-        assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
         assert_eq!(
-            error.metadata().get("fireemu-code").unwrap(),
-            "FS_PIPE_UNSUPPORTED_STAGE",
+            error.code(),
+            tonic::Code::InvalidArgument,
             "{label}: {error}"
         );
+        assert_eq!(error.message(), text, "{label}");
     }
     for (label, offset) in [
         (

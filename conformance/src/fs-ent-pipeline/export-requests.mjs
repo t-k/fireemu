@@ -30,7 +30,7 @@ export function exportText(programs = recordedPrograms()) {
       seed: program.seed ?? [],
       steps: program.steps
         .filter((step) => (step.transport ?? "rest") === "rest")
-        .map(({ id, rpc, body }) => ({ id, rpc, body })),
+        .map(({ id, rpc, body, parent }) => ({ id, rpc, body, parent })),
     })),
   };
   return `${JSON.stringify(out)}\n`;

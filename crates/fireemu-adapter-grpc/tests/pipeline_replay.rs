@@ -105,6 +105,10 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("fs-ent-pipeline/results/metadata#distinct", "distinct is outside the subset"),
     ("fs-ent-pipeline/results/metadata#limit", "without a sort production returns another order than document names, so limit keeps other documents (PX2)"),
     ("fs-ent-pipeline/results/metadata#remove-fields", "remove_fields is outside the subset"),
+    (
+        "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
+        "fireemu cannot tell a function that does not exist from one it does not run, and a where after a select is outside the subset, so the empty select's text comes first",
+    ),
 ];
 
 fn read(name: &str) -> Value {
@@ -300,12 +304,20 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 let step_id = step["id"].as_str().unwrap();
                 let row = format!("{id}#{step_id}");
                 let rpc = step["rpc"].as_str().unwrap();
-                let (status, body) =
-                    call(&s, "POST", &format!("{DOCS}:{rpc}"), &fill(&step["body"]));
+                let (status, body) = if rpc == "get" {
+                    let parent = step["parent"].as_str().unwrap();
+                    call(&s, "GET", &format!("{DOCS}/{parent}"), &Value::Null)
+                } else {
+                    call(&s, "POST", &format!("{DOCS}:{rpc}"), &fill(&step["body"]))
+                };
                 let expected = &recorded[step_id];
                 assert!(!expected.is_null(), "{row} has no production row");
                 let matches = if rpc == "commit" {
                     u64::from(status) == expected["status"].as_u64().unwrap()
+                } else if rpc == "get" {
+                    // A document read: the status and the normalized document.
+                    json!({"status": status, "body": normalize(&body)})
+                        == json!({"status": expected["status"], "body": normalize(&expected["body"])})
                 } else {
                     answer(status, &body)
                         == answer(
@@ -339,7 +351,8 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 .join("\n")
         );
         // Each allowlist entry still differs, and fireemu answers it as pinned: the result
-        // order row with two of the three documents, every other row with UNIMPLEMENTED.
+        // order row with two of the three documents, the unknown function after an empty
+        // select with the empty select's text, every other row with UNIMPLEMENTED.
         for (known, reason) in KNOWN_DIFFERENCES {
             let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
                 panic!("strict={strict}: {known} ({reason}) matches production now; remove it");
@@ -349,6 +362,13 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 assert_eq!(
                     got["results"].as_array().map(Vec::len),
                     Some(2),
+                    "{known}: {got}"
+                );
+            } else if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function" {
+                assert_eq!(got["status"], 400, "{known}: {got}");
+                assert_eq!(
+                    got["body"][0]["error"]["message"],
+                    "The 'select(...)' stage requires at least one field.",
                     "{known}: {got}"
                 );
             } else {

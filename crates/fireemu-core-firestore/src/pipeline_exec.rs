@@ -437,27 +437,15 @@ fn type_name(value: &Value) -> &'static str {
     }
 }
 
-/// `map(key, value, ...)`: a key whose value is absent is left out (production and the
-/// official emulator answer `{k: 1}` for `map("k", i, "k2", x)`). Production refused an integer
-/// key and a key repeated with both values present as the official emulator does
-/// (FS-ENT-ORACLE O-3, `fs-ent-pipeline/o3/functions#map-integer-key`, `#map-repeated-key`);
-/// another key type, or a repeated key with a value absent, is unrecorded, and the official
-/// emulator refuses those too.
-fn eval_map(args: &[Eval], cx: Context) -> Eval {
+/// `map(key, value, ...)`, as production answered it (FS-ENT-ORACLE O-1, O-3 and O-4
+/// `functions#map-*`) and the official emulator alike: a key whose value is absent is left out
+/// (`map("k", i, "k2", x)` is `{k: 1}`), only two present values repeat a key (a missing value
+/// drops its entry before the duplicate check), and a key that is not a string is refused
+/// naming its type.
+fn eval_map(args: &[Eval], _cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let refuse = |recorded: bool, reason, message: String| {
-        Eval::Error(match cx.unrecorded {
-            Unrecorded::Refuse if !recorded => EvalError::Unobserved {
-                function: "map",
-                reason,
-            },
-            _ => EvalError::Invalid(message),
-        })
-    };
-    let mut keys = std::collections::BTreeSet::new();
-    let mut absent = std::collections::BTreeSet::new();
     let mut fields = BTreeMap::new();
     for pair in args.chunks(2) {
         let [key, value] = pair else {
@@ -466,15 +454,12 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
         let key = match key {
             Eval::Value(Value::String(key)) => key,
             Eval::Value(other) => {
-                return refuse(
-                    matches!(other, Value::Integer(_)),
-                    "a key is not a string",
-                    format!(
-                        "map key must be of type STRING, given type is {}",
-                        type_name(other)
-                    ),
-                )
+                return Eval::Error(EvalError::Invalid(format!(
+                    "map key must be of type STRING, given type is {}",
+                    type_name(other)
+                )))
             }
+            // The adapter refuses a key that is no literal before evaluation.
             _ => {
                 return Eval::Error(EvalError::Unobserved {
                     function: "map",
@@ -482,25 +467,11 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
                 })
             }
         };
-        // The official emulator counts a key only where its value is present: a repeat is two
-        // present values. Production answered a key repeated with both values present; a
-        // repeat that involves a missing value is unrecorded.
-        let repeated = !keys.insert(key.clone());
-        let present = matches!(value, Eval::Value(_));
-        let twice_present = present && fields.contains_key(key);
-        if repeated && (twice_present || cx.unrecorded == Unrecorded::Refuse) {
-            return refuse(
-                twice_present && !absent.contains(key),
-                "a key repeats",
-                format!("map(...) constructor given duplicate key: {key}"),
-            );
-        }
-        match value {
-            Eval::Value(value) => {
-                fields.insert(key.clone(), value.clone());
-            }
-            _ => {
-                absent.insert(key.clone());
+        if let Eval::Value(value) = value {
+            if fields.insert(key.clone(), value.clone()).is_some() {
+                return Eval::Error(EvalError::Invalid(format!(
+                    "map(...) constructor given duplicate key: {key}"
+                )));
             }
         }
     }
@@ -508,18 +479,17 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
 }
 
 /// The document a reference argument names, or the answer for any other argument, as
-/// production answered them (FS-ENT-ORACLE O-1 and O-3) and the official emulator answers
+/// production answered them (FS-ENT-ORACLE O-1, O-3 and O-4) and the official emulator answers
 /// them alike:
 /// - absent or null: null;
 /// - the documents root (the parent of a top-level document): `INVALID_ARGUMENT` for
 ///   `document_id` and `collection_id`, null for `parent`;
-/// - a top-level collection: `INVALID_ARGUMENT` for `document_id`, naming the reference and
-///   its length as the index where the separator is missing;
-/// - a string: `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail.
+/// - a collection at any depth: `INVALID_ARGUMENT` naming the reference and its length in
+///   UTF-16 units as the index where the separator is missing (strict answers ASCII names
+///   only, the ones production recorded);
+/// - another type: `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail.
 ///
-/// Another argument type is refused as the official emulator refuses it under the emulator
-/// profile and stays unrecorded under strict; another reference that names no document is
-/// unrecorded in both.
+/// A malformed reference is unrecorded in both profiles.
 fn document_argument(
     function: &'static str,
     args: &[Eval],
@@ -539,14 +509,13 @@ fn document_argument(
             None if is_documents_root(name) => {
                 invalid(format!("{function}(...) requires a non-empty path."))
             }
-            // Production answered `document_id` of a top-level collection; the official emulator
-            // answers every document function of any collection alike.
+            // Production answered every document function of a collection at any depth (O-3,
+            // O-4 `functions#*-collection`, `*-subcollection`), as the official emulator does.
             // The index is the name's length in UTF-16 units, as the official emulator (Java)
-            // counts it; production recorded ASCII names only, where units and bytes agree.
-            None if (function == "document_id"
-                && is_top_level_collection(name)
-                && name.is_ascii())
-                || (unrecorded == Unrecorded::OfficialEmulator && is_collection(name)) =>
+            // counts it; production recorded ASCII names only, where units and bytes agree, so
+            // strict refuses another name as unobserved.
+            None if is_collection(name)
+                && (name.is_ascii() || unrecorded == Unrecorded::OfficialEmulator) =>
             {
                 invalid(format!(
                     "Document parent name \"{name}\" lacks \"/\" at index {}.",
@@ -556,16 +525,14 @@ fn document_argument(
             None => unobserved("the reference does not name a document"),
         },
         [Eval::Absent | Eval::Value(Value::Null)] => Err(Eval::Value(Value::Null)),
-        [Eval::Value(other)]
-            if unrecorded == Unrecorded::OfficialEmulator || matches!(other, Value::String(_)) =>
-        {
-            Err(Eval::Error(EvalError::WrongType {
-                function,
-                expected: "Reference",
-                got: type_name(other),
-            }))
-        }
-        _ => unobserved("the argument is not a document reference"),
+        // Production refused every argument type but a reference naming the type (O-3 a
+        // string, O-4 an integer, a map and a boolean).
+        [Eval::Value(other)] => Err(Eval::Error(EvalError::WrongType {
+            function,
+            expected: "Reference",
+            got: type_name(other),
+        })),
+        _ => unreachable!("the table checks the arity"),
     }
 }
 
@@ -581,16 +548,6 @@ fn is_collection(name: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// Whether `name` is a top-level collection of a database
-/// (`projects/{p}/databases/{d}/documents/{collection}`).
-fn is_top_level_collection(name: &str) -> bool {
-    matches!(
-        name.split('/').collect::<Vec<_>>().as_slice(),
-        ["projects", project, "databases", database, "documents", collection]
-            if !project.is_empty() && !database.is_empty() && !collection.is_empty()
-    )
 }
 
 /// Whether `name` is a database's documents root (`projects/{p}/databases/{d}/documents`), the

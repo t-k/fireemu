@@ -223,13 +223,25 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
             }),
             "{name}(str)"
         );
-        // Another argument type is unrecorded.
-        let e = call(name, vec![field("num")]).eval(&r);
-        assert!(unobserved(&e), "{name}(num) = {e:?}");
-    }
-    for name in ["collection_id", "parent"] {
-        let e = call(name, vec![field("collection")]).eval(&r);
-        assert!(unobserved(&e), "{name}(collection) = {e:?}");
+        // Every other argument type too (O-4 an integer, a map, a boolean).
+        assert_eq!(
+            call(name, vec![field("num")]).eval(&r),
+            Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Reference",
+                got: "LONG"
+            }),
+            "{name}(num)"
+        );
+        // A collection: refused naming it (O-3 for document_id, O-4 for the others).
+        assert_eq!(
+            call(name, vec![field("collection")]).eval(&r),
+            Eval::Error(EvalError::Invalid(format!(
+                "Document parent name \"{collection}\" lacks \"/\" at index {}.",
+                collection.len()
+            ))),
+            "{name}(collection)"
+        );
     }
     assert_eq!(
         call("parent", vec![field("__name__")]).eval(&r),
@@ -238,9 +250,8 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
         ))
     );
     // The exact documents root: production refuses its ID and its collection ID, and answers
-    // null for its parent. A top-level collection (one named `documents` too): its ID is
-    // refused naming the reference and its length. A deeper collection, or a malformed root,
-    // is unrecorded.
+    // null for its parent. A collection at any depth (one named `documents` too) is refused
+    // naming the reference and its length. A malformed root is unrecorded.
     let reference = |name: &str| Expr::Constant(Value::Reference(name.to_owned()));
     let root = "projects/p/databases/(default)/documents";
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
@@ -269,14 +280,11 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                 "{name}"
             );
         }
-        // A deeper collection is unrecorded: the official emulator answers it like a top-level
-        // one, for every document function. A malformed root is unrecorded in both.
+        // A deeper collection, for every document function (O-4 `*-subcollection`).
         let deep = "projects/p/databases/(default)/documents/a/b/documents";
         for function in ["document_id", "collection_id", "parent"] {
             let got = call(function, vec![reference(deep)]).eval_in(&r, unrecorded);
-            if unrecorded == Unrecorded::Refuse {
-                assert!(unobserved(&got), "{function}");
-            } else {
+            {
                 assert_eq!(
                     got,
                     Eval::Error(EvalError::Invalid(format!(
@@ -287,13 +295,10 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                 );
             }
         }
-        // A top-level collection for every function: the official emulator's text under the
-        // emulator profile (production recorded only document_id's).
+        // A top-level collection for every function (O-4 `*-collection`).
         for function in ["collection_id", "parent"] {
             let got = call(function, vec![reference(collection)]).eval_in(&r, unrecorded);
-            if unrecorded == Unrecorded::Refuse {
-                assert!(unobserved(&got), "{function}");
-            } else {
+            {
                 assert_eq!(
                     got,
                     Eval::Error(EvalError::Invalid(format!(
@@ -332,10 +337,11 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
         }
     }
     // An error argument propagates unchanged.
-    let inner = call("parent", vec![field("num")]).eval(&r);
+    let malformed = || reference("projects//databases/(default)/documents/c");
+    let inner = call("parent", vec![malformed()]).eval(&r);
     assert!(unobserved(&inner));
     assert_eq!(
-        call("document_id", vec![call("parent", vec![field("num")])]).eval(&r),
+        call("document_id", vec![call("parent", vec![malformed()])]).eval(&r),
         inner
     );
 }
@@ -370,9 +376,14 @@ fn equal_is_three_valued() {
     // An error wins over absent and values, on either side.
     let eq = |a: Expr, b: Expr| condition("equal", vec![a, b]).eval(&r);
     let error = call("document_id", vec![field("n")]);
-    assert!(unobserved(&eq(error.clone(), k(Value::Integer(7)))));
-    assert!(unobserved(&eq(field("missing"), error.clone())));
-    assert!(unobserved(&eq(error, field("missing"))));
+    let wrong = Eval::Error(EvalError::WrongType {
+        function: "document_id",
+        expected: "Reference",
+        got: "LONG",
+    });
+    assert_eq!(eq(error.clone(), k(Value::Integer(7))), wrong);
+    assert_eq!(eq(field("missing"), error.clone()), wrong);
+    assert_eq!(eq(error, field("missing")), wrong);
 }
 
 #[test]
@@ -777,8 +788,13 @@ fn errors_and_functions_describe_themselves() {
 
 #[test]
 fn document_functions_name_why_an_input_is_unobserved() {
-    let r = row("c/x", &[("num", Value::Integer(1))]);
-    let reason = |name: &str, arg: Expr| match call(name, vec![arg]).eval(&r) {
+    let r = row("c/x", &[]);
+    let reason = |name: &str, reference: &str| match call(
+        name,
+        vec![Expr::Constant(Value::Reference(reference.into()))],
+    )
+    .eval(&r)
+    {
         Eval::Error(EvalError::Unobserved { function, reason }) => {
             assert_eq!(function, name);
             reason
@@ -786,19 +802,18 @@ fn document_functions_name_why_an_input_is_unobserved() {
         other => panic!("{name}: {other:?}"),
     };
     for name in ["document_id", "collection_id", "parent"] {
-        assert_eq!(
-            reason(name, field("num")),
-            "the argument is not a document reference"
-        );
-        assert_eq!(
-            reason(
-                name,
-                Expr::Constant(Value::Reference(
-                    "projects/p/databases/(default)/documents/c/x/s".into()
-                ))
-            ),
-            "the reference does not name a document"
-        );
+        // A malformed reference, and under strict a non-ASCII collection (production recorded
+        // ASCII names only).
+        for reference in [
+            "projects//databases/(default)/documents/c",
+            "projects/p/databases/(default)/documents/あ",
+        ] {
+            assert_eq!(
+                reason(name, reference),
+                "the reference does not name a document",
+                "{name}({reference})"
+            );
+        }
     }
     // A reference constant names its document.
     assert_eq!(
@@ -846,7 +861,7 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
         assert_eq!(text.eval(&r), wrong(name, "STRING"));
         let number = call(name, vec![field("num")]);
         assert_eq!(official(&number), wrong(name, "LONG"));
-        assert!(unobserved(&number.eval(&r)), "{name}(num)");
+        assert_eq!(number.eval(&r), wrong(name, "LONG"), "{name}(num)");
     }
     assert_eq!(
         wrong("parent", "STRING"),

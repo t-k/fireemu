@@ -479,3 +479,76 @@ fn an_export_with_the_database_served_warns_that_its_data_is_not_exported() {
     let stderr = run("firestore");
     assert!(!stderr.contains("Realtime Database"), "{stderr}");
 }
+
+/// One long-polling request: the body.
+fn lp(port: u16, target: &str) -> String {
+    request(port, "GET", target, &[], "").1
+}
+
+/// The SDK's web-safe base64 of a message (`-`, `_`, and `.` for padding).
+fn segment(message: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in message.as_bytes().chunks(3) {
+        let bytes = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
+            } else {
+                out.push('.');
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn production_exact_holds_the_realtime_protocol_to_the_owner_too() {
+    let dir = Scratch::new("database", "production-exact-lp");
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+    )
+    .unwrap();
+    let daemon = Daemon::start(&[
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    let start = lp(port, "/.lp?start=t&ser=1&cb=1&v=5&ns=pe");
+    let line = start
+        .lines()
+        .find(|l| l.contains("pLPCommand('start'"))
+        .unwrap_or_else(|| panic!("{start}"));
+    let parts: Vec<&str> = line.split('\'').collect();
+    let (id, pw) = (parts[3], parts[5]);
+    let send = |n: u64, message: &str| {
+        lp(
+            port,
+            &format!(
+                "/.lp?id={id}&pw={pw}&ser={}&ns=pe&seg0={n}&ts0=1&d0={}",
+                n + 10,
+                segment(message)
+            ),
+        )
+    };
+    let denied = send(0, r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#);
+    assert!(denied.contains(r#""s":"permission_denied""#), "{denied}");
+    let authed = send(
+        1,
+        r#"{"t":"d","d":{"r":2,"a":"gauth","b":{"cred":"owner"}}}"#,
+    );
+    assert!(authed.contains(r#""r":2,"b":{"s":"ok""#), "{authed}");
+    let wrote = send(2, r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/a","d":1}}}"#);
+    assert!(wrote.contains(r#""r":3,"b":{"s":"ok""#), "{wrote}");
+}

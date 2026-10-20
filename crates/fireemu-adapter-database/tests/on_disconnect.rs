@@ -223,6 +223,10 @@ fn a_connection_end_writes_its_operations_as_one_update() {
                 ("oc", r#"{"p":"/c30/x"}"#),
                 ("o", r#"{"p":"/c31","d":{"a":{"b":1,"c":2},"d":3}}"#),
                 ("oc", r#"{"p":"/c31/a/b"}"#),
+                // A value replaces what was registered below it, for good.
+                ("o", r#"{"p":"/p/a","d":1}"#),
+                ("o", r#"{"p":"/p","d":{"b":2}}"#),
+                ("oc", r#"{"p":"/p/b"}"#),
             ],
             merge_push(r#"{"c30":5,"c31/a/c":2,"c31/d":3}"#),
             r#"{"c30":5,"c31":{"a":{"c":2},"d":3}}"#,

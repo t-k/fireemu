@@ -167,6 +167,18 @@ impl Rules {
         written: &[Path],
         requester: &Requester<'_>,
     ) -> bool {
+        // A priority belongs to its node: a write of `<path>/.priority` is judged as a write
+        // of `<path>`, never through a `$wildcard` below it (review M3).
+        let written: Vec<Path> = written
+            .iter()
+            .map(|path| {
+                if path.is_priority() {
+                    path.parent().unwrap_or_else(Path::root)
+                } else {
+                    path.clone()
+                }
+            })
+            .collect();
         written
             .iter()
             .all(|path| self.write_allowed(before, after, path, requester))

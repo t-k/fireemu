@@ -571,5 +571,47 @@ mod properties {
             let expected = grants.contains(&Some(true));
             prop_assert_eq!(rules.can_read(None, &path, None, &requester), expected);
         }
+
+        /// A write is allowed exactly when some `.write` at or above the location it is judged
+        /// at is true: rules below that location never allow it, and a priority is judged at its
+        /// node, a `$wildcard` below the node included.
+        #[test]
+        fn writes_are_judged_at_or_above_their_node(
+            grants in prop::collection::vec(
+                (prop::option::of(any::<bool>()), prop::option::of(any::<bool>())),
+                1..5,
+            ),
+            depth in 1usize..5,
+            priority in any::<bool>(),
+        ) {
+            // Level i holds key keys[i] with a `.write` of grants[i].0, and a `$w` wildcard
+            // beside it with grants[i].1.
+            let keys = ["a", "b", "c", "d", "e"];
+            let mut spec = RuleSpec::default();
+            for (level_at, (exact, wildcard)) in grants.iter().enumerate().rev() {
+                let mut level = RuleSpec::default();
+                level.write = exact.map(RuleSource::Bool);
+                // The next level's key and wildcard sit inside this one.
+                level.children = std::mem::take(&mut spec.children);
+                let mut wild = RuleSpec::default();
+                wild.write = wildcard.map(RuleSource::Bool);
+                let mut holder = RuleSpec::default();
+                holder.children.insert(keys[level_at].to_owned(), level);
+                holder.children.insert("$w".to_owned(), wild);
+                spec = holder;
+            }
+            // `spec` is the root's level: the root holds keys[0] and `$w`.
+            let rules = Rules::compile(&spec).unwrap();
+            let node = Path::from_keys(keys[..depth].iter().copied());
+            let written = if priority { node.child(".priority") } else { node.clone() };
+            let auth = Json::Null;
+            let requester = Requester { auth: &auth, now: 0 };
+            // The levels the walk to `node` visits: keys[0..depth] exactly while they exist.
+            let expected = (0..depth.min(grants.len())).any(|i| grants[i].0 == Some(true));
+            prop_assert_eq!(
+                rules.can_write(None, None, std::slice::from_ref(&written), &requester),
+                expected
+            );
+        }
     }
 }

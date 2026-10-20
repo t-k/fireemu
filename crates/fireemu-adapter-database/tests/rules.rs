@@ -1208,3 +1208,71 @@ fn conditional_writes_need_the_read_too() {
         (200, r#"{"r":1,"w":"z"}"#.to_owned())
     );
 }
+
+#[test]
+fn a_priority_write_is_judged_at_its_node() {
+    // Recorded on the official emulator (docs.local prio-probe).
+    let field = r#"{"rules":{"users":{"$uid":{"$field":{".write":true}}}}}"#;
+    let uid = r#"{"rules":{"users":{"$uid":{".write":true}}}}"#;
+    let validated =
+        r#"{"rules":{"users":{"$uid":{".write":true,".validate":"newData.getPriority() == 5"}}}}"#;
+    let child_invalid =
+        r#"{"rules":{"users":{"$uid":{".write":true,"$field":{".validate":false}}}}}"#;
+    for (rules, method, path, body, status) in [
+        (field, "PUT", "/users/u1/.priority", "5", 401),
+        (uid, "PUT", "/users/u1/.priority", "5", 200),
+        (field, "PATCH", "/users/u1", r#"{".priority":5}"#, 401),
+        (uid, "PATCH", "/users/u1", r#"{".priority":5}"#, 200),
+        (
+            field,
+            "PATCH",
+            "/users/u1",
+            r#"{"name":"b",".priority":5}"#,
+            401,
+        ),
+        (field, "PATCH", "/", r#"{"users/u1/.priority":5}"#, 401),
+        (validated, "PUT", "/users/u1/.priority", "5", 200),
+        (validated, "PUT", "/users/u1/.priority", "6", 401),
+        (child_invalid, "PUT", "/users/u1/.priority", "5", 401),
+        (field, "PUT", "/users/u1/name/.priority", "5", 200),
+    ] {
+        let mut db = db();
+        load(&mut db, "pr", rules);
+        call(
+            &mut db,
+            "PUT",
+            "/.json?ns=pr",
+            OWNER,
+            r#"{"users":{"u1":{"name":"a"}}}"#,
+        );
+        let target = format!("{path}.json?ns=pr");
+        assert_eq!(
+            call(&mut db, method, &target, &[], body).0,
+            status,
+            "{rules} {method} {path} {body}"
+        );
+    }
+    // The realtime protocol and onDisconnect judge it the same way.
+    let mut db = db();
+    load(&mut db, "pr", field);
+    call(
+        &mut db,
+        "PUT",
+        "/.json?ns=pr",
+        OWNER,
+        r#"{"users":{"u1":{"name":"a"}}}"#,
+    );
+    let mut session = open(&mut db, "pr");
+    for (r, action, body) in [
+        (1, "p", r#"{"p":"/users/u1/.priority","d":5}"#),
+        (2, "m", r#"{"p":"/users/u1","d":{".priority":5}}"#),
+        (3, "o", r#"{"p":"/users/u1/.priority","d":5}"#),
+        (4, "om", r#"{"p":"/users/u1","d":{".priority":5}}"#),
+    ] {
+        assert_eq!(
+            send(&mut db, &mut session, r, action, body),
+            vec![refused(r)],
+            "{action}"
+        );
+    }
+}

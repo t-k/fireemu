@@ -3297,5 +3297,75 @@
   "load": 200,
   "error": null,
   "read": 401
+ },
+ {
+  "expr": "'😀'.matches(/😁/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!'😀'.matches(/😁/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'😀😁'.matches(/^😀😁$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'😀😁'.matches(/^😀😁$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'😁'.matches(/^[😀]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'😁'.matches(/^[😀]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'𝟘'.matches(/^𝟘$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'𝟘'.matches(/^𝟘$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'𝟘'.matches(/😀/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!'𝟘'.matches(/😀/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
  }
 ]

@@ -6419,7 +6419,6 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
     let collection = || pipeline_stage("collection", s("where-refusals"));
     let predicate = || pipeline_equal("score", i(7));
     let unsupported = tonic::Code::Unimplemented;
-    let invalid = tonic::Code::InvalidArgument;
     let expression = |name: &str, args| pipeline_stage("where", pipeline_function(name, args));
     let mut options = pipeline_function("equal", vec![pipeline_field("score"), i(7)]);
     let Some(V::FunctionValue(function)) = options.value_type.as_mut() else {
@@ -6466,11 +6465,12 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             )],
             unsupported,
         ),
-        ("zero arity", vec![expression("equal", vec![])], invalid),
+        // fireemu's own texts, refused under strict as unobserved.
+        ("zero arity", vec![expression("equal", vec![])], unsupported),
         (
             "one argument",
             vec![expression("equal", vec![pipeline_field("score")])],
-            invalid,
+            unsupported,
         ),
         (
             "three arguments",
@@ -6478,24 +6478,28 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
                 "equal",
                 vec![pipeline_field("score"), i(7), i(8)],
             )],
-            invalid,
+            unsupported,
         ),
         (
             "function options",
             vec![pipeline_stage("where", options)],
-            invalid,
+            unsupported,
         ),
-        ("empty field", vec![pipeline_equal("", i(7))], invalid),
-        ("invalid field", vec![pipeline_equal("a..b", i(7))], invalid),
+        ("empty field", vec![pipeline_equal("", i(7))], unsupported),
+        (
+            "invalid field",
+            vec![pipeline_equal("a..b", i(7))],
+            unsupported,
+        ),
         (
             "missing literal",
             vec![pipeline_equal("score", pb::Value::default())],
-            invalid,
+            unsupported,
         ),
         (
             "missing left operand",
             vec![expression("equal", vec![pb::Value::default(), i(7)])],
-            invalid,
+            unsupported,
         ),
     ];
     let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
@@ -6849,7 +6853,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "same",
                 pipeline_function("equal", vec![pipeline_field("a..b"), s("a")]),
             )])],
-            invalid,
+            unsupported,
         ),
         (
             "equal with one argument",
@@ -6857,7 +6861,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "where",
                 pipeline_function("equal", vec![pipeline_field("name")]),
             )],
-            invalid,
+            unsupported,
         ),
         (
             "document_id without arguments",
@@ -6865,12 +6869,12 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "id",
                 pipeline_function("document_id", vec![]),
             )])],
-            invalid,
+            unsupported,
         ),
         (
             "document_id with options",
             vec![pipeline_select_map(vec![("id", options)])],
-            invalid,
+            unsupported,
         ),
         (
             "document_id with a missing argument",
@@ -6878,12 +6882,12 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "id",
                 pipeline_function("document_id", vec![pb::Value::default()]),
             )])],
-            invalid,
+            unsupported,
         ),
         (
             "invalid nested select path",
             vec![pipeline_select_map(vec![("n", pipeline_field("a..b"))])],
-            invalid,
+            unsupported,
         ),
     ];
     for (label, tail, code) in cases {
@@ -6897,10 +6901,12 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
             .join(" | ");
         let err = pipeline_error(&mut client, stages).await;
         assert_eq!(err.code(), code, "{label}: {err}");
+        // Under strict, fireemu's own texts are refused as unobserved (production names the
+        // function's signature).
         if label == "equal with one argument" {
             assert_eq!(
                 err.message(),
-                "equal requires exactly two arguments and no options"
+                "equal requires exactly two arguments and no options; this text is not observed locally"
             );
         }
         assert_eq!(
@@ -8199,9 +8205,18 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 assert!(docs.is_empty());
             }
         }
-        // Unrecorded in production: a non-ASCII collection name, and a key that is not plain
-        // in a literal holding an expression.
+        // Unrecorded in production: a non-ASCII collection name, a key that is not plain in a
+        // literal holding an expression, a limit or offset of another type than an integer or
+        // a string, a negative offset, and the key __name__ (only the official emulator
+        // answered these).
         let unrecorded = [
+            "limit of a double",
+            "limit of null",
+            "limit of a field",
+            "limit of a boolean",
+            "offset of a double",
+            "negative offset",
+            "a literal map with the key __name__",
             "document_id of a non-ASCII collection",
             "document_id of a collection outside the BMP",
             "an array of a map with a reserved key holding a field",
@@ -9200,27 +9215,20 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .into_inner();
     assert!(drain_pipeline(too_large, 1).await.is_empty());
 
-    for (label, value, text) in [
-        (
-            "negative",
-            i(-1),
-            "The 'offset(...)' cannot have a negative value: -1",
-        ),
+    // Production refused only a string offset (O-4 `stages#offset-string`); the official
+    // emulator's texts for a negative offset and another type are unrecorded, so strict
+    // refuses them as unobserved (the emulator profile answers them, see
+    // `execute_pipeline_emulator_profile_answers_the_official_argument_checks`).
+    for (label, value) in [
+        ("negative", i(-1)),
         (
             "double",
             pb::Value {
                 value_type: Some(pb::value::ValueType::DoubleValue(1.0)),
             },
-            "Expected offset to be INTEGER_VALUE, but was DOUBLE_VALUE.",
         ),
-        (
-            "unset",
-            pb::Value::default(),
-            "Expected offset to be INTEGER_VALUE, but was VALUE_TYPE_NOT_SET.",
-        ),
+        ("unset", pb::Value::default()),
     ] {
-        // Production refused these offsets with the official texts (O-4 `stages#offset-*`,
-        // `#limit-*`).
         let error = client
             .execute_pipeline(execute(vec![
                 collection_stage(),
@@ -9228,13 +9236,20 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
             ]))
             .await
             .unwrap_err();
-        assert_eq!(
-            error.code(),
-            tonic::Code::InvalidArgument,
-            "{label}: {error}"
-        );
-        assert_eq!(error.message(), text, "{label}");
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
     }
+    let error = client
+        .execute_pipeline(execute(vec![
+            collection_stage(),
+            pipeline_stage("offset", s("x")),
+        ]))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error}");
+    assert_eq!(
+        error.message(),
+        "Expected offset to be INTEGER_VALUE, but was STRING_VALUE."
+    );
     for (label, offset) in [
         (
             "missing argument",

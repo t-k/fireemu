@@ -107,7 +107,7 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("fs-ent-pipeline/results/metadata#remove-fields", "remove_fields is outside the subset"),
     (
         "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
-        "fireemu cannot tell a function that does not exist from one it does not run, and a where after a select is outside the subset, so the empty select's text comes first",
+        "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
     ),
 ];
 
@@ -352,7 +352,8 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         );
         // Each allowlist entry still differs, and fireemu answers it as pinned: the result
         // order row with two of the three documents, the unknown function after an empty
-        // select with the empty select's text, every other row with UNIMPLEMENTED.
+        // select with the empty select's text under the emulator profile, every other row
+        // (that one under strict too) with UNIMPLEMENTED.
         for (known, reason) in KNOWN_DIFFERENCES {
             let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
                 panic!("strict={strict}: {known} ({reason}) matches production now; remove it");
@@ -364,7 +365,9 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     Some(2),
                     "{known}: {got}"
                 );
-            } else if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function" {
+            } else if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
+                && !strict
+            {
                 assert_eq!(got["status"], 400, "{known}: {got}");
                 assert_eq!(
                     got["body"][0]["error"]["message"],

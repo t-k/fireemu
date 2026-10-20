@@ -444,6 +444,9 @@ pub fn compile_pipeline(
     // An empty alias map, which the official emulator answers only after every stage's own
     // argument checks.
     let mut deferred: Option<Status> = None;
+    // Whether the pipeline was refused only for a stage fireemu does not run, after every part
+    // of it passed a check production made (strict answers the deferred empty map only then).
+    let mut validated_unrun = false;
     let compiled = (|| -> Result<(), Status> {
         for (position, stage) in pipeline.stages.iter().enumerate().skip(1) {
             let rank = match stage.name.as_str() {
@@ -492,7 +495,7 @@ pub fn compile_pipeline(
                         ));
                     }
                     seen_offset = true;
-                    let offset = count_argument(stage)?;
+                    let offset = count_argument(stage, unrecorded)?;
                     stages.push(Stage::Offset(offset));
                 }
                 "limit" => {
@@ -502,14 +505,15 @@ pub fn compile_pipeline(
                         ));
                     }
                     seen_limit = true;
-                    let limit = count_argument(stage)?;
+                    let limit = count_argument(stage, unrecorded)?;
                     stages.push(Stage::Limit(limit));
                 }
                 other => {
                     // The official emulator checks every stage's arguments before running any.
                     for rest in pipeline.stages.iter().skip(position) {
-                        check_unrun_alias_stage(rest, &mut deferred)?;
+                        check_unrun_alias_stage(rest, &mut deferred, unrecorded)?;
                     }
+                    validated_unrun = true;
                     return Err(Status::unimplemented(format!(
                         "pipeline stage {other:?} is unsupported locally"
                     )));
@@ -520,10 +524,15 @@ pub fn compile_pipeline(
     })();
     // An empty map is answered after every other check of every stage (FS-ENT-ORACLE O-4,
     // `o4/stages#select-empty-then-*`, `#add-fields-then-select-empty`): a later stage's
-    // refusal comes first, but fireemu's own refusal of what it does not run is no check
-    // production makes, so the empty map wins over it.
+    // refusal comes first. fireemu's own refusal of a stage it does not run is no check
+    // production makes, so the empty map wins over it; but production checks function names
+    // and argument types before the empty map (O-4 `#select-empty-then-unknown-function`),
+    // so under strict the empty map wins only when every part passed fireemu's checks.
     match (compiled, deferred) {
-        (Err(error), Some(empty)) if error.code() != tonic::Code::InvalidArgument => {
+        (Err(error), Some(empty))
+            if error.code() != tonic::Code::InvalidArgument
+                && (validated_unrun || unrecorded == Unrecorded::OfficialEmulator) =>
+        {
             return Err(empty)
         }
         (Ok(()), Some(empty)) => return Err(empty),
@@ -545,10 +554,26 @@ pub fn compile_pipeline(
     })
 }
 
-fn expr_status(error: ExprError) -> Status {
+/// The status of an expression error. fireemu's own argument-count texts are not
+/// production's (which names the function's signature), so strict refuses them as unobserved.
+fn expr_status(error: ExprError, unrecorded: Unrecorded) -> Status {
     match error {
         ExprError::Unsupported(message) => Status::unimplemented(message),
+        ExprError::Invalid(message) if unrecorded == Unrecorded::Refuse => {
+            Status::unimplemented(format!("{message}; this text is not observed locally"))
+        }
         ExprError::Invalid(message) => Status::invalid_argument(message),
+    }
+}
+
+/// `INVALID_ARGUMENT` with fireemu's own text under the emulator profile; under strict, which
+/// answers only texts production recorded, `UNIMPLEMENTED`.
+fn own_text(message: String, unrecorded: Unrecorded) -> Status {
+    match unrecorded {
+        Unrecorded::Refuse => {
+            Status::unimplemented(format!("{message}; this text is not observed locally"))
+        }
+        Unrecorded::OfficialEmulator => Status::invalid_argument(message),
     }
 }
 
@@ -598,9 +623,12 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
 fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
-        None => Err(Status::invalid_argument("expression argument is missing")),
+        None => Err(own_text(
+            "expression argument is missing".to_owned(),
+            unrecorded,
+        )),
         Some(V::FieldReferenceValue(field)) => Ok(Expr::Field(
-            FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))?,
+            FieldPath::parse(field).map_err(|e| own_text(e.to_string(), unrecorded))?,
         )),
         Some(V::FunctionValue(function)) => {
             if pipeline_exec::function(&function.name).is_none() {
@@ -618,24 +646,29 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                 ));
             }
             if !function.options.is_empty() {
-                return Err(Status::invalid_argument(format!(
-                    "function {:?} takes no options",
-                    function.name
-                )));
+                return Err(own_text(
+                    format!("function {:?} takes no options", function.name),
+                    unrecorded,
+                ));
             }
             let args = function
                 .args
                 .iter()
                 .map(|arg| decode_operand(arg, unrecorded))
                 .collect::<Result<Vec<_>, _>>()?;
-            Expr::call(&function.name, args, Placement::Value).map_err(expr_status)
+            Expr::call(&function.name, args, Placement::Value)
+                .map_err(|e| expr_status(e, unrecorded))
         }
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
         Some(_) => match expression_kind(value) {
             // Production read literals of every kind, maps keyed by any name but an empty or a
-            // reserved one (FS-ENT-ORACLE O-3, O-4 `o4/literals#*`).
+            // reserved one (FS-ENT-ORACLE O-3, O-4 `o4/literals#*`); strict answers the shapes
+            // it recorded (see `literal_shape_recorded`).
+            None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value) => Err(
+                Status::unimplemented("a literal of this shape is not observed locally"),
+            ),
             None => Ok(Expr::Constant(decode_official_literal(value)?)),
             // A literal holding an expression with a key that is not plain: the official
             // emulator names a reserved key before the value type; production has not answered
@@ -736,6 +769,38 @@ fn decode_official_literal(
     }
 }
 
+/// Whether production recorded a literal of this shape: every vector map is
+/// `{__type__: "__vector__", value: [doubles]}` with at least one element (O-3, O-4
+/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`), at most one map key
+/// is empty or reserved (production named one, O-4 `literals#key-empty`, `#key-reserved`;
+/// which of several it names is unrecorded), and no key is `__name__` (only the official
+/// emulator answered it).
+fn literal_shape_recorded(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    fn walk(value: &pb::Value, refusable: &mut usize) -> bool {
+        match value.value_type.as_ref() {
+            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, refusable)),
+            Some(V::MapValue(map)) if is_vector_literal(value) => {
+                map.fields.len() == 2
+                    && matches!(
+                        map.fields.get("value").and_then(|v| v.value_type.as_ref()),
+                        Some(V::ArrayValue(array)) if !array.values.is_empty()
+                            && array.values.iter().all(|e| matches!(e.value_type, Some(V::DoubleValue(_))))
+                    )
+            }
+            Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
+                if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
+                    *refusable += 1;
+                }
+                key != "__name__" && walk(inner, refusable)
+            }),
+            _ => true,
+        }
+    }
+    let mut refusable = 0;
+    walk(value, &mut refusable) && refusable <= 1
+}
+
 /// Whether every map key a literal holds, at any depth, is plain.
 fn literal_keys_are_plain(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
@@ -793,10 +858,10 @@ fn decode_condition(
     // Every boolean function of the table is a comparison of two arguments; the wording is
     // the finite subset's.
     if def.arity != Arity::Exact(function.args.len()) || !function.options.is_empty() {
-        return Err(Status::invalid_argument(format!(
-            "{} requires exactly two arguments and no options",
-            def.name
-        )));
+        return Err(own_text(
+            format!("{} requires exactly two arguments and no options", def.name),
+            unrecorded,
+        ));
     }
     let args = function
         .args
@@ -818,7 +883,8 @@ fn decode_condition(
         }
         _ => None,
     };
-    let condition = Expr::call(def.name, args, Placement::Condition).map_err(expr_status)?;
+    let condition =
+        Expr::call(def.name, args, Placement::Condition).map_err(|e| expr_status(e, unrecorded))?;
     Ok((condition, pushdown))
 }
 
@@ -949,14 +1015,27 @@ fn parse_alias(alias: &str) -> Result<FieldPath, Status> {
     Ok(path)
 }
 
-/// The count a `limit` or `offset` stage takes. An integer from 0 to `recorded` is answered in
-/// both profiles. The official emulator also takes any larger integer, and refuses another
-/// type and a negative value with its own texts; production has not answered those, so strict
-/// refuses them as unobserved.
-fn count_argument(stage: &pb::pipeline::Stage) -> Result<u64, Status> {
+/// The count a `limit` or `offset` stage takes. Any non-negative integer is answered in both
+/// profiles (FS-ENT-ORACLE O-4 `o4/stages#limit-*`, `#offset-5000000000`). Production refused a
+/// string for both and a negative limit with the official emulator's texts (O-4
+/// `#limit-string`, `#offset-string`, `#limit-negative`); the official emulator refuses every
+/// other type and a negative offset alike, which production has not answered, so strict
+/// refuses those as unobserved.
+fn count_argument(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result<u64, Status> {
     use pb::value::ValueType as V;
     let name = stage.name.as_str();
-    match stage.args.first().and_then(|v| v.value_type.as_ref()) {
+    let argument = stage.args.first().and_then(|v| v.value_type.as_ref());
+    let recorded = match argument {
+        Some(V::IntegerValue(n)) => *n >= 0 || name == "limit",
+        Some(V::StringValue(_)) => true,
+        _ => false,
+    };
+    if unrecorded == Unrecorded::Refuse && !recorded {
+        return Err(Status::unimplemented(format!(
+            "this {name} argument is not observed locally"
+        )));
+    }
+    match argument {
         Some(V::IntegerValue(n)) if *n >= 0 => Ok(u64::try_from(*n).unwrap_or(u64::MAX)),
         Some(V::IntegerValue(n)) => Err(Status::invalid_argument(format!(
             "The '{name}(...)' cannot have a negative value: {n}"
@@ -997,10 +1076,24 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
 /// is `deferred` until every stage's other checks are done. Production answers them alike
 /// (FS-ENT-ORACLE O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`), so both profiles
 /// do. A `select`, `limit` or `offset` after an unrun stage gets its checks here too.
+///
+/// Production also checks every function name and argument type of every stage before the
+/// empty map, which fireemu cannot do for what it does not decode (O-4
+/// `#select-empty-then-unknown-function`). So under strict a stage's values must pass
+/// fireemu's own checks (an accumulator must be `count` of at most one field, as recorded),
+/// and any other stage ends the checks: the pipeline is refused as unobserved there.
 fn check_unrun_alias_stage(
     stage: &pb::pipeline::Stage,
     deferred: &mut Option<Status>,
+    unrecorded: Unrecorded,
 ) -> Result<(), Status> {
+    let strict = unrecorded == Unrecorded::Refuse;
+    let unvalidated = || {
+        Status::unimplemented(format!(
+            "pipeline stage {:?} holds what is not checked locally; the order of its checks is not observed locally",
+            stage.name
+        ))
+    };
     // Every one-argument aggregate gets the arity text before any check of its map
     // (FS-ENT-ORACLE O-1 `results/metadata#aggregate`, O-4 `o4/stages#aggregate-one-*`).
     if stage.name == "aggregate" && stage.args.len() == 1 {
@@ -1011,11 +1104,14 @@ fn check_unrun_alias_stage(
     let name = stage.name.as_str();
     // A limit or offset after an unrun stage: its argument checks come first, as above.
     if matches!(name, "limit" | "offset") {
-        count_argument(stage)?;
+        count_argument(stage, unrecorded)?;
         return Ok(());
     }
     if !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
-        return Ok(());
+        return if strict { Err(unvalidated()) } else { Ok(()) };
+    }
+    if strict && !unrun_values_validated(stage, unrecorded) {
+        return Err(unvalidated());
     }
     // A select after an unrun stage: the official emulator checks its aliases too, with the
     // select texts, and answers an empty map last.
@@ -1057,6 +1153,43 @@ fn check_unrun_alias_stage(
         deferred.get_or_insert_with(|| Status::invalid_argument(text));
     }
     Ok(())
+}
+
+/// Whether every value of an unrun `select`, `add_fields`, `distinct` or two-argument
+/// `aggregate` passes fireemu's own checks: each argument is an alias map, each value decodes
+/// as an operand, and each accumulator is `count` of no argument or one field (the only
+/// accumulator production answered, O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`).
+fn unrun_values_validated(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> bool {
+    use pb::value::ValueType as V;
+    let operands = |value: &pb::Value| {
+        map_fields(value).is_some_and(|fields| {
+            fields
+                .values()
+                .all(|v| decode_operand(v, unrecorded).is_ok())
+        })
+    };
+    let accumulators = |value: &pb::Value| {
+        map_fields(value).is_some_and(|fields| {
+            fields.values().all(|v| match v.value_type.as_ref() {
+                Some(V::FunctionValue(f)) => {
+                    f.name == "count"
+                        && f.options.is_empty()
+                        && f.args.len() <= 1
+                        && f.args.iter().all(|arg| {
+                            matches!(&arg.value_type, Some(V::FieldReferenceValue(path))
+                                if FieldPath::parse(path).is_ok())
+                        })
+                }
+                _ => false,
+            })
+        })
+    };
+    match (stage.name.as_str(), stage.args.as_slice()) {
+        ("aggregate", [accumulated, groups]) => accumulators(accumulated) && operands(groups),
+        ("aggregate", _) => false,
+        (_, [aliases]) => operands(aliases),
+        _ => false,
+    }
 }
 
 /// The fields of a wire map value.

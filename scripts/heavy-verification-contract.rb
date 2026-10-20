@@ -21,6 +21,8 @@ PINS = {
   "dtolnay/rust-toolchain" => "6bed0761d98439e5a578e2877258200ad565ba87",
   "taiki-e/install-action" => "7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c",
   "Swatinem/rust-cache" => "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+  "pnpm/action-setup" => "f40ffcd9367d9f12939873eb1018b921a783ffaa",
+  "actions/setup-node" => "49933ea5288caeca8642d1e84afbd3f7d6820020",
 }.freeze
 
 # Expressions (the text inside `${{ }}`) a step may use outside a script: the plan's validated
@@ -97,6 +99,8 @@ def violations(source, toolchain_channel: nil)
       end
       errors << "#{label}: a checkout must not persist credentials" if action == "actions/checkout" && step.dig("with", "persist-credentials") != false
       errors << "#{label}: rust-cache must not save (save-if: \"false\")" if action == "Swatinem/rust-cache" && step.dig("with", "save-if").to_s != "false"
+      errors << "#{label}: pnpm/action-setup must pin the pnpm version" if action == "pnpm/action-setup" && step.dig("with", "version").to_s.empty?
+      errors << "#{label}: setup-node must not cache (a cache would be written)" if action == "actions/setup-node" && step.dig("with", "cache")
       # Every other field of a step that can carry an expression.
       fields = {}
       (step["with"] || {}).each { |key, value| fields["with.#{key}"] = value }
@@ -148,6 +152,10 @@ def violations(source, toolchain_channel: nil)
   fetched = nextest_runs.index { |run| run.include?("cargo fetch --locked") }
   suite = nextest_runs.index { |run| run.include?("cargo nextest run") }
   errors << "nextest must fetch the locked graph before the suite (offline authority checks)" unless fetched && suite && fetched < suite
+  # The suites that run the real SDKs need the pinned conformance install (run 39458079082 stopped
+  # at eventarc_authentication without it), as ci.yml and release.yml install it.
+  installed = nextest_runs.index { |run| run.include?("pnpm -C conformance install --frozen-lockfile") }
+  errors << "nextest must install the conformance SDKs before the suite (pnpm -C conformance install --frozen-lockfile)" unless installed && suite && installed < suite
   # Inputs are validated where they enter, and everything downstream takes the validated outputs.
   plan = workflow.dig("jobs", "plan", "steps") || []
   validate = plan.find { |step| step["id"] == "validate" }

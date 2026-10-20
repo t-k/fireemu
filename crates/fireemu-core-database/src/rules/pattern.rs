@@ -254,11 +254,11 @@ fn fold_class(chars: &[char], start: usize, out: &mut String) -> Option<usize> {
                 i = next;
                 ranges.extend(fold_range(lo, hi)?);
             }
-            ClassItem::Char(c) if c.is_ascii_alphabetic() => {
+            // A letter stands for both its cases; anything else is its own case.
+            ClassItem::Char(c) => {
                 ranges.push((c.to_ascii_lowercase(), c.to_ascii_lowercase()));
                 ranges.push((c.to_ascii_uppercase(), c.to_ascii_uppercase()));
             }
-            ClassItem::Char(c) => ranges.push((c, c)),
         }
     }
     out.push('[');
@@ -502,6 +502,43 @@ mod tests {
         assert_eq!(matches("^x()$", "x"), Some(true));
         assert_eq!(matches("a|", "zz"), Some(true));
         assert_eq!(matches("^(a)*$", "aa"), Some(true));
+    }
+
+    #[test]
+    fn the_grammar_scan_reads_classes_escapes_and_alternatives_as_the_official_emulator() {
+        use crate::rules::parse::regex_shape;
+        // `]` right after `[^` is a member, so this class never closes.
+        assert_eq!(
+            regex_shape("^[^]$"),
+            Err("Illegal regular expression, expected ']' at position 3".to_owned())
+        );
+        assert_eq!(regex_shape("^[^]a]$"), Ok(false));
+        // A pattern whose body ends in an escape (the final `$` is the end anchor).
+        assert_eq!(
+            regex_shape("^a\\$"),
+            Err("Illegal regular expression, unexpected end-of-string".to_owned())
+        );
+        // A range up to an escaped backslash closes at the next `]`.
+        assert_eq!(regex_shape(r"^[a-\\]$"), Ok(false));
+        assert_eq!(regex_shape(r"^[\d-]$"), Ok(false));
+        assert_eq!(regex_shape("^(a|)b)$"), Ok(true));
+    }
+
+    #[test]
+    fn escapes_outside_a_class_do_not_open_one() {
+        assert_eq!(matches(r"^\[\\$", r"[\"), Some(true));
+        assert_eq!(matches(r"^[[]\\$", r"[\"), Some(true));
+        assert_eq!(matches(r"^[^]\\a]$", "b"), None);
+        assert_eq!(matches(r"^[^]a]\\$", r"b\"), Some(true));
+    }
+
+    #[test]
+    fn a_folded_negated_class_keeps_its_members() {
+        assert_eq!(matches_i("^[^a]$", "^"), Some(true));
+        assert_eq!(matches_i("^[^a]$", "A"), Some(false));
+        // A class escape as a range endpoint is not folded (the official emulator ends the
+        // member at the escape).
+        assert_eq!(matches_i(r"^[\d-z]$", "5"), None);
     }
 
     #[test]

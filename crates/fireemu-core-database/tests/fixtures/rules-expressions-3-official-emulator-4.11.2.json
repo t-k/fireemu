@@ -6731,5 +6731,207 @@
   "error": null,
   "read": 401,
   "fireemu": "refuses"
+ },
+ {
+  "expr": "'a'.matches(/^[^]$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected ']' at position 3\n",
+  "read": null
+ },
+ {
+  "expr": "!('a'.matches(/^[^]$/))",
+  "query": "",
+  "load": 400,
+  "error": "1:39: Illegal regular expression, expected ']' at position 3\n",
+  "read": null
+ },
+ {
+  "expr": "'b'.matches(/^[^]a]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('b'.matches(/^[^]a]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\\\'.matches(/^[a-\\\\]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('\\\\'.matches(/^[a-\\\\]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'-'.matches(/^[\\d-]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('-'.matches(/^[\\d-]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a)'.matches(/^(a|)b)$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('a)'.matches(/^(a|)b)$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'b'.matches(/^(a|)b)$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('b'.matches(/^(a|)b)$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'[\\\\'.matches(/^\\[\\\\$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('[\\\\'.matches(/^\\[\\\\$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'[\\\\'.matches(/^[[]\\\\$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('[\\\\'.matches(/^[[]\\\\$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'b\\\\'.matches(/^[^]a]\\\\$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('b\\\\'.matches(/^[^]a]\\\\$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'b'.matches(/^[^]\\\\a]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "!('b'.matches(/^[^]\\\\a]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'^'.matches(/^[^a]$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('^'.matches(/^[^a]$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'A'.matches(/^[^a]$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('A'.matches(/^[^a]$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'5'.matches(/^[\\d-z]$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "!('5'.matches(/^[\\d-z]$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'-'.matches(/^[\\d-z]$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "!('-'.matches(/^[\\d-z]$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
  }
 ]

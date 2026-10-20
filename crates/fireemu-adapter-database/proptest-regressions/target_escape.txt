@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a5a4c61fc872b9e7f0e043e57e30ace48bb3611f21d0aacd3fc302a8a150f91d # shrinks to requests = [Request { target: "/", body: [], chunked: false, chunk_size: 1 }, Request { target: "/^", body: [], chunked: false, chunk_size: 1 }], cuts = [1]

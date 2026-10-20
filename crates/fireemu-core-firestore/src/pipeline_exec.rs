@@ -717,6 +717,18 @@ impl Cursor {
                         // (FS-ENT-ORACLE O-1 and O-2; O-3 for doubles, NaN, timestamps, bytes,
                         // geo points and vectors) and for a missing one.
                         Eval::Value(_) | Eval::Absent => return Ok(None),
+                        // Production answered no refusal inside a where condition, so strict
+                        // refuses one as unobserved (coordinator ruling of 2026-10-21: a
+                        // recorded text answers only in the stage it was recorded in).
+                        Eval::Error(error)
+                            if self.unrecorded == Unrecorded::Refuse
+                                && !matches!(error, EvalError::Unobserved { .. }) =>
+                        {
+                            return Err(EvalError::Unobserved {
+                                function: "where",
+                                reason: "a refusal inside a where condition",
+                            })
+                        }
                         Eval::Error(error) => return Err(error),
                     }
                 }

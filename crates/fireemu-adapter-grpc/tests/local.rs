@@ -7387,6 +7387,13 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
             // Production refused every composition naming the first expression in document
             // order (O-4 `literals#*`, `#argument-map-of-field`).
             let err = pipeline_error(&mut client, stages).await;
+            // Production recorded this refusal in a select only: in a where condition strict
+            // refuses it as unobserved (coordinator ruling of 2026-10-21).
+            if policy == IndexValidationPolicy::Production && label == "map literal as an argument"
+            {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                continue;
+            }
             let kind = if matches!(label, "array of a function" | "map of two functions") {
                 "FUNCTION_VALUE"
             } else {
@@ -7582,6 +7589,11 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         );
         for (label, refused) in invalid.clone() {
             let err = pipeline_error(&mut client, refused).await;
+            // A repeated path answers fireemu's own text, which strict refuses as unobserved.
+            if policy == IndexValidationPolicy::Production && label == "same path twice" {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                continue;
+            }
             assert_eq!(
                 err.code(),
                 tonic::Code::InvalidArgument,
@@ -8224,6 +8236,9 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
         // a string, a negative offset, and the key __name__ (only the official emulator
         // answered these).
         let unrecorded = [
+            // Recorded in a select only (coordinator ruling of 2026-10-21).
+            "map key from a field in where",
+            "a where condition literal holding a field",
             "limit of a double",
             "limit of null",
             "limit of a field",
@@ -8553,6 +8568,11 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             let unrecorded_order = [
                 "distinct empty map, then select empty map",
                 "aggregate empty accumulators and an empty group alias",
+                // Production recorded the length text for add_fields and select only.
+                "aggregate accumulator alias of 1500 bytes",
+                // Production recorded an empty select map before a later empty alias only.
+                "add_fields empty map, then add_fields empty alias",
+                "add_fields empty alias, then select empty map",
             ];
             match official {
                 Some(_)

@@ -131,10 +131,6 @@ const TRACES: &[(&str, &str)] = &[
         "fs-ent-pipeline/o4/functions#collection-id-collection",
     ),
     (
-        "P29 where({a: field i})",
-        "fs-ent-pipeline/o3/functions#map-literal-mixed",
-    ),
-    (
         "P33 aggregate{c: count(n)} after where(true)",
         "fs-ent-pipeline/results/metadata#aggregate",
     ),
@@ -170,10 +166,6 @@ const TRACES: &[(&str, &str)] = &[
     (
         "N13 select{} then limit(5)",
         "fs-ent-pipeline/o4/stages#select-empty-map",
-    ),
-    (
-        "N18 aggregate{a..b: count(n)} by {}",
-        "fs-ent-pipeline/o4/stages#add-fields-invalid-alias",
     ),
     (
         "N19 aggregate{c: count(n)} by {} then select{}",

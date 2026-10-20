@@ -436,10 +436,23 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
         "equal",
         vec![call("parent", vec![field("k")]), Expr::Constant(s("x"))],
     );
+    // The emulator profile answers the refusal; strict refuses it as unobserved, since production
+    // answered no refusal inside a where condition.
     assert!(matches!(
-        execute(vec![Stage::Where(error)], input.clone()),
+        execute_in(
+            vec![Stage::Where(error.clone())],
+            input.clone(),
+            Unrecorded::OfficialEmulator
+        ),
         Err(EvalError::WrongType {
             function: "parent",
+            ..
+        })
+    ));
+    assert!(matches!(
+        execute(vec![Stage::Where(error)], input.clone()),
+        Err(EvalError::Unobserved {
+            function: "where",
             ..
         })
     ));

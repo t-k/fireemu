@@ -67,6 +67,28 @@ fn reserved_dunder_names_are_rejected_except_name() {
         FieldPath::parse("a.__x__"),
         Err(FieldPathError::ReservedSegment { index: 1 })
     );
+    // A pipeline select alias may hold reserved names; every other rule still holds.
+    for alias in ["__foo__", "a.__x__", "`__x__`", "a.`__x__`"] {
+        let path = FieldPath::parse_allowing_reserved(alias).unwrap();
+        assert!(
+            path.segments()
+                .iter()
+                .any(|s| s == "__foo__" || s == "__x__"),
+            "{alias}"
+        );
+    }
+    assert_eq!(
+        FieldPath::parse_allowing_reserved("a.__x__")
+            .unwrap()
+            .segments(),
+        ["a", "__x__"]
+    );
+    for invalid in ["a..b", "", "1st", "`unterminated"] {
+        assert!(
+            FieldPath::parse_allowing_reserved(invalid).is_err(),
+            "{invalid}"
+        );
+    }
 }
 
 #[test]

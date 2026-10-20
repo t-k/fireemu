@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@firebase/rules-unit-testing": "5.0.2",
+    "@google-cloud/firestore": "8.7.1",
     "@google-cloud/pubsub": "4.11.0",
     "firebase": "12.18.0",
     "firebase-admin": "14.3.0",

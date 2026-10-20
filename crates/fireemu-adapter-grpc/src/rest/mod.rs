@@ -1597,7 +1597,7 @@ impl RestState {
             let row = crate::pipeline::document_row(document).map_err(refuse)?;
             let fields = cursor
                 .push(row)
-                .map_err(|error| refuse(Status::unimplemented(error.to_string())))?;
+                .map_err(|error| refuse(crate::pipeline::eval_status(&error)))?;
             if let Some(fields) = fields {
                 let result = if whole_documents {
                     document.clone()

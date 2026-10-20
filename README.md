@@ -57,7 +57,7 @@ Running Functions requires `firebase-functions` v6 or v7 in the codebase.
 
 ## Supported scope
 
-Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), Cloud Storage for Firebase, Cloud Functions for Firebase, Cloud Pub/Sub, and Eventarc. It also provides a local Firebase App Check implementation and a UI for managing data and viewing logs. 
+Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), Cloud Storage for Firebase, Cloud Functions for Firebase, Cloud Pub/Sub, and Eventarc. It also serves the Firebase Realtime Database, without a compatibility claim yet (see the table below). It also provides a local Firebase App Check implementation and a UI for managing data and viewing logs. 
 
 ### Key unsupported features and limitations
 
@@ -66,7 +66,8 @@ Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), C
 | Cloud Firestore | The Enterprise Pipeline API supports a limited subset of read operations. Full-text search supports index definition validation, but local search execution is not supported.   |
 | Firebase Authentication (Identity Platform) | Authentication flows that communicate with external identity providers, authorization-code exchange, and SAML XML signature verification are outside the supported scope. These are separate from local authentication behavior and provider configuration.  |
 | Cloud Storage for Firebase | Signed-URL and POST-policy signatures are not verified (their expiry and conditions are), object ACLs other than `allUsers` read are not enforced, and IAM and bucket-level public access are not modeled. Object composition (`compose`) and notification configuration are not supported.  |
-| Cloud Functions for Firebase | Triggers that depend on unsupported products, such as Realtime Database (deferred), Remote Config, and Data Connect (deferred), cannot run. Storage archive events occur only for a bucket whose versioning was enabled, and their shape is unrecorded.  |
+| Cloud Functions for Firebase | Triggers that depend on products Fireemu does not deliver events for, such as Realtime Database (an open gap), Remote Config, and Data Connect (deferred), cannot run. Storage archive events occur only for a bucket whose versioning was enabled, and their shape is unrecorded.  |
+| Firebase Realtime Database (an open gap, no compatibility claim) | The REST API with event streams, the WebSocket and long-polling protocols the SDKs use, listens and queries are served and compared with the official emulator. Security Rules are not evaluated (a database without rules is open, or locked to the emulator's `owner` credential with `database.defaultAccess = "locked"`), and `onDisconnect`, import and export, Functions triggers and a UI view are not supported. Behaviour taken from the official emulator where production has not been observed may change. |
 | Cloud Pub/Sub | Schemas, BigQuery and Cloud Storage subscription delivery, and some APIs such as `UpdateTopic` are not supported.  |
 | Firebase App Check | Local testing with debug tokens is supported. Real attestation through Play Integrity, App Attest, DeviceCheck, or reCAPTCHA, and replay protection using limited-use tokens, are not supported.  |
 
@@ -80,7 +81,7 @@ See the [Functions support inventory](docs/functions-export-inventory.md) for su
 
 ### Unsupported products
 
-Realtime Database, Firebase Hosting, App Hosting, and Data Connect are not currently supported. Firebase Extensions support is not planned. 
+Firebase Hosting, App Hosting, and Data Connect are not currently supported. Firebase Extensions support is not planned. 
 
 ## Usage
 
@@ -117,6 +118,18 @@ The official CLI command names are also available as aliases.
 npx fireemu emulators:start
 npx fireemu emulators:exec -- npm test
 ```
+
+### Realtime Database
+
+The Realtime Database starts when it is selected with `--only database`, configured under `emulators.database` in `firebase.json`, or given a port with `--database-port`; it listens on 9000 by default. `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the child command.
+
+```sh
+npx fireemu exec --only database -- npm test
+```
+
+Databases are addressed as on the official emulator: by the `ns` query parameter (`http://127.0.0.1:9000/path.json?ns=my-project-default-rtdb`), which the SDKs send when `connectDatabaseEmulator` is used, or by the first label of the host name. A session reset empties the namespaces of the project being reset, `<project>` and `<project>-default-rtdb`.
+
+Security Rules are not evaluated yet. A `database` section in `firebase.json` is accepted and reported with a notice, and requests are answered as for a database without rules: open, or, with `database.defaultAccess = "locked"` (the `productionExact` default), only for the emulator's `owner` credential, which firebase-admin uses against an emulator.
 
 ### UI
 
@@ -280,6 +293,7 @@ JSON also works: existing `fireemu.json` files and `--config <path>.json` remain
 | Multi-factor authentication is on, SMS and TOTP, without a console toggle, an `updateConfig` call or an `auth.mfa` block | `auth.mfa` (`state: "ENABLED"`, `PHONE_SMS` and TOTP) | off until enabled, as in a new production project: enrollment is refused with `OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` or `TOTP based MFA not enabled.` |
 | An end user's native gRPC `Listen` stream stays open however long it is held. `POST /v1/firestore/listen:expire` on the control API ends every held end-user stream at once, with production's status, to test a client's reconnect | `firestore.listenStreamLifetime` (`"unlimited"`) | ended with `INTERNAL` an hour after it opened, as production ends it (`"oneHour"`) |
 | App Check is served without registering an app: any well-formed debug token (a UUIDv4) exchanges for any app, so an `enforceAppCheck` callable works with no `appCheck` block and a missing or malformed token is still refused | `appCheck.debugTokens` (`"any"`) | only registered apps and digests exchange (`"registered"`); an `appCheck` block asks for this too |
+| A Realtime Database without Security Rules is open to every request, as the official emulator serves it (rules are not evaluated yet) | `database.defaultAccess` (`"open"`) | only the emulator's `owner` credential reads and writes (`"locked"`), as production admits only admin credentials to a database whose rules deny everything |
 | Dead-letter forwarding needs neither a project number nor IAM grants | `pubsub.deadLetterAuthorization` (`"implicit"`) | forwarded only after the service agent holds `roles/pubsub.subscriber` on the subscription and `roles/pubsub.publisher` on the dead-letter topic (`"iam"`); naming `pubsub.projectNumbers` selects it |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
@@ -573,7 +587,7 @@ Security Rules and API behavior are implemented using documentation and observat
 
 The official emulator comparison baseline is `firebase-tools 15.28.2`.
 
-Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
+Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces -- under the `emulator` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while the Realtime Database is served without a parity claim (an open gap), Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
 
 The `strict` and `emulator` profiles differ in some behaviors to serve their respective purposes. Where the official emulator and production Firebase disagree, Fireemu also adopts production behavior in some cases and records the difference.
 

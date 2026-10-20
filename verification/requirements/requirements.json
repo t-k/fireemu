@@ -1331,7 +1331,7 @@
       "criticality": "important",
       "owner": "compat-contract",
       "status": "implemented",
-      "note": "Realtime Database, Firebase Hosting and App Hosting are deferred and Firebase Extensions is not planned; each declares the terms that may not read as supported. tools/compat-check CC-06 fails when such a term appears in any manifest entry's implemented list, when a README line names it without a scope disclaimer on the same line, when a non-active surface carries a parity claim at all, and when a non-active surface declares no prohibited terms, which would leave it unpoliced. The claim sentence of the contract is itself product-enumerated and version-qualified and says plainly that no complete-suite and no unqualified superset claim is made while those four surfaces are in the baseline; CC-05 keeps the README from stating anything else.",
+      "note": "Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned; each declares the terms that may not read as supported. tools/compat-check CC-06 fails when such a term appears in any manifest entry's implemented list, when a README line names it without a scope disclaimer on the same line, when a non-active surface carries a parity claim at all, and when a non-active surface declares no prohibited terms, which would leave it unpoliced. The claim sentence of the contract is itself product-enumerated and version-qualified and says plainly that no complete-suite and no unqualified superset claim is made while those surfaces, and the Realtime Database (active, served without a parity claim: an open gap), are in the baseline; CC-05 keeps the README from stating anything else.",
       "artifacts": {
         "conformance": "spec/compatibility/contract.json",
         "integration": [
@@ -1373,7 +1373,7 @@
       "criticality": "important",
       "owner": "fireemu",
       "status": "implemented",
-      "note": "an_official_service_fireemu_does_not_serve_is_refused_with_its_status (crates/fireemu/tests/exec.rs) covers all eight products and checks that the command never ran, and that hub, ui and logging are refused as non-service names. a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it (crates/fireemu/tests/cli.rs) covers the other half of the rule, that an emulators.<name> entry alone is a notice rather than a failure. the_only_list_names_services_and_at_most_one_functions_codebase drives the same table through the parser, iterating the UNSERVED_OFFICIAL_SERVICES constant itself so a product added there without a status fails the test.",
+      "note": "an_official_service_fireemu_does_not_serve_is_refused_with_its_status (crates/fireemu/tests/exec.rs) covers the four products fireemu does not serve and checks that the command never ran, and that hub, ui and logging are refused as non-service names. a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it (crates/fireemu/tests/cli.rs) covers the other half of the rule, that an emulators.<name> entry alone is a notice rather than a failure. the_only_list_names_services_and_at_most_one_functions_codebase drives the same table through the parser, iterating the UNSERVED_OFFICIAL_SERVICES constant itself so a product added there without a status fails the test.",
       "artifacts": {
         "integration": [
           "crates/fireemu/tests/exec.rs",

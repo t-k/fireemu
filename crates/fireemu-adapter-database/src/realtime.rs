@@ -861,8 +861,6 @@ fn location(
     Ok(path)
 }
 
-/// A write the tree refused: a priority on an absent node is answered; bad data is a
-/// connection error, as the official emulator treats it.
 /// Refuses merge entries of which one contains another, the way the server words it, naming
 /// the keys as sent.
 fn refuse_overlap(relative: &[(String, Path)]) -> Result<(), Failure> {
@@ -895,6 +893,8 @@ fn check_registered(
     Ok(())
 }
 
+/// A write the tree refused: a priority on an absent node is answered; bad data is a
+/// connection error, as the official emulator treats it.
 fn write_failure(err: &fireemu_core_database::DatabaseError) -> Failure {
     match err.kind {
         ErrorKind::PriorityOnAbsentNode => invalid("could not set priority on non-existent node"),

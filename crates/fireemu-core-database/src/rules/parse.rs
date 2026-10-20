@@ -211,6 +211,13 @@ struct Lexer<'a> {
 }
 
 impl Lexer<'_> {
+    /// Skips the format characters at the reader's place (see [`is_format`]).
+    fn skip_format(&mut self) {
+        while self.chars.get(self.at).copied().is_some_and(is_format) {
+            self.at += 1;
+        }
+    }
+
     /// Skips white space (see [`is_space`]) and comments, which JavaScript reads anywhere: `//` to the end of
     /// the line and `/* … */`. A `/` followed by `/` or `*` never starts a regular expression.
     fn skip_space(&mut self) -> Result<(), ExprError> {
@@ -221,7 +228,7 @@ impl Lexer<'_> {
                     while self
                         .chars
                         .get(self.at)
-                        .is_some_and(|c| !matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+                        .is_some_and(|&c| !is_line_terminator(c))
                     {
                         self.at += 1;
                     }
@@ -272,25 +279,34 @@ impl Lexer<'_> {
             }
             return Ok((start, Token::Name(name)));
         }
+        // A format character inside an operator is skipped, as there (review r7 S19).
         for punct in PUNCTUATION.iter().chain(&[">"]) {
-            let len = punct.chars().count();
-            if self.chars.len() >= self.at + len
-                && self.chars[self.at..self.at + len]
-                    .iter()
-                    .copied()
-                    .eq(punct.chars())
-            {
-                self.at += len;
+            let mut at = self.at;
+            let matched = punct.chars().enumerate().all(|(i, expected)| {
+                if i > 0 {
+                    while self.chars.get(at).copied().is_some_and(is_format) {
+                        at += 1;
+                    }
+                }
+                let found = self.chars.get(at) == Some(&expected);
+                at += 1;
+                found
+            });
+            if matched {
+                self.at = at;
                 return Ok((start, Token::Punct(punct)));
             }
         }
         Err(ExprError::new(start, "Unsupported javascript syntax."))
     }
 
+    /// Whether the character `ahead` places on, format characters skipped, is a digit.
     fn peek_digit(&self, ahead: usize) -> bool {
-        self.chars
-            .get(self.at + ahead)
-            .is_some_and(char::is_ascii_digit)
+        let mut at = self.at + ahead;
+        while self.chars.get(at).copied().is_some_and(is_format) {
+            at += 1;
+        }
+        self.chars.get(at).is_some_and(char::is_ascii_digit)
     }
 
     /// Where the JavaScript parser of the official emulator stands after a token that ends
@@ -307,46 +323,74 @@ impl Lexer<'_> {
     /// A number: decimal (`1`, `1.5`, `.5`, `1.`, `1e3`), hexadecimal (`0x10`) or legacy
     /// octal (`010`, as JavaScript reads it).
     fn number(&mut self, start: usize) -> Result<(usize, Token), ExprError> {
+        // A format character inside a number is skipped, as there (review r7 S19).
         let digits = |lexer: &mut Self, radix: u32| {
-            let from = lexer.at;
-            while lexer.chars.get(lexer.at).is_some_and(|c| c.is_digit(radix)) {
-                lexer.at += 1;
+            let mut text = String::new();
+            loop {
+                let saved = lexer.at;
+                lexer.skip_format();
+                match lexer.chars.get(lexer.at) {
+                    Some(c) if c.is_digit(radix) => {
+                        text.push(*c);
+                        lexer.at += 1;
+                    }
+                    _ => {
+                        lexer.at = saved;
+                        return text;
+                    }
+                }
             }
-            lexer.chars[from..lexer.at].iter().collect::<String>()
+        };
+        let next_is = |lexer: &mut Self, accept: &dyn Fn(char) -> bool| {
+            let saved = lexer.at;
+            lexer.skip_format();
+            match lexer.chars.get(lexer.at) {
+                Some(&c) if accept(c) => {
+                    lexer.at += 1;
+                    Some(c)
+                }
+                _ => {
+                    lexer.at = saved;
+                    None
+                }
+            }
         };
         if self.chars[self.at] == '0' {
-            if matches!(self.chars.get(self.at + 1), Some('x' | 'X')) {
-                self.at += 2;
+            let saved = self.at;
+            self.at += 1;
+            if next_is(self, &|c| matches!(c, 'x' | 'X')).is_some() {
                 let hex = digits(self, 16);
                 #[allow(clippy::cast_precision_loss)]
                 return u64::from_str_radix(&hex, 16)
                     .map(|n| (start, Token::Number(n as f64)))
                     .map_err(|_| ExprError::new(start, "Unsupported javascript syntax."));
             }
-            let mut end = self.at + 1;
-            while self.chars.get(end).is_some_and(char::is_ascii_digit) {
-                end += 1;
+            let octal = digits(self, 10);
+            if let Some(bad) = octal.chars().find(|c| matches!(c, '8' | '9')) {
+                // The official emulator refuses what its reader only warns about.
+                return Err(ExprError::new(
+                    self.at,
+                    format!(
+                        "illegal octal literal digit {bad}; interpreting it as a decimal digit"
+                    ),
+                ));
             }
-            let octal: String = self.chars[self.at + 1..end].iter().collect();
-            if !octal.is_empty() && octal.chars().all(|c| c.is_digit(8)) {
-                self.at = end;
+            if !octal.is_empty() {
                 #[allow(clippy::cast_precision_loss)]
                 return u64::from_str_radix(&octal, 8)
                     .map(|n| (start, Token::Number(n as f64)))
                     .map_err(|_| ExprError::new(start, "Unsupported javascript syntax."));
             }
+            self.at = saved;
         }
         let mut text = digits(self, 10);
-        if self.chars.get(self.at) == Some(&'.') {
-            self.at += 1;
+        if next_is(self, &|c| c == '.').is_some() {
             text.push('.');
             text.push_str(&digits(self, 10));
         }
-        if matches!(self.chars.get(self.at), Some('e' | 'E')) {
-            self.at += 1;
+        if next_is(self, &|c| matches!(c, 'e' | 'E')).is_some() {
             text.push('e');
-            if let Some(&sign @ ('+' | '-')) = self.chars.get(self.at) {
-                self.at += 1;
+            if let Some(sign) = next_is(self, &|c| matches!(c, '+' | '-')) {
                 text.push(sign);
             }
             let exponent = digits(self, 10);
@@ -381,20 +425,49 @@ impl Lexer<'_> {
                 Self::flush_units(start, &mut units, &mut text)?;
                 return Ok((start, Token::Str(text)));
             }
+            if is_line_terminator(c) {
+                // A line ends the literal there (review r7 M17).
+                return Err(ExprError::new(self.at - 1, "unterminated string literal"));
+            }
             if c != '\\' {
+                // A format character in the body is kept, as there.
                 Self::flush_units(start, &mut units, &mut text)?;
                 text.push(c);
                 continue;
             }
+            // After `\` the reader skips format characters, as it does everywhere but the
+            // body of a string (review r7 M15).
+            self.skip_format();
             let Some(&escaped) = self.chars.get(self.at) else {
                 return Err(ExprError::new(start, "Unterminated string literal."));
             };
             self.at += 1;
-            let hex = |lexer: &Self, n: usize| -> Option<u32> {
-                let digits: String = lexer.chars.get(lexer.at..lexer.at + n)?.iter().collect();
-                (digits.len() == n && digits.chars().all(|d| d.is_ascii_hexdigit()))
-                    .then(|| u32::from_str_radix(&digits, 16).ok())
-                    .flatten()
+            if is_line_terminator(escaped) {
+                // A line continuation adds nothing; `\r\n` is one (review r7 M16).
+                if escaped == '\r' {
+                    self.skip_format();
+                    if self.chars.get(self.at) == Some(&'\n') {
+                        self.at += 1;
+                    }
+                }
+                continue;
+            }
+            // `n` hex digits, each read past format characters. Short of them, the escape
+            // stands for its letter and the digits read, and the reader goes on at the
+            // character that is no digit; the format characters before it are gone.
+            let hex = |lexer: &mut Self, n: usize| -> Result<u32, String> {
+                let mut digits = String::with_capacity(n);
+                for _ in 0..n {
+                    lexer.skip_format();
+                    match lexer.chars.get(lexer.at) {
+                        Some(d) if d.is_ascii_hexdigit() => {
+                            digits.push(*d);
+                            lexer.at += 1;
+                        }
+                        _ => return Err(digits),
+                    }
+                }
+                u32::from_str_radix(&digits, 16).map_err(|_| digits)
             };
             let code = match escaped {
                 'n' => u32::from('\n'),
@@ -403,33 +476,31 @@ impl Lexer<'_> {
                 'b' => 0x8,
                 'f' => 0xC,
                 'v' => 0xB,
-                'u' => match hex(self, 4) {
-                    Some(code) => {
-                        self.at += 4;
-                        code
+                'u' | 'x' => match hex(self, if escaped == 'u' { 4 } else { 2 }) {
+                    Ok(code) => code,
+                    Err(digits) => {
+                        Self::flush_units(start, &mut units, &mut text)?;
+                        text.push(escaped);
+                        text.push_str(&digits);
+                        continue;
                     }
-                    None => u32::from('u'),
-                },
-                'x' => match hex(self, 2) {
-                    Some(code) => {
-                        self.at += 2;
-                        code
-                    }
-                    None => u32::from('x'),
                 },
                 '0'..='7' => {
                     // Up to three octal digits, at most \377.
                     let longest = if escaped <= '3' { 3 } else { 2 };
                     let mut value = escaped.to_digit(8).unwrap_or(0);
                     let mut taken = 1;
-                    while taken < longest {
+                    // The reader looks one character past the escape, so format characters
+                    // after it are gone too.
+                    loop {
+                        self.skip_format();
                         match self.chars.get(self.at).and_then(|d| d.to_digit(8)) {
-                            Some(digit) => {
+                            Some(digit) if taken < longest => {
                                 value = value * 8 + digit;
                                 self.at += 1;
                                 taken += 1;
                             }
-                            None => break,
+                            _ => break,
                         }
                     }
                     value
@@ -497,33 +568,31 @@ impl Lexer<'_> {
                 other => pattern.push(other),
             }
         }
+        // Flags, a format character among them skipped (review r7 S19).
         let mut flags = String::new();
-        while let Some(&c) = self.chars.get(self.at) {
-            if c.is_ascii_alphabetic() {
-                flags.push(c);
-                self.at += 1;
-            } else {
-                break;
+        loop {
+            let saved = self.at;
+            self.skip_format();
+            match self.chars.get(self.at) {
+                Some(&c) if c.is_ascii_alphabetic() => {
+                    flags.push(c);
+                    self.at += 1;
+                }
+                _ => {
+                    self.at = saved;
+                    break;
+                }
             }
         }
         check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
-        // The grammar's errors come first there; `\s` fails when the automaton is built.
         check_groups_and_counts(&pattern).map_err(|message| ExprError::new(start, message))?;
-        check_whitespace_classes(&pattern).map_err(|message| ExprError::new(start, message))?;
         Ok((start, Token::Regex(pattern, flags)))
     }
 }
 
-/// `\s` and `\S`, which the official emulator refuses: its automaton grammar has no
-/// whitespace class.
-fn check_whitespace_classes(pattern: &str) -> Result<(), &'static str> {
-    let mut chars = pattern.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' && matches!(chars.next(), Some('s' | 'S')) {
-            return Err("Illegal regular expression, 'whitespacechar' not found");
-        }
-    }
-    Ok(())
+/// Whether `c` ends a line (and so a string literal or a `//` comment) there.
+fn is_line_terminator(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
 }
 
 /// Whether `c` separates tokens as on the official emulator (recorded 2026-10-21): Unicode
@@ -587,6 +656,12 @@ pub(crate) fn regex_shape(pattern: &str) -> Result<bool, String> {
     }
     let illegal = |what: String| Err(format!("Illegal regular expression, {what}"));
     let mut literal_operator = false;
+    // `\s` and `\S` as the grammar reads them (in a class, `\\\s` is `\` then `s`): the
+    // automaton has no whitespace class, which fails once the grammar has read the pattern.
+    let mut whitespace_class = false;
+    let names_whitespace = |chars: &[char], i: usize| {
+        chars.get(i) == Some(&'\\') && matches!(chars.get(i + 1), Some('s' | 'S'))
+    };
     let mut depth = 0usize;
     let mut i = 0;
     // Whether the next character starts an alternative (and so is read as an atom whatever it
@@ -602,6 +677,7 @@ pub(crate) fn regex_shape(pattern: &str) -> Result<bool, String> {
                     i += 1;
                 }
                 loop {
+                    whitespace_class |= names_whitespace(&chars, i);
                     i = class_member_end(&chars, i)?;
                     if chars.get(i).is_none_or(|c| *c == ']') {
                         break;
@@ -623,6 +699,7 @@ pub(crate) fn regex_shape(pattern: &str) -> Result<bool, String> {
                 if i + 1 >= chars.len() {
                     return illegal("unexpected end-of-string".to_owned());
                 }
+                whitespace_class |= names_whitespace(&chars, i);
                 i += 2;
             }
             Some(c) => {
@@ -638,6 +715,9 @@ pub(crate) fn regex_shape(pattern: &str) -> Result<bool, String> {
         loop {
             i = repetitions_end(&chars, i)?;
             match chars.get(i) {
+                None if depth == 0 && whitespace_class => {
+                    return illegal("'whitespacechar' not found".to_owned());
+                }
                 None if depth == 0 => return Ok(literal_operator),
                 None => return illegal(format!("expected ')' at position {i}")),
                 Some('|') => {

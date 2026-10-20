@@ -568,13 +568,15 @@ impl Session {
             Some(Json::Object(q)) => wire_query(q)?,
             _ => None,
         };
+        // The rules come before the index, so a caller who may not read learns nothing
+        // about it (the official emulator's order, review S6).
+        if !db.may_read(&self.namespace, &path, query.as_ref(), &self.access, now) {
+            return Err(Self::denied());
+        }
         if let Some(query) = &query {
             if let Some(message) = db.index_refusal(&self.namespace, &path, query) {
                 return Err(Failure::Status("no_index", message));
             }
-        }
-        if !db.may_read(&self.namespace, &path, query.as_ref(), &self.access, now) {
-            return Err(Self::denied());
         }
         let tree = db.tree_mut(&self.namespace);
         if path.is_priority() {

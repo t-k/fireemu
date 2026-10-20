@@ -545,11 +545,12 @@ impl Database {
         } else {
             request::query(&params, output.shallow)?
         };
-        if let Some(query) = &query {
-            self.check_index(&namespace, &path, query)?;
-        }
+        // The rules come before the index (the official emulator's order, review S6).
         if !writing && !self.may_read(&namespace, &path, query.as_ref(), &access, now_millis) {
             return Err(read_refused(streaming));
+        }
+        if let Some(query) = &query {
+            self.check_index(&namespace, &path, query)?;
         }
         let want_etag = request
             .header("X-Firebase-ETag")

@@ -1440,3 +1440,46 @@ fn a_refused_token_signs_the_connection_out_under_strict_only() {
         }
     }
 }
+
+#[test]
+fn the_rules_come_before_the_index() {
+    // Recorded on the official emulator (docs.local indexorder-probe).
+    let mut db = db();
+    load(
+        &mut db,
+        "io",
+        r#"{"rules":{"q":{".read":false},"o":{".read":true}}}"#,
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/.json?ns=io",
+        OWNER,
+        r#"{"q":{"a":{"n":1}},"o":{"a":{"n":1}}}"#,
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/q.json?ns=io&orderBy=\"n\"", &[], ""),
+        (401, denied())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/o.json?ns=io&orderBy=\"n\"", &[], "").0,
+        400
+    );
+    let mut session = open(&mut db, "io");
+    assert_eq!(
+        send(&mut db, &mut session, 1, "g", r#"{"p":"/q","q":{"i":"n"}}"#),
+        vec![refused(1)]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            2,
+            "q",
+            r#"{"p":"/q","q":{"i":"n","l":1,"vf":"l"},"t":1,"h":""}"#
+        ),
+        vec![refused(2)]
+    );
+    let no_index = send(&mut db, &mut session, 3, "g", r#"{"p":"/o","q":{"i":"n"}}"#);
+    assert!(no_index[0].contains(r#""s":"no_index""#), "{no_index:?}");
+}

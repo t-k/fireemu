@@ -378,3 +378,135 @@ fn every_recorded_write_and_expression_error_matches_the_official_emulator() {
         "the fixture was read whole"
     );
 }
+
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Small expressions over the whole grammar, well-formed or not.
+    fn expression() -> impl Strategy<Value = String> {
+        let leaf = prop::sample::select(vec![
+            "true",
+            "false",
+            "null",
+            "1",
+            "2.5",
+            "'a'",
+            "\"b\"",
+            "auth",
+            "auth.uid",
+            "now",
+            "data",
+            "root",
+            "newData",
+            "query.limitToFirst",
+            "$k",
+            "data.val()",
+            "data.child('s')",
+            "data.child('s').val()",
+            "/a+/i",
+            "['a']",
+            "auth.token.x",
+        ])
+        .prop_map(str::to_owned);
+        leaf.prop_recursive(4, 32, 3, |inner| {
+            prop_oneof![
+                (
+                    inner.clone(),
+                    prop::sample::select(vec![
+                        "+", "-", "*", "/", "%", "==", "===", "!=", "<", "<=", ">", ">=", "&&",
+                        "||",
+                    ]),
+                    inner.clone()
+                )
+                    .prop_map(|(a, op, b)| format!("{a} {op} {b}")),
+                inner.clone().prop_map(|a| format!("!{a}")),
+                inner.clone().prop_map(|a| format!("-{a}")),
+                inner.clone().prop_map(|a| format!("({a})")),
+                (inner.clone(), inner.clone(), inner.clone())
+                    .prop_map(|(a, b, c)| format!("{a} ? {b} : {c}")),
+                (
+                    inner.clone(),
+                    prop::sample::select(vec![
+                        "val()",
+                        "exists()",
+                        "length",
+                        "child('o')",
+                        "parent()",
+                        "hasChildren()",
+                        "contains('e')",
+                        "matches(/e/)",
+                        "toLowerCase()",
+                        "isString()",
+                        "foo",
+                    ])
+                )
+                    .prop_map(|(a, m)| format!("{a}.{m}")),
+            ]
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2048))]
+
+        /// Loading and running any expression ends with a decision or a load error, never a
+        /// panic, for every kind of rule.
+        #[test]
+        fn any_expression_loads_or_is_refused_and_never_panics(text in expression()) {
+            let tree = seed();
+            let auth = auth();
+            let requester = Requester { auth: &auth, now: 1 };
+            for kind in [".read", ".write", ".validate"] {
+                let mut k = RuleSpec::default();
+                let rule = Some(expr(&text));
+                match kind {
+                    ".read" => k.read = rule,
+                    ".write" => k.write = rule,
+                    _ => k.validate = rule,
+                }
+                let mut t = RuleSpec::default();
+                t.children.insert("$k".to_owned(), k);
+                let mut root = RuleSpec::default();
+                root.children.insert("t".to_owned(), t);
+                if let Ok(rules) = Rules::compile(&root) {
+                    let _ = rules.can_read(tree.root(), &p("/t/s"), None, &requester);
+                    let _ = rules.can_write(tree.root(), tree.root(), &[p("/t/s")], &requester);
+                } else {
+                    let error = Rules::compile(&root).unwrap_err();
+                    prop_assert!(error.column >= 1 && error.column <= text.chars().count() + 1);
+                }
+            }
+        }
+
+        /// Arbitrary text never panics the parser.
+        #[test]
+        fn arbitrary_text_is_parsed_or_refused(text in "[ -~]{0,40}") {
+            let mut root = RuleSpec::default();
+            root.read = Some(expr(&text));
+            let _ = Rules::compile(&root);
+        }
+
+        /// A read is allowed exactly when some `.read` on the way to the location is true.
+        #[test]
+        fn reads_cascade_from_any_level(grants in prop::collection::vec(prop::option::of(any::<bool>()), 1..5)) {
+            let keys = ["a", "b", "c", "d", "e"];
+            let mut spec = RuleSpec::default();
+            for (depth, grant) in grants.iter().enumerate().rev() {
+                let mut level = RuleSpec::default();
+                level.read = grant.map(RuleSource::Bool);
+                if depth + 1 < grants.len() {
+                    level.children.insert(keys[depth + 1].to_owned(), spec);
+                }
+                spec = level;
+            }
+            let mut root = RuleSpec::default();
+            root.children.insert("a".to_owned(), spec);
+            let rules = Rules::compile(&root).unwrap();
+            let path = Path::from_keys(keys[..grants.len()].iter().copied());
+            let auth = Json::Null;
+            let requester = Requester { auth: &auth, now: 0 };
+            let expected = grants.iter().any(|g| *g == Some(true));
+            prop_assert_eq!(rules.can_read(None, &path, None, &requester), expected);
+        }
+    }
+}

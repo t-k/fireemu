@@ -7137,6 +7137,25 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
             }}]),
             "strict={strict}"
         );
+        let wide: serde_json::Map<String, Value> = (0..65)
+            .map(|k| (format!("a{k:02}"), field.clone()))
+            .collect();
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            select(Value::Object(wide)),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "The 'select(...)' stage is limited to 64 fields but this stage has 65.",
+                "status": "INVALID_ARGUMENT",
+            }}]),
+            "strict={strict}"
+        );
         let (status, body) = call(
             &s,
             "POST",

@@ -12,8 +12,8 @@
 //! Production answers recorded by FS-ENT-ORACLE O-1 (2026-10-19, an Enterprise database)
 //! are answered under both profiles; they agree with the official emulator (firebase-tools
 //! 15.28.2) everywhere O-1 looked. Under the strict profile anything whose production
-//! behavior is still unrecorded (a comparison cell O-1 did not record and no classic query
-//! decides, a document function of an unrecorded input, a repeated map key) evaluates to
+//! behavior is still unrecorded (a comparison cell O-1 and O-2 did not record and no classic
+//! query decides, a document function of an unrecorded input, a repeated map key) evaluates to
 //! [`EvalError::Unobserved`], and the caller refuses the pipeline; the emulator profile answers
 //! what the official emulator answers instead. An input both refuse evaluates to
 //! [`EvalError::Invalid`].
@@ -467,44 +467,27 @@ impl Class {
     }
 }
 
-/// The comparison cells FS-ENT-ORACLE O-1 (2026-10-19) recorded from production, as the
-/// comparison and the classes of its left and right operands (`fs-ent-pipeline/px1/select`
-/// and `/where`). Strict answers a recorded cell wherever it stands.
-const RECORDED_CELLS: &[(Comparison, Class, Class)] = {
-    use Class::{
-        Absent, Array, Boolean, Bytes, Map, Nan, Null, Number, Reference, String, Timestamp,
-    };
-    use Comparison::{Equal, Greater, GreaterOrEqual, Less, LessOrEqual, NotEqual};
-    &[
-        (Equal, Number, Number),
-        (Equal, Number, String),
-        (Equal, Null, Null),
-        (Equal, Nan, Nan),
-        (Equal, Absent, Number),
-        (Equal, Absent, Absent),
-        (Equal, Absent, Null),
-        (Equal, Array, Array),
-        (Equal, Map, Map),
-        (Equal, Reference, Reference),
-        (Equal, Null, String),
-        (NotEqual, Absent, Number),
-        (NotEqual, Null, Number),
-        (NotEqual, Number, String),
-        (NotEqual, Nan, Nan),
-        (Less, Number, Number),
-        (Less, Number, String),
-        (Less, String, Number),
-        (Less, Null, Number),
-        (Less, Nan, Number),
-        (Less, Absent, Number),
-        (Less, Null, Boolean),
-        (Less, Boolean, Number),
-        (LessOrEqual, Null, Null),
-        (Greater, Array, Array),
-        (Greater, String, Bytes),
-        (GreaterOrEqual, Timestamp, Timestamp),
-    ]
-};
+impl Class {
+    /// The kinds FS-ENT-ORACLE O-2 (2026-10-20) compared with each other, both ways, under all
+    /// six comparisons (`fs-ent-pipeline/o2/comparisons`): every kind but vectors.
+    const fn is_recorded_kind(self) -> bool {
+        !matches!(self, Self::Absent | Self::Vector)
+    }
+}
+
+/// Whether production recorded the comparison of these operand classes: FS-ENT-ORACLE O-2
+/// (2026-10-20) answered all six comparisons for every ordered pair of kinds but vectors (each
+/// kind with itself too) and for a missing field against another missing field, an integer
+/// and null, both ways; FS-ENT-ORACLE O-1 (2026-10-19) recorded a subset of the same cells.
+/// The official order answered every one of them.
+fn recorded_cell(left: Class, right: Class) -> bool {
+    match (left, right) {
+        (Class::Absent, other) | (other, Class::Absent) => {
+            matches!(other, Class::Absent | Class::Number | Class::Null)
+        }
+        _ => left.is_recorded_kind() && right.is_recorded_kind(),
+    }
+}
 
 /// Whether a classic query filter decides the comparison the same way (PX1 plan, ruling of
 /// 2026-10-19 (2)): a field against a scalar literal of the same orderable kind, anywhere; as
@@ -524,9 +507,10 @@ fn classic_cell(op: Comparison, a: &Eval, b: &Eval, cx: Context) -> bool {
 }
 
 /// A comparison. The emulator profile answers the official emulator's order everywhere.
-/// Strict answers the cells production recorded ([`RECORDED_CELLS`]) and the shapes a classic
-/// query decides the same way ([`classic_cell`]); every other cell is unobserved until a
-/// production recording answers it.
+/// Strict answers the cells production recorded ([`recorded_cell`]) and the shapes a classic
+/// query decides the same way ([`classic_cell`]); every other cell (a vector, a missing field
+/// against another kind than a number or null) is unobserved until a production recording
+/// answers it.
 fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
@@ -534,7 +518,7 @@ fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
     let [a, b] = args else {
         unreachable!("the table checks the arity");
     };
-    let recorded = RECORDED_CELLS.contains(&(op, Class::of(a), Class::of(b)));
+    let recorded = recorded_cell(Class::of(a), Class::of(b));
     if cx.unrecorded == Unrecorded::Refuse && !recorded && !classic_cell(op, a, b, cx) {
         return Eval::Error(EvalError::Unobserved {
             function: op.name(),
@@ -727,8 +711,8 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage {
     /// Keeps rows whose condition is `true`; any other value, and an absent one, drops the row
-    /// (production drops a row whose condition is an integer, null or a missing field; strict
-    /// refuses the other kinds, which are unrecorded).
+    /// (production drops a row whose condition is an integer, null, a string, a reference, an
+    /// array, a map or missing; strict refuses the other kinds, which are unrecorded).
     Where(Expr),
     /// Replaces the fields by the aliases' values. An alias is a field path, so a dotted
     /// alias nests its value; an absent value leaves its alias out. The aliases must not
@@ -790,14 +774,23 @@ impl Cursor {
                 Stage::Where(condition) => {
                     match condition.eval_condition_in(&row, self.unrecorded) {
                         Eval::Value(Value::Boolean(true)) => {}
-                        Eval::Value(Value::Boolean(false) | Value::Null | Value::Integer(_))
+                        Eval::Value(
+                            Value::Boolean(false)
+                            | Value::Null
+                            | Value::Integer(_)
+                            | Value::String(_)
+                            | Value::Reference(_)
+                            | Value::Array(_)
+                            | Value::Map(_),
+                        )
                         | Eval::Absent => return Ok(None),
-                        // Production dropped the row for an integer, null and missing
-                        // condition; other kinds are unrecorded.
+                        // Production dropped the row for these kinds (FS-ENT-ORACLE O-1 and
+                        // O-2); the others (double, vector, timestamp, bytes, geo point) are
+                        // unrecorded.
                         Eval::Value(_) if self.unrecorded == Unrecorded::Refuse => {
                             return Err(EvalError::Unobserved {
                                 function: "where",
-                                reason: "the condition is neither a boolean, an integer nor null",
+                                reason: "a condition of this kind is not recorded in production",
                             })
                         }
                         Eval::Value(_) => return Ok(None),

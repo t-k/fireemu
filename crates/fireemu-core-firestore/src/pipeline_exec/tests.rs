@@ -354,8 +354,8 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
         })
     ));
     // A condition that is not a boolean drops the row, as production drops a row whose
-    // condition is an integer, null or a missing field; strict refuses the other kinds, which
-    // are unrecorded, and the emulator profile drops them as the official emulator does.
+    // condition is an integer, null or a missing field; strict refuses the kinds production
+    // has not answered, and the emulator profile drops them as the official emulator does.
     for value in [
         Expr::Constant(Value::Integer(1)),
         Expr::Constant(Value::Null),
@@ -366,16 +366,20 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
             Vec::<BTreeMap<String, Value>>::new()
         );
     }
-    let string = vec![Stage::Where(field("k"))];
+    // A string condition drops the row too (FS-ENT-ORACLE O-2); a double is unrecorded.
+    assert!(execute(vec![Stage::Where(field("k"))], input.clone())
+        .unwrap()
+        .is_empty());
+    let double = vec![Stage::Where(Expr::Constant(Value::Double(1.5)))];
     assert!(matches!(
-        execute(string.clone(), input.clone()),
+        execute(double.clone(), input.clone()),
         Err(EvalError::Unobserved {
             function: "where",
             ..
         })
     ));
     assert!(
-        execute_in(string, input.clone(), Unrecorded::OfficialEmulator)
+        execute_in(double, input.clone(), Unrecorded::OfficialEmulator)
             .unwrap()
             .is_empty()
     );

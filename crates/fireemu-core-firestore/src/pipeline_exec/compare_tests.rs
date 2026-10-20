@@ -189,69 +189,53 @@ fn class_name(operand: &str) -> &'static str {
     }
 }
 
-/// The cells FS-ENT-ORACLE O-1 recorded (`fs-ent-pipeline/px1/select` and `/where`), by
-/// comparison and operand classes, written out from the recording rather than from the code.
-const O1_CELLS: &[(&str, &str, &str)] = &[
-    ("equal", "number", "number"),
-    ("equal", "number", "string"),
-    ("equal", "null", "null"),
-    ("equal", "nan", "nan"),
-    ("equal", "absent", "number"),
-    ("equal", "absent", "absent"),
-    ("equal", "absent", "null"),
-    ("equal", "array", "array"),
-    ("equal", "map", "map"),
-    ("equal", "reference", "reference"),
-    ("equal", "null", "string"),
-    ("not_equal", "absent", "number"),
-    ("not_equal", "null", "number"),
-    ("not_equal", "number", "string"),
-    ("not_equal", "nan", "nan"),
-    ("less_than", "number", "number"),
-    ("less_than", "number", "string"),
-    ("less_than", "string", "number"),
-    ("less_than", "null", "number"),
-    ("less_than", "nan", "number"),
-    ("less_than", "absent", "number"),
-    ("less_than", "null", "boolean"),
-    ("less_than", "boolean", "number"),
-    ("less_than_or_equal", "null", "null"),
-    ("greater_than", "array", "array"),
-    ("greater_than", "string", "bytes"),
-    ("greater_than_or_equal", "timestamp", "timestamp"),
-];
+/// Whether production recorded a comparison of these operand classes, as FS-ENT-ORACLE O-2
+/// (`fs-ent-pipeline/o2/comparisons`) recorded them: every ordered pair of kinds but vectors
+/// (each kind with itself too), and a missing field against a missing field, an integer and
+/// null, both ways, under all six comparisons. Written out from the corpus, not the code.
+fn o2_recorded(left: &str, right: &str) -> bool {
+    match (left, right) {
+        ("absent", other) | (other, "absent") => ["absent", "number", "null"].contains(&other),
+        _ => true,
+    }
+}
 
 /// Strict answers a cell of the official matrix (two fields, so no classic shape) exactly when
-/// O-1 recorded its comparison and operand classes, and then as the official emulator does;
-/// every other cell is unobserved.
+/// production recorded its comparison and operand classes, and then as the official emulator
+/// does (O-2 recorded production agreeing with it on all 810 cells); every other cell is
+/// unobserved.
 #[test]
 fn strict_answers_the_recorded_cells_of_the_official_matrix() {
     let r = matrix_row();
     let m = matrix();
-    let mut answered = 0;
+    let (mut answered, mut refused) = (0, 0);
     for (op, rows) in &m.rows {
         for (li, left) in m.operands.iter().enumerate() {
             for (ri, right) in m.operands.iter().enumerate() {
                 let expected = rows[li].as_bytes()[ri] == b'T';
                 let got = call(op, vec![field(left), field(right)]).eval_in(&r, Unrecorded::Refuse);
-                if O1_CELLS.contains(&(*op, class_name(left), class_name(right))) {
+                if o2_recorded(class_name(left), class_name(right)) {
                     assert_eq!(got, boolean(expected), "{op}({left}, {right})");
                     answered += 1;
                 } else {
                     assert!(unobserved(&got), "{op}({left}, {right}) = {got:?}");
+                    refused += 1;
                 }
             }
         }
     }
-    assert!(answered > 100, "{answered}");
+    assert!(answered > 5000 && refused > 100, "{answered} {refused}");
 }
 
-/// The cells the `PX1a` round-2 review named as inferred stay unobserved under strict until a
-/// production recording answers them (FS-ENT-ORACLE O-2); the emulator profile answers them.
+/// What production has not recorded stays unobserved under strict until a recording answers
+/// it: vectors, a missing field against another kind than a number or null (outside the
+/// classic where shape), and a where condition of another kind than boolean, integer, null,
+/// string, reference, array or map. The emulator profile answers them.
 #[test]
 fn strict_refuses_the_cells_production_has_not_answered() {
     let r = row(vec![
         ("nan".to_owned(), Value::Double(f64::NAN)),
+        ("d".to_owned(), Value::Double(1.5)),
         (
             "g".to_owned(),
             Value::GeoPoint(crate::value::GeoPoint::new(0.0, 0.0).unwrap()),
@@ -275,24 +259,20 @@ fn strict_refuses_the_cells_production_has_not_answered() {
         ),
         ("v".to_owned(), Value::Vector(vec![1.0])),
     ]);
-    let cases = [
-        call("less_than_or_equal", vec![field("nan"), field("nan")]),
-        call("greater_than_or_equal", vec![field("nan"), field("nan")]),
-        call("less_than_or_equal", vec![field("x"), field("y")]),
-        call("less_than", vec![field("g"), field("g2")]),
-        call("less_than", vec![field("m"), field("m2")]),
-        call("less_than", vec![field("ts"), field("s")]),
+    let refused = [
         call("equal", vec![field("v"), field("v")]),
-        // A comparison below another function: no classic shape.
+        call("less_than", vec![field("v"), field("d")]),
+        call("less_than", vec![field("x"), field("s")]),
+        call("not_equal", vec![field("g"), field("y")]),
         call(
             "equal",
             vec![
-                call("less_than", vec![field("g"), field("g2")]),
+                call("less_than", vec![field("v"), field("v")]),
                 Expr::Constant(Value::Boolean(true)),
             ],
         ),
     ];
-    for expr in cases {
+    for expr in refused {
         assert!(
             unobserved(&expr.eval_in(&r, Unrecorded::Refuse)),
             "{expr:?}"
@@ -305,8 +285,43 @@ fn strict_refuses_the_cells_production_has_not_answered() {
             "{expr:?}"
         );
     }
-    // A where condition of another kind than boolean, integer and null.
-    for value in [field("s"), field("m"), field("g")] {
+    // The cells the round-2 review named are recorded now (O-2) and answered.
+    for (expr, expected) in [
+        (
+            call("less_than_or_equal", vec![field("nan"), field("nan")]),
+            true,
+        ),
+        (
+            call("less_than_or_equal", vec![field("x"), field("y")]),
+            true,
+        ),
+        (call("less_than", vec![field("g"), field("g2")]), true),
+        (call("less_than", vec![field("m"), field("m2")]), true),
+        (call("less_than", vec![field("ts"), field("s")]), false),
+    ] {
+        assert_eq!(
+            expr.eval_in(&r, Unrecorded::Refuse),
+            boolean(expected),
+            "{expr:?}"
+        );
+    }
+    // A where condition of a recorded kind drops the row; the other kinds are refused.
+    for value in [field("s"), field("m"), call("array", vec![field("s")])] {
+        let stages = vec![Stage::Where(value.clone())];
+        assert!(
+            execute_in(stages, [r.clone()], Unrecorded::Refuse)
+                .unwrap()
+                .is_empty(),
+            "{value:?}"
+        );
+    }
+    for value in [
+        field("d"),
+        field("v"),
+        field("ts"),
+        field("g"),
+        field("nan"),
+    ] {
         let stages = vec![Stage::Where(value.clone())];
         assert!(
             execute_in(stages.clone(), [r.clone()], Unrecorded::Refuse).is_err(),
@@ -347,17 +362,13 @@ fn strict_answers_the_classic_field_versus_literal_shapes() {
         call("greater_than", vec![geo(), field("g")]).eval_in(&r, Unrecorded::Refuse),
         boolean(true)
     );
-    // Across kinds: only an equality, and only as the whole condition.
+    // Across kinds: recorded (O-2), so answered anywhere.
     let across = condition("equal", vec![field("g"), lit("a")]);
     assert_eq!(
         across.eval_condition_in(&r, Unrecorded::Refuse),
         boolean(false)
     );
-    assert!(unobserved(&across.eval_in(&r, Unrecorded::Refuse)));
-    assert!(unobserved(
-        &condition("less_than", vec![field("g"), lit("a")])
-            .eval_condition_in(&r, Unrecorded::Refuse)
-    ));
+    assert_eq!(across.eval_in(&r, Unrecorded::Refuse), boolean(false));
     // A missing field: dropped as the whole condition, except under not_equal.
     for op in ["equal", "less_than", "greater_than_or_equal"] {
         let missing = condition(op, vec![field("x"), lit("a")]);
@@ -372,43 +383,42 @@ fn strict_answers_the_classic_field_versus_literal_shapes() {
         &condition("not_equal", vec![field("x"), lit("a")])
             .eval_condition_in(&r, Unrecorded::Refuse)
     ));
-    // Two fields of one kind are no classic shape, nor are two literals.
+    // Vectors are not recorded: two of them, or a vector field against a vector literal, are
+    // no classic shape either.
+    let v = row(vec![("v".to_owned(), Value::Vector(vec![1.0]))]);
+    let vector = || Expr::Constant(Value::Vector(vec![2.0]));
     assert!(unobserved(
-        &call("less_than", vec![field("s"), field("s")]).eval_in(&r, Unrecorded::Refuse)
+        &call("less_than", vec![field("v"), field("v")]).eval_in(&v, Unrecorded::Refuse)
     ));
     assert!(unobserved(
-        &call("less_than", vec![lit("a"), lit("b")]).eval_in(&r, Unrecorded::Refuse)
+        &condition("equal", vec![field("v"), vector()]).eval_in(&v, Unrecorded::Refuse)
     ));
     // A document function of a field is a classic operand (the finite subset's equality of a
-    // document ID and a literal); another function of a field is not.
+    // document ID and a literal); another function of a field is not, and a missing field
+    // against a string is recorded only as the classic where shape.
     let id = || call("document_id", vec![field("__name__")]);
     assert_eq!(
         condition("equal", vec![id(), lit("d")]).eval_condition_in(&r, Unrecorded::Refuse),
         boolean(true)
     );
     assert_eq!(
-        call("less_than", vec![id(), lit("e")]).eval_in(&r, Unrecorded::Refuse),
-        boolean(true)
+        condition(
+            "equal",
+            vec![call("document_id", vec![field("x")]), lit("d")]
+        )
+        .eval_condition_in(&r, Unrecorded::Refuse),
+        boolean(false)
     );
     assert!(unobserved(
         &condition(
-            "equal",
-            vec![
-                call("array", vec![field("s")]),
-                Expr::Constant(Value::Integer(1))
-            ]
+            "less_than",
+            vec![call("array", vec![field("x")]), field("v")]
         )
-        .eval_condition_in(&r, Unrecorded::Refuse)
-    ));
-    // Null is not ordered by a classic filter.
-    let n = row(vec![("n".to_owned(), Value::Null)]);
-    assert!(unobserved(
-        &call("less_than", vec![field("n"), Expr::Constant(Value::Null)])
-            .eval_in(&n, Unrecorded::Refuse)
+        .eval_condition_in(&v, Unrecorded::Refuse)
     ));
     // A refused comparison names itself.
     for op in OPS {
-        let got = call(op, vec![field("s"), field("g")]).eval_in(&r, Unrecorded::Refuse);
+        let got = call(op, vec![field("x"), lit("a")]).eval_in(&r, Unrecorded::Refuse);
         assert!(
             matches!(&got, Eval::Error(EvalError::Unobserved { function, .. }) if function == &op),
             "{op}: {got:?}"

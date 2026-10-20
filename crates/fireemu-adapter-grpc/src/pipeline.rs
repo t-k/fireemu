@@ -726,6 +726,14 @@ fn decode_select(
     else {
         return Err(Status::invalid_argument("select requires an alias map"));
     };
+    // Production and the official emulator refuse a wider select (FS-ENT-ORACLE O-2,
+    // `fs-ent-pipeline/o2/select-width`).
+    if map.fields.len() > MAX_SELECT_FIELDS {
+        return Err(Status::invalid_argument(format!(
+            "The 'select(...)' stage is limited to {MAX_SELECT_FIELDS} fields but this stage has {}.",
+            map.fields.len()
+        )));
+    }
     let mut aliases = Vec::with_capacity(map.fields.len());
     for (alias, value) in &map.fields {
         if value.value_type.is_none() {
@@ -775,6 +783,9 @@ fn decode_select(
         .map(|(_, path, expr)| (path, expr))
         .collect())
 }
+
+/// The most fields one `select` stage sets.
+const MAX_SELECT_FIELDS: usize = 64;
 
 /// A name like `__x__`, which Firestore reserves.
 fn is_reserved_name(segment: &str) -> bool {

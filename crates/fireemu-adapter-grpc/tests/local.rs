@@ -7230,6 +7230,31 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
                 );
             }
         }
+        // The select width: 64 fields answer, 65 are refused with production's text
+        // (FS-ENT-ORACLE O-2, `fs-ent-pipeline/o2/select-width`).
+        let wide = |n: usize| {
+            let names: Vec<String> = (0..n).map(|k| format!("a{k:02}")).collect();
+            vec![
+                collection(),
+                pipeline_select_map(names.iter().map(|name| (name.as_str(), f("i"))).collect()),
+            ]
+        };
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(wide(64)))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        assert_eq!(docs[0].fields.len(), 64, "{policy:?}");
+        let err = pipeline_error(&mut client, wide(65)).await;
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{policy:?}");
+        assert_eq!(
+            err.message(),
+            "The 'select(...)' stage is limited to 64 fields but this stage has 65."
+        );
         // document_id of the documents root, refused at run time as production refuses it.
         let root = pipeline_error(
             &mut client,
@@ -7465,7 +7490,19 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
                             ("n", null.clone()),
                         ],
                     ),
-                    update_write("cmp/b", &[("i", i(5)), ("flag", boolean(true))]),
+                    update_write(
+                        "cmp/b",
+                        &[
+                            ("i", i(5)),
+                            ("flag", boolean(true)),
+                            (
+                                "d",
+                                pb::Value {
+                                    value_type: Some(V::DoubleValue(1.5)),
+                                },
+                            ),
+                        ],
+                    ),
                 ],
                 ..Default::default()
             })
@@ -7619,8 +7656,9 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
             assert_eq!(run(stages).await.unwrap(), official, "{policy:?} {label}");
         }
         // Cells production has not answered: strict refuses them until a recording does (a
-        // missing field against an array or map literal, two strings field to field, a string
-        // as the whole condition); the emulator profile answers as the official emulator.
+        // missing field against an array or map literal, a double as the whole condition);
+        // the emulator profile answers as the official emulator. Two strings field to field
+        // and a string condition are recorded (FS-ENT-ORACLE O-2) and answered.
         let unanswered = [
             (
                 "missing field against an array literal",
@@ -7641,6 +7679,13 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
                 vec![fields(&[("i", i(1))])],
             ),
             (
+                "a double as the whole condition",
+                vec![collection(), pipeline_stage("where", f("d")), select_i()],
+                vec![],
+            ),
+        ];
+        for (label, stages, expected) in [
+            (
                 "two strings field to field",
                 vec![
                     collection(),
@@ -7654,7 +7699,9 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
                 vec![collection(), pipeline_stage("where", f("s")), select_i()],
                 vec![],
             ),
-        ];
+        ] {
+            assert_eq!(run(stages).await.unwrap(), expected, "{policy:?} {label}");
+        }
         for (label, stages, official) in unanswered {
             let got = run(stages).await;
             if strict {

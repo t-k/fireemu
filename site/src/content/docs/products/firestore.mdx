@@ -38,7 +38,32 @@ apiMode = "native"
 </TabItem>
 </Tabs>
 
-`edition` accepts `standard` and `enterprise`. The Enterprise Pipeline API supports a limited subset of read operations; see [Limitations](../../compatibility/limitations/).
+`edition` accepts `standard` and `enterprise`. The Enterprise Pipeline API supports a limited subset of read operations; see [Enterprise pipelines](#enterprise-pipelines) and [Limitations](../../compatibility/limitations/).
+
+## Enterprise pipelines
+
+On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset is a collection input followed by, in this order, an optional `where`, an optional `select`, an optional `offset` and an optional `limit`.
+
+| Expression | Supported |
+|---|---|
+| Fields | Nested paths (`a.b`) and `__name__` (the document reference) |
+| Literals | Values of every type, including arrays and maps of literals |
+| Comparisons | `equal`, `not_equal`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, anywhere an expression stands |
+| Construction | `array(...)` and `map(...)` |
+| Document functions | `documentId`, `collectionId` and `parent` |
+
+A `where` keeps a row only when its condition is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and every answer carries the execution time.
+
+The answers follow production as recorded by fireemu's production observations (comparisons across value types, missing fields, integer and double values compared exactly, select alias rules and refusal texts). Where production has not been observed, the profiles differ:
+
+| Input | `strict` | `emulator` |
+|---|---|---|
+| A comparison of vectors, or a missing field against a string, bytes or another non-numeric value outside a `where` field filter | `UNIMPLEMENTED` | Answered as the official emulator answers it |
+| A `where` on a double, timestamp, bytes, geo point or vector | `UNIMPLEMENTED` | The row is dropped |
+| `collectionId` or `parent` of a missing or `null` value | `UNIMPLEMENTED` | `null` |
+| A repeated or non-string `map(...)` key | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
+
+Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.
 
 ## Composite indexes
 

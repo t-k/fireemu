@@ -17,7 +17,7 @@ Realtime Database, Firebase Hosting, App Hosting and Data Connect are not curren
 
 | Product | Unsupported features and limitations |
 |---|---|
-| Cloud Firestore | The Enterprise Pipeline API supports a limited subset of read operations. Full-text search validates index definitions, but searches are not executed locally. |
+| Cloud Firestore | The Enterprise Pipeline API supports a limited subset of read operations (see [Enterprise pipelines](../../products/firestore/#enterprise-pipelines)). Full-text search validates index definitions, but searches are not executed locally. |
 | Authentication | Sign-in flows that talk to external identity providers, authorization-code exchange and SAML XML signature verification. Provider configuration and local sign-in are supported. |
 | Cloud Storage | Verifying the signature of a signed URL or a POST policy (their expiry and conditions are checked), object ACLs other than `allUsers` read, IAM and bucket-level public access, object composition (`compose`) and notification configuration. |
 | Cloud Functions | Triggers for products Fireemu does not serve, such as Realtime Database (deferred), Remote Config (deferred) and Data Connect (deferred). The exact shape of Storage archive events, which is unrecorded. |

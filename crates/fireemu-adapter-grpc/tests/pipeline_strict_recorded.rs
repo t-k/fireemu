@@ -978,6 +978,23 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
             strict: None,
             emulator: (400, "Invalid empty property path string."),
         },
+        // A failing call inside an array literal, beside the literal's own recorded refusal.
+        Case {
+            label: "select {v: [document_id(1)]}",
+            stages: vec![select(json!({ "arrayValue": { "values": [
+                func("document_id", vec![int(1)]),
+            ] } }))],
+            strict: None,
+            emulator: (400, "Value type is not supported: FUNCTION_VALUE"),
+        },
+        Case {
+            label: "select {v: [document_id(__name__)]}",
+            stages: vec![select(json!({ "arrayValue": { "values": [
+                func("document_id", vec![field("__name__")]),
+            ] } }))],
+            strict: Some((400, "Value type is not supported: FUNCTION_VALUE")),
+            emulator: (400, "Value type is not supported: FUNCTION_VALUE"),
+        },
         // A type that depends on the data: the plan-time empty map still wins (N77).
         Case {
             label: "N77 add_fields {a: document_id(i)} then select {}",

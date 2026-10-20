@@ -609,12 +609,17 @@ impl Database {
                 subscription.query.as_ref(),
                 subscription.format,
             );
-            if fresh == subscription.last {
-                continue;
-            }
-            let event = stream_event(&ns.tree, subscription, change, &fresh);
+            let event = match patch_listing(&ns.tree, subscription, change) {
+                Listing::Entries(event) => event,
+                // Views compare by form: a number rewritten as 1.0 inside a larger write
+                // is an event, as on the official emulator.
+                Listing::Whole { counts } => (counts || !fresh.same_form(&subscription.last))
+                    .then(|| stream_event(&ns.tree, subscription, change, &fresh)),
+            };
             subscription.last = fresh;
-            events.push((*id, event));
+            if let Some(event) = event {
+                events.push((*id, event));
+            }
         }
         // Plain listens go first: an SDK holding the whole location (a query served without
         // its index) then sees each write there before the windows built from it, as the
@@ -646,6 +651,10 @@ impl Database {
             .listens
             .values()
             .any(|listen| listen.namespace == namespace)
+            && !self
+                .subscriptions
+                .values()
+                .any(|subscription| subscription.namespace == namespace)
         {
             return None;
         }
@@ -1252,6 +1261,68 @@ fn relative_to(outer: &Path, inner: &Path) -> Path {
     Path::from_keys(inner.keys()[outer.depth()..].iter().cloned())
 }
 
+/// How a change reaches a stream.
+enum Listing {
+    /// A patch event of the entries inside the streamed location, or nothing when none of
+    /// them counts.
+    Entries(Option<SseEvent>),
+    /// The stream's event for the whole change, sent when the view changed or when
+    /// `counts` (a write inside the location that counts even without changing it: null).
+    Whole { counts: bool },
+}
+
+/// How `change` reaches `subscription`. The official emulator lists in a patch event only
+/// the entries that count (see [`Database::effective`]), relative to the streamed location;
+/// an entry at or above that location sends the whole value instead.
+fn patch_listing(tree: &Tree, subscription: &Subscription, change: &Change) -> Listing {
+    let location = &subscription.path;
+    let (base, entries) = match change {
+        Change::Put { path, effective } => {
+            return Listing::Whole {
+                counts: *effective && subscription.query.is_none() && location.contains(path),
+            };
+        }
+        Change::Patch { base, entries } => (base, entries),
+    };
+    if subscription.query.is_some() {
+        return Listing::Whole { counts: false };
+    }
+    let counting: Vec<(&Patched, Path)> = entries
+        .iter()
+        .filter(|entry| entry.effective)
+        .map(|entry| (entry, base.join(&entry.path)))
+        .collect();
+    if counting.iter().any(|(_, target)| target.contains(location)) {
+        return Listing::Whole { counts: false };
+    }
+    let mut data = BTreeMap::new();
+    for (entry, target) in counting.iter().filter(|(_, t)| location.contains(t)) {
+        let key = if location.contains(base) {
+            entry.path.clone()
+        } else {
+            relative_to(location, target)
+        };
+        let value = if target.is_priority() {
+            written_priority_at(tree, target)
+        } else {
+            output_json(tree.get(target), subscription.format)
+        };
+        data.insert(key.keys().join("/"), value);
+    }
+    if data.is_empty() {
+        return Listing::Entries(None);
+    }
+    let path = if location.contains(base) {
+        relative_to(location, base)
+    } else {
+        Path::root()
+    };
+    Listing::Entries(Some(SseEvent {
+        event: "patch".to_owned(),
+        data: event_data(&path, &Json::Object(data)),
+    }))
+}
+
 /// The event a stream receives for a change that altered its view: the changed location
 /// when it lies inside the streamed location, the whole view otherwise. A query stream gets
 /// the changed location only while the change stays inside one child it already shows.
@@ -1284,24 +1355,6 @@ fn stream_event(
                 return put_event(&relative, &data);
             }
             put_event(&Path::root(), fresh)
-        }
-        Change::Patch { base, entries }
-            if subscription.query.is_none() && location.contains(base) =>
-        {
-            let mut data = BTreeMap::new();
-            for entry in entries.iter().map(|entry| &entry.path) {
-                let target = base.join(entry);
-                let value = if target.is_priority() {
-                    written_priority_at(tree, &target)
-                } else {
-                    output_json(tree.get(&target), subscription.format)
-                };
-                data.insert(entry.keys().join("/"), value);
-            }
-            SseEvent {
-                event: "patch".to_owned(),
-                data: event_data(&relative_to(location, base), &Json::Object(data)),
-            }
         }
         _ => put_event(&Path::root(), fresh),
     }

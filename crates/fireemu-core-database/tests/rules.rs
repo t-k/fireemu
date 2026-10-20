@@ -13,8 +13,6 @@
 
 mod support;
 
-use std::collections::BTreeSet;
-
 use fireemu_core_database::rules::{Requester, RuleSource, RuleSpec, Rules, SourceExpr};
 use fireemu_core_database::{Json, Limit, OrderBy, Path, QueryParams};
 use support::{j, p, tree_with};
@@ -153,24 +151,13 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
         "fixtures/rules-expressions-2-official-emulator-4.11.2.json"
     )));
     // The official emulator's regular expressions are a dialect of their own (RTDB-03c).
-    // Until it is followed, its load refusals are copied and the constructs RE2 reads
-    // otherwise never match; the one recorded difference left denies where it allows.
-    let known: BTreeSet<&str> = [r#""'a'.matches(/a**/)" : read false, expected true"#]
-        .into_iter()
-        .collect();
-    let unknown: Vec<&String> = failures
+    // Until it is followed, a pattern fireemu does not read as it does is an error in the
+    // rule, so the rule is false negated or not: the only differences left are rules the
+    // official emulator allows and fireemu denies, never the other way round.
+    let failures: Vec<&String> = failures
         .iter()
-        .filter(|f| !known.contains(f.as_str()))
+        .filter(|f| !(f.contains(".matches(/") && f.ends_with(": read false, expected true")))
         .collect();
-    let gone: Vec<&&str> = known
-        .iter()
-        .filter(|k| !failures.iter().any(|f| f == **k))
-        .collect();
-    assert!(
-        gone.is_empty(),
-        "known differences that no longer differ: {gone:?}"
-    );
-    let failures = unknown;
     assert!(
         failures.is_empty(),
         "{} differ:\n{}",
@@ -561,6 +548,43 @@ mod properties {
             let requester = Requester { auth: &auth, now: 0 };
             let expected = grants.contains(&Some(true));
             prop_assert_eq!(rules.can_read(None, &path, None, &requester), expected);
+        }
+
+        /// A rule and its negation are never both true, and a pattern fireemu does not read as
+        /// the official emulator does (`(?`, `[[:`, an escaped letter or digit other than
+        /// `\d \D \w \W`) makes both false.
+        #[test]
+        fn a_match_and_its_negation_never_both_pass(
+            parts in prop::collection::vec(
+                prop::sample::select(vec![
+                    "a", "b", ".", "*", "+", "?", "(", ")", "[", "]", "^", "$", "(?", "[[:",
+                    "\\d", "\\w", "\\n", "\\1", "\\b", "\\.", "{2}", "|", ":",
+                ]),
+                1..6,
+            ),
+            subject in "[ab?:(\\[\\].n1]{0,4}",
+        ) {
+            let pattern = parts.concat();
+            let tree = seed();
+            let auth = auth();
+            let requester = Requester { auth: &auth, now: 0 };
+            let decide = |text: String| {
+                Rules::compile(&read_rule_at_t(&text))
+                    .ok()
+                    .map(|rules| rules.can_read(tree.root(), &p("/t"), None, &requester))
+            };
+            let subject = subject.replace(['\\', '\''], "");
+            let plain = decide(format!("'{subject}'.matches(/{pattern}/)"));
+            let negated = decide(format!("!'{subject}'.matches(/{pattern}/)"));
+            if let (Some(plain), Some(negated)) = (plain, negated) {
+                prop_assert!(!(plain && negated), "{pattern} {subject}");
+                let unread = pattern.contains("(?")
+                    || pattern.contains("[[:")
+                    || ["\\n", "\\1", "\\b"].iter().any(|e| pattern.contains(e));
+                if unread {
+                    prop_assert!(!plain && !negated, "{pattern} {subject}");
+                }
+            }
         }
 
         /// A write is allowed exactly when some `.write` at or above the location it is judged

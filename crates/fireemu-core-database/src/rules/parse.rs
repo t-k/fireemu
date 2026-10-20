@@ -346,9 +346,22 @@ impl Lexer<'_> {
             }
         }
         check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
+        check_whitespace_classes(&pattern).map_err(|message| ExprError::new(start, message))?;
         check_groups_and_counts(&pattern).map_err(|message| ExprError::new(start, message))?;
         Ok((start, Token::Regex(pattern, flags)))
     }
+}
+
+/// `\s` and `\S`, which the official emulator refuses: its automaton grammar has no
+/// whitespace class.
+fn check_whitespace_classes(pattern: &str) -> Result<(), &'static str> {
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' && matches!(chars.next(), Some('s' | 'S')) {
+            return Err("Illegal regular expression, 'whitespacechar' not found");
+        }
+    }
+    Ok(())
 }
 
 /// The groups and counted repetitions of a pattern, as the official emulator checks them. It

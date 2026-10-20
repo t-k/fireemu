@@ -2737,5 +2737,383 @@
   "load": 400,
   "error": "1:37: Illegal regular expression, integer expected at position 9\n",
   "read": null
+ },
+ {
+  "expr": "'?:a'.matches(/(?:a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'?:a'.matches(/(?:a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a]'.matches(/[[:alpha:]]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'a]'.matches(/[[:alpha:]]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'[]'.matches(/[[:alpha:]]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'[]'.matches(/[[:alpha:]]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'?ia'.matches(/(?i)a/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'?ia'.matches(/(?i)a/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'?=a'.matches(/(?=a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'?=a'.matches(/(?=a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'x?:a'.matches(/x(?:a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'x?:a'.matches(/x(?:a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/^a**$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'a'.matches(/^a**$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'aaa'.matches(/^a**$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'aaa'.matches(/^a**$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "''.matches(/^a**$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!''.matches(/^a**$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'?'.matches(/^(?)$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'?'.matches(/^(?)$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'1'.matches(/^\\1$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'1'.matches(/^\\1$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\n'.matches(/^\\n$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!'\\n'.matches(/^\\n$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'n'.matches(/^\\n$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'n'.matches(/^\\n$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'r'.matches(/^\\r$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'r'.matches(/^\\r$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'t'.matches(/^\\t$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'t'.matches(/^\\t$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'b'.matches(/^\\b$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'b'.matches(/^\\b$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'q'.matches(/^\\q$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'q'.matches(/^\\q$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'x'.matches(/^\\x$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'x'.matches(/^\\x$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a\\nb'.matches(/^a.b$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'a\\nb'.matches(/^a.b$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "' '.matches(/^\\s$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, 'whitespacechar' not found\n",
+  "read": null
+ },
+ {
+  "expr": "!' '.matches(/^\\s$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:38: Illegal regular expression, 'whitespacechar' not found\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/^\\S$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, 'whitespacechar' not found\n",
+  "read": null
+ },
+ {
+  "expr": "!'x'.matches(/^\\S$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:38: Illegal regular expression, 'whitespacechar' not found\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/[\\s]/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, 'whitespacechar' not found\n",
+  "read": null
+ },
+ {
+  "expr": "!'x'.matches(/[\\s]/)",
+  "query": "",
+  "load": 400,
+  "error": "1:38: Illegal regular expression, 'whitespacechar' not found\n",
+  "read": null
+ },
+ {
+  "expr": "'5'.matches(/^\\d$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'5'.matches(/^\\d$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/^\\D$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'a'.matches(/^\\D$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'_'.matches(/^\\w$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'_'.matches(/^\\w$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'-'.matches(/^\\W$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!'-'.matches(/^\\W$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'aa'.matches(/^(a)\\1$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!'aa'.matches(/^(a)\\1$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
  }
 ]

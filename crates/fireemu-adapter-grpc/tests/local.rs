@@ -7869,6 +7869,16 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
             )],
         ),
         (
+            "a vector literal compares with a vector field",
+            select(pipeline_function("equal", vec![f("vec"), vector()])),
+            vec![(
+                "v".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::BooleanValue(true)),
+                },
+            )],
+        ),
+        (
             "two vector literals compare",
             select(pipeline_function("equal", vec![vector(), vector()])),
             vec![(
@@ -8075,6 +8085,14 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
             "field name '__name__' is reserved.".to_owned(),
         ),
         (
+            "an argument literal array of a map with an empty key",
+            select(pipeline_function(
+                "equal",
+                vec![f("i"), array_value(vec![map_value(&[("", i(1))])])],
+            )),
+            "Property names cannot be empty.".to_owned(),
+        ),
+        (
             "an argument literal map with an empty key",
             select(pipeline_function(
                 "equal",
@@ -8126,7 +8144,10 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
         client
             .commit(pb::CommitRequest {
                 database: DB.to_owned(),
-                writes: vec![update_write("args/a", &[("i", i(1)), ("s", s("a"))])],
+                writes: vec![update_write(
+                    "args/a",
+                    &[("i", i(1)), ("s", s("a")), ("vec", vector())],
+                )],
                 ..Default::default()
             })
             .await

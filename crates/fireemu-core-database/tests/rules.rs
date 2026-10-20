@@ -24,13 +24,16 @@ fn read_rule_at_t(expr: &str) -> RuleSpec {
     let mut column = prefix.chars().count() + 1;
     let mut positions = Vec::new();
     for c in expr.chars() {
-        positions.push((1, column));
-        // As JSON.stringify writes it, in UTF-16 units.
-        column += match c {
+        // As JSON.stringify writes it, in UTF-16 units; an escaped character is placed where
+        // its escape ends, as the rules file reader places it.
+        let width = match c {
             '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
             c if u32::from(c) < 0x20 => 6,
             c => c.len_utf16(),
         };
+        let escaped = matches!(c, '"' | '\\') || u32::from(c) < 0x20;
+        positions.push((1, if escaped { column + width - 1 } else { column }));
+        column += width;
     }
     positions.push((1, column));
     let mut t = RuleSpec::default();

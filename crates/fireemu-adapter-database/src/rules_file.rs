@@ -11,9 +11,28 @@
 use fireemu_core_database::rules::{RuleSource, RuleSpec, Rules, RulesError, SourceExpr};
 
 /// Reads and compiles a rules file.
+///
+/// Reading and checking recurse once per level of nesting, which the bounds allow to reach
+/// about a thousand; they run on a thread of their own with room for that, so the caller's
+/// stack (a server worker's) never decides whether a file loads.
 pub fn compile(text: &str) -> Result<Rules, RulesError> {
-    Rules::compile(&read(text)?)
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("rules-compile".to_owned())
+            .stack_size(COMPILE_STACK_BYTES)
+            .spawn_scoped(scope, || Rules::compile(&read(text)?))
+            .map_err(|error| RulesError {
+                line: 1,
+                column: 1,
+                message: format!("Could not start reading the rules: {error}"),
+            })?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
+
+/// The stack of the thread that reads and checks a rules file.
+const COMPILE_STACK_BYTES: usize = 256 * 1024 * 1024;
 
 /// Reads a rules file into its tree, without checking the expressions.
 pub fn read(text: &str) -> Result<RuleSpec, RulesError> {
@@ -64,11 +83,18 @@ struct Place {
     column: usize,
 }
 
+/// The deepest nesting of rule levels, `rules` included. The official emulator loads 1,000
+/// levels below `rules` (and stops answering at 3,000); past this bound fireemu refuses the
+/// file, so a deep file never exhausts the stack. The text is provisional.
+const MAX_LEVEL_DEPTH: usize = 1001;
+
 struct Reader {
     chars: Vec<char>,
     at: usize,
     line: usize,
     column: usize,
+    /// How many levels the one being read is nested in.
+    depth: usize,
 }
 
 impl Reader {
@@ -78,6 +104,7 @@ impl Reader {
             at: 0,
             line: 1,
             column: 1,
+            depth: 0,
         }
     }
 
@@ -312,6 +339,17 @@ impl Reader {
 
     /// One level of the rules: an object.
     fn level(&mut self) -> Result<RuleSpec, RulesError> {
+        self.depth += 1;
+        let level = if self.depth > MAX_LEVEL_DEPTH {
+            Err(self.error_here("Parse error."))
+        } else {
+            self.level_body()
+        };
+        self.depth -= 1;
+        level
+    }
+
+    fn level_body(&mut self) -> Result<RuleSpec, RulesError> {
         if self.peek() != Some('{') {
             return Err(match self.peek() {
                 None => self.error_here("Unexpected EOF."),

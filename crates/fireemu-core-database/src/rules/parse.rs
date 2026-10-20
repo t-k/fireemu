@@ -388,6 +388,7 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
         },
         peeked: None,
         regex_next: true,
+        depth: 0,
     };
     let expr = parser.ternary()?;
     let (at, token) = parser.next()?;
@@ -414,11 +415,21 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
     }
 }
 
+/// The deepest nesting of operands in an expression (each group, unary operator, call
+/// argument and index adds one, and the innermost operand counts too). Past it the
+/// expression is refused with "Rule expression may not be empty.", the text the official
+/// emulator gives to 1,000 nested groups. The official emulator loads up to 600 groups and
+/// 1,000 `!`; fireemu stops at 256, a local safety budget, so that evaluating a rule on a
+/// server worker's stack never runs out of it.
+pub(crate) const MAX_EXPRESSION_DEPTH: usize = 256;
+
 struct Parser<'a> {
     lexer: Lexer<'a>,
     peeked: Option<(usize, Token)>,
     /// Whether a `/` at the next token starts a regular expression.
     regex_next: bool,
+    /// How deep the operand being read is nested.
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -559,6 +570,17 @@ impl Parser<'_> {
     }
 
     fn unary(&mut self) -> Result<Expr, ExprError> {
+        self.depth += 1;
+        let operand = if self.depth > MAX_EXPRESSION_DEPTH {
+            Err(ExprError::new(0, "Rule expression may not be empty."))
+        } else {
+            self.unary_operand()
+        };
+        self.depth -= 1;
+        operand
+    }
+
+    fn unary_operand(&mut self) -> Result<Expr, ExprError> {
         let (at, token) = self.peek()?.clone();
         match token {
             Token::Punct("!") => {

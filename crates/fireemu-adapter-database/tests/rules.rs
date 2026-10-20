@@ -1048,3 +1048,60 @@ fn credentials_debug_says_whether_a_verifier_is_set() {
     let text = format!("{:?}", RestOptions::default().credentials);
     assert_eq!(text, "Credentials { strict: false, id_tokens: false }");
 }
+
+/// Runs `f` on a thread with the stack of a tokio worker (2 MiB), where requests run.
+fn on_worker_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+#[test]
+fn deep_rules_are_refused_without_exhausting_the_stack() {
+    on_worker_stack(|| {
+        let mut db = db();
+        let put = |db: &mut Database, body: &str| {
+            call(db, "PUT", "/.settings/rules.json?ns=deep", OWNER, body)
+        };
+        let groups = |n: usize| {
+            format!(
+                r#"{{"rules":{{".read":"{}true{}"}}}}"#,
+                "(".repeat(n),
+                ")".repeat(n)
+            )
+        };
+        let nots = |n: usize| format!(r#"{{"rules":{{".read":"{}true"}}}}"#, "!".repeat(n));
+        let levels = |n: usize| {
+            format!(
+                r#"{{"rules":{}{{}}{}}}"#,
+                r#"{"a":"#.repeat(n),
+                "}".repeat(n)
+            )
+        };
+        // Up to the local budget an expression loads and is evaluated (the official emulator
+        // loads up to 600 groups and 1,000 `!`); rule levels load as deep as it loads them.
+        for body in [groups(255), nots(255), levels(1000)] {
+            let (status, text) = put(&mut db, &body);
+            assert_eq!(status, 200, "{text}");
+            call(&mut db, "GET", "/a.json?ns=deep", &[], "");
+        }
+        for (body, message) in [
+            (groups(256), "1:20: Rule expression may not be empty."),
+            (nots(256), "1:20: Rule expression may not be empty."),
+            (groups(10_000), "1:20: Rule expression may not be empty."),
+            (nots(10_000), "1:20: Rule expression may not be empty."),
+        ] {
+            let (status, text) = put(&mut db, &body);
+            assert_eq!(status, 400);
+            assert!(text.contains(message), "{text}");
+        }
+        for n in [1001, 10_000] {
+            assert_eq!(put(&mut db, &levels(n)).0, 400, "{n}");
+        }
+        // The database still answers.
+        assert_eq!(call(&mut db, "GET", "/.json?ns=other", &[], "").0, 200);
+    });
+}

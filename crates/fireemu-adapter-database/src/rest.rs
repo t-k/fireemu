@@ -22,6 +22,7 @@ use fireemu_core_database::{
     ServerValueContext, Tree,
 };
 
+use crate::access::{Access, LoadedRules, WriteOp};
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{
     output_json, parse, priority_at, render, value_at, written_priority_at, ParseError, Style,
@@ -80,6 +81,19 @@ impl SseEvent {
             event: "keep-alive".to_owned(),
             data: "null".to_owned(),
         }
+    }
+
+    /// The `cancel` event that ends a stream the rules no longer allow to read.
+    pub fn cancel() -> Self {
+        Self {
+            event: "cancel".to_owned(),
+            data: "Permission denied".to_owned(),
+        }
+    }
+
+    /// Whether this is the `cancel` event, after which the stream ends.
+    pub fn is_cancel(&self) -> bool {
+        self.event == "cancel"
     }
 
     /// The event as stream text.
@@ -143,9 +157,6 @@ impl Default for RestOptions {
     }
 }
 
-/// The credential of the local administrator (firebase-tools sends `Bearer owner`).
-const OWNER: &str = "owner";
-
 const PARSE_ERROR: &str = "Invalid data; couldn't parse JSON object, array, or value.";
 const PATCH_ERROR: &str =
     "Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?";
@@ -162,6 +173,8 @@ struct Subscription {
     namespace: String,
     path: Path,
     query: Option<QueryParams>,
+    /// Who opened it, for the rules when they change.
+    access: Access,
     format: Format,
     /// The view last sent.
     last: Json,
@@ -175,6 +188,7 @@ struct Call<'a> {
     want_etag: bool,
     condition: Option<Condition<'a>>,
     context: ServerValueContext,
+    access: Access,
 }
 
 /// A conditional request header.
@@ -259,6 +273,10 @@ pub struct Database {
     waker: Waker,
     /// The writes each realtime connection registered for its end, with its namespace.
     on_disconnect: BTreeMap<u64, (String, Pending)>,
+    /// The rules loaded per namespace.
+    rules: BTreeMap<String, LoadedRules>,
+    /// Who each realtime connection is (anonymous until it authenticates).
+    client_access: BTreeMap<u64, Access>,
 }
 
 /// The server's callback for messages that wait outside a request.
@@ -294,6 +312,8 @@ impl Database {
             events: Vec::new(),
             waker: Waker::default(),
             on_disconnect: BTreeMap::new(),
+            rules: BTreeMap::new(),
+            client_access: BTreeMap::new(),
         }
     }
 
@@ -316,6 +336,108 @@ impl Database {
     /// Closes an event stream.
     pub fn unsubscribe(&mut self, id: u64) {
         self.subscriptions.remove(&id);
+    }
+
+    /// `/.settings/rules.json`: an administrator reads or loads the rules of the namespace.
+    fn settings(
+        &mut self,
+        raw_path: &str,
+        method: &str,
+        namespace: &str,
+        access: &Access,
+        request: &HttpRequest,
+        now_millis: i64,
+    ) -> Result<Handled, Refusal> {
+        let administrator = match access {
+            Access::Owner => true,
+            Access::Admin => self.options.rules == RulesMode::AllowAll,
+            _ => false,
+        };
+        if !administrator || raw_path.trim_matches('/') != ".settings/rules.json" {
+            return Err(Refusal::new(403, "Permission denied."));
+        }
+        match method {
+            "GET" => Ok(respond(HttpResponse {
+                status: 200,
+                headers: json_headers(),
+                body: self.rules_text(namespace).into_bytes(),
+            })),
+            "PUT" => {
+                let text = String::from_utf8_lossy(&request.body).into_owned();
+                match self.set_rules(namespace, &text, now_millis) {
+                    Ok(events) => Ok(Handled::Response {
+                        response: HttpResponse {
+                            status: 200,
+                            headers: json_headers(),
+                            body: br#"{"status":"ok"}"#.to_vec(),
+                        },
+                        events,
+                    }),
+                    Err(error) => Err(Refusal::bad(format!("{error}\n"))),
+                }
+            }
+            _ => Err(Refusal::new(405, "Unsupported request type")),
+        }
+    }
+
+    pub(crate) fn loaded_rules(&self, namespace: &str) -> Option<&LoadedRules> {
+        self.rules.get(namespace)
+    }
+
+    pub(crate) fn store_rules(&mut self, namespace: &str, loaded: LoadedRules) {
+        self.rules.insert(namespace.to_owned(), loaded);
+    }
+
+    pub(crate) fn store_client_access(&mut self, client: u64, access: Access) {
+        self.client_access.insert(client, access);
+    }
+
+    /// Who a realtime connection is.
+    pub(crate) fn client_access(&self, client: u64) -> Access {
+        self.client_access
+            .get(&client)
+            .cloned()
+            .unwrap_or(Access::Anonymous)
+    }
+
+    /// The realtime listens of `namespace`: id, connection, location and query.
+    pub(crate) fn listen_entries(
+        &self,
+        namespace: &str,
+    ) -> Vec<(u64, u64, Path, Option<QueryParams>)> {
+        self.listens
+            .iter()
+            .filter(|(_, l)| l.namespace == namespace)
+            .map(|(id, l)| (*id, l.client, l.path.clone(), l.query.clone()))
+            .collect()
+    }
+
+    pub(crate) fn drop_listen(&mut self, id: u64) {
+        self.listens.remove(&id);
+    }
+
+    /// Queues a data message for a realtime connection.
+    pub(crate) fn push_raw(&mut self, client: u64, frame: String) {
+        self.pushes.push((client, frame));
+    }
+
+    /// The event streams of `namespace`: id, location, query and who opened them.
+    pub(crate) fn subscription_entries(
+        &self,
+        namespace: &str,
+    ) -> Vec<(u64, Path, Option<QueryParams>, Access)> {
+        self.subscriptions
+            .iter()
+            .filter(|(_, s)| s.namespace == namespace)
+            .map(|(id, s)| (*id, s.path.clone(), s.query.clone(), s.access.clone()))
+            .collect()
+    }
+
+    /// Asks the server to deliver what waits outside a request.
+    pub(crate) fn wake(&self) {
+        if let Some(waker) = &self.waker.0 {
+            waker();
+        }
     }
 
     /// The number of open event streams.
@@ -371,9 +493,12 @@ impl Database {
             return Err(Refusal::new(405, "Unsupported request type"));
         }
         let writing = method != "GET";
+        let access = Access::from_rest(request.header("Authorization"), &params);
         let path = match request::location(raw_path, writing, &self.options.limits)? {
             Location::Data(path) => path,
-            Location::Settings => return Err(Refusal::new(403, "Permission denied.")),
+            Location::Settings => {
+                return self.settings(raw_path, &method, &namespace, &access, request, now_millis)
+            }
         };
         let condition = condition(request, &method)?;
         let output = request::output(&params)?;
@@ -396,17 +521,17 @@ impl Database {
         if let Some(query) = &query {
             self.check_index(&namespace, &path, query)?;
         }
-        if self.options.rules == RulesMode::DenyAll && credential(request, &params) != Some(OWNER) {
-            return Err(Refusal::new(401, "Permission denied"));
+        let streaming = request
+            .header("Accept")
+            .is_some_and(|v| v.contains("text/event-stream"));
+        if !writing && !self.may_read(&namespace, &path, query.as_ref(), &access, now_millis) {
+            return Err(read_refused(streaming));
         }
         let want_etag = request
             .header("X-Firebase-ETag")
             .is_some_and(|v| v.eq_ignore_ascii_case("true"));
-        let streaming = request
-            .header("Accept")
-            .is_some_and(|v| v.contains("text/event-stream"));
         if method == "GET" && streaming {
-            return Ok(self.subscribe(namespace, path, query, &output));
+            return Ok(self.subscribe(namespace, path, query, &output, access));
         }
         let call = Call {
             namespace,
@@ -415,6 +540,7 @@ impl Database {
             want_etag,
             condition,
             context: ServerValueContext { now_millis },
+            access,
         };
         match method.as_str() {
             "GET" => {
@@ -463,6 +589,11 @@ impl Database {
             _ => {}
         }
         let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
+        let op = WriteOp::Set(&call.path, &value);
+        if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
+        let tree = &mut self.namespace(&call.namespace).tree;
         let node = tree
             .set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
@@ -485,6 +616,10 @@ impl Database {
             .push_ids
             .next(u64::try_from(call.context.now_millis).unwrap_or(0));
         let child = call.path.child(&id);
+        let op = WriteOp::Set(&child, &value);
+        if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
         self.namespace(&call.namespace)
             .tree
             .set(&child, &value, call.context)
@@ -507,6 +642,10 @@ impl Database {
             .iter()
             .map(|entry| (entry.key.clone(), entry.value.clone()))
             .collect();
+        let op = WriteOp::Update(&call.path, &wire);
+        if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
         let tree = &mut self.namespace(&call.namespace).tree;
         // The answer echoes the request with its placeholders resolved, read before the
         // update changes what they resolve against.
@@ -548,11 +687,15 @@ impl Database {
         let Some(spec) = request::required_index(&query.order_by) else {
             return Ok(());
         };
-        let declared = self
-            .indexes
-            .get(namespace)
-            .and_then(|by_path| by_path.get(path))
-            .is_some_and(|specs| specs.contains(&spec));
+        // Loaded rules declare the indexes; without them, what tests declared directly.
+        let declared = match self.rules.get(namespace) {
+            Some(loaded) => loaded.rules.index_on(path).contains(&spec),
+            None => self
+                .indexes
+                .get(namespace)
+                .and_then(|by_path| by_path.get(path))
+                .is_some_and(|specs| specs.contains(&spec)),
+        };
         if declared {
             return Ok(());
         }
@@ -567,6 +710,7 @@ impl Database {
         path: Path,
         query: Option<QueryParams>,
         output: &Output,
+        access: Access,
     ) -> Handled {
         let format = if output.export {
             Format::Export
@@ -584,6 +728,7 @@ impl Database {
                 namespace,
                 path,
                 query,
+                access,
                 format,
                 last: view,
             },
@@ -789,6 +934,11 @@ impl Database {
     pub fn close_realtime(&mut self, client: u64, now_millis: i64) {
         self.listens.retain(|_, listen| listen.client != client);
         self.pushes.retain(|(to, _)| *to != client);
+        // The writes are made as the connection was at its end, under the rules then.
+        let access = self
+            .client_access
+            .remove(&client)
+            .unwrap_or(Access::Anonymous);
         let Some((namespace, pending)) = self.on_disconnect.remove(&client) else {
             return;
         };
@@ -802,6 +952,14 @@ impl Database {
             _ => None,
         };
         let change = if let Some(value) = root_value {
+            if !self.may_write(
+                &namespace,
+                &WriteOp::Set(&Path::root(), &value),
+                &access,
+                now_millis,
+            ) {
+                return;
+            }
             let paths = [Path::root()];
             let before = self.before_write(&namespace, &paths);
             if self
@@ -823,6 +981,14 @@ impl Database {
                 .into_iter()
                 .map(|(keys, value)| (keys.join("/"), value))
                 .collect();
+            if !self.may_write(
+                &namespace,
+                &WriteOp::Update(&Path::root(), &wire),
+                &access,
+                now_millis,
+            ) {
+                return;
+            }
             let before = self.before_write(&namespace, &paths);
             if self
                 .tree_mut(&namespace)
@@ -958,22 +1124,6 @@ fn condition<'a>(request: &'a HttpRequest, method: &str) -> Result<Option<Condit
         (None, Some(tag)) => Some(Condition::NoneMatch(tag)),
         (None, None) => None,
     })
-}
-
-/// The token of a request: `auth`, `access_token` or an `Authorization: Bearer` header.
-fn credential<'a>(
-    request: &'a HttpRequest,
-    params: &'a BTreeMap<String, String>,
-) -> Option<&'a str> {
-    params
-        .get("auth")
-        .or_else(|| params.get("access_token"))
-        .map(String::as_str)
-        .or_else(|| {
-            request
-                .header("Authorization")
-                .and_then(|v| v.strip_prefix("Bearer "))
-        })
 }
 
 /// A request body parsed ahead of the database lock.
@@ -1460,6 +1610,19 @@ fn stream_event(
             put_event(&Path::root(), fresh)
         }
         _ => put_event(&Path::root(), fresh),
+    }
+}
+
+/// A refused read: an event stream is answered in plain text, as the official emulator does.
+fn read_refused(streaming: bool) -> Refusal {
+    if streaming {
+        Refusal {
+            status: 401,
+            message: "Permission denied".to_owned(),
+            plain: true,
+        }
+    } else {
+        Refusal::new(401, "Permission denied")
     }
 }
 

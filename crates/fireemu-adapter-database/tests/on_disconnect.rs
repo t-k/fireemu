@@ -465,8 +465,9 @@ fn a_connection_end_wakes_the_server_and_reaches_event_streams() {
 
 #[test]
 fn under_deny_all_only_the_owner_registers() {
-    // Not observed on the official emulator, which has no rules here: registering is a
-    // write, so it is refused where a write is (owner decision Q4).
+    // Registering is a write, so it is refused where a write is (owner decision Q4). A
+    // cancel (`oc`) is not checked: the official emulator answers it under rules that refuse
+    // every write (`.write: false`), and the locked default is those rules.
     let mut db = Database::new(
         RestOptions {
             rules: RulesMode::DenyAll,
@@ -478,7 +479,6 @@ fn under_deny_all_only_the_owner_registers() {
     for (r, (action, body)) in (1..).zip([
         ("o", r#"{"p":"/a","d":1}"#),
         ("om", r#"{"p":"/a","d":{"b":1}}"#),
-        ("oc", r#"{"p":"/a"}"#),
     ]) {
         assert_eq!(
             send(&mut db, &mut anonymous, &request(r, action, body)),
@@ -486,6 +486,10 @@ fn under_deny_all_only_the_owner_registers() {
             "{action}"
         );
     }
+    assert_eq!(
+        send(&mut db, &mut anonymous, &request(3, "oc", r#"{"p":"/a"}"#)),
+        vec![ok(3)]
+    );
     db.close_realtime(anonymous.client(), LATER);
     let mut owner = open(&mut db, "deny");
     send(

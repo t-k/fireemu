@@ -910,3 +910,41 @@ async fn a_websocket_dropped_for_falling_behind_writes_what_it_registered_once()
     }
     eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
 }
+
+#[tokio::test]
+async fn a_stream_the_rules_no_longer_allow_ends_after_its_cancel_event() {
+    let (address, database) = start(Duration::from_secs(60)).await;
+    let rules = |body: &'static str| {
+        let address = address.clone();
+        async move {
+            let mut stream = TcpStream::connect(&address).await.unwrap();
+            let request = format!(
+                "PUT /.settings/rules.json?ns=rc HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer owner\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            response
+        }
+    };
+    assert!(rules(r#"{"rules":{".read":true}}"#)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    let request = format!(
+        "GET /s.json?ns=rc HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    read_until(&mut stream, "data: {\"path\":\"/\",\"data\":null}\n\n").await;
+    assert!(rules(r#"{"rules":{".read":false}}"#)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    // The chunked body ends right after the event.
+    let tail = read_until(&mut stream, "0\r\n\r\n").await;
+    assert!(
+        tail.ends_with("event: cancel\ndata: Permission denied\n\n\r\n0\r\n\r\n"),
+        "{tail:?}"
+    );
+    assert_eq!(database.lock().unwrap().subscription_count(), 0);
+}

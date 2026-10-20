@@ -295,7 +295,8 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Bo
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(id, sender.clone());
             drop(database);
-            spawn_keep_alive(Arc::clone(shared), id, sender);
+            // The map holds the only strong sender, so removing it ends the stream.
+            spawn_keep_alive(Arc::clone(shared), id, sender.downgrade());
             streaming(response, receiver)
         }
     }
@@ -308,10 +309,13 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     for (id, event) in events {
+        // A `cancel` event (the rules no longer allow the read) is the last: the stream ends
+        // after it, as the official emulator's does.
+        let last = event.is_cancel();
         let delivered = streams
             .get(&id)
             .is_some_and(|sender| sender.try_send(event).is_ok());
-        if !delivered {
+        if !delivered || last {
             streams.remove(&id);
             database.unsubscribe(id);
         }
@@ -338,12 +342,16 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
     }
 }
 
-fn spawn_keep_alive(shared: Arc<Shared>, id: u64, sender: mpsc::Sender<SseEvent>) {
+fn spawn_keep_alive(shared: Arc<Shared>, id: u64, sender: mpsc::WeakSender<SseEvent>) {
     tokio::spawn(async move {
         let mut ticks = tokio::time::interval(shared.config.keep_alive);
         ticks.tick().await;
         loop {
             ticks.tick().await;
+            // A stream that was ended (cancelled) needs no keep-alive.
+            let Some(sender) = sender.upgrade() else {
+                return;
+            };
             if sender.try_send(SseEvent::keep_alive()).is_err() {
                 let mut database = shared
                     .database

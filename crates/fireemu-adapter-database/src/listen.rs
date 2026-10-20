@@ -50,6 +50,9 @@ pub(crate) struct Listen {
     pub tag: Option<i64>,
     /// The query and its tag, for a tagged query served as a window.
     pub window: Option<(QueryParams, i64)>,
+    /// The query as the client asked for it (also when it is served whole, for want of its
+    /// index), for the rules and for cancelling the listen.
+    pub query: Option<QueryParams>,
     /// What the client was last sent.
     pub last: Json,
 }

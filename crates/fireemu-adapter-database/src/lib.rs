@@ -5,6 +5,7 @@
 //! ([`rest::Database::handle`]), so every answer can be checked without sockets;
 //! [`server`] runs it behind hyper and delivers the streaming events.
 
+mod access;
 pub mod json_parse;
 pub mod json_text;
 mod listen;

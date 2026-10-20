@@ -129,7 +129,7 @@ npx fireemu exec --only database -- npm test
 
 Databases are addressed as on the official emulator: by the `ns` query parameter (`http://127.0.0.1:9000/path.json?ns=my-project-default-rtdb`), which the SDKs send when `connectDatabaseEmulator` is used, or by the first label of the host name. A session reset empties the namespaces of the project being reset, `<project>` and `<project>-default-rtdb`.
 
-Security Rules are not evaluated yet. A `database` section in `firebase.json` is accepted and reported with a notice, and requests are answered as for a database without rules: open, or, with `database.defaultAccess = "locked"` (the `productionExact` default), only for the emulator's `owner` credential, which firebase-admin uses against an emulator.
+Security Rules are not evaluated yet. A `database` section in `firebase.json` is accepted, with its deploy hooks. The start banner's `database rules:` line says what access is in effect, and a served database whose `firebase.json` names rules files prints a warning that they are not enforced. Requests are answered as for a database without rules: open, or, with `database.defaultAccess = "locked"` (the `productionExact` default), only for the emulator's `owner` credential, which firebase-admin uses against an emulator.
 
 ### UI
 

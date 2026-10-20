@@ -813,7 +813,7 @@
     ],
     "unimplemented": [
       "emulators.singleProjectMode is recorded and published but enforces nothing on its own: fireemu isolates every project into its own session, which is stricter",
-      "the database section (rules, instance, target) is checked for shape and reported with a notice: Realtime Database rules are not evaluated yet; hosting and the other deferred products are not parsed beyond reporting them"
+      "the database section (rules, instance, target, and the predeploy / postdeploy hooks, which are ignored) is checked for shape; its rules are not evaluated yet, which a warning says when the database is served, and the banner names the access in effect; hosting and the other deferred products are not parsed beyond reporting them"
     ],
     "notes": [
       "command-line ports override firebase.json; firebase.json overrides the canonical configuration"

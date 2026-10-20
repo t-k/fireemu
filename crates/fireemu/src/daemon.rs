@@ -1248,6 +1248,13 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         }
         locator
     });
+    if addrs.database.is_some() && !cfg.database_rules.is_empty() {
+        eprintln!(
+            "warning: database: the rules in {} are not enforced (fireemu does not evaluate Realtime Database rules yet), so {}",
+            cfg.database_rules.join(", "),
+            crate::database_access(&cfg)
+        );
+    }
     if !quiet {
         print_banner(
             &cfg,

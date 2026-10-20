@@ -98,6 +98,17 @@ impl Daemon {
             .to_owned()
     }
 
+    /// The banner line about Realtime Database rules.
+    fn rules_line(&self) -> String {
+        self.banner
+            .lock()
+            .unwrap()
+            .lines()
+            .find(|line| line.trim_start().starts_with("database rules:"))
+            .unwrap_or_default()
+            .to_owned()
+    }
+
     fn database_port(&self) -> u16 {
         let line = self.database_line();
         line.split("127.0.0.1:")
@@ -354,4 +365,86 @@ fn database_deploy_hooks_in_firebase_json_are_accepted_whatever_is_selected() {
             "{only}: {line}"
         );
     }
+}
+
+#[test]
+fn the_banner_says_rules_are_not_evaluated_and_what_access_is_in_effect() {
+    let dir = Scratch::new("database", "rules-banner");
+    let open = Daemon::start(&["--only", "database", "--database-port", "0"]);
+    let line = open.rules_line();
+    assert!(line.contains("not evaluated"), "{line}");
+    assert!(line.contains("every request is allowed"), "{line}");
+    assert!(
+        line.contains("database.defaultAccess = open, default"),
+        "{line}"
+    );
+    drop(open);
+    for (config, source) in [
+        (
+            r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+            "productionExact",
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"strict","database":{"defaultAccess":"locked"}}"#,
+            "explicit",
+        ),
+    ] {
+        let path = dir.join(format!("{source}.json"));
+        std::fs::write(&path, config).unwrap();
+        let daemon = Daemon::start(&[
+            "--config",
+            path.to_str().unwrap(),
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+        ]);
+        let line = daemon.rules_line();
+        assert!(line.contains("only the owner credential"), "{line}");
+        assert!(
+            line.contains(&format!("database.defaultAccess = locked, {source}")),
+            "{line}"
+        );
+    }
+    // Not served: no rules line.
+    let unserved = Daemon::start(&[]);
+    assert_eq!(unserved.rules_line(), "");
+}
+
+#[test]
+fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_served() {
+    let dir = Scratch::new("database", "rules-warning");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":{"rules":"database.rules.json"}}"#,
+    )
+    .unwrap();
+    let run = |only: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--no-config-discovery", "--project", PROJECT])
+            .args(["--firebase-json", firebase_json.to_str().unwrap()])
+            .args(["--only", only, "--database-port", "0", "--http-port", "0"])
+            .args(["--hub-port", "0", "--log-verbosity", "quiet", "--", "true"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let stderr = run("database");
+    assert!(
+        stderr.contains("warning: database: the rules in database.rules.json are not enforced"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("database.defaultAccess = open, default"),
+        "{stderr}"
+    );
+    let stderr = run("auth");
+    assert!(!stderr.contains("database.rules.json"), "{stderr}");
 }

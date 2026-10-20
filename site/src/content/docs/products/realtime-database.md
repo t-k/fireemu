@@ -21,7 +21,7 @@ npx fireemu exec --only database -- npm test
 
 ## Security Rules
 
-Rules are not evaluated yet. A `database` section in `firebase.json` is accepted and reported with a notice, and every request is answered as for a database without rules. By default that is open to everyone, as the official emulator serves a database with no rules file. With `database.defaultAccess = "locked"` (the `productionExact` default, strict profile only) only the emulator's `owner` credential, which the Admin SDK sends to an emulator, can read and write.
+Rules are not evaluated yet. A `database` section in `firebase.json` is accepted (its deploy hooks too), the start banner has a `database rules:` line saying what access is in effect, a served database whose `firebase.json` names rules files prints a warning that they are not enforced, and every request is answered as for a database without rules. By default that is open to everyone, as the official emulator serves a database with no rules file. With `database.defaultAccess = "locked"` (the `productionExact` default, strict profile only) only the emulator's `owner` credential, which the Admin SDK sends to an emulator, can read and write.
 
 ## Not supported yet
 

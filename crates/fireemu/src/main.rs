@@ -3019,6 +3019,42 @@ fn pubsub_project_numbers(cfg: &RuntimeConfig) -> std::collections::BTreeMap<Str
     numbers
 }
 
+/// What every Realtime Database request is answered with while rules are not evaluated, and
+/// why: `database.defaultAccess` and where its value came from.
+pub fn database_access(cfg: &RuntimeConfig) -> String {
+    let source = cfg
+        .development_defaults
+        .iter()
+        .find(|entry| entry["key"] == "database.defaultAccess")
+        .and_then(|entry| entry["source"].as_str())
+        .unwrap_or("default");
+    match cfg.database_default_access {
+        config::DatabaseDefaultAccess::Open => {
+            format!("every request is allowed (database.defaultAccess = open, {source})")
+        }
+        config::DatabaseDefaultAccess::Locked => format!(
+            "only the owner credential reads and writes (database.defaultAccess = locked, {source})"
+        ),
+    }
+}
+
+/// The banner lines of the Realtime Database: where it listens, and the access in effect
+/// while its rules are not evaluated.
+fn print_database_lines(cfg: &RuntimeConfig, addrs: &BoundAddrs) {
+    match addrs.database {
+        Some(a) => {
+            println!("  database:         {a}   FIREBASE_DATABASE_EMULATOR_HOST={a}");
+            println!(
+                "  database rules:   not evaluated yet, so {}",
+                database_access(cfg)
+            );
+        }
+        None => println!(
+            "  database:         not started (configure emulators.database / --database-port, or --only database)"
+        ),
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn print_banner(
     cfg: &RuntimeConfig,
@@ -3120,12 +3156,7 @@ fn print_banner(
             "  pubsub:           not started (configure emulators.pubsub / --pubsub-port, or --only pubsub)"
         ),
     }
-    match addrs.database {
-        Some(a) => println!("  database:         {a}   FIREBASE_DATABASE_EMULATOR_HOST={a}"),
-        None => println!(
-            "  database:         not started (configure emulators.database / --database-port, or --only database)"
-        ),
-    }
+    print_database_lines(cfg, addrs);
     match addrs.hub {
         Some(a) => println!(
             "  emulator hub:     {a}   FIREBASE_EMULATOR_HUB={a}   (GET /emulators discovers the suite)"

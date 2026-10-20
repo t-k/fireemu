@@ -7524,6 +7524,17 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                 String::new(),
                 Some(format!("`{}", "a".repeat(1499))),
             ),
+            // Over the path parser's own limits, the text is still unquoted and joined.
+            (
+                format!("`\\`{}`", "a".repeat(1501)),
+                String::new(),
+                Some(format!("`{}", "a".repeat(1501))),
+            ),
+            (
+                format!("`a`.{}", "b".repeat(1499)),
+                String::new(),
+                Some(format!("a.{}", "b".repeat(1499))),
+            ),
         ] {
             let request = stages(vec![(alias.as_str(), pipeline_field("top"))]);
             if let Some(reference) = refused {

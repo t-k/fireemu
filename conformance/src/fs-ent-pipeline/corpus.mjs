@@ -574,24 +574,44 @@ export const O3_ALIASES = [
   ["nested-name", "a.__name__"],
   ["nested-quoted-reserved", "a.`__x__`"],
   ["quoted-dotted-name", "`a.__name__`"],
+  // Invalid quoted and dotted aliases (the official emulator answers each with its
+  // invalid-path text).
   ["empty-segment", "a..b"],
+  ["trailing-dot", "a."],
+  ["leading-dot", ".a"],
+  ["unterminated-quote", "`a"],
+  ["dotted-digit", "a.1b"],
+  ["empty-quoted", "``"],
   ["empty", ""],
-  // The length boundary: the official emulator refuses an alias of 1500 bytes or more,
-  // counting the backticks of a quoted alias; fireemu counts the segment, up to 1500 bytes.
+  // The length boundary. The official emulator joins the unquoted segments with '.' and
+  // refuses 1500 bytes or more with that joined text, after the syntax check; the rows tell
+  // the joined length apart from the raw alias length.
   ["plain-1499", "a".repeat(1499)],
   ["plain-1500", "a".repeat(1500)],
   ["plain-1501", "a".repeat(1501)],
-  ["quoted-1499", `\`${"a".repeat(1497)}\``],
-  ["quoted-1500", `\`${"a".repeat(1498)}\``],
-  ["quoted-1502", `\`${"a".repeat(1500)}\``],
+  ["quoted-inner-1497", `\`${"a".repeat(1497)}\``],
+  ["quoted-inner-1498", `\`${"a".repeat(1498)}\``],
+  ["quoted-inner-1499", `\`${"a".repeat(1499)}\``],
+  ["quoted-inner-1500", `\`${"a".repeat(1500)}\``],
+  ["dotted-1499", `a.${"b".repeat(1497)}`],
+  ["dotted-1500", `a.${"b".repeat(1498)}`],
+  ["quoted-dotted-1499", `\`a\`.${"b".repeat(1497)}`],
+  ["quoted-dotted-1500", `\`a\`.${"b".repeat(1498)}`],
+  ["escaped-1499", `\`\\\`${"a".repeat(1498)}\``],
+  ["escaped-1500", `\`\\\`${"a".repeat(1499)}\``],
+  ["invalid-1500", "-".repeat(1500)],
 ];
 
 const o3AliasProgram = {
   id: "fs-ent-pipeline/o3/aliases",
   seed: [["al3/d", { top: str("t") }]],
-  steps: O3_ALIASES.map(([label, alias]) =>
-    step(label, pipeline(collection("al3"), select({ [alias]: fld("top") }))),
-  ),
+  steps: [
+    ...O3_ALIASES.map(([label, alias]) =>
+      step(label, pipeline(collection("al3"), select({ [alias]: fld("top") }))),
+    ),
+    // The empty alias's gRPC status code as well as its REST status.
+    grpcStep("empty-grpc", pipeline(collection("al3"), select({ "": fld("top") }))),
+  ],
 };
 
 /** The O-2 kinds plus two vectors (`v` orders before `v2`). */
@@ -677,6 +697,7 @@ export const O3_LITERALS = [
   ["double-one", dbl(1)],
   ["negative-zero", dbl("-0")],
   ["double-array", arr(dbl(1.5), arr(dbl(2.5)))],
+  ["negative-zero-in-array", arr(dbl(1.5), dbl("-0"))],
   ["infinity", inf()],
   ["negative-infinity", inf(-1)],
   ["nan", nan()],

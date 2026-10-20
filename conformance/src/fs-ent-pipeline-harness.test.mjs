@@ -137,7 +137,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 285);
+  assert.equal(requests, 300);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline"]);
   // The only writes are the order program's single-document commits into `ord`.
@@ -348,7 +348,7 @@ test("a wipe read that is not JSON fails its program and the cleanup wipe still 
   assert.equal(wipeReads.length, 0);
 });
 
-test("O-3 records only its four new programs, within its request cap: 2 x (65 + 60) + 5", async () => {
+test("O-3 records only its four new programs, within its request cap: 2 x (80 + 60) + 5", async () => {
   const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
   const { readFile } = await import("node:fs/promises");
   const o3 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o3/");
@@ -362,10 +362,10 @@ test("O-3 records only its four new programs, within its request cap: 2 x (65 + 
     ],
   );
   // The harness ceiling is a base of 20 plus 8 and the seed batches per program.
-  assert.deepEqual(ceilings(o3), { maxRequests: 65, maxHarnessRequests: 60 });
+  assert.deepEqual(ceilings(o3), { maxRequests: 80, maxHarnessRequests: 60 });
   // S0 one describe, the preflight two reads, two recordings, A1 two read-backs.
-  const worst = 1 + 2 + 2 * (65 + 60) + 2;
-  assert.equal(worst, 255);
+  const worst = 1 + 2 + 2 * (80 + 60) + 2;
+  assert.equal(worst, 285);
   // The O-1 and O-2 programs are recorded already and keep their digests.
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
@@ -388,17 +388,41 @@ test("O-3 records only its four new programs, within its request cap: 2 x (65 + 
   );
   assert.deepEqual(aliases.toSorted(), O3_CELLS.map(([alias]) => alias).toSorted());
   assert.equal(O3_CELLS.length, 6 * (3 + 2 * 12 + 2 * 9));
-  // The alias lengths sit on both sides of the official emulator's 1500-byte boundary.
+  // The alias lengths sit on both sides of the official emulator's 1500-byte boundary, which
+  // counts the unquoted segments joined with '.'; the raw length tells the rows apart.
+  const joined = (alias) =>
+    Buffer.byteLength(alias.replace(/\\(.)|`/g, (_, escaped) => escaped ?? ""));
   const lengths = Object.fromEntries(
-    O3_ALIASES.map(([label, alias]) => [label, Buffer.byteLength(alias)]),
+    O3_ALIASES.filter(([label]) => /-\d{4}$/.test(label)).map(([label, alias]) => [
+      label,
+      [joined(alias), Buffer.byteLength(alias)],
+    ]),
   );
+  assert.deepEqual(lengths, {
+    "plain-1499": [1499, 1499],
+    "plain-1500": [1500, 1500],
+    "plain-1501": [1501, 1501],
+    "quoted-inner-1497": [1497, 1499],
+    "quoted-inner-1498": [1498, 1500],
+    "quoted-inner-1499": [1499, 1501],
+    "quoted-inner-1500": [1500, 1502],
+    "dotted-1499": [1499, 1499],
+    "dotted-1500": [1500, 1500],
+    "quoted-dotted-1499": [1499, 1501],
+    "quoted-dotted-1500": [1500, 1502],
+    "escaped-1499": [1499, 1502],
+    "escaped-1500": [1500, 1503],
+    "invalid-1500": [1500, 1500],
+  });
+  // The empty alias is asked over both transports.
   assert.deepEqual(
-    [lengths["plain-1499"], lengths["plain-1500"], lengths["plain-1501"]],
-    [1499, 1500, 1501],
-  );
-  assert.deepEqual(
-    [lengths["quoted-1499"], lengths["quoted-1500"], lengths["quoted-1502"]],
-    [1499, 1500, 1502],
+    o3[0].steps.filter((s) => s.id.startsWith("empty")).map((s) => [s.id, s.transport ?? "rest"]),
+    [
+      ["empty-segment", "rest"],
+      ["empty-quoted", "rest"],
+      ["empty", "rest"],
+      ["empty-grpc", "grpc"],
+    ],
   );
   // A vector is written as a vector.
   assert.equal(O3_KIND_DOC.v.mapValue.fields.__type__.stringValue, "__vector__");

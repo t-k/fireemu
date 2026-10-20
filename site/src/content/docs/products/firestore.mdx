@@ -47,19 +47,26 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 | Expression | Supported |
 |---|---|
 | Fields | Nested paths (`a.b`) and `__name__` (the document reference) |
-| Literals | Values of every type, including arrays and maps of literals |
+| Literals | Values of every type, including arrays and maps of literals and vectors of doubles |
 | Comparisons | `equal`, `not_equal`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, anywhere an expression stands |
 | Construction | `array(...)` and `map(...)` |
 | Document functions | `documentId`, `collectionId` and `parent` |
 
 A `where` keeps a row only when its condition (a comparison, a field or another supported function) is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and every answer carries the execution time. A stored `-0.0` reads back as `-0.0`, as in production; the official emulator stores it as `0.0`.
 
-The answers follow production as recorded by fireemu's production observations (comparisons across value types, vectors and missing fields, integer and double values compared exactly, conditions of every kind, literal values and map keys, select alias rules and the alias length limit, document functions, `map(...)`, `limit` and `offset` arguments, and refusal texts and their order). Where production has not been observed, the profiles differ:
+The answers follow production as recorded by fireemu's production observations (comparisons across value types, vectors and missing fields, integer and double values compared exactly, conditions of every kind, literal values and map keys, select alias rules and the alias length limit, document functions, `map(...)`, `limit` and `offset` arguments, and the refusal texts and orders production returned). Where production has not been observed, the profiles differ:
 
 | Input | `strict` | `emulator` |
 |---|---|---|
 | A document function of a collection reference with a non-ASCII name | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the index counted in UTF-16 units |
 | A literal holding a field or function under a map key that is not a plain name | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming a reserved key first |
+| A document function of a double, timestamp, geo point, bytes, array or vector | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
+| A `map(...)` key that is a double, null or another type than an integer or boolean | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
+| A vector literal with integer elements, without `value` or with another key | `UNIMPLEMENTED` | The official emulator's answer |
+| A literal with more than one empty or reserved key, or the key `__name__` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
+| A `limit` of another type than an integer or string; an `offset` that is negative or of another type than an integer or string | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| The wrong number of arguments or options for a supported function | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |
+| An empty `select` map or a later stage's check after a function or stage value fireemu does not check (production names an unknown function first) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the later check |
 
 Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.
 

@@ -3240,8 +3240,8 @@ struct Exporter {
     products: import_export::Products,
     blocking: Option<Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>>,
     auth_operation_gate: Arc<Mutex<()>>,
-    /// Whether the Realtime Database is served, whose data no export carries yet.
-    database_served: bool,
+    /// The Realtime Database namespaces.
+    database: Arc<Mutex<fireemu_adapter_database::rest::Database>>,
 }
 
 impl Exporter {
@@ -3251,6 +3251,7 @@ impl Exporter {
             auth: &self.auth,
             storage: &self.storage,
             clock: &self.clock,
+            database: &self.database,
             project: &self.project,
             blocking: self.blocking.as_deref(),
             auth_operation_gate: Some(&self.auth_operation_gate),
@@ -3260,19 +3261,10 @@ impl Exporter {
 
 impl hub::ExportRunner for Exporter {
     fn export(&self, path: &Path, initiated_by: &str) -> Result<Vec<String>, String> {
-        let mut warnings = Vec::new();
-        if self.database_served {
-            let warning = format!(
-                "Realtime Database data is not exported (an open gap): the export to {} leaves it out",
-                path.display()
-            );
-            eprintln!("warning: {warning}");
-            warnings.push(warning);
-        }
         import_export::may_overwrite(path)?;
         import_export::export(path, self.products, &self.endpoints(), initiated_by)
             .map_err(|e| e.to_string())?;
-        Ok(warnings)
+        Ok(Vec::new())
     }
 }
 

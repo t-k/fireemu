@@ -21,8 +21,8 @@
 //! ```
 //!
 //! A section fireemu does not serve is not silently dropped: [`ExportMetadata::parse`] keeps
-//! every recognized section, and the caller decides what a Realtime Database or SQL Connect
-//! section means for the run (`fireemu` refuses the run rather than importing part of it).
+//! every recognized section, and the caller decides what a SQL Connect section means for the
+//! run (`fireemu` refuses the run rather than importing part of it).
 
 use fireemu_core_types::ids::DatabaseId;
 use fireemu_core_types::json::{parse, JsonValue};
@@ -38,7 +38,7 @@ pub const FIRESTORE_PATH: &str = "firestore_export";
 pub const AUTH_PATH: &str = "auth_export";
 /// The Storage section's default directory name.
 pub const STORAGE_PATH: &str = "storage_export";
-/// The Realtime Database section's directory name (fireemu never writes one).
+/// The Realtime Database section's directory name: one `<namespace>.json` per namespace.
 pub const DATABASE_PATH: &str = "database_export";
 /// The SQL Connect section's directory name (fireemu never writes one).
 pub const DATACONNECT_PATH: &str = "dataconnect_export";
@@ -55,7 +55,7 @@ pub enum Product {
     Auth,
     /// Cloud Storage for Firebase.
     Storage,
-    /// Realtime Database: served, but its export section is not imported or written yet.
+    /// Firebase Realtime Database.
     Database,
     /// SQL Connect (Data Connect): a deferred product fireemu does not serve.
     DataConnect,
@@ -89,7 +89,10 @@ impl Product {
     /// Whether fireemu can import and export this product's section.
     #[must_use]
     pub fn is_served(self) -> bool {
-        matches!(self, Self::Firestore | Self::Auth | Self::Storage)
+        matches!(
+            self,
+            Self::Firestore | Self::Auth | Self::Storage | Self::Database
+        )
     }
 
     /// Every product, in the order the official CLI writes them.
@@ -440,11 +443,15 @@ mod tests {
     }
 
     #[test]
-    fn a_realtime_database_section_is_reported_as_deferred() {
+    fn a_realtime_database_section_is_served() {
         let text =
             r#"{"version":"15.28.2","database":{"version":"4.11.2","path":"database_export"}}"#;
         let parsed = ExportMetadata::parse(text).expect("the manifest parses");
-        assert_eq!(parsed.deferred(), vec![Product::Database]);
+        assert!(parsed.deferred().is_empty());
+        assert_eq!(
+            parsed.section(Product::Database).map(|s| s.path.as_str()),
+            Some("database_export")
+        );
     }
 
     #[test]

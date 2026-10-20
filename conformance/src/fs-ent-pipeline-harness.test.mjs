@@ -315,6 +315,19 @@ test("a wipe read that is not JSON fails its program and the cleanup wipe still 
   assert.equal(wipeReads.length, 0);
 });
 
+test("the committed REST request export is the corpus's", async () => {
+  const { EXPORT, exportText } = await import("./fs-ent-pipeline/export-requests.mjs");
+  const { readFile } = await import("node:fs/promises");
+  assert.equal(await readFile(EXPORT, "utf8"), exportText());
+  const exported = JSON.parse(exportText());
+  assert.equal(exported.programs.length, PROGRAMS.length);
+  const rest = PROGRAMS.flatMap((p) => p.steps).filter((s) => (s.transport ?? "rest") === "rest");
+  assert.equal(
+    exported.programs.reduce((n, p) => n + p.steps.length, 0),
+    rest.length,
+  );
+});
+
 test("every step stays in the named database on both transports", () => {
   for (const ctx of [production()]) {
     for (const program of PROGRAMS) {

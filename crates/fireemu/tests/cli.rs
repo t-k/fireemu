@@ -684,6 +684,7 @@ fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() 
         ("daemon.eventarcPort", serde_json::json!(9299)),
         ("daemon.tasksPort", serde_json::json!(9499)),
         ("daemon.pubsubPort", serde_json::json!(8085)),
+        ("daemon.databasePort", serde_json::json!(9000)),
         ("daemon.loggingPort", serde_json::json!(4500)),
         (
             "auth.idTokenSigning",
@@ -807,7 +808,7 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
     write(
         &dir,
         "selected.json",
-        r#"{"emulators":{"firestore":{"port":8123},"auth":{"port":9123},"storage":{"port":9223},"functions":{"port":5023},"eventarc":{"port":9323},"tasks":{"port":9523},"pubsub":{"port":8223},"logging":{"port":4523}},"firestore":{"rules":"test.rules"},"storage":{"rules":"storage.rules"},"functions":{"source":"functions"}}"#,
+        r#"{"emulators":{"firestore":{"port":8123},"auth":{"port":9123},"storage":{"port":9223},"functions":{"port":5023},"eventarc":{"port":9323},"tasks":{"port":9523},"pubsub":{"port":8223},"database":{"port":9423},"logging":{"port":4523}},"firestore":{"rules":"test.rules"},"storage":{"rules":"storage.rules"},"functions":{"source":"functions"}}"#,
     );
     std::fs::create_dir(dir.join("functions")).unwrap();
     write(
@@ -839,6 +840,7 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
         ("daemon.eventarcPort", serde_json::json!(9323), "explicit"),
         ("daemon.tasksPort", serde_json::json!(9523), "explicit"),
         ("daemon.pubsubPort", serde_json::json!(8223), "explicit"),
+        ("daemon.databasePort", serde_json::json!(9423), "explicit"),
         ("daemon.loggingPort", serde_json::json!(4523), "explicit"),
         (
             "daemon.authProject",

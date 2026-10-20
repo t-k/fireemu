@@ -3768,7 +3768,6 @@ fn only_names(only: &Selection, service: &str) -> bool {
         "storage" => only.storage,
         "functions" => only.functions,
         "appcheck" => only.appcheck,
-        "database" => only.database,
         // A product fireemu does not serve can never be selected: `Selection::parse` refuses
         // the name outright, so reaching here means it was not named.
         _ => false,
@@ -5886,6 +5885,7 @@ mod tests {
             ("daemon.eventarcPort", json!(9299), "default"),
             ("daemon.tasksPort", json!(9499), "default"),
             ("daemon.pubsubPort", json!(8085), "default"),
+            ("daemon.databasePort", json!(9000), "default"),
             ("daemon.loggingPort", json!(4500), "default"),
             ("daemon.clockStart", json!(null), "unset"),
             ("daemon.seed", json!(42), "default"),

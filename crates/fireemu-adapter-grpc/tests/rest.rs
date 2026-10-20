@@ -7303,7 +7303,16 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
             body[0]["results"][0]["fields"]["v"], nested,
             "strict={strict}"
         );
-        for key in ["", "__x__", "a.b", "1a"] {
+        for key in ["ab_c9", "_k", "K"] {
+            let plain = json!({"mapValue": {"fields": {key: {"integerValue": "1"}}}});
+            let (status, body) = select(plain.clone());
+            assert_eq!(status, 200, "strict={strict} {key:?}: {body}");
+            assert_eq!(
+                body[0]["results"][0]["fields"]["v"], plain,
+                "strict={strict}"
+            );
+        }
+        for key in ["", "__x__", "a.b", "1a", "a-b"] {
             let (status, body) =
                 select(json!({"mapValue": {"fields": {key: {"integerValue": "1"}}}}));
             // The emulator profile answers as before (a reserved key is refused by the value

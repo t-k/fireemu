@@ -541,12 +541,16 @@ fn document_argument(
             }
             // Production answered `document_id` of a top-level collection; the official emulator
             // answers every document function of any collection alike.
-            None if (function == "document_id" && is_top_level_collection(name))
+            // The index is the name's length in UTF-16 units, as the official emulator (Java)
+            // counts it; production recorded ASCII names only, where units and bytes agree.
+            None if (function == "document_id"
+                && is_top_level_collection(name)
+                && name.is_ascii())
                 || (unrecorded == Unrecorded::OfficialEmulator && is_collection(name)) =>
             {
                 invalid(format!(
                     "Document parent name \"{name}\" lacks \"/\" at index {}.",
-                    name.len()
+                    name.encode_utf16().count()
                 ))
             }
             None => unobserved("the reference does not name a document"),

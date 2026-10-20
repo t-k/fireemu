@@ -304,6 +304,20 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                 );
             }
         }
+        // A non-ASCII collection: production recorded ASCII names only, so strict refuses it;
+        // the official emulator counts the index in UTF-16 units (😀 is two).
+        let emoji = "projects/p/databases/(default)/documents/😀";
+        let got = call("document_id", vec![reference(emoji)]).eval_in(&r, unrecorded);
+        if unrecorded == Unrecorded::Refuse {
+            assert!(unobserved(&got), "{got:?}");
+        } else {
+            assert_eq!(
+                got,
+                Eval::Error(EvalError::Invalid(format!(
+                    "Document parent name \"{emoji}\" lacks \"/\" at index 43."
+                )))
+            );
+        }
         // Malformed references name no collection: an empty project, database or segment.
         for name in [
             "projects//databases/(default)/documents",

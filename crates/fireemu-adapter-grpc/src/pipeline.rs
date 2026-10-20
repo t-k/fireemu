@@ -601,10 +601,14 @@ fn is_recorded_expression_literal(value: &pb::Value) -> bool {
     };
     let map_of_fields = |v: &pb::Value| {
         matches!(&v.value_type, Some(V::MapValue(map))
-            if !map.fields.is_empty() && map.fields.values().all(field))
+            if !map.fields.is_empty()
+                && map.fields.keys().all(|key| is_plain_key(key))
+                && map.fields.values().all(field))
     };
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => matches!(array.values.as_slice(), [only] if field(only)),
+        // The recorded maps used plain keys only; another key is unrecorded (PX1b r2 B-S1).
+        Some(V::MapValue(map)) if !map.fields.keys().all(|key| is_plain_key(key)) => false,
         Some(V::MapValue(map)) => {
             let values: Vec<&pb::Value> = map.fields.values().collect();
             match values.as_slice() {
@@ -670,10 +674,23 @@ fn decode_operand(
             "variable and pipeline operands are unsupported locally",
         )),
         Some(_) => match expression_kind(value) {
+            None if unrecorded == Unrecorded::OfficialEmulator => {
+                Ok(Expr::Constant(decode_official_literal(value)?))
+            }
             None => Ok(Expr::Constant(
                 crate::decode::decode_value(value)
                     .map_err(|e| Status::invalid_argument(e.to_string()))?,
             )),
+            // The official emulator names a reserved map key (`__type__` aside) before the
+            // value type; production has not answered a literal with such a key.
+            Some(_)
+                if unrecorded == Unrecorded::OfficialEmulator && reserved_key(value).is_some() =>
+            {
+                Err(Status::invalid_argument(format!(
+                    "field name '{}' is reserved.",
+                    reserved_key(value).unwrap_or_default()
+                )))
+            }
             Some(kind)
                 if unrecorded == Unrecorded::OfficialEmulator
                     || (select_value && is_recorded_expression_literal(value)) =>
@@ -687,6 +704,89 @@ fn decode_operand(
             )),
         },
     }
+}
+
+/// The first reserved map key (`__x__`, `__type__` aside) a literal holds at any depth, in key
+/// order.
+fn reserved_key(value: &pb::Value) -> Option<String> {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().find_map(reserved_key),
+        Some(V::MapValue(map)) => {
+            let mut keys: Vec<&String> = map.fields.keys().collect();
+            keys.sort();
+            keys.into_iter().find_map(|key| {
+                if is_reserved_name(key) && key != "__type__" {
+                    Some(key.clone())
+                } else {
+                    reserved_key(&map.fields[key])
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
+/// A literal as the official emulator reads it in a pipeline: an empty map key is refused
+/// ("Property names cannot be empty."), and a `__type__` key of a map that is no vector is a
+/// plain key; everything else decodes as a stored value does.
+fn decode_official_literal(
+    value: &pb::Value,
+) -> Result<fireemu_core_firestore::value::Value, Status> {
+    use fireemu_core_firestore::value::Value;
+    use pb::value::ValueType as V;
+    fn has(value: &pb::Value, test: &dyn Fn(&str, &pb::Value) -> bool) -> bool {
+        match value.value_type.as_ref() {
+            Some(V::ArrayValue(array)) => array.values.iter().any(|v| has(v, test)),
+            Some(V::MapValue(map)) => map
+                .fields
+                .iter()
+                .any(|(key, inner)| test(key, value) || has(inner, test)),
+            _ => false,
+        }
+    }
+    let typed = |key: &str, map: &pb::Value| key == "__type__" && !is_vector_literal(map);
+    if has(value, &|key, _| key.is_empty()) {
+        return Err(Status::invalid_argument("Property names cannot be empty."));
+    }
+    if !has(value, &typed) {
+        return crate::decode::decode_value(value)
+            .map_err(|e| Status::invalid_argument(e.to_string()));
+    }
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => Ok(Value::Array(
+            array
+                .values
+                .iter()
+                .map(decode_official_literal)
+                .collect::<Result<_, _>>()?,
+        )),
+        Some(V::MapValue(map)) if !is_vector_literal(value) => {
+            let mut fields = std::collections::BTreeMap::new();
+            for (key, inner) in &map.fields {
+                if is_reserved_name(key) && key != "__type__" {
+                    return Err(Status::invalid_argument(format!(
+                        "field name '{key}' is reserved."
+                    )));
+                }
+                fields.insert(key.clone(), decode_official_literal(inner)?);
+            }
+            Ok(Value::Map(fields))
+        }
+        _ => {
+            crate::decode::decode_value(value).map_err(|e| Status::invalid_argument(e.to_string()))
+        }
+    }
+}
+
+/// Whether a wire map is a vector (`{__type__: "__vector__", value: [...]}`).
+fn is_vector_literal(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    matches!(&value.value_type, Some(V::MapValue(map))
+    if matches!(
+        map.fields.get("__type__").and_then(|t| t.value_type.as_ref()),
+        Some(V::StringValue(t)) if t == "__vector__"
+    ))
 }
 
 /// Decodes `where(condition)`: a field or a call of a table function (production keeps the
@@ -873,10 +973,12 @@ fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status
                 "select alias {alias:?}: a reserved first segment with a child is not observed locally"
             )))
         }
-        [name] if name == "__name__" => Err(Status::invalid_argument(format!(
+        // A reserved first segment is refused with or without a child (O-3 for the top level,
+        // the official emulator for a child).
+        [name, ..] if name == "__name__" => Err(Status::invalid_argument(format!(
             "Stage 'select': field name '{name}' is reserved and can not be overwritten."
         ))),
-        [name] if is_reserved_name(name) => Err(Status::invalid_argument(format!(
+        [name, ..] if is_reserved_name(name) => Err(Status::invalid_argument(format!(
             "Stage 'select': field name '{name}' is reserved."
         ))),
         // A reserved name below another field is a nested key.

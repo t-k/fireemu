@@ -7736,28 +7736,25 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             }
         }
         // A reserved first segment with a child: unrecorded, so strict refuses it; the emulator
-        // profile keeps its nested key.
-        for alias in ["__x__.a", "__name__.a", "`__x__`.a"] {
-            let request = stages(vec![(alias, pipeline_field("top"))]);
+        // profile refuses it as the official emulator does, with the top-level texts.
+        for (alias, text) in [
+            ("__x__.a", "Stage 'select': field name '__x__' is reserved."),
+            (
+                "__name__.a",
+                "Stage 'select': field name '__name__' is reserved and can not be overwritten.",
+            ),
+            (
+                "`__x__`.a",
+                "Stage 'select': field name '__x__' is reserved.",
+            ),
+        ] {
+            let err =
+                pipeline_error(&mut client, stages(vec![(alias, pipeline_field("top"))])).await;
             if strict {
-                let err = pipeline_error(&mut client, request).await;
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{alias}: {err}");
             } else {
-                let docs = drain_pipeline(
-                    client
-                        .execute_pipeline(pipeline_request(request))
-                        .await
-                        .unwrap()
-                        .into_inner(),
-                    1,
-                )
-                .await;
-                let first = alias.split('.').next().unwrap().trim_matches('`');
-                assert_eq!(
-                    docs[0].fields.keys().collect::<Vec<_>>(),
-                    [&first.to_owned()],
-                    "{alias}"
-                );
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{alias}: {err}");
+                assert_eq!(err.message(), text, "{alias}");
             }
         }
         handle.abort();
@@ -7795,7 +7792,7 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
         let name = format!("{DOCS}/{relative}");
         format!(
             "Document parent name \"{name}\" lacks \"/\" at index {}.",
-            name.len()
+            name.encode_utf16().count()
         )
     };
     let map_value = |entries: &[(&str, pb::Value)]| pb::Value {
@@ -7831,6 +7828,11 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 pipeline_stage("limit", i(5_000_000_000)),
             ],
             vec![("i".to_owned(), i(1))],
+        ),
+        (
+            "a literal map with a __type__ key",
+            select(map_value(&[("__type__", s("x"))])),
+            vec![("v".to_owned(), map_value(&[("__type__", s("x"))]))],
         ),
         (
             "limit at int64 max",
@@ -7933,6 +7935,114 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
             select(pipeline_function("collection_id", vec![reference("c/x/s")])),
             lacks("c/x/s"),
         ),
+        (
+            "parent of a subcollection",
+            select(pipeline_function("parent", vec![reference("c/x/s")])),
+            lacks("c/x/s"),
+        ),
+        // The index is the name's length in UTF-16 units, as the official emulator (Java)
+        // counts it: あ is one unit, 😀 two.
+        (
+            "document_id of a non-ASCII collection",
+            select(pipeline_function("document_id", vec![reference("あ")])),
+            lacks("あ"),
+        ),
+        (
+            "document_id of a collection outside the BMP",
+            select(pipeline_function("document_id", vec![reference("😀")])),
+            lacks("😀"),
+        ),
+        (
+            "limit of a boolean",
+            vec![
+                collection(),
+                pipeline_stage(
+                    "limit",
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::BooleanValue(true)),
+                    },
+                ),
+            ],
+            "Expected limit to be INTEGER_VALUE, but was BOOLEAN_VALUE.".to_owned(),
+        ),
+        (
+            "offset of a double",
+            vec![collection(), pipeline_stage("offset", double(1.5))],
+            "Expected offset to be INTEGER_VALUE, but was DOUBLE_VALUE.".to_owned(),
+        ),
+        (
+            "repeated key, missing value first, then two present values",
+            select(map_of(vec![
+                s("k"),
+                missing(),
+                s("k"),
+                f("i"),
+                s("k"),
+                f("s"),
+            ])),
+            "map(...) constructor given duplicate key: k".to_owned(),
+        ),
+        (
+            "map key from a missing field with a missing value",
+            select(map_of(vec![missing(), missing()])),
+            "map keys must be constants/literals".to_owned(),
+        ),
+        (
+            "map key from a field in where",
+            vec![
+                collection(),
+                pipeline_stage(
+                    "where",
+                    pipeline_function(
+                        "equal",
+                        vec![map_of(vec![f("s"), f("i")]), map_value(&[("a", i(1))])],
+                    ),
+                ),
+            ],
+            "map keys must be constants/literals".to_owned(),
+        ),
+        (
+            "an empty select, then a string limit",
+            vec![
+                collection(),
+                pipeline_select_map(vec![]),
+                pipeline_stage("limit", s("x")),
+            ],
+            "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.".to_owned(),
+        ),
+        (
+            "a literal map with an empty key",
+            select(map_value(&[("", i(1))])),
+            "Property names cannot be empty.".to_owned(),
+        ),
+        (
+            "an expression literal with a reserved key",
+            select(map_value(&[("__x__", f("i"))])),
+            "field name '__x__' is reserved.".to_owned(),
+        ),
+        (
+            "an expression literal with a reserved inner key",
+            select(map_value(&[("a", map_value(&[("__name__", f("i"))]))])),
+            "field name '__name__' is reserved.".to_owned(),
+        ),
+        (
+            "an expression literal with an empty key",
+            select(map_value(&[("", f("i"))])),
+            "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned(),
+        ),
+        (
+            "an expression literal with a __type__ key",
+            select(map_value(&[("__type__", f("i"))])),
+            "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned(),
+        ),
+        (
+            "an expression literal with a dotted key",
+            select(map_value(&[(
+                "a.b",
+                pipeline_function("document_id", vec![f("__name__")]),
+            )])),
+            "Value type is not supported: FUNCTION_VALUE".to_owned(),
+        ),
     ];
     for policy in [
         IndexValidationPolicy::Production,
@@ -7966,22 +8076,34 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 assert_eq!(docs[0].fields, fields.iter().cloned().collect(), "{label}");
             }
         }
-        // An offset beyond int32 skips every row in the emulator profile.
-        let offset = vec![collection(), pipeline_stage("offset", i(5_000_000_000))];
-        if strict {
-            let err = pipeline_error(&mut client, offset).await;
-            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
-        } else {
-            let docs = drain_pipeline(
-                client
-                    .execute_pipeline(pipeline_request(offset))
-                    .await
-                    .unwrap()
-                    .into_inner(),
-                1,
-            )
-            .await;
-            assert!(docs.is_empty());
+        // The index is the name's length: a literal for this database (the official row for
+        // `demo-app` reads 49 for a one-letter collection, 50 for one outside the BMP).
+        assert_eq!(
+            lacks("c"),
+            format!("Document parent name \"{DOCS}/c\" lacks \"/\" at index 49.")
+        );
+        assert_eq!(
+            lacks("😀"),
+            format!("Document parent name \"{DOCS}/😀\" lacks \"/\" at index 50.")
+        );
+        // An offset beyond int32 skips every row in the emulator profile, up to int64 max.
+        for value in [5_000_000_000, i64::MAX] {
+            let offset = vec![collection(), pipeline_stage("offset", i(value))];
+            if strict {
+                let err = pipeline_error(&mut client, offset).await;
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+            } else {
+                let docs = drain_pipeline(
+                    client
+                        .execute_pipeline(pipeline_request(offset))
+                        .await
+                        .unwrap()
+                        .into_inner(),
+                    1,
+                )
+                .await;
+                assert!(docs.is_empty());
+            }
         }
         for (label, stages, text) in &refused {
             let err = pipeline_error(&mut client, stages.clone()).await;

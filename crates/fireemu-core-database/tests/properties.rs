@@ -703,3 +703,76 @@ proptest! {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// Same form
+// ---------------------------------------------------------------------------------------
+
+/// `value` with every integer written as the double of the same value.
+fn as_doubles(value: &Json) -> Json {
+    match value {
+        Json::Number(Number::Int(i)) => Json::Number(Number::from_f64(*i as f64).unwrap()),
+        Json::Array(items) => Json::Array(items.iter().map(as_doubles).collect()),
+        Json::Object(map) => Json::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), as_doubles(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn has_int(value: &Json) -> bool {
+    match value {
+        Json::Number(Number::Int(_)) => true,
+        Json::Array(items) => items.iter().any(has_int),
+        Json::Object(map) => map.values().any(has_int),
+        _ => false,
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    #[test]
+    fn same_form_tells_apart_what_equality_does_not(v in value()) {
+        prop_assert!(v.same_form(&v));
+        let doubled = as_doubles(&v);
+        // Equal in value either way; the same form only when there was no integer.
+        prop_assert_eq!(&v, &doubled);
+        prop_assert_eq!(v.same_form(&doubled), !has_int(&v));
+        prop_assert_eq!(doubled.same_form(&v), !has_int(&v));
+    }
+
+    #[test]
+    fn same_form_implies_equality(a in value(), b in value()) {
+        if a.same_form(&b) {
+            prop_assert_eq!(&a, &b);
+        }
+    }
+}
+
+#[test]
+fn same_form_compares_numbers_by_kind_and_bits() {
+    let double = |x: f64| Json::Number(Number::from_f64(x).unwrap());
+    assert!(Json::int(1).same_form(&Json::int(1)));
+    assert!(!Json::int(1).same_form(&double(1.0)));
+    assert!(double(1.5).same_form(&double(1.5)));
+    assert!(!double(0.0).same_form(&double(-0.0)));
+    assert_eq!(double(0.0), double(-0.0));
+    assert!(!Json::int(1).same_form(&Json::int(2)));
+    assert!(!Json::Null.same_form(&Json::Bool(false)));
+    assert!(Json::Array(vec![Json::int(1), double(0.5)])
+        .same_form(&Json::Array(vec![Json::int(1), double(0.5)])));
+    assert!(!Json::Array(vec![Json::int(1)]).same_form(&Json::Array(vec![double(1.0)])));
+    assert!(
+        !Json::Array(vec![Json::int(1)]).same_form(&Json::Array(vec![Json::int(1), Json::int(2)]))
+    );
+    assert!(
+        !Json::Array(vec![Json::int(1), Json::int(2)]).same_form(&Json::Array(vec![Json::int(1)]))
+    );
+    assert!(!Json::object([("a", Json::int(1))]).same_form(&Json::object([("b", Json::int(1))])));
+    assert!(!Json::object([("a", Json::int(1))])
+        .same_form(&Json::object([("a", Json::int(1)), ("b", Json::int(1))])));
+    assert!(!Json::string("a").same_form(&Json::string("b")));
+}

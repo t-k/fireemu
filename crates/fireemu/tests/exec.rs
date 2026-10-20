@@ -1024,9 +1024,8 @@ fn only_a_lost_port_race_on_the_chosen_ui_port_is_retried() {
 
 #[test]
 fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
-    // The official `firebase emulators:exec` names, and only those: no
-    // FIREBASE_DATABASE_EMULATOR_HOST (fireemu serves no Realtime Database) and no
-    // variable for a service `--only` left out.
+    // The official `firebase emulators:exec` names, and only those: no variable for a
+    // service `--only` left out (the Realtime Database is not selected in any of these).
     let firestore = [
         "FIRESTORE_EMULATOR_HOST",
         "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
@@ -1074,7 +1073,7 @@ fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
         }
         assert!(
             !env.contains_key("FIREBASE_DATABASE_EMULATOR_HOST"),
-            "{label}: fireemu has no Realtime Database to point that variable at"
+            "{label}: the Realtime Database was not selected"
         );
         // The control plane is always reachable: it is fireemu's own surface, not a product.
         assert!(env["FIREEMU_CONTROL_URL"].starts_with("http://127.0.0.1:"));
@@ -1102,7 +1101,6 @@ fn the_control_plane_leaves_the_auth_port_free_when_auth_is_not_selected() {
 #[test]
 fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
     for (service, fragment) in [
-        ("database", "deferred"),
         ("hosting", "deferred"),
         ("apphosting", "deferred"),
         ("dataconnect", "deferred"),

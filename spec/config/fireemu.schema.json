@@ -778,6 +778,12 @@
         "eventarcPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "tasksPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "pubsubPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "databasePort": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port of the Realtime Database emulator, the same setting as emulators.database.port in firebase.json and --database-port. Setting it starts the emulator; the official default port is 9000."
+        },
         "loggingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "hubPort": {
           "type": "integer",
@@ -833,6 +839,18 @@
       "properties": {
         "delivery": { "enum": ["exactly-once-test", "at-least-once", "chaos"] },
         "maxAttempts": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The Realtime Database emulator (served with --only database, emulators.database or daemon.databasePort).",
+      "properties": {
+        "defaultAccess": {
+          "enum": ["open", "locked"],
+          "default": "open",
+          "description": "What a database without a rules file allows. fireemu does not evaluate Realtime Database rules files yet. \"open\" (development default, as the official emulator): every request. \"locked\" (productionExact; strict profile only): only the emulator's owner credential (Authorization: Bearer owner), as a new production database in locked mode admits only administrators."
+        }
       }
     },
     "pubsub": {

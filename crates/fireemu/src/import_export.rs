@@ -440,7 +440,7 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
             "import",
             &manifest_path,
             format!(
-                "the export carries a {} section, and that product is a deferred gap in fireemu: it serves no Realtime Database or SQL Connect surface, so importing the rest would start a suite holding less state than the artifact records",
+                "the export carries a {} section, which fireemu cannot import (Realtime Database import is an open gap, SQL Connect is deferred), so importing the rest would start a suite holding less state than the artifact records",
                 product.cli_name()
             ),
         ));

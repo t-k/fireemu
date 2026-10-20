@@ -17,6 +17,16 @@ pub enum Number {
 }
 
 impl Number {
+    /// Whether both are the same kind of number with the same value, doubles compared by
+    /// their bits (so `0.0` and `-0.0` differ).
+    pub fn same_form(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Double(a), Self::Double(b)) => a.to_bits() == b.to_bits(),
+            _ => false,
+        }
+    }
+
     /// The number for `value`, or `None` when it is not finite.
     pub fn from_f64(value: f64) -> Option<Self> {
         value.is_finite().then_some(Self::Double(value))

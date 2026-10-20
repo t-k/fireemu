@@ -84,8 +84,9 @@ impl EmulatorInfo {
 /// Writes an export directory from the live state. `main` implements it; the Hub only knows
 /// that `POST /_admin/export` calls it.
 pub trait ExportRunner: Send + Sync {
-    /// Writes the export at `path`, attributing it to `initiated_by`.
-    fn export(&self, path: &std::path::Path, initiated_by: &str) -> Result<(), String>;
+    /// Writes the export at `path`, attributing it to `initiated_by`; returns the warnings the
+    /// export carries (data it left out), which the Hub's answer passes on to the caller.
+    fn export(&self, path: &std::path::Path, initiated_by: &str) -> Result<Vec<String>, String>;
 }
 
 /// Everything the Hub answers from.
@@ -716,7 +717,16 @@ async fn run_export(
     let runner = Arc::clone(runner);
     let result = tokio::task::spawn_blocking(move || runner.export(&path, &initiated_by)).await;
     match result {
-        Ok(Ok(())) => json_response(StatusCode::OK, &json!({"message": "OK"}), origin),
+        // The official body is `{"message": "OK"}`; `warnings` is fireemu's, for what the
+        // export left out, so the command that asked can print it.
+        Ok(Ok(warnings)) if warnings.is_empty() => {
+            json_response(StatusCode::OK, &json!({"message": "OK"}), origin)
+        }
+        Ok(Ok(warnings)) => json_response(
+            StatusCode::OK,
+            &json!({"message": "OK", "warnings": warnings}),
+            origin,
+        ),
         Ok(Err(message)) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &json!({ "message": message }),

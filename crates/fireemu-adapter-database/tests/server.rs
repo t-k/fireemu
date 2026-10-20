@@ -257,7 +257,8 @@ impl Client {
                     }
                 }
                 let mut chunk = [0u8; 4096];
-                let n = self.stream.read(&mut chunk).await.unwrap();
+                // A reset connection (Linux answers unread data with RST) ends it like EOF.
+                let n = self.stream.read(&mut chunk).await.unwrap_or(0);
                 if n == 0 {
                     return (0xFF, Vec::new());
                 }
@@ -627,7 +628,9 @@ async fn a_listener_that_stops_reading_is_dropped_once_its_queue_fills() {
 }
 
 #[tokio::test]
-async fn a_listener_whose_waiting_messages_pass_the_byte_budget_is_dropped() {
+async fn a_message_larger_than_the_byte_budget_reaches_a_listener_with_an_empty_queue() {
+    // The official emulator delivers it. The queue unit tests pin the drop that follows
+    // when a second message would wait with it.
     let (address, database) = start_with(ServerConfig {
         stream_queue_bytes: 10_000,
         realtime_idle: Duration::from_secs(120),
@@ -641,10 +644,15 @@ async fn a_listener_whose_waiting_messages_pass_the_byte_budget_is_dropped() {
         .await;
     reader.next_text().await;
     assert_eq!(database.lock().unwrap().listen_count(), 1);
-    // One message larger than the budget: the queue is far from full in messages.
     let big = format!("\"{}\"", "x".repeat(20_000));
     exchange(&address, "PUT", "/s.json?ns=w11&print=silent", &big).await;
-    assert_eq!(database.lock().unwrap().listen_count(), 0);
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // It arrives, split into frames as the SDK reads a long message.
+    let mut received = String::new();
+    while !received.contains("xxxxx\"") {
+        received.push_str(&reader.next_text().await);
+    }
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
 }
 
 #[tokio::test]
@@ -740,4 +748,163 @@ async fn a_client_that_pings_without_reading_is_dropped_after_the_write_deadline
     })
     .await
     .expect("the stalled client was never dropped");
+}
+
+#[tokio::test]
+async fn a_reset_outside_any_request_reaches_listeners_at_once() {
+    let (address, database) = start(Duration::from_secs(30)).await;
+    exchange(&address, "PUT", "/a.json?ns=w15", "1").await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w15").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#)
+        .await;
+    client.next_text().await;
+    client.next_text().await;
+    database
+        .lock()
+        .unwrap()
+        .clear_namespaces_where(|ns| ns == "w15");
+    assert_eq!(
+        client.next_text().await,
+        r#"{"t":"d","d":{"b":{"p":"a","d":null},"a":"d"}}"#
+    );
+}
+
+#[tokio::test]
+async fn stopping_the_server_stops_its_flush_task() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 3)));
+    let server = tokio::spawn(serve(
+        listener,
+        Arc::clone(&database),
+        ServerConfig::default(),
+    ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(Arc::strong_count(&database) > 1);
+    server.abort();
+    let _ = server.await;
+    // The flush task held the database too; it goes with the server.
+    for _ in 0..100 {
+        if Arc::strong_count(&database) == 1 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the database is still held after the server stopped");
+}
+
+#[tokio::test]
+async fn a_closing_websocket_writes_what_it_registered_and_listeners_hear_it() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    exchange(
+        &address,
+        "PUT",
+        "/presence/other.json?ns=w20",
+        r#""online""#,
+    )
+    .await;
+    let (mut listener, _) = Client::connect(&address, "/.ws?v=5&ns=w20").await;
+    listener.next_text().await;
+    listener
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/presence","h":""}}}"#)
+        .await;
+    listener.next_text().await;
+    listener.next_text().await;
+    let (mut leaving, _) = Client::connect(&address, "/.ws?v=5&ns=w20").await;
+    leaving.next_text().await;
+    leaving
+        .text(r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/presence/me","d":"offline"}}}"#)
+        .await;
+    assert_eq!(
+        leaving.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}"#
+    );
+    // A close frame ends the connection; a dropped socket would too.
+    leaving.send(0x8, &[0x03, 0xe8]).await;
+    drop(leaving);
+    assert_eq!(
+        listener.next_text().await,
+        r#"{"t":"d","d":{"b":{"p":"presence","d":{"me":"offline"}},"a":"m"}}"#
+    );
+    assert_eq!(
+        exchange(&address, "GET", "/presence.json?ns=w20", "")
+            .await
+            .rsplit("\r\n\r\n")
+            .next()
+            .unwrap(),
+        r#"{"me":"offline","other":"online"}"#
+    );
+}
+
+/// Reads `target` until it answers `expected`, for writes that land after a connection ends.
+async fn eventually(address: &str, target: &str, expected: &str) {
+    for _ in 0..100 {
+        let response = exchange(address, "GET", target, "").await;
+        if response.rsplit("\r\n\r\n").next() == Some(expected) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{target} never answered {expected}");
+}
+
+#[tokio::test]
+async fn an_idle_websocket_writes_what_it_registered_when_it_is_closed() {
+    let (address, _) = start_with(ServerConfig {
+        realtime_idle: Duration::from_millis(300),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=w21").await;
+    client.next_text().await;
+    client
+        .text(r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/idle","d":1}}}"#)
+        .await;
+    client.next_text().await;
+    eventually(&address, "/idle.json?ns=w21", "1").await;
+}
+
+#[tokio::test]
+async fn a_websocket_dropped_for_falling_behind_writes_what_it_registered_once() {
+    let (address, database) = start_with(ServerConfig {
+        stream_queue: 2,
+        realtime_idle: Duration::from_secs(120),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut reader, _) = Client::connect(&address, "/.ws?v=5&ns=w22").await;
+    reader.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/presence","d":"offline"}}}"#)
+        .await;
+    reader.next_text().await;
+    reader
+        .text(r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/a","h":""}}}"#)
+        .await;
+    while !reader.next_text().await.contains(r#""r":2"#) {}
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // The reader stops reading; large writes fill its socket, then its queue.
+    for n in 0..200 {
+        if database.lock().unwrap().listen_count() == 0 {
+            break;
+        }
+        // A different value each time: an equal write is no write and pushes nothing.
+        let big = format!("\"{n}{}\"", "x".repeat(300_000));
+        exchange(&address, "PUT", "/a.json?ns=w22&print=silent", &big).await;
+    }
+    assert_eq!(database.lock().unwrap().listen_count(), 0, "never dropped");
+    eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
+    // What the dropped socket still sends is not applied after it.
+    reader
+        .text(r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/presence","d":"online"}}}"#)
+        .await;
+    // Reading again lets the server finish the pushes it was writing and read that frame.
+    loop {
+        let (opcode, _) = reader.next().await;
+        if opcode == 0x8 || opcode == 0xFF {
+            break;
+        }
+    }
+    eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
 }

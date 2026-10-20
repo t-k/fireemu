@@ -373,6 +373,58 @@ fn write_bodies_are_checked() {
 }
 
 #[test]
+fn put_answers_and_tags_the_value_as_written_even_when_nothing_is_stored() {
+    let mut db = db();
+    let etag = |db: &mut Database, method: &str, target: &str, body: &str| {
+        header(
+            &send(db, method, target, &[("X-Firebase-ETag", "true")], body),
+            "ETag",
+        )
+        .unwrap()
+        .to_owned()
+    };
+    // The increment resolves to the double 1.0; the stored 1 stays, being equal.
+    call(&mut db, "PUT", "/c.json?ns=w2", "1");
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/c.json?ns=w2",
+            r#"{".sv":{"increment":0.0}}"#
+        ),
+        (200, "1.0".to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/c.json?ns=w2", ""),
+        (200, "1".to_owned())
+    );
+    let resolved = r#"{"a":{".sv":{"increment":0}},"b":1}"#;
+    call(
+        &mut db,
+        "PUT",
+        "/n.json?ns=w2",
+        r#"{"a":{".sv":{"increment":2}},"b":1.0}"#,
+    );
+    assert_eq!(
+        call(&mut db, "PUT", "/n.json?ns=w2", resolved),
+        (200, r#"{"a":2,"b":1}"#.to_owned())
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/n.json?ns=w2", ""),
+        (200, r#"{"a":2,"b":1.0}"#.to_owned())
+    );
+    // The answer's ETag hashes what was written (0), not what stays stored (-0.0).
+    call(&mut db, "PUT", "/z.json?ns=w2", "-0.0");
+    call(&mut db, "PUT", "/y.json?ns=w2", "0");
+    let zero = etag(&mut db, "GET", "/y.json?ns=w2", "");
+    let negative_zero = etag(&mut db, "GET", "/z.json?ns=w2", "");
+    assert_eq!(zero, "7ysMph9WPitGP7poMnMHMVPtUlI=");
+    assert_eq!(negative_zero, "m/gA365Q5OBo06Bg8wdybAAiMSQ=");
+    assert_eq!(etag(&mut db, "PUT", "/z.json?ns=w2", "0"), zero);
+    assert_eq!(etag(&mut db, "GET", "/z.json?ns=w2", ""), negative_zero);
+}
+
+#[test]
 fn put_answers_the_stored_value_in_export_form() {
     let mut db = db();
     assert_eq!(

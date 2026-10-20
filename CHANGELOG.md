@@ -8,8 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- The Firebase Realtime Database is served, without a compatibility claim yet: the REST API with event streams, and the WebSocket and long-polling protocols the SDKs use, with listens, queries and `onDisconnect` writes. It starts with `--only database`, `emulators.database` in `firebase.json`, `daemon.databasePort` or `--database-port` (port 9000 by default), and `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST`. Behavior is compared with the official emulator, and where production has not been observed it follows that emulator and may change. Security Rules are not evaluated: a database is open, or with the new `database.defaultAccess = "locked"` (the `productionExact` default, strict profile only) only the emulator's `owner` credential reads and writes. The start banner's `database rules:` line names the access in effect. Import, export, Functions triggers and a UI view are not supported yet; an export taken while the database is served prints a warning that its data is left out.
+
 ### Changed
 
+- A `firebase.json` with `emulators.database`, which `firebase init` writes, now starts the Realtime Database on that port, where it used to be reported as unsupported. A port already in use (9000 is also PHP-FPM's default) now stops startup; choose another with `--database-port`, or leave the database out with `--only`. `--only database` is no longer refused.
+- The `database` section of `firebase.json` is now checked for shape (`rules`, `instance`, `target` and the ignored `predeploy` / `postdeploy` hooks); an unknown key there stops startup. When the database is served, a warning says that the rules files it names are not enforced.
 - Pipelines answer what FS-ENT-ORACLE O-3 and O-4 recorded from production (2026-10-20) under both profiles, as the official emulator answers it:
   - `select` aliases: invalid, empty and reserved names (a reserved first segment is refused with or without a child, a reserved name below another field is a nested key), and the length limit of 1500 bytes or more, counted in UTF-8 bytes over the segments joined with `.` after unquoting, with production's `PROPERTY_PATH_TOO_LONG` detail.
   - Comparisons of every pair of kinds, vectors (by length first, then element by element) and missing fields included; a `where` on a value or constant of any kind keeps the row only for `true`.

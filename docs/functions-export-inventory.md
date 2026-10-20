@@ -21,7 +21,7 @@ Non-trigger exports (`params`, `logger`, `config`, `app`, `onInit`, `runWith`, `
 | `pubsub` (`topic().onPublish`, `schedule()`) | served | `pubsub`, `schedule` | `crates/fireemu-adapter-functions/tests/runtime.rs` (`onJob`, `tick`, `nightly`, `failSchedule`), `conformance/pubsub-matrix.json` | Schedules run on the virtual clock |
 | `auth` (`user().onCreate/onDelete`, `beforeCreate`, `beforeSignIn`) | served | `auth`, blocking `auth` | `crates/fireemu-adapter-functions/tests/runtime.rs` (`onUser`, `onGone`), `crates/fireemu/tests/functions_discovery.rs`, `crates/fireemu-adapter-http/tests/auth_flows.rs` | Blocking functions run synchronously inside the Identity Toolkit request; credential forwarding follows `auth.forwardInboundCredentials` |
 | `tasks` (`taskQueue().onDispatch`) | served | `tasks` | `crates/fireemu-adapter-functions/tests/runtime.rs` (task queue scenarios) | Rate limits and retry config are enforced on the virtual clock |
-| `database` (`ref().onCreate/...`) | deferred | none (`ignored.triggerType: database`) | `tools/runner-node/index.mjs` `DEFERRED_TRIGGER_PRODUCTS` | The Realtime Database emulator is not in the active supported surface |
+| `database` (`ref().onCreate/...`) | deferred | none (`ignored.triggerType: database`) | `tools/runner-node/index.mjs` `DEFERRED_TRIGGER_PRODUCTS` | The daemon serves the Realtime Database, but does not deliver its events to functions yet |
 | `remoteConfig` (`onUpdate`) | deferred | none (`ignored.triggerType: remoteConfig`) | same | Remote Config has no emulator in the active surface |
 | `analytics` (`event().onLog`) | not-planned | none (`ignored.triggerType: analytics`) | same | Google Analytics triggers have no local emulator |
 | `testLab` (`testMatrix().onComplete`) | not-planned | none (`ignored.triggerType: testLab`) | same | Test Lab triggers have no local emulator |
@@ -39,7 +39,7 @@ Non-trigger exports (`params`, `logger`, `config`, `app`, `onInit`, `runWith`, `
 | `tasks` (`onTaskDispatched`) | served | `tasks` | as v1 `tasks` | |
 | `eventarc` (`onCustomEventPublished`) | served | `eventarc` | `crates/fireemu-adapter-functions/tests/runtime.rs` (`customEvent`), `crates/fireemu-adapter-functions/src/eventarc.rs` tests | Channels and filters are matched; publication goes through the Eventarc listener |
 | `alerts` (`onAlertPublished` and the per-product `onNew*` helpers) | served | `eventarc` (Firebase alerts channel) | `ui/e2e/alerts.spec.ts`, `crates/fireemu-adapter-functions/tests/runtime.rs` | Alerts are published through the official `google/publishEvents` mechanism |
-| `database` (`onValueCreated/...`) | deferred | none | `DEFERRED_TRIGGER_PRODUCTS` | Realtime Database is deferred |
+| `database` (`onValueCreated/...`) | deferred | none | `DEFERRED_TRIGGER_PRODUCTS` | The daemon serves the Realtime Database, but does not deliver its events to functions yet |
 | `dataconnect` (`onMutationExecuted`) | deferred | none (`ignored.triggerType: dataconnect`) | `DEFERRED_TRIGGER_PRODUCTS` | The Data Connect emulator is not in the active supported surface |
 | `ai` (`beforeGenerateContent`, `afterGenerateContent`) | not-planned | none (`ignored.triggerType: ai`) | `DEFERRED_TRIGGER_PRODUCTS` | Firebase AI Logic blocking triggers have no local emulator; the official emulator does not serve them either |
 | `remoteConfig` (`onConfigUpdated`) | deferred | none | `DEFERRED_TRIGGER_PRODUCTS` | Remote Config is deferred |

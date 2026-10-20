@@ -158,26 +158,40 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
         "fixtures/rules-expressions-3-official-emulator-4.11.2.json"
     ))
     .unwrap();
-    // A lone escaped surrogate has no counterpart in this text: refused at load (review r5
-    // S13), where the official emulator loads it.
-    let (refused, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) = corpus
-        .into_iter()
-        .partition(|entry| entry.get("fireemu").is_some_and(|f| f == "refuses"));
-    assert_eq!(refused.len(), 8);
+    fn marked(mark: &'static str) -> impl Fn(&serde_json::Value) -> bool {
+        move |entry| entry.get("fireemu").is_some_and(|f| f == mark)
+    }
+    // Refused at load here: a lone escaped surrogate, which has no counterpart in this text
+    // (review r5 S13), where the official emulator loads it; and rules both refuse, with
+    // another text or place (a character that is no white space, an unterminated comment).
+    let (refused, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
+        corpus.into_iter().partition(marked("refuses"));
+    assert!(refused.len() >= 8);
     for entry in &refused {
-        let error = Rules::compile(&read_rule_at_t(entry["expr"].as_str().unwrap())).unwrap_err();
+        let expr = entry["expr"].as_str().unwrap();
+        assert!(Rules::compile(&read_rule_at_t(expr)).is_err(), "{entry}");
+    }
+    // Patterns the official emulator refuses because it cannot determinize them, its own
+    // resource limit: they load here (ruling M14, a listed difference on the production
+    // observation list).
+    let (undeterminized, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
+        corpus.into_iter().partition(marked("determinize"));
+    assert_eq!(undeterminized.len(), 6);
+    for entry in &undeterminized {
+        let expr = entry["expr"].as_str().unwrap();
         assert!(
-            error
-                .to_string()
-                .ends_with("Unsupported javascript syntax."),
-            "{entry}: {error}"
+            entry["error"]
+                .as_str()
+                .unwrap()
+                .contains("could not determinize efficiently"),
+            "{entry}"
         );
-        assert_eq!(entry["load"], 200);
+        assert!(Rules::compile(&read_rule_at_t(expr)).is_ok(), "{entry}");
     }
     let (denied, agreeing): (Vec<serde_json::Value>, Vec<serde_json::Value>) = corpus
         .into_iter()
         .partition(|entry| entry.get("fireemu").is_some());
-    assert!(agreeing.len() > 600 && denied.len() > 150);
+    assert!(agreeing.len() > 1200 && denied.len() > 200);
     // Both refuse it; the official emulator places the error of an expression that spans a
     // line break elsewhere on the line.
     let known = [
@@ -217,9 +231,6 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
         r#""'?ia'.matches(/(?i)a/)" : read false, expected true"#,
         r#""'?=a'.matches(/(?=a)/)" : read false, expected true"#,
         r#""'x?:a'.matches(/x(?:a)/)" : read false, expected true"#,
-        r#""'a'.matches(/^a**$/)" : read false, expected true"#,
-        r#""'aaa'.matches(/^a**$/)" : read false, expected true"#,
-        r#""''.matches(/^a**$/)" : read false, expected true"#,
         r#""'?'.matches(/^(?)$/)" : read false, expected true"#,
         r#""'1'.matches(/^\\1$/)" : read false, expected true"#,
         r#""!'\\n'.matches(/^\\n$/)" : read false, expected true"#,
@@ -230,7 +241,6 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
         r#""'q'.matches(/^\\q$/)" : read false, expected true"#,
         r#""'x'.matches(/^\\x$/)" : read false, expected true"#,
         r#""!'aa'.matches(/^(a)\\1$/)" : read false, expected true"#,
-        r#""'a'.matches(/a**/)" : read false, expected true"#,
         // Ranges whose endpoints are surrogates of one character are, read by UTF-16 unit,
         // reversed or not ranges at all: an error here, false and true there.
         // A lone escaped surrogate has no counterpart in this text: refused at load.

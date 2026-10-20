@@ -340,6 +340,32 @@ async fn bad_segments_answer_400_and_end_the_connection() {
 }
 
 #[tokio::test]
+async fn a_malformed_percent_escape_is_a_bad_request_before_anything_else() {
+    let (address, database) = start(ServerConfig::default()).await;
+    let bad = (
+        400,
+        "application/json; charset=utf-8".to_owned(),
+        "{\n  \"error\" : \"Bad Request\"\n}\n".to_owned(),
+    );
+    assert_eq!(
+        get(
+            &address,
+            "GET",
+            "/.lp?start=t&ser=1&cb=1&v=5&ns=lpe&x=%zz",
+            ""
+        )
+        .await,
+        bad
+    );
+    let (mut lp, _) = Lp::start(&address, "lpe").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    let target = format!("/.lp?id={}&pw={}&ser=60&x=%+f", lp.id, lp.pw);
+    assert_eq!(get(&address, "GET", &target, "").await, bad);
+    // The request never reached the connection.
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+}
+
+#[tokio::test]
 async fn a_held_request_that_runs_out_closes_the_connection() {
     let (address, database) = start(ServerConfig {
         long_poll_hold: Duration::from_millis(300),

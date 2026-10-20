@@ -148,6 +148,9 @@ pub(super) async fn answer(shared: &Arc<Shared>, request: &Request<Incoming>) ->
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned)
         .unwrap_or_default();
+    if let Err(refusal) = request::check_escapes(&target) {
+        return full(refusal_response(&refusal));
+    }
     let (_, params) = request::split_target(&target);
     match parse(&params) {
         LpRequest::Start { callback } => start(shared, &target, &host, callback),

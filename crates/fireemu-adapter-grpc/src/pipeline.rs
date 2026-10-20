@@ -1230,13 +1230,13 @@ fn holds_unobserved_part(stages: &[pb::pipeline::Stage]) -> bool {
 }
 
 /// The subset's order of stages after the input: `where` and `select`, then `offset`, then
-/// `limit`; anything else is not run.
+/// `limit` (which shares the last rank with the stages fireemu does not run: the checks end
+/// at the first such stage, and a second `limit` is refused as repeated).
 fn stage_rank(name: &str) -> u8 {
     match name {
         "where" | "select" => 1,
         "offset" => 2,
-        "limit" => 3,
-        _ => 4,
+        _ => 3,
     }
 }
 

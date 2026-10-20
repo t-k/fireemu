@@ -8,7 +8,7 @@
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
-use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::field_path::{FieldPath, FieldPathError};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
 use fireemu_core_firestore::pipeline_exec::{
@@ -429,6 +429,7 @@ pub struct CompiledExecution {
 /// is refused. `unrecorded` decides whether shapes with unrecorded production behavior
 /// (a constant `where` condition, a literal holding expressions) are refused or answered as
 /// the official emulator answers them.
+#[allow(clippy::too_many_lines)]
 pub fn compile_pipeline(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
@@ -440,79 +441,106 @@ pub fn compile_pipeline(
     let (mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
         (false, false, false, false);
     let mut pushdown = None;
-    for stage in pipeline.stages.iter().skip(1) {
-        let rank = match stage.name.as_str() {
-            "where" | "select" => 1,
-            "offset" => 2,
-            "limit" => 3,
-            _ => 4,
-        };
-        if rank < last_rank {
-            return Err(Status::unimplemented(
-                "pipeline stages are out of supported order",
-            ));
+    // An empty alias map, which the official emulator answers only after every stage's own
+    // argument checks.
+    let mut deferred: Option<Status> = None;
+    let compiled = (|| -> Result<(), Status> {
+        for (position, stage) in pipeline.stages.iter().enumerate().skip(1) {
+            let rank = match stage.name.as_str() {
+                "where" | "select" => 1,
+                "offset" => 2,
+                "limit" => 3,
+                _ => 4,
+            };
+            if rank < last_rank {
+                return Err(Status::unimplemented(
+                    "pipeline stages are out of supported order",
+                ));
+            }
+            last_rank = rank;
+            match stage.name.as_str() {
+                "where" => {
+                    if seen_where || seen_select || seen_limit {
+                        return Err(Status::unimplemented("duplicate or misplaced where stage"));
+                    }
+                    seen_where = true;
+                    let (condition, filter) = decode_condition(stage, unrecorded)?;
+                    pushdown = filter;
+                    stages.push(Stage::Where(condition));
+                }
+                "select" => {
+                    if seen_select {
+                        return Err(Status::unimplemented(
+                            "duplicate select stage is unsupported locally",
+                        ));
+                    }
+                    seen_select = true;
+                    if unrecorded != Unrecorded::Refuse
+                        && stage.args.first().is_some_and(is_empty_map)
+                    {
+                        deferred.get_or_insert_with(|| {
+                            Status::invalid_argument(
+                                "The 'select(...)' stage requires at least one field.",
+                            )
+                        });
+                        continue;
+                    }
+                    stages.push(Stage::Select(decode_select(stage, unrecorded)?));
+                }
+                "offset" => {
+                    if seen_offset {
+                        return Err(Status::unimplemented(
+                            "duplicate offset stage is unsupported locally",
+                        ));
+                    }
+                    seen_offset = true;
+                    let Some(pb::value::ValueType::IntegerValue(n)) =
+                        stage.args.first().and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::invalid_argument("offset must be an integer"));
+                    };
+                    let offset = i32::try_from(*n).map_err(|_| {
+                        Status::unimplemented("offset exceeds the finite local execution range")
+                    })?;
+                    let offset = u64::try_from(offset)
+                        .map_err(|_| Status::invalid_argument("offset must not be negative"))?;
+                    stages.push(Stage::Offset(offset));
+                }
+                "limit" => {
+                    if seen_limit {
+                        return Err(Status::unimplemented(
+                            "duplicate limit stage is unsupported locally",
+                        ));
+                    }
+                    seen_limit = true;
+                    let Some(pb::value::ValueType::IntegerValue(n)) =
+                        stage.args.first().and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::invalid_argument("limit must be an integer"));
+                    };
+                    let limit = u32::try_from(*n)
+                        .map_err(|_| Status::invalid_argument("limit is out of range"))?;
+                    stages.push(Stage::Limit(u64::from(limit)));
+                }
+                other => {
+                    // The official emulator checks every stage's arguments before running any.
+                    for (later, rest) in pipeline.stages.iter().enumerate().skip(position) {
+                        check_unrun_alias_stage(rest, later, unrecorded, &mut deferred)?;
+                    }
+                    return Err(Status::unimplemented(format!(
+                        "pipeline stage {other:?} is unsupported locally"
+                    )));
+                }
+            }
         }
-        last_rank = rank;
-        match stage.name.as_str() {
-            "where" => {
-                if seen_where || seen_select || seen_limit {
-                    return Err(Status::unimplemented("duplicate or misplaced where stage"));
-                }
-                seen_where = true;
-                let (condition, filter) = decode_condition(stage, unrecorded)?;
-                pushdown = filter;
-                stages.push(Stage::Where(condition));
-            }
-            "select" => {
-                if seen_select {
-                    return Err(Status::unimplemented(
-                        "duplicate select stage is unsupported locally",
-                    ));
-                }
-                seen_select = true;
-                stages.push(Stage::Select(decode_select(stage, unrecorded)?));
-            }
-            "offset" => {
-                if seen_offset {
-                    return Err(Status::unimplemented(
-                        "duplicate offset stage is unsupported locally",
-                    ));
-                }
-                seen_offset = true;
-                let Some(pb::value::ValueType::IntegerValue(n)) =
-                    stage.args.first().and_then(|v| v.value_type.as_ref())
-                else {
-                    return Err(Status::invalid_argument("offset must be an integer"));
-                };
-                let offset = i32::try_from(*n).map_err(|_| {
-                    Status::unimplemented("offset exceeds the finite local execution range")
-                })?;
-                let offset = u64::try_from(offset)
-                    .map_err(|_| Status::invalid_argument("offset must not be negative"))?;
-                stages.push(Stage::Offset(offset));
-            }
-            "limit" => {
-                if seen_limit {
-                    return Err(Status::unimplemented(
-                        "duplicate limit stage is unsupported locally",
-                    ));
-                }
-                seen_limit = true;
-                let Some(pb::value::ValueType::IntegerValue(n)) =
-                    stage.args.first().and_then(|v| v.value_type.as_ref())
-                else {
-                    return Err(Status::invalid_argument("limit must be an integer"));
-                };
-                let limit = u32::try_from(*n)
-                    .map_err(|_| Status::invalid_argument("limit is out of range"))?;
-                stages.push(Stage::Limit(u64::from(limit)));
-            }
-            other => {
-                return Err(Status::unimplemented(format!(
-                    "pipeline stage {other:?} is unsupported locally"
-                )))
-            }
+        Ok(())
+    })();
+    match (compiled, deferred) {
+        (Err(error), Some(empty)) if error.code() != tonic::Code::InvalidArgument => {
+            return Err(empty)
         }
+        (Ok(()), Some(empty)) => return Err(empty),
+        (result, _) => result?,
     }
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
@@ -758,9 +786,12 @@ fn decode_select(
         aliases.push((alias, path, decode_operand(value, unrecorded, true)?));
     }
     if aliases.is_empty() {
-        return Err(Status::invalid_argument(
-            "select requires a non-empty alias map",
-        ));
+        // Production has not answered an empty select; the official emulator names the stage.
+        return Err(if unrecorded == Unrecorded::Refuse {
+            Status::unimplemented("an empty select alias map is not observed locally")
+        } else {
+            Status::invalid_argument("The 'select(...)' stage requires at least one field.")
+        });
     }
     aliases.sort_by(|a, b| a.1.cmp(&b.1));
     for pair in aliases.windows(2) {
@@ -782,12 +813,35 @@ fn decode_select(
         .collect())
 }
 
+/// The official emulator refuses a select alias whose unquoted segments, joined with '.', reach
+/// this many bytes (1499 is accepted).
+const ALIAS_LIMIT_BYTES: usize = 1500;
+
+/// A syntactically valid alias the path parser refuses for its length, unquoted and joined
+/// with '.' as the official emulator names it.
+fn unquoted_alias(alias: &str) -> String {
+    let mut out = String::with_capacity(alias.len());
+    let mut chars = alias.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '`' => {}
+            '\\' => out.extend(chars.next()),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Reads a select alias as a field path. Production's refusals are recorded for a single
 /// unquoted segment (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`): an invalid name, a
 /// reserved `__x__` and `__name__`; their texts are production's, which the official emulator
 /// answers too. The official emulator also refuses a quoted reserved name, and accepts a
 /// reserved name below another field (`a.__x__`, `a.__name__`); production has not answered
-/// those shapes, nor an invalid quoted or dotted alias, so strict refuses them as unobserved.
+/// those shapes, nor an invalid quoted or dotted alias, nor an empty alias, nor a name at the
+/// length limit, so strict refuses them as unobserved. Production's regex text answers only a
+/// plain name that fails the path rules, the shape it was recorded for (`total-count`, `名前`,
+/// `1st`). The official emulator checks the syntax first, then the length of the segments
+/// joined with '.' after unquoting, refusing 1500 bytes or more with that joined text.
 fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
     let strict = unrecorded == Unrecorded::Refuse;
     let unobserved = || {
@@ -796,15 +850,7 @@ fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status
         ))
     };
     let plain = !alias.contains(['.', '`']);
-    let path = match FieldPath::parse_allowing_reserved(alias) {
-        Ok(path) => path,
-        Err(_) if strict && !plain => return Err(unobserved()),
-        Err(_) => {
-            return Err(Status::invalid_argument(format!(
-                r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
-            )))
-        }
-    };
+    let path = parse_alias(alias, unrecorded)?;
     let reserved = path
         .segments()
         .iter()
@@ -821,6 +867,128 @@ fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status
         // A reserved name below another field, as the official emulator answers it.
         _ => Ok(path),
     }
+}
+
+/// Reads an alias as a field path with the official emulator's syntax and length checks, in
+/// its order: the empty path, the path syntax, then the joined length. Reserved names are the
+/// caller's.
+fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
+    let strict = unrecorded == Unrecorded::Refuse;
+    let unobserved = || {
+        Status::unimplemented(format!(
+            "select alias {alias:?}: this alias shape is not observed locally"
+        ))
+    };
+    let too_long = |reference: &str| {
+        if strict {
+            unobserved()
+        } else {
+            Status::invalid_argument(format!(
+                "The field reference '{reference}' is longer than 1500 bytes."
+            ))
+        }
+    };
+    let plain = !alias.contains(['.', '`']);
+    let path = match FieldPath::parse_allowing_reserved(alias) {
+        Ok(path) => path,
+        Err(_) if strict && !plain => return Err(unobserved()),
+        Err(FieldPathError::Empty) if strict => return Err(unobserved()),
+        Err(FieldPathError::Empty) => {
+            return Err(Status::invalid_argument(
+                crate::query_messages::EMPTY_PROPERTY_PATH,
+            ))
+        }
+        // Production's regex text is recorded only for a name the regex refuses; a name over
+        // the length limit is unrecorded (the official emulator names the length).
+        Err(FieldPathError::SegmentTooLong { .. } | FieldPathError::PathTooLong { .. }) => {
+            return Err(too_long(&unquoted_alias(alias)))
+        }
+        // Which refusal production answers first for a long invalid name is unrecorded.
+        Err(_) if strict && alias.len() >= ALIAS_LIMIT_BYTES => return Err(unobserved()),
+        Err(_) => {
+            return Err(Status::invalid_argument(format!(
+                r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+            )))
+        }
+    };
+    let joined = path.segments().join(".");
+    if joined.len() >= ALIAS_LIMIT_BYTES {
+        return Err(too_long(&joined));
+    }
+    Ok(path)
+}
+
+/// The official emulator's argument checks on a stage the local executor does not run
+/// (`add_fields`, `distinct`, `aggregate`), answered before the stage is refused as
+/// unsupported, in the official order: the stage's arity, each alias, then an empty map, which
+/// is `deferred` until every stage's other checks are done. Production answered
+/// `aggregate({c: count()})` directly after the collection with the official arity text
+/// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/results/metadata#aggregate`), so strict answers that
+/// text for that shape (a non-empty map of plain valid aliases, at `position` 1; the request
+/// validator already refuses accumulators that are not functions) and leaves every other shape
+/// here to the unsupported-stage refusal.
+fn check_unrun_alias_stage(
+    stage: &pb::pipeline::Stage,
+    position: usize,
+    unrecorded: Unrecorded,
+    deferred: &mut Option<Status>,
+) -> Result<(), Status> {
+    let strict = unrecorded == Unrecorded::Refuse;
+    if stage.name == "aggregate" && stage.args.len() == 1 {
+        let recorded = || {
+            position == 1
+                && map_fields(&stage.args[0]).is_some_and(|fields| {
+                    !fields.is_empty()
+                        && fields.keys().all(|alias| {
+                            !alias.contains(['.', '`']) && parse_alias(alias, unrecorded).is_ok()
+                        })
+                })
+        };
+        if !strict || recorded() {
+            return Err(Status::invalid_argument(
+                "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+            ));
+        }
+    }
+    let name = stage.name.as_str();
+    if strict || !matches!(name, "aggregate" | "add_fields" | "distinct") {
+        return Ok(());
+    }
+    for alias in stage
+        .args
+        .iter()
+        .filter_map(map_fields)
+        .flat_map(|fields| fields.keys())
+    {
+        parse_alias(alias, unrecorded)?;
+    }
+    let empty = match name {
+        "aggregate" => map_fields(&stage.args[0])
+            .is_some_and(std::collections::HashMap::is_empty)
+            .then(|| "The 'aggregate(...)' stage requires at least one accumulator.".to_owned()),
+        _ => stage
+            .args
+            .iter()
+            .any(is_empty_map)
+            .then(|| format!("The '{name}(...)' stage requires at least one field.")),
+    };
+    if let Some(text) = empty {
+        deferred.get_or_insert_with(|| Status::invalid_argument(text));
+    }
+    Ok(())
+}
+
+/// The fields of a wire map value.
+fn map_fields(value: &pb::Value) -> Option<&std::collections::HashMap<String, pb::Value>> {
+    match value.value_type.as_ref() {
+        Some(pb::value::ValueType::MapValue(map)) => Some(&map.fields),
+        _ => None,
+    }
+}
+
+/// Whether a wire value is an empty map.
+fn is_empty_map(value: &pb::Value) -> bool {
+    matches!(&value.value_type, Some(pb::value::ValueType::MapValue(map)) if map.fields.is_empty())
 }
 
 /// The literal select values production answered (FS-ENT-ORACLE O-1

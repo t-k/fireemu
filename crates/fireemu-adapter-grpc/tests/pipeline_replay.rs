@@ -102,7 +102,6 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("fs-ent-pipeline/px1/where#not-equal-x", "not is outside the subset"),
     ("fs-ent-pipeline/px1/where#sqrt-s-positive", "sqrt is outside the subset"),
     ("fs-ent-pipeline/results/metadata#add-fields", "add_fields is outside the subset"),
-    ("fs-ent-pipeline/results/metadata#aggregate", "aggregate is outside the subset"),
     ("fs-ent-pipeline/results/metadata#distinct", "distinct is outside the subset"),
     ("fs-ent-pipeline/results/metadata#limit", "without a sort production returns another order than document names, so limit keeps other documents (PX2)"),
     ("fs-ent-pipeline/results/metadata#remove-fields", "remove_fields is outside the subset"),
@@ -315,12 +314,26 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
-        // Each allowlist entry still differs.
+        // Each allowlist entry still differs, and fireemu answers it as pinned: the result
+        // order row with two of the three documents, every other row with UNIMPLEMENTED.
         for (known, reason) in KNOWN_DIFFERENCES {
-            assert!(
-                differing.iter().any(|(row, _, _)| row == known),
-                "strict={strict}: {known} ({reason}) matches production now; remove it"
-            );
+            let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
+                panic!("strict={strict}: {known} ({reason}) matches production now; remove it");
+            };
+            if *known == "fs-ent-pipeline/results/metadata#limit" {
+                assert_eq!(got["status"], 200, "{known}: {got}");
+                assert_eq!(
+                    got["results"].as_array().map(Vec::len),
+                    Some(2),
+                    "{known}: {got}"
+                );
+            } else {
+                assert_eq!(got["status"], 501, "strict={strict} {known}: {got}");
+                assert_eq!(
+                    got["body"][0]["error"]["status"], "UNIMPLEMENTED",
+                    "strict={strict} {known}: {got}"
+                );
+            }
         }
     }
 }

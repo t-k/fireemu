@@ -17,7 +17,7 @@
     "conformance/scheduled-delivery/local/production-run2.json": "f361f4d30ddb7d655715b1eec9395bfa58275791dfa5922643d7a13ba637e21f",
     "conformance/scheduled-delivery/local/production-run3.json": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
     "conformance/scheduled-delivery/local/production-run4.json": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
-    "conformance/src/fs-query-index/run.mjs": "0994b4ed416f0825b3cb976c62323352c09260c4e8dafba55bef5bff7481d7c2",
+    "conformance/src/fs-query-index/run.mjs": "d4ab368b2a17fac8a3f82bba66cce29de23f69353a9bf77db25c1a3c220428c1",
     "spec/compatibility/broad-runs/fs-aggregate-string-3d7ceabb8-saved-comparison.json": "3b1f0df878fb02959d95215db01e119dd5637128bc5cd0a1b60503fa6a0ae9e4",
     "spec/compatibility/broad-runs/fs-batch-duplicate-document-3d7ceabb8-saved-comparison.json": "1715ee8467fdcabaf8ad5769d918296fe0c74b631271a6b640b9f2b030481937",
     "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json": "3d6be2459422db7a68de9300207099bdcbd1ad3c4aacb206e983bcb5174e9177",

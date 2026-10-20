@@ -31,7 +31,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (process.argv[2] === "--check") {
     const current = await readFile(EXPORT, "utf8").catch(() => "");
     if (current !== text) {
-      console.error(`${EXPORT.pathname} is stale; run node src/fs-ent-pipeline/export-requests.mjs`);
+      console.error(
+        `${EXPORT.pathname} is stale; run node src/fs-ent-pipeline/export-requests.mjs`,
+      );
       process.exit(1);
     }
   } else {

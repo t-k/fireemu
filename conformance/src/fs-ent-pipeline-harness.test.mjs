@@ -49,13 +49,18 @@ test("the pipeline lane has its own copy of the request layer and the others kee
   assert.equal(LANES["fs-data-write-list"].harness, "src/fs-query-index");
   // The session copy is byte for byte the shared one: only the harness differs, by the named
   // database. The shared harness has no named database at all.
-  assert.equal(await read("./fs-ent-pipeline/session.mjs"), await read("./fs-query-index/session.mjs"));
+  assert.equal(
+    await read("./fs-ent-pipeline/session.mjs"),
+    await read("./fs-query-index/session.mjs"),
+  );
   assert.equal(queryHarness.DATABASES, undefined);
   assert.notEqual(DATABASES, undefined);
   // Every recorded row is bound to the digest of the lane's own two files (no index file).
   const { createHash } = await import("node:crypto");
   const own = createHash("sha256")
-    .update(`${await read("./fs-ent-pipeline/harness.mjs")}\n${await read("./fs-ent-pipeline/session.mjs")}\n`)
+    .update(
+      `${await read("./fs-ent-pipeline/harness.mjs")}\n${await read("./fs-ent-pipeline/session.mjs")}\n`,
+    )
     .digest("hex");
   const recorded = JSON.parse(await read("../fs-ent-pipeline-production.json"));
   for (const [id, program] of Object.entries(recorded.programs)) {
@@ -174,10 +179,9 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
   );
   // The O-1 programs keep the digests their production rows were recorded under.
   const recorded = JSON.parse(
-    await (await import("node:fs/promises")).readFile(
-      new URL("../fs-ent-pipeline-production.json", import.meta.url),
-      "utf8",
-    ),
+    await (
+      await import("node:fs/promises")
+    ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
   const o1 = PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o2/"));
   assert.equal(o1.length, 6);
@@ -213,17 +217,40 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
 
 test("O-2 compares every pair of kinds and each kind with itself under every comparison, in steps below the select width", () => {
   const program = PROGRAMS.find((p) => p.id === "fs-ent-pipeline/o2/comparisons");
-  const cells = new Map(COMPARISON_CELLS.map(([alias, left, right, op]) => [alias, { left, right, op }]));
+  const cells = new Map(
+    COMPARISON_CELLS.map(([alias, left, right, op]) => [alias, { left, right, op }]),
+  );
   assert.equal(cells.size, COMPARISON_CELLS.length);
-  const ops = ["equal", "not_equal", "less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal"];
+  const ops = [
+    "equal",
+    "not_equal",
+    "less_than",
+    "less_than_or_equal",
+    "greater_than",
+    "greater_than_or_equal",
+  ];
   for (const op of ops) {
     for (const left of KINDS) {
       for (const right of KINDS) {
-        if (left !== right) assert.ok(cells.has(`${op}__${left}__${right}`), `${op} ${left} ${right}`);
+        if (left !== right)
+          assert.ok(cells.has(`${op}__${left}__${right}`), `${op} ${left} ${right}`);
       }
     }
     // NaN and null against themselves, two missing fields, a missing field against a value.
-    for (const pair of ["nan__nan", "n__n", "x__y", "x__i", "i__x", "ts__ts2", "ts2__ts", "g__g2", "m__m2", "r__r2", "by__by2", "arr__arr2"]) {
+    for (const pair of [
+      "nan__nan",
+      "n__n",
+      "x__y",
+      "x__i",
+      "i__x",
+      "ts__ts2",
+      "ts2__ts",
+      "g__g2",
+      "m__m2",
+      "r__r2",
+      "by__by2",
+      "arr__arr2",
+    ]) {
       assert.ok(cells.has(`${op}__${pair}`), `${op} ${pair}`);
     }
   }
@@ -239,7 +266,10 @@ test("O-2 compares every pair of kinds and each kind with itself under every com
       assert.match(alias, /^[a-z][a-z0-9_]*$/);
       const { left, right, op } = cells.get(alias);
       assert.deepEqual(fields[alias], {
-        functionValue: { name: op, args: [{ fieldReferenceValue: left }, { fieldReferenceValue: right }] },
+        functionValue: {
+          name: op,
+          args: [{ fieldReferenceValue: left }, { fieldReferenceValue: right }],
+        },
       });
     }
     selected.push(...aliases);

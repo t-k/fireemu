@@ -6,7 +6,19 @@
 // row is kept). The expressions are the ones the official emulator 1.22.0 was probed with, so
 // the production rows and the emulator's answers line up one to one.
 
-import { arr, bool, dbl, inf, int, map, nan, nul, ref, str, ts } from "../fs-query-index/values.mjs";
+import {
+  arr,
+  bool,
+  dbl,
+  inf,
+  int,
+  map,
+  nan,
+  nul,
+  ref,
+  str,
+  ts,
+} from "../fs-query-index/values.mjs";
 
 // --- expression builders (proto3 JSON `Value`s) ---
 
@@ -444,7 +456,19 @@ export const KIND_DOC = {
 /** One field of each kind, in the canonical kind order. */
 export const KINDS = ["n", "b", "nan", "i", "ts", "s", "by", "r", "g", "arr", "m"];
 /** The second field of each kind for ordering within a kind (NaN and null against themselves). */
-const SECOND = { n: "n", b: "b2", nan: "nan", i: "d5", ts: "ts2", s: "s2", by: "by2", r: "r2", g: "g2", arr: "arr2", m: "m2" };
+const SECOND = {
+  n: "n",
+  b: "b2",
+  nan: "nan",
+  i: "d5",
+  ts: "ts2",
+  s: "s2",
+  by: "by2",
+  r: "r2",
+  g: "g2",
+  arr: "arr2",
+  m: "m2",
+};
 const OPS = [
   "equal",
   "not_equal",
@@ -461,25 +485,37 @@ export const COMPARISON_CELLS = [
   // Every ordered pair of different kinds, under every comparison.
   ...OPS.flatMap((op) =>
     KINDS.flatMap((left) =>
-      KINDS.filter((right) => right !== left).map((right) => [`${op}__${left}__${right}`, left, right, op]),
+      KINDS.filter((right) => right !== left).map((right) => [
+        `${op}__${left}__${right}`,
+        left,
+        right,
+        op,
+      ]),
     ),
   ),
   // Field to field within each kind, both ways (NaN and null against themselves).
   ...OPS.flatMap((op) =>
     KINDS.flatMap((kind) => {
       const second = SECOND[kind];
-      const pairs = second === kind ? [[kind, kind]] : [[kind, second], [second, kind]];
+      const pairs =
+        second === kind
+          ? [[kind, kind]]
+          : [
+              [kind, second],
+              [second, kind],
+            ];
       return pairs.map(([left, right]) => [`${op}__${left}__${right}`, left, right, op]);
     }),
   ),
   // Missing fields: two of them, and one against a value or null.
   ...OPS.flatMap((op) =>
-    [["x", "y"], ["x", "i"], ["i", "x"], ["x", "n"], ["n", "x"]].map(([left, right]) => [
-      `${op}__${left}__${right}`,
-      left,
-      right,
-      op,
-    ]),
+    [
+      ["x", "y"],
+      ["x", "i"],
+      ["i", "x"],
+      ["x", "n"],
+      ["n", "x"],
+    ].map(([left, right]) => [`${op}__${left}__${right}`, left, right, op]),
   ),
 ];
 

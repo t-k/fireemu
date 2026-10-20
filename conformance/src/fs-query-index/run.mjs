@@ -59,7 +59,6 @@ const {
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
   createContext,
-  databaseName,
   diffRecordings,
   isTransient,
   normalizeStep,

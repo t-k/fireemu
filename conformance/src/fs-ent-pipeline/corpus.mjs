@@ -753,6 +753,217 @@ const o3FunctionProgram = {
   ),
 };
 
+// --- FS-ENT-ORACLE O-4: the shapes PX1b and PX1c still refuse under strict ---
+
+/** A quoted alias segment. */
+const quoted = (inner) => `\`${inner}\``;
+
+/** Select aliases: the multibyte length boundary and a reserved first segment with a child. */
+export const O4_ALIASES = [
+  // The official emulator counts the joined path in bytes, not characters (あ is 3 bytes).
+  ["multibyte-1497", quoted("あ".repeat(499))],
+  ["multibyte-1499", quoted(`${"あ".repeat(499)}aa`)],
+  ["multibyte-1500", quoted("あ".repeat(500))],
+  ["multibyte-dotted-1499", `a.${quoted("あ".repeat(499))}`],
+  ["multibyte-plain-1500", "あ".repeat(500)],
+  ["reserved-first-segment", "__x__.a"],
+  ["name-first-segment", "__name__.a"],
+  ["quoted-reserved-first-segment", `${quoted("__x__")}.a`],
+];
+
+const o4AliasProgram = {
+  id: "fs-ent-pipeline/o4/aliases",
+  seed: [["al4/d", { top: str("t") }]],
+  steps: O4_ALIASES.map(([label, alias]) =>
+    step(label, pipeline(collection("al4"), select({ [alias]: fld("top") }))),
+  ),
+};
+
+const count = () => fn("count", fld("n"));
+const mapOf = (fields) => ({ mapValue: { fields } });
+const aggregate = (...args) => stage("aggregate", ...args);
+const st4 = () => collection("st4");
+
+/** Argument checks: one-argument aggregate, alias maps of other stages, limit and offset, order. */
+export const O4_STAGES = [
+  ["aggregate-one-empty", [aggregate(mapOf({}))]],
+  ["aggregate-one-empty-alias", [aggregate(mapOf({ "": count() }))]],
+  ["aggregate-one-field", [aggregate(mapOf({ c: fld("n") }))]],
+  ["aggregate-one-unknown-function", [aggregate(mapOf({ c: fn("nope_fn") }))]],
+  ["aggregate-one-reserved-alias", [aggregate(mapOf({ __name__: count() }))]],
+  ["aggregate-one-after-limit", [stage("limit", int(1)), aggregate(mapOf({ c: count() }))]],
+  ["add-fields-empty-alias", [stage("add_fields", mapOf({ "": fld("top") }))]],
+  ["distinct-empty-alias", [stage("distinct", mapOf({ "": fld("top") }))]],
+  ["aggregate-empty-accumulator-alias", [aggregate(mapOf({ "": count() }), mapOf({}))]],
+  ["aggregate-empty-group-alias", [aggregate(mapOf({ c: count() }), mapOf({ "": fld("top") }))]],
+  ["add-fields-empty-map", [stage("add_fields", mapOf({}))]],
+  ["distinct-empty-map", [stage("distinct", mapOf({}))]],
+  ["select-empty-map", [select({})]],
+  ["aggregate-empty-accumulators", [aggregate(mapOf({}), mapOf({}))]],
+  ["add-fields-invalid-alias", [stage("add_fields", mapOf({ "a..b": fld("top") }))]],
+  ["add-fields-alias-1500", [stage("add_fields", mapOf({ ["a".repeat(1500)]: fld("top") }))]],
+  ["select-empty-then-unknown-function", [select({}), stage("where", fn("nope_fn", fld("n")))]],
+  ["select-empty-then-limit-string", [select({}), stage("limit", str("x"))]],
+  [
+    "select-empty-then-add-fields-empty-alias",
+    [select({}), stage("add_fields", mapOf({ "": fld("top") }))],
+  ],
+  ["add-fields-then-select-empty", [stage("add_fields", mapOf({ t: fld("top") })), select({})]],
+  ["limit-string", [stage("limit", str("x"))]],
+  ["offset-string", [stage("offset", str("x"))]],
+  ["limit-negative", [stage("limit", int(-1))]],
+  ["limit-beyond-int32", [stage("limit", int("2147483648"))]],
+  ["limit-5000000000", [stage("limit", int("5000000000"))]],
+  ["offset-5000000000", [stage("offset", int("5000000000"))]],
+];
+
+const o4StageProgram = {
+  id: "fs-ent-pipeline/o4/stages",
+  seed: [["st4/d", { top: str("t"), n: int(1) }]],
+  steps: O4_STAGES.map(([label, stages]) => step(label, pipeline(st4(), ...stages))),
+};
+
+/** `where` on constants of the kinds O-3 did not ask. */
+export const O4_CONDITIONS = [
+  ["integer", int(1)],
+  ["negative-zero", dbl("-0")],
+  ["nan", nan()],
+  ["timestamp", ts("2020-01-01T00:00:00Z")],
+  ["bytes", { bytesValue: "AAE=" }],
+  ["geo", { geoPointValue: { latitude: 0, longitude: 1 } }],
+  ["reference", ref("cn4/d")],
+  ["array", arr(int(1))],
+  ["map", map({ a: int(1) })],
+  ["vector", vec(1, 2)],
+];
+
+const o4ConditionProgram = {
+  id: "fs-ent-pipeline/o4/conditions",
+  seed: [["cn4/d", { i: int(1) }]],
+  steps: O4_CONDITIONS.map(([label, condition]) =>
+    step(
+      `where-${label}`,
+      pipeline(collection("cn4"), stage("where", condition), select({ i: fld("i") })),
+    ),
+  ),
+};
+
+const docId = () => fn("document_id", fld("__name__"));
+
+/** Literal select values: vectors, map keys and compositions of expression literals. */
+export const O4_LITERALS = [
+  ["vector", vec(1, 2)],
+  ["map-holding-vector", map({ a: vec(1, 2) })],
+  ["deep-literal", map({ a: map({ b: arr(map({ c: arr(int(1), str("x")) })) }) })],
+  ["nested-map-literal", map({ a: map({ b: arr(int(1), map({ c: str("x") })) }) })],
+  ["key-empty", mapOf({ "": int(1) })],
+  ["key-reserved", mapOf({ __x__: int(1) })],
+  ["key-type", mapOf({ __type__: str("x") })],
+  ["key-dotted", mapOf({ "a.b": int(1) })],
+  ["key-digit-first", mapOf({ "1a": int(1) })],
+  ["key-dash", mapOf({ "a-b": int(1) })],
+  ["map-of-array-of-field", mapOf({ a: list(fld("i")) })],
+  ["array-of-function", list(docId())],
+  ["array-of-two-fields", list(fld("i"), fld("s"))],
+  ["array-of-map-of-field", list(mapOf({ a: fld("i") }))],
+  ["map-three-deep-field", mapOf({ a: mapOf({ b: mapOf({ c: fld("i") }) }) })],
+  ["map-of-two-functions", mapOf({ a: docId(), b: docId() })],
+  ["map-field-and-function", mapOf({ a: fld("i"), b: docId() })],
+  ["array-function-then-field", list(docId(), fld("i"))],
+];
+
+const o4LiteralProgram = {
+  id: "fs-ent-pipeline/o4/literals",
+  seed: [["li4/d", { i: int(1), s: str("a"), m: map({ a: int(1) }) }]],
+  steps: [
+    ...O4_LITERALS.map(([label, literal]) =>
+      step(label, pipeline(collection("li4"), select({ v: literal }))),
+    ),
+    // A literal holding an expression as a function argument.
+    step(
+      "argument-map-of-field",
+      pipeline(collection("li4"), select({ v: fn("equal", fld("m"), mapOf({ a: fld("i") })) })),
+    ),
+  ],
+};
+
+/** Document functions of other argument types and collections; map keys and repeats. */
+export const O4_FUNCTIONS = [
+  ["document-id-integer", fn("document_id", fld("i"))],
+  ["collection-id-map", fn("collection_id", fld("m"))],
+  ["parent-boolean", fn("parent", fld("b"))],
+  ["collection-id-collection", fn("collection_id", ref("c"))],
+  ["parent-collection", fn("parent", ref("c"))],
+  ["document-id-subcollection", fn("document_id", ref("c/x/s"))],
+  ["collection-id-subcollection", fn("collection_id", ref("c/x/s"))],
+  ["map-key-missing-field", fn("map", fld("x"), fld("i"))],
+  ["map-key-boolean", fn("map", bool(true), fld("i"))],
+  ["map-key-string-field", fn("map", fld("s"), fld("i"))],
+  ["map-repeat-first-missing", fn("map", str("k"), fld("x"), str("k"), fld("i"))],
+  ["map-repeat-second-missing", fn("map", str("k"), fld("i"), str("k"), fld("x"))],
+  ["map-repeat-both-missing", fn("map", str("k"), fld("x"), str("k"), fld("x"))],
+  ["map-repeat-around-missing", fn("map", str("k"), fld("i"), str("k"), fld("x"), str("k"), fld("s"))],
+];
+
+const o4FunctionProgram = {
+  id: "fs-ent-pipeline/o4/functions",
+  seed: [["fn4/d", { i: int(1), s: str("a"), b: bool(true), m: map({ a: int(1) }) }]],
+  steps: O4_FUNCTIONS.map(([label, expr]) =>
+    step(label, pipeline(collection("fn4"), select({ v: expr }))),
+  ),
+};
+
+/** REST geo points with a zero or missing coordinate: written, then read back. */
+export const O4_GEO = [
+  ["empty", {}],
+  ["longitude-only", { longitude: 1 }],
+  ["zero-latitude", { latitude: 0, longitude: 1 }],
+];
+
+const o4DocumentProgram = {
+  id: "fs-ent-pipeline/o4/documents",
+  seed: [],
+  steps: O4_GEO.flatMap(([label, point]) => [
+    {
+      id: `write-${label}`,
+      rpc: "commit",
+      body: {
+        writes: [{ update: { name: `{docs}/geo4/${label}`, fields: { g: { geoPointValue: point } } } }],
+      },
+    },
+    { id: `get-${label}`, rpc: "get", parent: `geo4/${label}` },
+  ]),
+};
+
+/** Vectors of different lengths, under every comparison, both ways (last: a refused vector
+ * seed costs only this program). */
+export const O4_CELLS = OPS.flatMap((op) =>
+  [
+    ["v", "v3"],
+    ["v3", "v"],
+    ["w", "v"],
+    ["v", "w"],
+  ].map(([left, right]) => [`${op}__${left}__${right}`, left, right, op]),
+);
+
+const o4ComparisonProgram = {
+  id: "fs-ent-pipeline/o4/comparisons",
+  seed: [["cm4/d", { v: vec(1, 2), v3: vec(1, 2, 3), w: vec(3) }]],
+  steps: [
+    step(
+      "cells-01",
+      pipeline(
+        collection("cm4"),
+        select(
+          Object.fromEntries(
+            O4_CELLS.map(([alias, left, right, op]) => [alias, fn(op, fld(left), fld(right))]),
+          ),
+        ),
+      ),
+    ),
+  ],
+};
+
 export const PROGRAMS = [
   expressionProgram,
   whereProgram,
@@ -767,4 +978,11 @@ export const PROGRAMS = [
   o3ComparisonProgram,
   o3LiteralProgram,
   o3FunctionProgram,
+  o4AliasProgram,
+  o4StageProgram,
+  o4ConditionProgram,
+  o4LiteralProgram,
+  o4FunctionProgram,
+  o4DocumentProgram,
+  o4ComparisonProgram,
 ];

@@ -380,12 +380,12 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   // S0 one describe, the preflight two reads, two recordings, A1 two read-backs.
   const worst = 1 + 2 + 2 * (80 + 60) + 2;
   assert.equal(worst, 285);
-  // Every program O-1 to O-3 (O-3 since its recording, 2026-10-20) is recorded under its
+  // Every program (O-3 and O-4 since their recordings, 2026-10-20) is recorded under its
   // current digest, and O-3 under the request layer that recorded O-1.
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o4/"))) {
+  for (const program of PROGRAMS) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
   for (const program of o3) {
@@ -492,14 +492,21 @@ test("O-4 records only its seven new programs, comparisons last, within its requ
   // S0 one describe, the preflight two reads, two recordings, A1 two read-backs.
   const worst = 1 + 2 + 2 * (84 + 88) + 2;
   assert.equal(worst, 349);
-  // O-1 to O-3 are recorded already and keep their digests; O-4 is not recorded yet.
+  // O-1 to O-4 are recorded and keep their digests.
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o4/"))) {
+  for (const program of PROGRAMS) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
-  for (const program of o4) assert.equal(recorded[program.id], undefined, program.id);
+  // O-4 recorded under the request layer that recorded O-1 (2026-10-20).
+  for (const program of o4) {
+    assert.equal(
+      recorded[program.id].harnessDigest,
+      recorded["fs-ent-pipeline/px0/aliases"].harnessDigest,
+      program.id,
+    );
+  }
   // The multibyte rows separate bytes from characters (O-3 presend Should Fix 1).
   const unquoted = (alias) => alias.replace(/`/g, "");
   const lengths = Object.fromEntries(
@@ -537,7 +544,7 @@ test("the committed REST request export is the corpus's", async () => {
   const { readFile } = await import("node:fs/promises");
   assert.equal(await readFile(EXPORT, "utf8"), exportText());
   const exported = JSON.parse(exportText());
-  // Only the programs the fixture records (O-3 since its recording).
+  // Only the programs the fixture records (O-3 and O-4 since their recordings).
   const recordedIds = Object.keys(
     JSON.parse(
       await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
@@ -545,7 +552,7 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 13);
+  assert.equal(recordedPrograms.length, 20);
   const rest = recordedPrograms
     .flatMap((p) => p.steps)
     .filter((s) => (s.transport ?? "rest") === "rest");

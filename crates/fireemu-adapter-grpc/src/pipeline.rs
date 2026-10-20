@@ -1610,11 +1610,8 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
                 let parts_found = !found.is_empty();
                 if name == "select" && !parts_found && !stage.args.iter().any(is_empty_map) {
                     if let Err(error) = decode_select(stage, strict) {
-                        if error.code() == tonic::Code::InvalidArgument
-                            && !error
-                                .message()
-                                .starts_with("The 'select(...)' stage is limited")
-                        {
+                        // (More than 64 fields was counted above, so it never reaches here.)
+                        if error.code() == tonic::Code::InvalidArgument {
                             found.push(
                                 if error
                                     .message()

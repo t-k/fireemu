@@ -9,7 +9,9 @@
 import {
   arr,
   bool,
+  bytes,
   dbl,
+  geo,
   inf,
   int,
   map,
@@ -1064,6 +1066,93 @@ const o5FunctionOrderProgram = {
   steps: O5_FUNCTION_ORDER.map(([label, stages]) => step(label, pipeline(fo5(), ...stages))),
 };
 
+const so5 = () => collection("so5");
+/** A vector map of any elements, where `vec` builds doubles only. */
+const vectorOf = (...values) => mapOf({ __type__: str("__vector__"), value: list(...values) });
+const unknownAddFields = () => stage("add_fields", mapOf({ a: fn("nope_fn") }));
+
+/**
+ * The orders strict refuses since PX1d review round 2 (M1): an empty map or a later stage's
+ * check after a function or stage value fireemu does not check; and the limit and offset
+ * arguments only the official emulator answered (M2).
+ */
+export const O5_STAGE_ORDER = [
+  ["select-empty-then-where-sqrt-string", [select({}), stage("where", fn("sqrt", str("a")))]],
+  ["add-fields-unknown-then-select-empty", [unknownAddFields(), select({})]],
+  ["add-fields-unknown-then-limit-string", [unknownAddFields(), stage("limit", str("x"))]],
+  [
+    "add-fields-unknown-then-aggregate-one",
+    [unknownAddFields(), aggregate(mapOf({ c: fn("count", fld("n")) }))],
+  ],
+  [
+    "add-fields-array-of-field-then-select-empty",
+    [stage("add_fields", mapOf({ t: list(fld("i")) })), select({})],
+  ],
+  [
+    "aggregate-sum-then-select-empty",
+    [aggregate(mapOf({ c: fn("sum", fld("n")) }), mapOf({})), select({})],
+  ],
+  ["sort-then-limit-string", [stage("sort", fn("ascending", fld("i"))), stage("limit", str("x"))]],
+  ["limit-boolean", [stage("limit", bool(true))]],
+  ["limit-double", [stage("limit", dbl(1.5))]],
+  ["limit-null", [stage("limit", nul())]],
+  ["limit-empty-map", [stage("limit", mapOf({}))]],
+  ["offset-negative", [stage("offset", int(-1))]],
+  ["offset-boolean", [stage("offset", bool(true))]],
+  ["where-vector-of-integer", [stage("where", vectorOf(int(1)))]],
+];
+
+const o5StageOrderProgram = {
+  id: "fs-ent-pipeline/o5/stage-order",
+  seed: [["so5/d", { i: int(1), n: int(1), top: str("t") }]],
+  steps: O5_STAGE_ORDER.map(([label, stages]) => step(label, pipeline(so5(), ...stages))),
+};
+
+/**
+ * The values strict refuses since PX1d review round 2 (M2, S1): document-function argument
+ * types and map keys production has not named, malformed vectors and vectors of integers,
+ * literals with more than one empty or reserved key or a `__name__` key, and the argument
+ * checks of the functions fireemu runs.
+ */
+export const O5_VALUE_SHAPES = [
+  ["document-id-double", fn("document_id", dbl(1.5))],
+  ["document-id-geo", fn("document_id", geo(1, 1))],
+  ["document-id-timestamp", fn("document_id", ts("2020-01-01T00:00:00Z"))],
+  ["document-id-bytes", fn("document_id", bytes("AA=="))],
+  ["document-id-array", fn("document_id", arr(int(1)))],
+  ["document-id-vector", fn("document_id", vec(1))],
+  ["parent-double", fn("parent", dbl(1.5))],
+  ["map-key-double", fn("map", dbl(1.5), fld("i"))],
+  ["map-key-null", fn("map", nul(), fld("i"))],
+  ["map-key-timestamp", fn("map", ts("2020-01-01T00:00:00Z"), fld("i"))],
+  ["vector-of-integer", vectorOf(int(1))],
+  ["vector-of-double-and-integer", vectorOf(dbl(1), int(2))],
+  ["vector-without-value", mapOf({ __type__: str("__vector__") })],
+  ["vector-with-extra-key", mapOf({ __type__: str("__vector__"), value: list(dbl(1)), x: int(1) })],
+  ["vector-value-not-array", mapOf({ __type__: str("__vector__"), value: str("x") })],
+  ["keys-empty-and-reserved", mapOf({ "": int(1), __x__: int(1) })],
+  ["keys-two-reserved", mapOf({ __b__: int(1), __a__: int(1) })],
+  ["keys-reserved-inner-and-outer", mapOf({ a: mapOf({ __x__: int(1) }), __y__: int(1) })],
+  ["key-name", mapOf({ __name__: int(1) })],
+  ["key-inner-name", mapOf({ a: mapOf({ __name__: int(1) }) })],
+  ["map-one-argument", fn("map", str("k"))],
+  ["equal-one-argument", fn("equal", fld("i"))],
+  [
+    "document-id-with-options",
+    { functionValue: { name: "document_id", args: [fld("__name__")], options: { x: int(1) } } },
+  ],
+];
+
+const vs5 = () => collection("vs5");
+
+const o5ValueShapeProgram = {
+  id: "fs-ent-pipeline/o5/value-shapes",
+  seed: [["vs5/d", { i: int(1), n: int(1), top: str("t") }]],
+  steps: O5_VALUE_SHAPES.map(([label, value]) =>
+    step(label, pipeline(vs5(), select({ v: value }))),
+  ),
+};
+
 /**
  * Every function name of the official emulator 1.22.0's registry
  * (cloud/datastore/catalog/function/function_registry.binarypb in its jar: names and their
@@ -1313,5 +1402,7 @@ export const PROGRAMS = [
   o5NameProgram,
   o5LiteralKeyProgram,
   o5FunctionOrderProgram,
+  o5StageOrderProgram,
+  o5ValueShapeProgram,
   o5FunctionNameProgram,
 ];

@@ -141,7 +141,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 587);
+  assert.equal(requests, 624);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get"]);
   // The only writes are single-document commits into the program's own collection: the order
@@ -802,7 +802,7 @@ test("a seed commit is a reviewed single-document write into the named database"
   assert.throws(() => seedCommit("seed-x", "a/b/c/", fields), /document path/);
 });
 
-test("O-5 records only its four new programs, within its request cap: 2 x (203 + 60) + 5", async () => {
+test("O-5 records only its six new programs, within its request cap: 2 x (240 + 80) + 5", async () => {
   const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
   const { readFile } = await import("node:fs/promises");
   const {
@@ -810,7 +810,8 @@ test("O-5 records only its four new programs, within its request cap: 2 x (203 +
     O5_FUNCTION_ORDER,
     O5_LITERAL_KEYS,
     O5_NAMES,
-    functionNameStep,
+    O5_STAGE_ORDER,
+    O5_VALUE_SHAPES,
     seedHoldsVector,
   } = await import("./fs-ent-pipeline/corpus.mjs");
   const o5 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o5/");
@@ -820,14 +821,34 @@ test("O-5 records only its four new programs, within its request cap: 2 x (203 +
       "fs-ent-pipeline/o5/names",
       "fs-ent-pipeline/o5/literal-keys",
       "fs-ent-pipeline/o5/function-order",
+      "fs-ent-pipeline/o5/stage-order",
+      "fs-ent-pipeline/o5/value-shapes",
       "fs-ent-pipeline/o5/function-names",
     ],
   );
   assert.deepEqual(
     o5.map((p) => p.steps.length),
-    [O5_NAMES.length, O5_LITERAL_KEYS.length, O5_FUNCTION_ORDER.length, O5_FUNCTION_NAMES.length],
+    [
+      O5_NAMES.length,
+      O5_LITERAL_KEYS.length,
+      O5_FUNCTION_ORDER.length,
+      O5_STAGE_ORDER.length,
+      O5_VALUE_SHAPES.length,
+      O5_FUNCTION_NAMES.length,
+    ],
   );
-  assert.deepEqual([O5_NAMES.length, O5_LITERAL_KEYS.length, O5_FUNCTION_ORDER.length], [5, 6, 13]);
+  // The PX1d review round 2 shapes strict refuses (stage order, limit and offset; value types,
+  // vectors, literal keys and the argument checks of the functions fireemu runs).
+  assert.deepEqual(
+    [
+      O5_NAMES.length,
+      O5_LITERAL_KEYS.length,
+      O5_FUNCTION_ORDER.length,
+      O5_STAGE_ORDER.length,
+      O5_VALUE_SHAPES.length,
+    ],
+    [5, 6, 13, 14, 23],
+  );
   // Reads only: every step is a REST executePipeline in the program's own collection, and each
   // program seeds one document without a vector through the harness.
   for (const program of o5) {
@@ -841,9 +862,9 @@ test("O-5 records only its four new programs, within its request cap: 2 x (203 +
       assert.deepEqual(first, { name: "collection", args: [{ referenceValue: `/${own}` }] });
     }
   }
-  assert.deepEqual(ceilings(o5), { maxRequests: 203, maxHarnessRequests: 60 });
-  const worst = 1 + 2 + 2 * (203 + 60) + 2;
-  assert.equal(worst, 531);
+  assert.deepEqual(ceilings(o5), { maxRequests: 240, maxHarnessRequests: 80 });
+  const worst = 1 + 2 + 2 * (240 + 80) + 2;
+  assert.equal(worst, 645);
   // O-5 is not recorded yet; the earlier programs keep their recorded digests.
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),

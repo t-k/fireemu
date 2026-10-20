@@ -1276,3 +1276,49 @@ fn a_priority_write_is_judged_at_its_node() {
         );
     }
 }
+
+#[test]
+fn on_disconnect_writes_are_judged_one_by_one_when_made() {
+    // Recorded on the official emulator (docs.local odfire-probe): the writes registered
+    // for u2 and u4 are denied when the connection ends, the others are made as one update.
+    let mut db = db();
+    load(
+        &mut db,
+        "of",
+        r#"{"rules":{".read":true,"users":{"$uid":{".write":"root.child('closed').child($uid).val() !== true"}}}}"#,
+    );
+    let mut listener = open(&mut db, "of");
+    send(&mut db, &mut listener, 1, "q", r#"{"p":"/users","h":""}"#);
+    let mut session = open(&mut db, "of");
+    for (r, action, body) in [
+        (1, "o", r#"{"p":"/users/u1","d":"gone1"}"#),
+        (2, "o", r#"{"p":"/users/u2","d":"gone2"}"#),
+        (3, "om", r#"{"p":"/users","d":{"u3":"gone3","u4":"gone4"}}"#),
+        (4, "om", r#"{"p":"/users","d":{"u5":"gone5","u6":"gone6"}}"#),
+        (5, "o", r#"{"p":"/users/u7","d":"gone7"}"#),
+    ] {
+        assert_eq!(
+            send(&mut db, &mut session, r, action, body),
+            vec![reply(r, "ok", r#""""#)]
+        );
+    }
+    call(
+        &mut db,
+        "PUT",
+        "/closed.json?ns=of",
+        OWNER,
+        r#"{"u2":true,"u4":true}"#,
+    );
+    pushes_to(&mut db, listener.client());
+    db.close_realtime(session.client(), LATER);
+    let heard = pushes_to(&mut db, listener.client());
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert!(heard[0].contains(r#""a":"m""#), "{heard:?}");
+    assert_eq!(
+        call(&mut db, "GET", "/users.json?ns=of", &[], ""),
+        (
+            200,
+            r#"{"u1":"gone1","u3":"gone3","u5":"gone5","u6":"gone6","u7":"gone7"}"#.to_owned()
+        )
+    );
+}

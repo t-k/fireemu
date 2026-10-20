@@ -984,7 +984,13 @@ impl Database {
         let Some((namespace, pending)) = self.on_disconnect.remove(&client) else {
             return;
         };
-        let entries = pending.entries();
+        // Each registered write is judged on its own, as the official emulator judges it at
+        // the end (an update's entries too); the allowed ones are made together (review M4).
+        let mut entries = pending.entries();
+        entries.retain(|(keys, value)| {
+            let path = Path::from_keys(keys.iter().cloned());
+            self.may_write(&namespace, &WriteOp::Set(&path, value), &access, now_millis)
+        });
         if entries.is_empty() {
             return;
         }
@@ -994,14 +1000,6 @@ impl Database {
             _ => None,
         };
         let change = if let Some(value) = root_value {
-            if !self.may_write(
-                &namespace,
-                &WriteOp::Set(&Path::root(), &value),
-                &access,
-                now_millis,
-            ) {
-                return;
-            }
             let paths = [Path::root()];
             let before = self.before_write(&namespace, &paths);
             if self
@@ -1023,14 +1021,6 @@ impl Database {
                 .into_iter()
                 .map(|(keys, value)| (keys.join("/"), value))
                 .collect();
-            if !self.may_write(
-                &namespace,
-                &WriteOp::Update(&Path::root(), &wire),
-                &access,
-                now_millis,
-            ) {
-                return;
-            }
             let before = self.before_write(&namespace, &paths);
             if self
                 .tree_mut(&namespace)

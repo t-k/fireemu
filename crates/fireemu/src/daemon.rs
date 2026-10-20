@@ -596,7 +596,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     // The rules files of `firebase.json`, each in its instance; one that does not load stops
     // the start, as firebase-tools does, and a change is loaded again.
     if !cfg.database_rules_resolved.is_empty() {
-        crate::database_rules::load_initial(
+        let loaded = crate::database_rules::load_initial(
             &realtime_database,
             &cfg.database_rules_resolved,
             clock_millis(&clock),
@@ -605,6 +605,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         crate::database_rules::start_reload_supervisors(
             &realtime_database,
             &cfg.database_rules_resolved,
+            &loaded,
             &(Arc::new(move || clock_millis(&database_clock))
                 as Arc<dyn Fn() -> i64 + Send + Sync>),
         );

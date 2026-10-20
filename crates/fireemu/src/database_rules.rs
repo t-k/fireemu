@@ -83,42 +83,53 @@ fn shown(path: &str) -> String {
         .unwrap_or_else(|| path.to_owned())
 }
 
-/// Loads every `(instance, file)` in order. The error is the one firebase-tools stops with.
+/// Loads every `(instance, file)` in order, and answers the text loaded from each. The error
+/// is the one firebase-tools stops with.
 pub(crate) fn load_initial(
     database: &Mutex<Database>,
     files: &[(String, String)],
     now_millis: i64,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let mut database = database.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut texts = Vec::with_capacity(files.len());
     for (instance, path) in files {
         let loaded = std::fs::read_to_string(path)
             .map_err(|error| error.to_string())
-            .and_then(|text| database.load_rules(instance, &text, now_millis));
-        if let Err(error) = loaded {
+            .and_then(|text| {
+                database.load_rules(instance, &text, now_millis)?;
+                Ok(text)
+            });
+        if let Err(error) = &loaded {
             return Err(format!(
                 "Failed to load initial Realtime Database rules:\n{}:{}",
                 shown(path),
                 error.trim()
             ));
         }
+        texts.extend(loaded);
     }
-    Ok(())
+    Ok(texts)
 }
 
-/// Watches every file and loads it again into its instance when it changes. The watchers end
-/// with the database.
+/// Watches every file and loads it again into its instance when it changes; `loaded` is the
+/// text each was loaded from. The watchers end with the database.
 pub(crate) fn start_reload_supervisors(
     database: &Arc<Mutex<Database>>,
     files: &[(String, String)],
+    loaded: &[String],
     clock: &Arc<dyn Fn() -> i64 + Send + Sync>,
 ) {
-    for (instance, path) in files {
+    for ((instance, path), loaded) in files.iter().zip(loaded) {
         let weak = Arc::downgrade(database);
         let clock = Arc::clone(clock);
         let instance = instance.clone();
         let path = path.clone();
+        // The file as first observed counts as loaded only when it holds the text that was
+        // loaded; a change between the load and this look is loaded at the first scan
+        // (review S4).
         let mut observed = crate::watched_file(&path)
             .ok()
+            .filter(|(_, _, bytes)| bytes.as_slice() == loaded.as_bytes())
             .map(|(stamp, signature, _)| (stamp, signature));
         tokio::spawn(async move {
             loop {
@@ -263,14 +274,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_change_between_the_load_and_the_watch_is_loaded() {
+        let (_dir, path) = temp("between", r#"{"rules":{".read":true}}"#);
+        let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 1)));
+        let files = [("b".to_owned(), path.clone())];
+        let texts = load_initial(&database, &files, 0).unwrap();
+        std::fs::write(&path, r#"{"rules":{".read":false}}"#).unwrap();
+        start_reload_supervisors(
+            &database,
+            &files,
+            &texts,
+            &(Arc::new(|| 0_i64) as Arc<dyn Fn() -> i64 + Send + Sync>),
+        );
+        for _ in 0..100 {
+            if read(&database, "b") == 401 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("the change made before the watch was not loaded");
+    }
+
+    #[tokio::test]
     async fn a_changed_file_is_loaded_again_and_a_bad_change_keeps_the_rules() {
         let (_dir, path) = temp("reload", r#"{"rules":{".read":true}}"#);
         let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 1)));
         let files = [("r".to_owned(), path.clone())];
-        load_initial(&database, &files, 0).unwrap();
+        let texts = load_initial(&database, &files, 0).unwrap();
         start_reload_supervisors(
             &database,
             &files,
+            &texts,
             &(Arc::new(|| 0_i64) as Arc<dyn Fn() -> i64 + Send + Sync>),
         );
         let wait_for = |status: u16| {

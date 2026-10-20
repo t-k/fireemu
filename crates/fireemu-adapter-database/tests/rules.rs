@@ -1034,3 +1034,17 @@ fn realtime_credentials_follow_the_profile() {
         assert!(user[0].contains(r#""uid":"ok-1""#), "{user:?}");
     }
 }
+
+#[test]
+fn credentials_debug_says_whether_a_verifier_is_set() {
+    let credentials = fireemu_adapter_database::rest::Credentials {
+        strict: true,
+        id_tokens: Some(verifier()),
+    };
+    assert_eq!(
+        format!("{credentials:?}"),
+        "Credentials { strict: true, id_tokens: true }"
+    );
+    let text = format!("{:?}", RestOptions::default().credentials);
+    assert_eq!(text, "Credentials { strict: false, id_tokens: false }");
+}

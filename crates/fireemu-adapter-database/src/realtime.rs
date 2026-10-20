@@ -879,20 +879,17 @@ fn refuse_overlap(relative: &[(String, Path)]) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Checks a write registered for a connection's end as the tree would check it now: keys,
-/// depth, sizes and server-value placeholders. The official emulator answers a value it
-/// cannot read with a connection error, as it does for a write. A priority is not checked
-/// here: the official emulator accepts any, and an unusable one fails the whole update when
-/// the connection ends.
+/// Checks a write registered for a connection's end as the tree would read it now: keys,
+/// depth, sizes and server-value placeholders, the same for a `.priority` path. The official
+/// emulator answers a value it cannot read with a connection error, as it does for a write;
+/// it does not check that a priority is one (an object is accepted), and an unusable one
+/// fails the whole update when the connection ends.
 fn check_registered(
     path: &Path,
     value: &Json,
     limits: &fireemu_core_database::Limits,
     context: ServerValueContext,
 ) -> Result<(), Failure> {
-    if path.is_priority() {
-        return Ok(());
-    }
     let resolved = resolve(value, None, context).map_err(|_| Failure::Malformed)?;
     Node::from_json(&resolved, path, limits).map_err(|_| Failure::Malformed)?;
     Ok(())

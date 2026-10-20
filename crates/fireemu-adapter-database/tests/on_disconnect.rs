@@ -345,6 +345,32 @@ fn a_priority_is_checked_only_when_the_connection_ends() {
 }
 
 #[test]
+fn a_priority_with_a_key_that_cannot_be_read_is_a_connection_error() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let mut session = open(&mut db, "bk");
+    let replies = send(
+        &mut db,
+        &mut session,
+        &request(1, "o", r#"{"p":"/c40/.priority","d":{"a.b":1}}"#),
+    );
+    assert_eq!(replies.len(), 1);
+    assert!(
+        replies[0].starts_with(r#"{"t":"c","d":{"t":"e""#),
+        "{replies:?}"
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            &request(2, "o", r#"{"p":"/c22","d":1}"#)
+        ),
+        vec![ok(2)]
+    );
+    db.close_realtime(session.client(), LATER);
+    assert_eq!(rest(&mut db, "GET", "/.json?ns=bk", ""), r#"{"c22":1}"#);
+}
+
+#[test]
 fn a_request_without_a_path_keeps_the_connection() {
     let mut db = Database::new(RestOptions::default(), 1);
     let mut session = open(&mut db, "np");

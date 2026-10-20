@@ -1247,8 +1247,20 @@ export const O5_FUNCTION_NAMES = [
   "is_nan",
   "is_null",
 ];
-/** Names whose call without arguments answers a value that changes between runs. */
-const O5_RANDOM_FUNCTIONS = new Set(["rand", "autogen_document_id", "current_timestamp"]);
+/**
+ * The names not called without arguments. A random value changes between runs, so those names
+ * take one argument and answer their argument count. Three overloaded array functions answer an
+ * internal error (500 UNKNOWN) without arguments on the official emulator 1.22.0, so they take the
+ * arguments it answered a definite 400 for (o5-official-4.txt).
+ */
+export const O5_FUNCTION_ARGUMENTS = {
+  rand: [fld("i")],
+  autogen_document_id: [fld("i")],
+  current_timestamp: [fld("i")],
+  array_transform: [fld("i"), fld("i"), fld("i"), fld("i")],
+  array_reverse: [fld("i")],
+  array_slice: [fld("i"), fld("i")],
+};
 
 /** A step id for any function name: the name itself, or its code points when it is not plain. */
 export const functionNameStep = (name) =>
@@ -1261,7 +1273,7 @@ export const functionNameStep = (name) =>
 /**
  * Each name called with no argument: an unknown name answers that it does not exist and a known
  * one its argument count (or its value), so the rows give production's function list. The names
- * whose value is random take one argument instead, to answer the argument count.
+ * in O5_FUNCTION_ARGUMENTS take the arguments listed there.
  */
 const o5FunctionNameProgram = {
   id: "fs-ent-pipeline/o5/function-names",
@@ -1269,10 +1281,7 @@ const o5FunctionNameProgram = {
   steps: O5_FUNCTION_NAMES.map((name) =>
     step(
       functionNameStep(name),
-      pipeline(
-        collection("fx5"),
-        select({ v: O5_RANDOM_FUNCTIONS.has(name) ? fn(name, fld("i")) : fn(name) }),
-      ),
+      pipeline(collection("fx5"), select({ v: fn(name, ...(O5_FUNCTION_ARGUMENTS[name] ?? [])) })),
     ),
   ),
 };

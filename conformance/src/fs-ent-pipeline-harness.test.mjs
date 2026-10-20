@@ -891,13 +891,21 @@ test("the O-5 name sweep calls every registry and SDK name once, each under its 
     sweep.steps.map((s) => s.id),
     ids,
   );
-  // Each step selects one call of its name: no argument, except the names whose value is random,
-  // which take one so that production answers their argument count.
+  // Each step selects one call of its name: no argument, except the random names (one) and the
+  // three array functions the official emulator answers 500 without arguments.
+  const field = { fieldReferenceValue: "i" };
+  const expected = {
+    rand: 1,
+    autogen_document_id: 1,
+    current_timestamp: 1,
+    array_transform: 4,
+    array_reverse: 1,
+    array_slice: 2,
+  };
   for (const [index, s] of sweep.steps.entries()) {
     const [, selectStage] = s.body.structuredPipeline.pipeline.stages;
     const call = selectStage.args[0].mapValue.fields.v.functionValue;
     assert.equal(call.name, O5_FUNCTION_NAMES[index]);
-    const random = ["rand", "autogen_document_id", "current_timestamp"].includes(call.name);
-    assert.deepEqual(call.args, random ? [{ fieldReferenceValue: "i" }] : [], call.name);
+    assert.deepEqual(call.args, Array(expected[call.name] ?? 0).fill(field), call.name);
   }
 });

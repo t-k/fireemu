@@ -152,11 +152,43 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
     )));
     // The official emulator's regular expressions are a dialect of their own (RTDB-03c).
     // Until it is followed, a pattern fireemu does not read as it does is an error in the
-    // rule, so the rule is false negated or not: the only differences left are rules the
-    // official emulator allows and fireemu denies, never the other way round.
+    // rule, so the rule is false negated or not: these recorded rows are allowed there and
+    // denied here, and no row is the other way round.
+    let known: std::collections::BTreeSet<&str> = [
+        r#""'?:a'.matches(/(?:a)/)" : read false, expected true"#,
+        r#""'a]'.matches(/[[:alpha:]]/)" : read false, expected true"#,
+        r#""'[]'.matches(/[[:alpha:]]/)" : read false, expected true"#,
+        r#""'?ia'.matches(/(?i)a/)" : read false, expected true"#,
+        r#""'?=a'.matches(/(?=a)/)" : read false, expected true"#,
+        r#""'x?:a'.matches(/x(?:a)/)" : read false, expected true"#,
+        r#""'a'.matches(/^a**$/)" : read false, expected true"#,
+        r#""'aaa'.matches(/^a**$/)" : read false, expected true"#,
+        r#""''.matches(/^a**$/)" : read false, expected true"#,
+        r#""'?'.matches(/^(?)$/)" : read false, expected true"#,
+        r#""'1'.matches(/^\\1$/)" : read false, expected true"#,
+        r#""!'\\n'.matches(/^\\n$/)" : read false, expected true"#,
+        r#""'n'.matches(/^\\n$/)" : read false, expected true"#,
+        r#""'r'.matches(/^\\r$/)" : read false, expected true"#,
+        r#""'t'.matches(/^\\t$/)" : read false, expected true"#,
+        r#""'b'.matches(/^\\b$/)" : read false, expected true"#,
+        r#""'q'.matches(/^\\q$/)" : read false, expected true"#,
+        r#""'x'.matches(/^\\x$/)" : read false, expected true"#,
+        r#""!'aa'.matches(/^(a)\\1$/)" : read false, expected true"#,
+        r#""'a'.matches(/a**/)" : read false, expected true"#,
+    ]
+    .into_iter()
+    .collect();
+    let gone: Vec<&&str> = known
+        .iter()
+        .filter(|k| !failures.iter().any(|f| f == **k))
+        .collect();
+    assert!(
+        gone.is_empty(),
+        "known differences that no longer differ: {gone:?}"
+    );
     let failures: Vec<&String> = failures
         .iter()
-        .filter(|f| !(f.contains(".matches(/") && f.ends_with(": read false, expected true")))
+        .filter(|f| !known.contains(f.as_str()))
         .collect();
     assert!(
         failures.is_empty(),
@@ -657,28 +689,44 @@ type Shape = fn(usize) -> String;
 
 #[test]
 fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
-    let shapes: Vec<(&str, Shape)> = vec![
-        ("groups", |n| {
-            format!("{}true{}", "(".repeat(n), ")".repeat(n))
-        }),
-        ("not", |n| format!("{}true", "!".repeat(n))),
-        ("child", |n| {
-            format!("root{}.val() == null", ".child('a')".repeat(n))
-        }),
-        ("parent", |n| {
-            format!("data{}.val() == null", ".parent()".repeat(n))
-        }),
-        ("index", |n| format!("auth{} == null", "['a']".repeat(n))),
-        ("ternary then", |n| {
-            format!("{}true{}", "true ? ".repeat(n), " : false".repeat(n))
-        }),
-        ("ternary otherwise", |n| {
-            format!("{}true", "false ? false : ".repeat(n))
-        }),
-        ("minus", |n| format!("1{} < 0", " - 1".repeat(n))),
+    // Each shape, and the deepest `n` that loads: one level per group, `!`, conditional or
+    // `-`, two per `.child()` or `.parent()` call (the member and the call), one per index.
+    let shapes: Vec<(&str, Shape, usize)> = vec![
+        (
+            "groups",
+            |n| format!("{}true{}", "(".repeat(n), ")".repeat(n)),
+            599,
+        ),
+        ("not", |n| format!("{}true", "!".repeat(n)), 599),
+        (
+            "child",
+            |n| format!("root{}.val() == null", ".child('a')".repeat(n)),
+            298,
+        ),
+        (
+            "parent",
+            |n| format!("data{}.val() == null", ".parent()".repeat(n)),
+            298,
+        ),
+        (
+            "index",
+            |n| format!("auth{} == null", "['a']".repeat(n)),
+            598,
+        ),
+        (
+            "ternary then",
+            |n| format!("{}true{}", "true ? ".repeat(n), " : false".repeat(n)),
+            599,
+        ),
+        (
+            "ternary otherwise",
+            |n| format!("{}true", "false ? false : ".repeat(n)),
+            599,
+        ),
+        ("minus", |n| format!("1{} < 0", " - 1".repeat(n)), 599),
     ];
     let tree = seed();
-    for (name, shape) in shapes {
+    for (name, shape, expected) in shapes {
         // The deepest that loads, found by bisection, is within the bound.
         let (mut ok, mut refused) = (1usize, 2_000usize);
         assert!(load_deep(shape(ok)).is_ok(), "{name}");
@@ -690,7 +738,8 @@ fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
                 refused = mid;
             }
         }
-        assert!(ok >= 290, "{name}: only {ok} load");
+        // 600 levels: the levels each shape adds, and the ones around it, fill the bound.
+        assert_eq!(ok, expected, "{name}");
         for deeper in [ok + 1, 10_000] {
             assert_eq!(
                 load_deep(shape(deeper)).unwrap_err(),
@@ -709,6 +758,22 @@ fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
             };
             let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
         });
+    }
+}
+
+#[test]
+fn levels_are_given_back_when_an_operand_ends() {
+    // 700 operands side by side, each nested a few levels in every way, load: the levels of
+    // one operand do not add to the next one's.
+    for operand in [
+        "data.child('a').val() == null",
+        "(true ? true : false)",
+        "(1 - 1 < 1)",
+        "!(!true)",
+        "auth['a']['b'] == null",
+    ] {
+        let text = vec![operand; 700].join(" && ");
+        assert!(load_deep(text).is_ok(), "{operand}");
     }
 }
 

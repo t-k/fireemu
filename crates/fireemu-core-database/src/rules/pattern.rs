@@ -126,6 +126,9 @@ mod tests {
             assert_eq!(matches(text, subject), None, "{text}");
         }
         assert_eq!(matches(r"^\d\D\w\W$", "1a_-"), Some(true));
+        // An escaped backslash is a backslash, also first: what follows it is plain.
+        assert_eq!(matches(r"\\n", r"\n"), Some(true));
+        assert_eq!(matches(r"x\\n", r"x\n"), Some(true));
         assert_eq!(matches("^a.b$", "a\nb"), Some(true));
         assert_eq!(matches(r"a\(?b", "ab"), Some(true));
         assert_eq!(matches(r"a\(?b", "a(b"), Some(true));

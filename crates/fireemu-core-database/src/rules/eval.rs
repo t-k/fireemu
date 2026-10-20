@@ -352,19 +352,9 @@ fn snapshot_call<'a>(
     }
 }
 
+/// `left op right` for an operator the parser does not chain (`&&`, `||` and `+` are
+/// always [`chain`]s).
 fn binary<'a>(op: BinaryOp, left: &Expr, right: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
-    if matches!(op, BinaryOp::And | BinaryOp::Or) {
-        let Value::Bool(l) = eval(left, scope)? else {
-            return None;
-        };
-        if (op == BinaryOp::And && !l) || (op == BinaryOp::Or && l) {
-            return Some(Value::Bool(l));
-        }
-        return match eval(right, scope)? {
-            Value::Bool(r) => Some(Value::Bool(r)),
-            _ => None,
-        };
-    }
     let l = eval(left, scope)?;
     let r = eval(right, scope)?;
     combine(op, &l, &r)

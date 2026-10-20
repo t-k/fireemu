@@ -2825,7 +2825,9 @@
         "Realtime Database Functions triggers and the Emulator UI database view are not wired",
         "Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope"
       ],
-      "prohibitedClaimTerms": [],
+      "prohibitedClaimTerms": [
+        "Realtime Database"
+      ],
       "claims": []
     },
     {

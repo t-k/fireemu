@@ -368,14 +368,21 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   // S0 one describe, the preflight two reads, two recordings, A1 two read-backs.
   const worst = 1 + 2 + 2 * (80 + 60) + 2;
   assert.equal(worst, 285);
-  // The O-1 and O-2 programs are recorded already and keep their digests.
+  // Every program, O-3 included since its recording (2026-10-20), is recorded under its
+  // current digest, and O-3 under the request layer that recorded O-1.
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o3/"))) {
+  for (const program of PROGRAMS) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
-  for (const program of o3) assert.equal(recorded[program.id], undefined, program.id);
+  for (const program of o3) {
+    assert.equal(
+      recorded[program.id].harnessDigest,
+      recorded["fs-ent-pipeline/px0/aliases"].harnessDigest,
+      program.id,
+    );
+  }
   // Each O-3 cell step selects at most CELLS_PER_STEP aliases, each cell once.
   const comparisons = o3[1].steps.filter((s) => s.id.startsWith("cells-"));
   const aliases = comparisons.flatMap((s) =>
@@ -449,7 +456,7 @@ test("the committed REST request export is the corpus's", async () => {
   const { readFile } = await import("node:fs/promises");
   assert.equal(await readFile(EXPORT, "utf8"), exportText());
   const exported = JSON.parse(exportText());
-  // Only the programs the fixture records: O-3 joins after its recording.
+  // Only the programs the fixture records (O-3 since its recording).
   const recordedIds = Object.keys(
     JSON.parse(
       await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
@@ -457,7 +464,7 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 9);
+  assert.equal(recordedPrograms.length, 13);
   const rest = recordedPrograms
     .flatMap((p) => p.steps)
     .filter((s) => (s.transport ?? "rest") === "rest");

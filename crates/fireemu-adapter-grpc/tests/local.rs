@@ -7242,17 +7242,12 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
             recorded.message(),
             "Value type is not supported: FIELD_REFERENCE_VALUE"
         );
-        // The literal shapes O-3 recorded, and their compositions: a select value whose
-        // expressions, at any depth, are all fields or all functions.
+        // The literal shapes O-1 and O-3 recorded: a map of fields and literals, a map holding
+        // one map of fields, a map holding one function and an array holding one field.
         for (label, value, kind) in [
             (
                 "nested map",
                 map(&[("a", map(&[("b", f("i"))]))]),
-                "FIELD_REFERENCE_VALUE",
-            ),
-            (
-                "map holding an array of a field",
-                map(&[("a", array(vec![f("i")]))]),
                 "FIELD_REFERENCE_VALUE",
             ),
             (
@@ -7283,8 +7278,63 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
                 "{label}"
             );
         }
-        // Literals holding expressions in shapes production has not answered.
+        // Literals holding expressions in shapes production has not answered (PX1a r3 M2,
+        // PX1b r2 M2): compositions beyond the recorded shapes.
         for (label, stages) in [
+            (
+                "map holding an array of a field",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![("v", map(&[("a", array(vec![f("i")]))]))]),
+                ],
+            ),
+            (
+                "array of a function",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![(
+                        "v",
+                        array(vec![pipeline_function("document_id", vec![f("__name__")])]),
+                    )]),
+                ],
+            ),
+            (
+                "array of two fields",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![("v", array(vec![f("i"), f("s")]))]),
+                ],
+            ),
+            (
+                "array holding a map of a field",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![("v", array(vec![map(&[("a", f("i"))])]))]),
+                ],
+            ),
+            (
+                "map nesting a field three deep",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![(
+                        "v",
+                        map(&[("a", map(&[("b", map(&[("c", f("i"))]))]))]),
+                    )]),
+                ],
+            ),
+            (
+                "map of two functions",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![(
+                        "v",
+                        map(&[
+                            ("a", pipeline_function("document_id", vec![f("__name__")])),
+                            ("b", pipeline_function("document_id", vec![f("__name__")])),
+                        ]),
+                    )]),
+                ],
+            ),
             (
                 "array mixing a field and a function",
                 vec![
@@ -7685,6 +7735,31 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                     [("a".to_owned(), map(&[(leaf, s("t"))]))]
                         .into_iter()
                         .collect(),
+                    "{alias}"
+                );
+            }
+        }
+        // A reserved first segment with a child: unrecorded, so strict refuses it; the emulator
+        // profile keeps its nested key.
+        for alias in ["__x__.a", "__name__.a", "`__x__`.a"] {
+            let request = stages(vec![(alias, pipeline_field("top"))]);
+            if strict {
+                let err = pipeline_error(&mut client, request).await;
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{alias}: {err}");
+            } else {
+                let docs = drain_pipeline(
+                    client
+                        .execute_pipeline(pipeline_request(request))
+                        .await
+                        .unwrap()
+                        .into_inner(),
+                    1,
+                )
+                .await;
+                let first = alias.split('.').next().unwrap().trim_matches('`');
+                assert_eq!(
+                    docs[0].fields.keys().collect::<Vec<_>>(),
+                    [&first.to_owned()],
                     "{alias}"
                 );
             }

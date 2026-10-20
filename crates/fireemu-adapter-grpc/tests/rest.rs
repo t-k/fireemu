@@ -7294,6 +7294,22 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
                 "strict={strict}"
             );
         }
+        // A map of recorded literals with plain keys composes (a named coordinator inference,
+        // PX1b review M3); empty, reserved and dotted keys are unrecorded.
+        let nested = json!({"mapValue": {"fields": {"a": {"mapValue": {"fields": {"b": {"arrayValue": {"values": [{"integerValue": "1"}, {"mapValue": {"fields": {"c": {"stringValue": "x"}}}}]}}}}}}}});
+        let (status, body) = select(nested.clone());
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        assert_eq!(
+            body[0]["results"][0]["fields"]["v"], nested,
+            "strict={strict}"
+        );
+        for key in ["", "__x__", "a.b", "1a"] {
+            let (status, body) =
+                select(json!({"mapValue": {"fields": {key: {"integerValue": "1"}}}}));
+            // The emulator profile answers as before (a reserved key is refused by the value
+            // decoder, as for a write).
+            assert_eq!(status == 501, strict, "strict={strict} {key:?}: {body}");
+        }
         // A vector literal is unrecorded.
         let (status, body) = select(
             json!({"mapValue": {"fields": {"__type__": {"stringValue": "__vector__"}, "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}}),

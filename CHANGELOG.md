@@ -8,6 +8,11 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- A pipeline `select` alias of 1500 bytes or more, counted as the official emulator counts it (the segments joined with `.` after unquoting), is now refused with `UNIMPLEMENTED` under the strict profile, since production's answer is unrecorded; the emulator profile answers the official emulator's `INVALID_ARGUMENT` text, and accepts 1499 bytes. An empty alias is refused with `UNIMPLEMENTED` under the strict profile, and the emulator profile answers the official `Invalid empty property path string.`
+- Pipeline alias maps of `add_fields`, `distinct` and `aggregate`, and empty alias maps of `select`, `add_fields`, `distinct` and `aggregate`: the emulator profile answers the official emulator's refusals (the empty path, an invalid path, the 1500-byte length and the empty-map texts) in its order (every alias check before an empty map) before refusing the stage as unsupported locally; the strict profile refuses them with `UNIMPLEMENTED`, since production's answers are unrecorded. An `aggregate` stage without its groups argument is refused with production's arity text: under the strict profile only for the recorded shape (directly after the collection, with a non-empty map of plain aliases to functions), in the emulator profile always, as the official emulator does. An `aggregate` with an empty groups map is no longer refused as an invalid argument.
+
 ## [0.28.0] - 2026-10-20
 
 ### Added

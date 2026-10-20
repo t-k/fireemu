@@ -782,14 +782,35 @@ fn decode_select(
         .collect())
 }
 
+/// The official emulator refuses a select alias whose unquoted segments, joined with '.', reach
+/// this many bytes (1499 is accepted).
+const ALIAS_LIMIT_BYTES: usize = 1500;
+
+/// A syntactically valid alias the path parser refuses for its length, unquoted and joined
+/// with '.' as the official emulator names it.
+fn unquoted_alias(alias: &str) -> String {
+    let mut out = String::with_capacity(alias.len());
+    let mut chars = alias.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '`' => {}
+            '\\' => out.extend(chars.next()),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Reads a select alias as a field path. Production's refusals are recorded for a single
 /// unquoted segment (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`): an invalid name, a
 /// reserved `__x__` and `__name__`; their texts are production's, which the official emulator
 /// answers too. The official emulator also refuses a quoted reserved name, and accepts a
 /// reserved name below another field (`a.__x__`, `a.__name__`); production has not answered
-/// those shapes, nor an invalid quoted or dotted alias, nor a name over the length limit, so
-/// strict refuses them as unobserved. Production's regex text answers only a plain name that
-/// fails the path rules, the shape it was recorded for (`total-count`, `名前`, `1st`).
+/// those shapes, nor an invalid quoted or dotted alias, nor an empty alias, nor a name at the
+/// length limit, so strict refuses them as unobserved. Production's regex text answers only a
+/// plain name that fails the path rules, the shape it was recorded for (`total-count`, `名前`,
+/// `1st`). The official emulator checks the syntax first, then the length of the segments
+/// joined with '.' after unquoting, refusing 1500 bytes or more with that joined text.
 fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
     let strict = unrecorded == Unrecorded::Refuse;
     let unobserved = || {
@@ -797,27 +818,42 @@ fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status
             "select alias {alias:?}: this alias shape is not observed locally"
         ))
     };
+    let too_long = |reference: &str| {
+        if strict {
+            unobserved()
+        } else {
+            Status::invalid_argument(format!(
+                "The field reference '{reference}' is longer than 1500 bytes."
+            ))
+        }
+    };
     let plain = !alias.contains(['.', '`']);
     let path = match FieldPath::parse_allowing_reserved(alias) {
         Ok(path) => path,
         Err(_) if strict && !plain => return Err(unobserved()),
+        Err(FieldPathError::Empty) if strict => return Err(unobserved()),
+        Err(FieldPathError::Empty) => {
+            return Err(Status::invalid_argument(
+                crate::query_messages::EMPTY_PROPERTY_PATH,
+            ))
+        }
         // Production's regex text is recorded only for a name the regex refuses; a name over
         // the length limit is unrecorded (the official emulator names the length).
         Err(FieldPathError::SegmentTooLong { .. } | FieldPathError::PathTooLong { .. }) => {
-            return Err(if strict {
-                unobserved()
-            } else {
-                Status::invalid_argument(format!(
-                    "The field reference '{alias}' is longer than 1500 bytes."
-                ))
-            })
+            return Err(too_long(&unquoted_alias(alias)))
         }
+        // Which refusal production answers first for a long invalid name is unrecorded.
+        Err(_) if strict && alias.len() >= ALIAS_LIMIT_BYTES => return Err(unobserved()),
         Err(_) => {
             return Err(Status::invalid_argument(format!(
                 r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
             )))
         }
     };
+    let joined = path.segments().join(".");
+    if joined.len() >= ALIAS_LIMIT_BYTES {
+        return Err(too_long(&joined));
+    }
     let reserved = path
         .segments()
         .iter()

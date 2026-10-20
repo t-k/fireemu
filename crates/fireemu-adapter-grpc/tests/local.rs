@@ -7490,18 +7490,78 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         // emulator profile answers as the official emulator does (a quoted reserved name is
         // refused, a reserved name below another field is a nested key).
         let strict = policy == IndexValidationPolicy::Production;
-        // An empty alias is refused by the request validator in both profiles, before any
-        // alias rule (the official emulator answers "Invalid empty property path string.";
-        // production is unrecorded).
+        // An empty alias: production is unrecorded, so strict refuses it as unobserved; the
+        // emulator profile answers the official emulator's text.
         let err = pipeline_error(&mut client, stages(vec![("", pipeline_field("top"))])).await;
-        assert_eq!(
-            err.code(),
-            tonic::Code::InvalidArgument,
-            "{policy:?}: {err}"
-        );
-        // A plain alias over the 1500-byte limit (the official emulator: "The field reference
-        // '...' is longer than 1500 bytes.").
+        if strict {
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+        } else {
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+            assert_eq!(err.message(), "Invalid empty property path string.");
+        }
+        // The length limit, as the official emulator answers it: the segments are joined with
+        // '.' after unquoting, and 1500 bytes or more is refused with that joined text. Under
+        // the limit both profiles answer; at it strict refuses as unobserved.
+        let quoted = |inner: &str| format!("`{inner}`");
+        let a1499 = "a".repeat(1499);
+        let a1500 = "a".repeat(1500);
+        let b1497 = format!("`a`.{}", "b".repeat(1497));
+        let b1498 = format!("`a`.{}", "b".repeat(1498));
+        let escaped = format!("`\\`{}`", "a".repeat(1499));
+        for (alias, key, refused) in [
+            (a1499.clone(), a1499.clone(), None),
+            (a1500.clone(), String::new(), Some(a1500.clone())),
+            (quoted(&a1499), a1499.clone(), None),
+            (quoted(&a1500), String::new(), Some(a1500.clone())),
+            (b1497.clone(), "a".to_owned(), None),
+            (
+                b1498.clone(),
+                String::new(),
+                Some(format!("a.{}", "b".repeat(1498))),
+            ),
+            (
+                escaped.clone(),
+                String::new(),
+                Some(format!("`{}", "a".repeat(1499))),
+            ),
+        ] {
+            let request = stages(vec![(alias.as_str(), pipeline_field("top"))]);
+            if let Some(reference) = refused {
+                let err = pipeline_error(&mut client, request).await;
+                if strict {
+                    assert_eq!(err.code(), tonic::Code::Unimplemented, "{}", alias.len());
+                } else {
+                    assert_eq!(err.code(), tonic::Code::InvalidArgument, "{}", alias.len());
+                    assert_eq!(
+                        err.message(),
+                        format!("The field reference '{reference}' is longer than 1500 bytes."),
+                        "{}",
+                        alias.len()
+                    );
+                }
+            } else {
+                let docs = drain_pipeline(
+                    client
+                        .execute_pipeline(pipeline_request(request))
+                        .await
+                        .unwrap()
+                        .into_inner(),
+                    1,
+                )
+                .await;
+                assert_eq!(
+                    docs[0].fields.keys().collect::<Vec<_>>(),
+                    [&key],
+                    "{}",
+                    alias.len()
+                );
+            }
+        }
+        // A plain over-length alias that also fails the regex gets the regex text in the
+        // emulator profile (the official emulator checks the syntax first); production's order
+        // is unrecorded.
         let long_alias = "a".repeat(1501);
+        let dashes = "-".repeat(1501);
         for (alias, official) in [
             ("a..b", Some("Invalid property path")),
             (
@@ -7517,6 +7577,7 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             ("a.__x__", None),
             ("a.__name__", None),
             (long_alias.as_str(), Some("The field reference 'aaaa")),
+            (dashes.as_str(), Some("Invalid property path \"---")),
         ] {
             let request = stages(vec![(alias, pipeline_field("top"))]);
             if strict {

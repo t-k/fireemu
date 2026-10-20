@@ -294,7 +294,9 @@ fn alias_map(
         return Err(argument(stage, index, "a non-empty map of aliases", arg));
     }
     for (alias, value) in entries {
-        if alias.is_empty() || !value.is_expression() {
+        // An empty `select` alias is the adapter's to answer: production has not recorded it,
+        // and the official emulator answers it with its empty-path text.
+        if (alias.is_empty() && stage != "select") || !value.is_expression() {
             return Err(argument(stage, index, values, value));
         }
         if values == "a map of aliases to aggregate functions"
@@ -541,6 +543,11 @@ mod tests {
         assert!(canonicalize(&[users(), stage("where", vec![Arg::String("x".into())])]).is_ok());
         assert!(canonicalize(&[users(), stage("where", vec![Arg::Pipeline])]).is_err());
         assert!(canonicalize(&[users(), stage("sort", vec![Arg::Field("age".into())])]).is_err());
+        // An empty select alias is left to the adapter, which answers it per profile; an empty
+        // add_fields alias stays a validator refusal.
+        let empty_alias = || Arg::Map(vec![(String::new(), Arg::Field("age".into()))]);
+        assert!(canonicalize(&[users(), stage("select", vec![empty_alias()])]).is_ok());
+        assert!(canonicalize(&[users(), stage("add_fields", vec![empty_alias()])]).is_err());
         assert!(canonicalize(&[
             users(),
             stage(

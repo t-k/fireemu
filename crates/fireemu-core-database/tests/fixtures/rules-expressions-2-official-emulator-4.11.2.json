@@ -2100,5 +2100,383 @@
   "load": 400,
   "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
   "read": null
+ },
+ {
+  "expr": "query.orderByChild + 'a' == 'na'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid + expression: left operand is not a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderByChild.contains('n')",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.limitToFirst.length == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.equalTo.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAt.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.limitToLast.contains('a')",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderByChild < 'a'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid < expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "query.limitToFirst < 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAt < 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-query.limitToFirst == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-query.startAt == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderByChild.foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.limitToFirst.foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "query.limitToFirst + 1 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderByChild - 1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid - expression: left operand is not a number.\n",
+  "read": null
+ },
+ {
+  "expr": "data.getPriority().length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.getPriority().foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "-data.val() == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "now.length == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "$x == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$x'.\n",
+  "read": null
+ },
+ {
+  "expr": "('a' + 1) - 1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid - expression: left operand is not a number.\n",
+  "read": null
+ },
+ {
+  "expr": "(1 + 'a') - 1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid - expression: left operand is not a number.\n",
+  "read": null
+ },
+ {
+  "expr": "(auth.n + 1) - 1 == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 9223372036854775808 == 'a9.223372036854776E18'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 9223372036854775807 == 'a9223372036854775807'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 9223372036854774784 == 'a9223372036854774784'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/[a]$b/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/[a]b^/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a]'.matches(/a]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/[a]^/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "true false",
+  "query": "",
+  "load": 400,
+  "error": "1:35: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "1 2",
+  "query": "",
+  "load": 400,
+  "error": "1:28: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "auth['a'",
+  "query": "",
+  "load": 400,
+  "error": "1:33: missing ] in index expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth['a')",
+  "query": "",
+  "load": 400,
+  "error": "1:34: missing ] in index expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth['uid'] == 'u1' auth",
+  "query": "",
+  "load": 400,
+  "error": "1:49: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "auth[1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:36: missing ] in index expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth[",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "1e5x == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "12345678901234567890 == 12345678901234567000",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "0.5e1 == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "5e-1 == 0.5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1 a.b == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "1 ab",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "1 2.5 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "1 'a'",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "1 'a' == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "1 'a\\'b' == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:34: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "(1 'x')",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "data.child('s' 'x')",
+  "query": "",
+  "load": 400,
+  "error": "1:43: missing ) after argument list\n",
+  "read": null
+ },
+ {
+  "expr": "1 \"q\" == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:32: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "'a\\\\x'.matches(/a\\\\$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1 2.5",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "1 a",
+  "query": "",
+  "load": 400,
+  "error": "1:28: missing ; before statement\n",
+  "read": null
  }
 ]

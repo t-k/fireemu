@@ -201,94 +201,24 @@ impl Checker<'_> {
             ));
         };
         let object_ty = self.ty(object)?;
-        let types = self.argument_types(arguments)?;
-        let arity = |n: usize| -> Result<(), ExprError> {
-            if arguments.len() == n {
-                Ok(())
-            } else {
-                let count = match n {
-                    0 => "no arguments",
-                    1 => "1 argument",
-                    _ => "two arguments",
-                };
-                Err(ExprError::new(
-                    call.at,
-                    format!("{name}() expects {count}."),
-                ))
-            }
-        };
-        let string_arguments = || -> Result<(), ExprError> {
-            for (argument, ty) in arguments.iter().zip(&types) {
-                if !ty.is(&[Ty::Str]) {
-                    return Err(ExprError::new(
-                        argument.at,
-                        format!("{name}() expects a string argument."),
-                    ));
-                }
-            }
-            Ok(())
+        let site = CallSite {
+            at: call.at,
+            name,
+            arguments,
+            types: self.argument_types(arguments)?,
         };
         match object_ty {
-            Ty::Snapshot if SNAPSHOT_METHODS.contains(&name.as_str()) => match name.as_str() {
-                "child" | "hasChild" => {
-                    arity(1)?;
-                    string_arguments()?;
-                    Ok(if name == "child" {
-                        Ty::Snapshot
-                    } else {
-                        Ty::Bool
-                    })
-                }
-                "hasChildren" => {
-                    if arguments.len() > 1 {
-                        return Err(ExprError::new(
-                            call.at,
-                            "hasChildren() expects 0 or 1 arguments.",
-                        ));
-                    }
-                    if let (Some(argument), Some(ty)) = (arguments.first(), types.first()) {
-                        if !ty.is(&[Ty::Array]) {
-                            return Err(ExprError::new(
-                                argument.at,
-                                "hasChildren() expects an array of child names.",
-                            ));
-                        }
-                    }
-                    Ok(Ty::Bool)
-                }
-                "parent" => arity(0).map(|()| Ty::Snapshot),
-                "val" | "getPriority" => arity(0).map(|()| Ty::Any),
-                _ => arity(0).map(|()| Ty::Bool),
-            },
+            Ty::Snapshot if SNAPSHOT_METHODS.contains(&name.as_str()) => site.snapshot_method(),
             Ty::Str | Ty::Any | Ty::Json if STRING_METHODS.contains(&name.as_str()) => {
-                match name.as_str() {
-                    "contains" | "beginsWith" | "endsWith" => {
-                        arity(1)?;
-                        string_arguments()?;
-                        Ok(Ty::Bool)
-                    }
-                    "replace" => {
-                        arity(2)?;
-                        string_arguments()?;
-                        Ok(Ty::Str)
-                    }
-                    "toLowerCase" | "toUpperCase" => arity(0).map(|()| Ty::Str),
-                    _ => {
-                        arity(1)?;
-                        if types[0].is(&[Ty::Regex]) {
-                            Ok(Ty::Bool)
-                        } else {
-                            Err(ExprError::new(
-                                arguments[0].at,
-                                "matches() expects a regular expression literal argument.",
-                            ))
-                        }
-                    }
-                }
+                site.string_method()
             }
             Ty::Json => Err(ExprError::new(
                 call.at,
                 "Type error: Function call on target that is not a function.",
+            )),
+            Ty::Num | Ty::Bool | Ty::Null | Ty::Regex | Ty::Array => Err(ExprError::new(
+                call.at,
+                "Invalid property access: target is not an object.",
             )),
             // A value known only at run time has only the string methods.
             _ => Err(no_such(call.at, name)),
@@ -375,6 +305,104 @@ impl Checker<'_> {
                 operand(l, "left", &[Ty::Num], "is not a number")?;
                 operand(r, "right", &[Ty::Num], "is not a number")?;
                 Ok(Ty::Num)
+            }
+        }
+    }
+}
+
+/// A method call being checked: where it is, the method, and its arguments with their types.
+struct CallSite<'a> {
+    at: usize,
+    name: &'a str,
+    arguments: &'a [Expr],
+    types: Vec<Ty>,
+}
+
+impl CallSite<'_> {
+    fn arity(&self, n: usize) -> Result<(), ExprError> {
+        if self.arguments.len() == n {
+            return Ok(());
+        }
+        let count = match n {
+            0 => "no arguments",
+            1 => "1 argument",
+            _ => "two arguments",
+        };
+        Err(ExprError::new(
+            self.at,
+            format!("{}() expects {count}.", self.name),
+        ))
+    }
+
+    fn string_arguments(&self) -> Result<(), ExprError> {
+        for (argument, ty) in self.arguments.iter().zip(&self.types) {
+            if !ty.is(&[Ty::Str]) {
+                return Err(ExprError::new(
+                    argument.at,
+                    format!("{}() expects a string argument.", self.name),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn snapshot_method(&self) -> Result<Ty, ExprError> {
+        match self.name {
+            "child" | "hasChild" => {
+                self.arity(1)?;
+                self.string_arguments()?;
+                Ok(if self.name == "child" {
+                    Ty::Snapshot
+                } else {
+                    Ty::Bool
+                })
+            }
+            "hasChildren" => {
+                if self.arguments.len() > 1 {
+                    return Err(ExprError::new(
+                        self.at,
+                        "hasChildren() expects 0 or 1 arguments.",
+                    ));
+                }
+                if let (Some(argument), Some(ty)) = (self.arguments.first(), self.types.first()) {
+                    if !ty.is(&[Ty::Array]) {
+                        return Err(ExprError::new(
+                            argument.at,
+                            "hasChildren() expects an array of child names.",
+                        ));
+                    }
+                }
+                Ok(Ty::Bool)
+            }
+            "parent" => self.arity(0).map(|()| Ty::Snapshot),
+            "val" | "getPriority" => self.arity(0).map(|()| Ty::Any),
+            _ => self.arity(0).map(|()| Ty::Bool),
+        }
+    }
+
+    fn string_method(&self) -> Result<Ty, ExprError> {
+        match self.name {
+            "contains" | "beginsWith" | "endsWith" => {
+                self.arity(1)?;
+                self.string_arguments()?;
+                Ok(Ty::Bool)
+            }
+            "replace" => {
+                self.arity(2)?;
+                self.string_arguments()?;
+                Ok(Ty::Str)
+            }
+            "toLowerCase" | "toUpperCase" => self.arity(0).map(|()| Ty::Str),
+            _ => {
+                self.arity(1)?;
+                if self.types[0].is(&[Ty::Regex]) {
+                    Ok(Ty::Bool)
+                } else {
+                    Err(ExprError::new(
+                        self.arguments[0].at,
+                        "matches() expects a regular expression literal argument.",
+                    ))
+                }
             }
         }
     }

@@ -80,14 +80,20 @@ fn leaf_value<'a>(leaf: &Leaf) -> Value<'a> {
     }
 }
 
-/// A number as the official emulator prints it: a whole number that fits a 64-bit integer
-/// as that integer, anything else as Java's `Double.toString` (plain from 10^-3 up to 10^7,
-/// otherwise `d.dddE<exponent>`).
+/// A number as the official emulator prints it: a number that a 64-bit integer holds after
+/// Java's saturating cast as that integer (so 2^63 prints as 9223372036854775807), anything
+/// else as Java's `Double.toString` (plain from 10^-3 up to 10^7, otherwise
+/// `d.dddE<exponent>`).
 fn number_text(n: f64) -> String {
-    // 2^63: the first magnitude a 64-bit integer cannot hold.
-    const LONG_LIMIT: f64 = 9_223_372_036_854_775_808.0;
-    #[allow(clippy::cast_possible_truncation)]
-    if n.fract() == 0.0 && n.abs() < LONG_LIMIT {
+    // Rust's `as` saturates as Java's `(long)` does.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::float_cmp
+    )]
+    let whole = (n as i64) as f64 == n;
+    if whole {
+        #[allow(clippy::cast_possible_truncation)]
         return format!("{}", n as i64);
     }
     if (1e-3..1e7).contains(&n.abs()) {
@@ -274,7 +280,8 @@ fn regex_matches<'a>(pattern: &str, flags: &str, text: &str) -> Option<Value<'a>
         source.push_str("(?i)");
     }
     let anchored_start = pattern.starts_with('^');
-    let anchored_end = pattern.ends_with('$') && !pattern.ends_with("\\$");
+    // A final `$` is the end anchor; loading refused one left escaping nothing.
+    let anchored_end = pattern.ends_with('$');
     if !anchored_start {
         source.push_str("(?s:.)*?");
     }

@@ -475,9 +475,13 @@ impl Parser<'_> {
                 (end + 1).min(chars.len())
             }
             Token::Number(_) | Token::Name(_) | Token::Regex(..) => {
+                // A number runs over its digits, point and exponent; a name stops at a `.`.
+                let number = matches!(token, Token::Number(_));
                 let mut end = at + 1;
                 while end < chars.len()
-                    && (chars[end].is_alphanumeric() || matches!(chars[end], '_' | '$' | '.'))
+                    && (chars[end].is_alphanumeric()
+                        || matches!(chars[end], '_' | '$')
+                        || (number && chars[end] == '.'))
                 {
                     end += 1;
                 }
@@ -595,7 +599,7 @@ impl Parser<'_> {
                 };
             } else if self.eat("[")? {
                 let index = self.ternary()?;
-                self.expect("]")?;
+                self.close("]", "missing ] in index expression")?;
                 expr = match index.kind {
                     ExprKind::Str(name) => Expr {
                         at: expr.at,
@@ -624,15 +628,6 @@ impl Parser<'_> {
             } else {
                 return Ok(expr);
             }
-        }
-    }
-
-    fn expect(&mut self, punct: &str) -> Result<(), ExprError> {
-        let (at, token) = self.next()?;
-        match token {
-            Token::Punct(p) if p == punct => Ok(()),
-            Token::End => Err(ExprError::new(at, "Unexpected end of expression")),
-            _ => Err(ExprError::new(at, "Unexpected token.")),
         }
     }
 

@@ -328,6 +328,25 @@ fn an_update_that_fails_writes_nothing_at_all() {
 }
 
 #[test]
+fn a_priority_registered_for_a_prioritized_leaf_changes_only_its_priority() {
+    let (_, pushes, value) = run(
+        "pl",
+        &[],
+        &[
+            ("o", r#"{"p":"/m","d":{".value":5,".priority":2}}"#),
+            ("o", r#"{"p":"/m/.priority","d":3}"#),
+            ("o", r#"{"p":"/n","d":{".value":5,".priority":2}}"#),
+            ("o", r#"{"p":"/n/.priority","d":null}"#),
+        ],
+    );
+    assert_eq!(
+        pushes,
+        vec![merge_push(r#"{"m":{".value":5,".priority":3.0},"n":5}"#)]
+    );
+    assert_eq!(value, r#"{"m":{".value":5,".priority":3.0},"n":5}"#);
+}
+
+#[test]
 fn a_priority_is_checked_only_when_the_connection_ends() {
     // An object is no priority: registering it is answered ok, and the update it joins
     // fails whole when the connection ends.

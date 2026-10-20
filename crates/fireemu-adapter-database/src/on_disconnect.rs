@@ -114,6 +114,14 @@ fn update_child(value: Json, keys: &[String], data: Json) -> Json {
         return value;
     }
     let mut map = match value {
+        // A prioritized leaf: a priority replaces or removes its priority only.
+        Json::Object(mut map) if map.contains_key(VALUE) && key == PRIORITY && rest.is_empty() => {
+            if data == Json::Null {
+                return map.remove(VALUE).unwrap_or(Json::Null);
+            }
+            map.insert(PRIORITY.to_owned(), data);
+            return Json::Object(map);
+        }
         Json::Object(map) if map.contains_key(VALUE) => {
             map.into_iter().filter(|(key, _)| key == PRIORITY).collect()
         }
@@ -203,6 +211,23 @@ mod tests {
         );
         assert_eq!(update_child(json("1"), &[], json("2")), json("2"));
         assert_eq!(update_child(json("1"), &keys("a/b"), Json::Null), json("1"));
+        // A priority for a prioritized leaf replaces or removes its priority only.
+        assert_eq!(
+            update_child(
+                json(r#"{".value":5,".priority":2}"#),
+                &keys(".priority"),
+                json("3")
+            ),
+            json(r#"{".value":5,".priority":3}"#)
+        );
+        assert_eq!(
+            update_child(
+                json(r#"{".value":5,".priority":2}"#),
+                &keys(".priority"),
+                Json::Null
+            ),
+            json("5")
+        );
         assert_eq!(
             update_child(
                 json(r#"{".value":1,".priority":2}"#),
@@ -239,7 +264,7 @@ mod tests {
         /// by one would leave.
         #[test]
         fn one_update_equals_the_writes_in_order(
-            writes in prop::collection::vec(
+            groups in prop::collection::vec(
                 (
                     prop::collection::vec(prop::sample::select(vec!["a", "b", "c"]), 0..4),
                     prop_oneof![
@@ -247,11 +272,27 @@ mod tests {
                         Just(Json::Null),
                         (0i64..3).prop_map(|n| Json::object([("a", Json::int(n))])),
                         (0i64..3).prop_map(|n| Json::object([("b", Json::object([("c", Json::int(n))]))])),
+                        (0i64..3, 0i64..3).prop_map(|(n, p)| {
+                            Json::object([(".value", Json::int(n)), (".priority", Json::int(p))])
+                        }),
                     ],
+                    // A priority written right after the value at the same path, so the node
+                    // is there for it in both orders.
+                    prop::option::of(prop_oneof![(0i64..3).prop_map(Json::int), Just(Json::Null)]),
                 ),
                 0..8,
             ),
         ) {
+            let mut writes: Vec<(Vec<&str>, Json)> = Vec::new();
+            for (keys, value, priority) in groups {
+                let priority = priority.filter(|_| !keys.is_empty() && value != Json::Null);
+                writes.push((keys.clone(), value));
+                if let Some(priority) = priority {
+                    let mut at = keys;
+                    at.push(".priority");
+                    writes.push((at, priority));
+                }
+            }
             let context = ServerValueContext { now_millis: 0 };
             let mut pending = Pending::default();
             let mut one_by_one = Tree::new(Limits::default());

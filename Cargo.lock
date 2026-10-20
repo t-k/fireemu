@@ -618,6 +618,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fireemu-adapter-database"
+version = "0.27.1"
+dependencies = [
+ "bytes",
+ "fireemu-core-database",
+ "fireemu-core-types",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "proptest",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "fireemu-adapter-functions"
 version = "0.27.1"
 dependencies = [
@@ -798,6 +814,14 @@ dependencies = [
  "fireemu-core-limits",
  "fireemu-core-types",
  "proptest",
+]
+
+[[package]]
+name = "fireemu-core-database"
+version = "0.27.1"
+dependencies = [
+ "proptest",
+ "serde_json",
 ]
 
 [[package]]

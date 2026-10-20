@@ -11,7 +11,7 @@
 //! | `CC-03` | a manifest capability that is `implemented` or `partial` and is not bound to at least one existing executed test or conformance fixture |
 //! | `CC-04` | a manifest entry and the contract that disagree on status, an unknown capability ID, or a manifest entry no claim covers |
 //! | `CC-05` | a README that does not carry the version-qualified claim sentence verbatim |
-//! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest, the README or a document the claim scopes (`claim.scopedDocuments`: the release's npm descriptions; the npm package page is generated from the README) |
+//! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest, the README or a document the claim scopes (`claim.scopedDocuments`: the release's npm descriptions; the npm package page is generated from the README); an active surface in the gap state is held to the same document rule |
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
 //! | `CC-08` | a compatibility profile that sets or declares a configuration key the canonical schema does not define, or a value it does not allow; a declared key without a `hand-written` / `not-implemented` status and a note, or one that is also set; and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
 //! | `CC-09` | a conformance fixture cited as evidence that records unresolved `debt`, unless the claim excludes that step by name with the issue that owns it; a fixture with no `parity` or `documented-divergence` step (so nothing the local oracle answered); a stale exclusion, and a step status the suite does not define |
@@ -1036,7 +1036,7 @@ fn check_readme_claim(root: &Path, contract: &Value, problems: &mut Vec<String>)
 }
 
 // ---------------------------------------------------------------------------------------------
-// CC-06: a deferred or not-planned product may never read as supported
+// CC-06: a deferred or not-planned product, or one served as a gap, may never read as supported
 
 fn check_scope_leakage(
     root: &Path,
@@ -1072,19 +1072,29 @@ fn check_scope_leakage(
 
     for surface in surfaces {
         let scope = str_field(surface, "scope").unwrap_or("");
-        if scope == "active" {
+        // An active surface in the gap state is served without a parity claim, so the
+        // documents must say so wherever they name it; its manifest entries may list what
+        // it serves.
+        let gap = scope == "active" && str_field(surface, "state") == Some("gap");
+        if scope == "active" && !gap {
             continue;
         }
+        let status = if gap { "an open gap" } else { scope };
         let sid = str_field(surface, "id").unwrap_or("");
         let terms = strings(surface, "prohibitedClaimTerms");
         if terms.is_empty() {
+            let what = if gap {
+                "active in the gap state"
+            } else {
+                scope
+            };
             problems.push(format!(
-                "CC-06: surface {sid} is {scope} and declares no prohibitedClaimTerms, so nothing stops it from reading as supported"
+                "CC-06: surface {sid} is {what} and declares no prohibitedClaimTerms, so nothing stops it from reading as supported"
             ));
         }
         for term in terms {
             let needle = term.to_lowercase();
-            for (id, entry) in entries {
+            for (id, entry) in entries.iter().filter(|_| !gap) {
                 for item in strings(entry, "implemented") {
                     if item.to_lowercase().contains(&needle) {
                         problems.push(format!(
@@ -1104,7 +1114,7 @@ fn check_scope_leakage(
                         .any(|d| lower.contains(&d.to_lowercase()))
                     {
                         problems.push(format!(
-                            "CC-06: {document}:{} names {term:?} without saying it is {scope}",
+                            "CC-06: {document}:{} names {term:?} without saying it is {status}",
                             n + 1
                         ));
                     }

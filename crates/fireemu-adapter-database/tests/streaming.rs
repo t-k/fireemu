@@ -202,14 +202,29 @@ fn a_child_entering_a_query_window_resends_the_window() {
 }
 
 #[test]
-fn a_multipath_write_above_a_stream_resends_its_value() {
+fn a_multipath_write_above_a_stream_sends_the_entries_inside_it() {
     let mut db = Database::new(RestOptions::default(), 1);
-    write(&mut db, "PUT", "/s.json?ns=e1", r#"{"a":{"b":1}}"#);
+    write(&mut db, "PUT", "/s.json?ns=e1", r#"{"a":{"b":1,"x":0}}"#);
     let (id, _) = open(&mut db, "/s/a.json?ns=e1");
-    assert_eq!(
-        write(&mut db, "PATCH", "/s.json?ns=e1", r#"{"a/b":2,"c":3}"#),
-        vec![(id, put("/", r#"{"b":2}"#))]
-    );
+    for (body, data) in [
+        (r#"{"a/b":2,"c":3}"#, r#"{"b":2}"#),
+        (r#"{"a/b":3}"#, r#"{"b":3}"#),
+        (r#"{"a/b":4,"a/x":5}"#, r#"{"b":4,"x":5}"#),
+        (r#"{"a/b":4,"a/x":6,"c":1}"#, r#"{"x":6}"#),
+        (r#"{"a/b/q":1,"c":2}"#, r#"{"b/q":1}"#),
+    ] {
+        assert_eq!(
+            write(&mut db, "PATCH", "/s.json?ns=e1", body),
+            vec![(
+                id,
+                SseEvent {
+                    event: "patch".to_owned(),
+                    data: format!("{{\"path\":\"/\",\"data\":{data}}}"),
+                }
+            )],
+            "{body}"
+        );
+    }
 }
 
 #[test]
@@ -249,4 +264,145 @@ fn a_write_of_an_equal_number_is_no_write() {
         }
         fireemu_adapter_database::rest::Handled::Stream { .. } => panic!("stream"),
     }
+}
+
+fn patch(path: &str, data: &str) -> SseEvent {
+    SseEvent {
+        event: "patch".to_owned(),
+        data: format!("{{\"path\":\"{path}\",\"data\":{data}}}"),
+    }
+}
+
+#[test]
+fn a_stream_sees_a_number_change_its_form_inside_a_larger_write() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/s.json?ns=f1", r#"{"a":1,"b":2}"#);
+    let (a, _) = open(&mut db, "/s/a.json?ns=f1");
+    let (s, _) = open(&mut db, "/s.json?ns=f1");
+    // b changes, so the node is rewritten and a is stored as written: 1.0.
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=f1", r#"{"a":1.0,"b":3}"#),
+        vec![(a, put("/", "1.0")), (s, put("/", r#"{"a":1.0,"b":3}"#))]
+    );
+    // Equal writes keep the stored form and send nothing.
+    assert!(write(&mut db, "PUT", "/s.json?ns=f1", r#"{"a":1.0,"b":3}"#).is_empty());
+    assert!(write(&mut db, "PUT", "/s/a.json?ns=f1", "1").is_empty());
+    assert_eq!(
+        write(&mut db, "PATCH", "/s.json?ns=f1", r#"{"a":1,"b":4}"#),
+        vec![(s, patch("/", r#"{"b":4}"#))]
+    );
+    assert_eq!(
+        write(&mut db, "PUT", "/s.json?ns=f1", r#"{"a":2.0,"b":4}"#),
+        vec![(a, put("/", "2.0")), (s, put("/", r#"{"a":2.0,"b":4}"#))]
+    );
+}
+
+#[test]
+fn a_patch_event_lists_only_the_entries_that_changed() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(
+        &mut db,
+        "PUT",
+        "/s.json?ns=f2",
+        r#"{"a":1,"b":3,"c":{"x":1}}"#,
+    );
+    let (s, _) = open(&mut db, "/s.json?ns=f2");
+    for (body, expected) in [
+        (r#"{"a":5,"b":3}"#, Some(r#"{"a":5}"#)),
+        // A null entry always counts, even where nothing was.
+        (r#"{"zz":null}"#, Some(r#"{"zz":null}"#)),
+        (r#"{"a":6,"zz":null}"#, Some(r#"{"a":6,"zz":null}"#)),
+        (r#"{"c/x":1.0,"b":4}"#, Some(r#"{"b":4}"#)),
+        (r#"{"c":{"x":1.0}}"#, None),
+        (r#"{"c":{"x":1,"y":2}}"#, Some(r#"{"c":{"x":1,"y":2}}"#)),
+        (r#"{"a":6,"b":4}"#, None),
+        (r#"{"a":{".sv":{"increment":0}},"b":7}"#, Some(r#"{"b":7}"#)),
+        (r#"{"b/.priority":3}"#, Some(r#"{"b/.priority":3}"#)),
+        (r#"{"b/.priority":3,"a":8}"#, Some(r#"{"a":8}"#)),
+    ] {
+        let events = write(&mut db, "PATCH", "/s.json?ns=f2", body);
+        let expected: Vec<(u64, SseEvent)> = expected
+            .map(|data| (s, patch("/", data)))
+            .into_iter()
+            .collect();
+        assert_eq!(events, expected, "{body}");
+    }
+}
+
+#[test]
+fn a_patch_above_a_stream_sends_the_entries_inside_it() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/s.json?ns=f3", r#"{"a":1}"#);
+    let (s, _) = open(&mut db, "/s.json?ns=f3");
+    let (c, _) = open(&mut db, "/s/c.json?ns=f3");
+    // A null write always counts, as for the realtime listens.
+    assert_eq!(
+        write(&mut db, "PUT", "/s/zz.json?ns=f3", "null"),
+        vec![(s, put("/zz", "null"))]
+    );
+    assert_eq!(
+        write(&mut db, "DELETE", "/s/zz.json?ns=f3", ""),
+        vec![(s, put("/zz", "null"))]
+    );
+    assert_eq!(
+        write(&mut db, "PATCH", "/.json?ns=f3", r#"{"s/c/zz":null}"#),
+        vec![
+            (s, patch("/", r#"{"c/zz":null}"#)),
+            (c, patch("/", r#"{"zz":null}"#))
+        ]
+    );
+    assert!(write(&mut db, "PATCH", "/.json?ns=f3", r#"{"s/a":1}"#).is_empty());
+    assert_eq!(
+        write(&mut db, "PATCH", "/.json?ns=f3", r#"{"s/a":2,"q":1}"#),
+        vec![(s, patch("/", r#"{"a":2}"#))]
+    );
+}
+
+#[test]
+fn a_patch_entry_at_or_above_a_stream_sends_its_whole_value() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/s.json?ns=f4", r#"{"a":1,"c":{"x":1}}"#);
+    let (c, _) = open(&mut db, "/s/c.json?ns=f4");
+    for (body, expected) in [
+        (r#"{"s/c":{"k":1}}"#, put("/", r#"{"k":1}"#)),
+        (r#"{"s":{"c":{"k":2},"a":1}}"#, put("/", r#"{"k":2}"#)),
+        (
+            r#"{"s/c/k":3,"s/c/m":4,"s/a":5}"#,
+            patch("/", r#"{"k":3,"m":4}"#),
+        ),
+        (r#"{"s/c/k":3,"s/c/m":5}"#, patch("/", r#"{"m":5}"#)),
+        (
+            r#"{"s/c/k":null,"s/c/m":null}"#,
+            patch("/", r#"{"k":null,"m":null}"#),
+        ),
+    ] {
+        assert_eq!(
+            write(&mut db, "PATCH", "/.json?ns=f4", body),
+            vec![(c, expected)],
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_reset_queues_the_emptied_value_for_streams_until_drained() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/s.json?ns=f6", r#"{"a":1}"#);
+    let (id, _) = open(&mut db, "/s.json?ns=f6");
+    db.clear_namespaces_where(|ns| ns == "f6");
+    assert_eq!(db.drain_events(), vec![(id, put("/", "null"))]);
+    assert!(db.drain_events().is_empty());
+}
+
+#[test]
+fn a_null_write_beside_a_full_limit_window_sends_nothing() {
+    // The official emulator sends nothing to a full limit window for null written to an
+    // absent child. (It sends the null to a range window whose range holds the key; this
+    // server does not, see the module notes of rest.rs.)
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/q.json?ns=f5", r#"{"a":1,"b":2,"c":3}"#);
+    let (_, initial) = open(&mut db, "/q.json?ns=f5&orderBy=%22%24key%22&limitToFirst=2");
+    assert_eq!(initial, put("/", r#"{"a":1,"b":2}"#));
+    assert!(write(&mut db, "PUT", "/q/zz.json?ns=f5", "null").is_empty());
+    assert!(write(&mut db, "PUT", "/q/a0.json?ns=f5", "null").is_empty());
 }

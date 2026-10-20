@@ -49,6 +49,7 @@ export default defineConfig({
 						{ label: 'Cloud Storage', slug: 'products/storage' },
 						{ label: 'Cloud Functions', slug: 'products/functions' },
 						{ label: 'Pub/Sub and Eventarc', slug: 'products/pubsub-eventarc' },
+						{ label: 'Realtime Database', slug: 'products/realtime-database' },
 						{ label: 'App Check', slug: 'products/app-check' },
 					],
 				},

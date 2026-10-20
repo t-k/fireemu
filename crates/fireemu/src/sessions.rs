@@ -38,6 +38,9 @@ pub struct Projects {
     pub pubsub: Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
     /// Push dispatcher sharing `pubsub`; reset invalidates work before clearing broker state.
     pub pubsub_handle: fireemu_adapter_pubsub::PubSubHandle,
+    /// The Realtime Database: a reset empties the namespaces of the projects it covers
+    /// (`<project>-default-rtdb`, or a namespace named after the project).
+    pub realtime_database: Arc<Mutex<fireemu_adapter_database::rest::Database>>,
 }
 
 /// The App Check epochs a transition will install, drawn before anything is destroyed.
@@ -210,6 +213,14 @@ impl ProjectHooks for Projects {
             .lock()
             .map_err(|_| TransitionFailure::new("pubsub", "the Pub/Sub state is poisoned"))?
             .clear_projects_where(|project| scope.owns_project(project));
+        self.realtime_database
+            .lock()
+            .map_err(|_| {
+                TransitionFailure::new("database", "the Realtime Database state is poisoned")
+            })?
+            .clear_namespaces_where(|namespace| {
+                scope.owns_project(fireemu_adapter_database::namespace::project_of(namespace))
+            });
         install_app_check_epochs(self.app_check.as_ref(), |p| scope.owns_project(p), &epochs);
         if let Scope::Project(project) = scope {
             if !self.registry.commit_session(project) {
@@ -439,6 +450,10 @@ pub(crate) mod tests {
             app_check: Some(gate.clone()),
             pubsub,
             pubsub_handle,
+            realtime_database: Arc::new(Mutex::new(fireemu_adapter_database::rest::Database::new(
+                fireemu_adapter_database::rest::RestOptions::default(),
+                5,
+            ))),
         }
     }
 
@@ -570,6 +585,57 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(created.lock().unwrap().authorized_domains(), seed);
         assert!(!created.lock().unwrap().sign_in_config().email_enabled);
+    }
+
+    #[test]
+    fn a_reset_empties_the_realtime_database_namespaces_of_the_projects_it_covers() {
+        let gate = gate();
+        let projects = projects(&gate);
+        let put = |ns: &str| {
+            let request = fireemu_adapter_database::rest::HttpRequest {
+                method: "PUT".to_owned(),
+                target: format!("/a.json?ns={ns}"),
+                headers: Vec::new(),
+                body: b"1".to_vec(),
+            };
+            projects
+                .realtime_database
+                .lock()
+                .unwrap()
+                .handle(&request, 0);
+        };
+        let held = |ns: &str| {
+            projects
+                .realtime_database
+                .lock()
+                .unwrap()
+                .tree(ns)
+                .is_some_and(|tree| tree.root().is_some())
+        };
+        let second = format!("{SECOND_PROJECT}-default-rtdb");
+        for ns in [
+            "demo-app-default-rtdb",
+            "demo-app",
+            second.as_str(),
+            SECOND_PROJECT,
+        ] {
+            put(ns);
+        }
+        fireemu_adapter_http::control::ProjectHooks::reset_scope(
+            &projects,
+            &Scope::Project(SECOND_PROJECT.to_owned()),
+        )
+        .unwrap();
+        assert!(held("demo-app-default-rtdb") && held("demo-app"));
+        assert!(!held(&second) && !held(SECOND_PROJECT));
+        put(&second);
+        fireemu_adapter_http::control::ProjectHooks::reset_scope(
+            &projects,
+            &Scope::AllExcept(BTreeSet::from([SECOND_PROJECT.to_owned()])),
+        )
+        .unwrap();
+        assert!(!held("demo-app-default-rtdb") && !held("demo-app"));
+        assert!(held(&second));
     }
 
     #[test]

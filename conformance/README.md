@@ -206,7 +206,7 @@ ORACLE.md DEBT.md                  generated
 ## Not in this slice
 
 Browser / WebChannel, Android, Apple, Unity, Java, Python and Go SDKs; import and export;
-Realtime Database, Hosting, App Hosting, Extensions and Data Connect; Windows and Linux
+Realtime Database (compared with the official emulator by `tools/sdk-smoke-database` instead), Hosting, App Hosting, Extensions and Data Connect; Windows and Linux
 matrix rows; and any production oracle. `DEBT.md` and the two issues under
 `docs.local/issues/open/` track the rest.
 

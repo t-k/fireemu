@@ -1,0 +1,451 @@
+{
+ "events": [
+  [
+   "reader connected",
+   false
+  ],
+  [
+   "reader connected",
+   true
+  ],
+  [
+   "set",
+   "ok"
+  ],
+  [
+   "get",
+   {
+    "a": {
+     "n": 1
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    }
+   }
+  ],
+  [
+   "update",
+   "ok"
+  ],
+  [
+   "push",
+   20
+  ],
+  [
+   "server values",
+   "ok"
+  ],
+  [
+   "get server values",
+   {
+    "n": 2,
+    "t": "<TS>"
+   }
+  ],
+  [
+   "priority",
+   "ok"
+  ],
+  [
+   "get priority",
+   {
+    ".value": "v",
+    ".priority": 3
+   }
+  ],
+  [
+   "big value",
+   "ok"
+  ],
+  [
+   "get big",
+   5000
+  ],
+  [
+   "query",
+   {
+    "a": {
+     "n": 5
+    },
+    "b": {
+     "n": 2
+    }
+   }
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 5
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "added last2",
+   "c",
+   {
+    "n": 3
+   }
+  ],
+  [
+   "added last2",
+   "d",
+   {
+    "n": 4
+   }
+  ],
+  [
+   "--",
+   "set a/n"
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 6
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "--",
+   "add e"
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 6
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    },
+    "e": {
+     "n": 9
+    }
+   }
+  ],
+  [
+   "removed last2",
+   "c",
+   {
+    "n": 3
+   }
+  ],
+  [
+   "added last2",
+   "e",
+   {
+    "n": 9
+   }
+  ],
+  [
+   "--",
+   "remove e"
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 6
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "removed last2",
+   "e",
+   {
+    "n": 9
+   }
+  ],
+  [
+   "added last2",
+   "c",
+   {
+    "n": 3
+   }
+  ],
+  [
+   "--",
+   "transaction"
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 7
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    }
+   }
+  ],
+  [
+   "--",
+   "reader write"
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 7
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    },
+    "f": {
+     "n": 1
+    }
+   }
+  ],
+  [
+   "removed last2",
+   "c",
+   {
+    "n": 3
+   }
+  ],
+  [
+   "added last2",
+   "f",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "--",
+   "reader offline"
+  ],
+  [
+   "reader connected",
+   false
+  ],
+  [
+   "--",
+   "write while reader offline"
+  ],
+  [
+   "--",
+   "reader writes offline"
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 7
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    },
+    "f": {
+     "n": 1
+    },
+    "h": {
+     "n": 8
+    }
+   }
+  ],
+  [
+   "removed last2",
+   "d",
+   {
+    "n": 4
+   }
+  ],
+  [
+   "added last2",
+   "h",
+   {
+    "n": 8
+   }
+  ],
+  [
+   "--",
+   "reader online"
+  ],
+  [
+   "reader connected",
+   true
+  ],
+  [
+   "value room",
+   "room",
+   {
+    "a": {
+     "n": 7
+    },
+    "b": {
+     "n": 2
+    },
+    "c": {
+     "n": 3
+    },
+    "d": {
+     "n": 4
+    },
+    "f": {
+     "n": 1
+    },
+    "g": {
+     "n": 7
+    },
+    "h": {
+     "n": 8
+    }
+   }
+  ],
+  [
+   "removed last2",
+   "f",
+   {
+    "n": 1
+   }
+  ],
+  [
+   "added last2",
+   "g",
+   {
+    "n": 7
+   }
+  ],
+  [
+   "--",
+   "get after reconnect"
+  ],
+  [
+   "writer sees h",
+   {
+    "n": 8
+   }
+  ],
+  [
+   "--",
+   "remove room"
+  ],
+  [
+   "value room",
+   "room",
+   null
+  ],
+  [
+   "removed last2",
+   "g",
+   {
+    "n": 7
+   }
+  ],
+  [
+   "removed last2",
+   "h",
+   {
+    "n": 8
+   }
+  ],
+  [
+   "value presence",
+   "presence",
+   null
+  ],
+  [
+   "--",
+   "writer registers onDisconnect"
+  ],
+  [
+   "value presence",
+   "presence",
+   {
+    "tmp": 1,
+    "writer": {
+     "state": "online"
+    },
+    "x": {
+     "z": 2
+    }
+   }
+  ],
+  [
+   "--",
+   "writer offline"
+  ],
+  [
+   "--",
+   "reader reads presence"
+  ],
+  [
+   "presence",
+   {
+    "tmp": 1,
+    "writer": {
+     "state": "online"
+    },
+    "x": {
+     "z": 2
+    }
+   }
+  ]
+ ],
+ "transports": [
+  "/.lp"
+ ],
+ "errors": []
+}

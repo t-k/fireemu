@@ -4,14 +4,20 @@
 //! messages waiting to be sent and at most one held request. Pushes from other connections
 //! and REST go straight into the outbox under the database lock, so they keep commit order
 //! with the connection's own answers. A new request first releases the held one with what
-//! is waiting (possibly nothing), then hands its packets to the session. Locks are taken in
-//! the order database, listeners, connection; a connection's state is only locked with the
-//! database lock held, and the registry lock is taken alone or last.
+//! is waiting (possibly nothing), then hands its packets to the session.
+//!
+//! Locks: a connection's state is locked only with the database lock held, by every path
+//! (`poll`, an expired hold, `disconn`, the reaper and `deliver`), so the database lock
+//! serializes them. Under it the order varies: `deliver` takes the listeners and then a
+//! connection, `close` a connection and then the listeners and the registry. That cannot
+//! deadlock, because neither runs without the database lock. The registry lock is never held
+//! while the database lock is taken.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
+use fireemu_adapter_support::entropy;
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use tokio::sync::oneshot;
@@ -54,9 +60,8 @@ struct State {
     outbox_bytes: usize,
     /// The number of the next answer that carries messages.
     next_packet: u64,
-    /// The held request: its ticket and where its answer goes.
-    held: Option<(u64, oneshot::Sender<String>)>,
-    next_ticket: u64,
+    /// Where the held request's answer goes.
+    held: Option<oneshot::Sender<String>>,
     last_request: Instant,
     closed: bool,
 }
@@ -76,12 +81,21 @@ impl State {
         body
     }
 
-    /// Answers the held request, if any, with what is waiting.
+    /// Answers the held request, if any, with what is waiting. A held request whose client
+    /// went away takes nothing (its receiver is gone, so the send hands the packet back): its
+    /// packet number and messages wait for the next request, since the SDK reads packets
+    /// strictly in order.
     fn release(&mut self) {
-        if let Some((_, sender)) = self.held.take() {
-            let body = self.take_packet();
-            // A held request whose client went away has nobody to read it.
-            let _ = sender.send(body);
+        let Some(sender) = self.held.take() else {
+            return;
+        };
+        let messages = std::mem::take(&mut self.outbox);
+        match sender.send(packet(self.next_packet, &messages)) {
+            Ok(()) => {
+                self.outbox_bytes = 0;
+                self.next_packet += 1;
+            }
+            Err(_) => self.outbox = messages,
         }
     }
 
@@ -102,9 +116,11 @@ pub(super) fn deliver(connection: &Connection, message: String, budget: usize) -
     if state.closed {
         return false;
     }
+    // An empty outbox takes any one message, as an empty push queue does.
+    let alone = state.outbox.is_empty();
     state.outbox_bytes += message.len();
     state.outbox.push(message);
-    if state.outbox_bytes > budget || state.outbox.len() > connection.queue {
+    if (!alone && state.outbox_bytes > budget) || state.outbox.len() > connection.queue {
         state.end();
         return false;
     }
@@ -147,6 +163,9 @@ pub(super) async fn answer(shared: &Arc<Shared>, request: &Request<Incoming>) ->
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned)
         .unwrap_or_default();
+    if let Err(refusal) = request::check_escapes(&target) {
+        return full(refusal_response(&refusal));
+    }
     let (_, params) = request::split_target(&target);
     match parse(&params) {
         LpRequest::Start { callback } => start(shared, &target, &host, callback),
@@ -176,7 +195,40 @@ fn find(shared: &Shared, id: &str, password: &str) -> Option<Arc<Connection>> {
     (connection.password == password).then_some(connection)
 }
 
+/// A connection's password: ten letters and digits, as the official emulator's, drawn from
+/// the operating system. The password is all that keeps another page from polling the
+/// connection (the client number is sequential), so it never comes from the database's
+/// seeded generator; `None` when the operating system has no entropy to give.
+fn draw_password() -> Option<String> {
+    let mut password = String::with_capacity(PASSWORD_LENGTH);
+    let mut bytes = [0u8; 32];
+    while password.len() < PASSWORD_LENGTH {
+        entropy::fill(&mut bytes).ok()?;
+        extend_password(&mut password, &bytes);
+    }
+    Some(password)
+}
+
+/// Adds a letter or digit for each usable byte until the password is long enough. Bytes
+/// from 248 (4 * 62) up are skipped, which keeps every character equally likely.
+fn extend_password(password: &mut String, bytes: &[u8]) {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    for byte in bytes {
+        if password.len() == PASSWORD_LENGTH {
+            return;
+        }
+        if *byte < 248 {
+            password.push(char::from(ALPHABET[usize::from(*byte % 62)]));
+        }
+    }
+}
+
+const PASSWORD_LENGTH: usize = 10;
+
 fn start(shared: &Arc<Shared>, target: &str, host: &str, callback: Option<i32>) -> Response<Body> {
+    let Some(password) = draw_password() else {
+        return full(refusal_response(&Refusal::new(503, "Service Unavailable")));
+    };
     let now = (shared.config.clock)();
     let mut database = lock_database(shared);
     let opened = match database.open_realtime(target, Some(host).filter(|h| !h.is_empty()), now) {
@@ -198,7 +250,6 @@ fn start(shared: &Arc<Shared>, target: &str, host: &str, callback: Option<i32>) 
             frames.into_iter().next().unwrap_or_default(),
         ),
     };
-    let password = database.long_poll_password();
     let limit = database.realtime_message_bytes();
     let client = session.client();
     let connection = Arc::new(Connection {
@@ -212,7 +263,6 @@ fn start(shared: &Arc<Shared>, target: &str, host: &str, callback: Option<i32>) 
             outbox_bytes: 0,
             next_packet: 1,
             held: None,
-            next_ticket: 0,
             last_request: Instant::now(),
             closed: false,
         }),
@@ -242,56 +292,76 @@ async fn poll(
     segments: Vec<Segment>,
     host: &str,
 ) -> Response<Body> {
-    let (ticket, mut receiver) = {
+    let mut receiver = {
         let mut database = lock_database(shared);
         let mut state = connection.lock();
         if state.closed {
             return script(reset(host));
         }
         let Ok(messages) = state.segments.add(segments) else {
+            // Segments the client numbered are gone, so its packets can never line up
+            // again: end the connection, and the next request gets a reset.
+            close(shared, &mut database, connection, &mut state);
             return full(refusal_response(&Refusal::bad("Bad Request")));
         };
         state.last_request = Instant::now();
         state.release();
         for message in messages {
             if !answer_message(shared, &mut database, &mut state, &message) {
+                // What the session answered before it ended goes out; the reset reaches
+                // the client as the answer to its next request, from an unknown connection.
+                let body = if state.outbox.is_empty() {
+                    NOTHING.to_owned()
+                } else {
+                    state.take_packet()
+                };
                 close(shared, &mut database, connection, &mut state);
-                return script(NOTHING.to_owned());
+                return script(body);
             }
         }
         if !state.outbox.is_empty() {
             return script(state.take_packet());
         }
         let (sender, receiver) = oneshot::channel();
-        let ticket = state.next_ticket;
-        state.next_ticket += 1;
-        state.held = Some((ticket, sender));
-        (ticket, receiver)
+        state.held = Some(sender);
+        receiver
     };
-    match tokio::time::timeout(shared.config.long_poll_hold, &mut receiver).await {
-        Ok(Ok(body)) => script(body),
-        // The connection was closed while the request waited.
-        Ok(Err(_)) => script(String::new()),
-        Err(_) => {
-            let expired = {
-                let mut database = lock_database(shared);
-                let mut state = connection.lock();
-                let expired = state.held.as_ref().is_some_and(|(held, _)| *held == ticket);
-                if expired {
-                    // Nobody asked again within the hold time: the client is gone.
-                    close(shared, &mut database, connection, &mut state);
-                }
-                expired
-            };
-            if expired {
-                return script(NOTHING.to_owned());
-            }
-            // Released just as the hold ended.
-            match receiver.await {
-                Ok(body) => script(body),
-                Err(_) => script(String::new()),
-            }
+    if let Ok(answer) = tokio::time::timeout(shared.config.long_poll_hold, &mut receiver).await {
+        // An error: the connection was closed while the request waited.
+        return script(answer.unwrap_or_default());
+    }
+    let mut database = lock_database(shared);
+    let mut state = connection.lock();
+    match expiry(&mut receiver) {
+        Expiry::Released(body) => script(body),
+        Expiry::Closed => script(String::new()),
+        Expiry::Held => {
+            // Nobody asked again within the hold time: the client is gone.
+            close(shared, &mut database, connection, &mut state);
+            script(NOTHING.to_owned())
         }
+    }
+}
+
+/// What became of a held request whose hold time ran out.
+#[derive(Debug, PartialEq, Eq)]
+enum Expiry {
+    /// A later request or a push answered it just as the hold ended.
+    Released(String),
+    /// The connection was closed.
+    Closed,
+    /// It is still the held request.
+    Held,
+}
+
+/// Reads the held request's channel with the connection's state locked: the request is
+/// answered and the connection closed only under that lock, so an empty, open channel means
+/// the request is still held.
+fn expiry(receiver: &mut oneshot::Receiver<String>) -> Expiry {
+    match receiver.try_recv() {
+        Ok(body) => Expiry::Released(body),
+        Err(oneshot::error::TryRecvError::Closed) => Expiry::Closed,
+        Err(oneshot::error::TryRecvError::Empty) => Expiry::Held,
     }
 }
 
@@ -309,9 +379,16 @@ fn answer_message(
     let now = (shared.config.clock)();
     let mut received = state.session.dispatch_prepared(database, prepared, now);
     deliver_events(shared, database, std::mem::take(&mut received.events));
+    let ends = received.close.is_some() || received.drop_connection;
+    if ends {
+        // The official emulator sends no reset in the request that ends the connection
+        // (over a WebSocket the reset goes before the drop).
+        let reset = state.session.reset_control();
+        received.replies.retain(|reply| *reply != reset);
+    }
     // The request answers these at once, so they do not count against the bounds.
     state.outbox.extend(received.replies);
-    received.close.is_none() && !received.drop_connection
+    !ends
 }
 
 /// Ends a connection, with the database lock and its state held: its held request gets an
@@ -326,7 +403,7 @@ fn close(shared: &Shared, database: &mut Database, connection: &Connection, stat
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&connection.client);
     shared.long_polls.lock().remove(&connection.client);
-    database.close_realtime(connection.client);
+    database.close_realtime(connection.client, (shared.config.clock)());
 }
 
 /// Closes a connection that sends no request for twice the hold time (a held request that
@@ -343,5 +420,39 @@ async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
             close(&shared, &mut database, &connection, &mut state);
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expiry, extend_password, oneshot, Expiry};
+
+    #[test]
+    fn password_bytes_map_to_letters_and_digits_evenly() {
+        let mut password = String::new();
+        extend_password(&mut password, &[0, 25, 26, 61, 62, 247, 248, 255]);
+        // 248 and up are skipped; the rest are taken modulo 62.
+        assert_eq!(password, "AZa9A9");
+        extend_password(&mut password, &[1, 2, 3, 4, 5, 6]);
+        // Ten characters, then nothing more.
+        assert_eq!(password, "AZa9A9BCDE");
+        let full = password.clone();
+        extend_password(&mut password, &[7]);
+        assert_eq!(password, full);
+    }
+
+    #[test]
+    fn an_expired_hold_tells_released_closed_and_held_apart() {
+        let (sender, mut receiver) = oneshot::channel();
+        sender.send("pRTLPCB(3,[]);\n".to_owned()).unwrap();
+        assert_eq!(
+            expiry(&mut receiver),
+            Expiry::Released("pRTLPCB(3,[]);\n".to_owned())
+        );
+        let (sender, mut receiver) = oneshot::channel::<String>();
+        drop(sender);
+        assert_eq!(expiry(&mut receiver), Expiry::Closed);
+        let (_sender, mut receiver) = oneshot::channel::<String>();
+        assert_eq!(expiry(&mut receiver), Expiry::Held);
     }
 }

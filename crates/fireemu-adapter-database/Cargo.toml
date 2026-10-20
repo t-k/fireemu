@@ -9,6 +9,7 @@ publish.workspace = true
 description = "Realtime Database REST and streaming (SSE) transport over the database core"
 
 [dependencies]
+fireemu-adapter-support = { path = "../fireemu-adapter-support" }
 fireemu-core-database = { path = "../fireemu-core-database" }
 fireemu-core-types = { path = "../fireemu-core-types" }
 serde_json.workspace = true

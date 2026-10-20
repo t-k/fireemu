@@ -247,25 +247,11 @@ async fn unknown_connections_frames_and_bad_segments() {
         get(&address, "GET", "/.lp?dframe=t&id=x&pw=y", "").await.2,
         ""
     );
-    let (status, _, body) = get(
-        &address,
-        "GET",
-        &format!(
-            "/.lp?id={}&pw={}&ser=9&seg0=0&ts0=1&d0=%25%25%25",
-            lp.id, lp.pw
-        ),
-        "",
-    )
-    .await;
-    assert_eq!(
-        (status, body.as_str()),
-        (400, "{\n  \"error\" : \"Bad Request\"\n}\n")
-    );
-    // The bad packet used segment 0. A packet split over two requests is answered once it is whole; POST works as GET.
+    // A packet split over two requests is answered once it is whole; POST works as GET.
     let message = b64(&request(1, "echo", r#"{"d":"split"}"#));
     let (first, second) = message.split_at(10);
     let target = format!(
-        "/.lp?id={}&pw={}&ser=20&seg0=1&ts0=2&d0={first}",
+        "/.lp?id={}&pw={}&ser=20&seg0=0&ts0=2&d0={first}",
         lp.id, lp.pw
     );
     let held = tokio::spawn({
@@ -274,7 +260,7 @@ async fn unknown_connections_frames_and_bad_segments() {
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     let target = format!(
-        "/.lp?id={}&pw={}&ser=21&seg0=2&ts0=2&d0={second}",
+        "/.lp?id={}&pw={}&ser=21&seg0=1&ts0=2&d0={second}",
         lp.id, lp.pw
     );
     assert_eq!(
@@ -282,7 +268,7 @@ async fn unknown_connections_frames_and_bad_segments() {
         "pRTLPCB(2,[{\"t\":\"d\",\"d\":{\"r\":1,\"b\":{\"s\":\"ok\",\"d\":\"split\"}}}]);\n"
     );
     assert_eq!(held.await.unwrap(), "pRTLPCB(1,[]);\n");
-    lp.segment = 3;
+    lp.segment = 2;
     assert!(lp
         .poll(&[&request(2, "echo", r#"{"d":"y"}"#)])
         .await
@@ -295,6 +281,88 @@ async fn unknown_connections_frames_and_bad_segments() {
         lp.poll(&[&request(4, "g", r#"{"p":"/big","q":{}}"#)]).await,
         format!("pRTLPCB(5,[{{\"t\":\"d\",\"d\":{{\"r\":4,\"b\":{{\"s\":\"ok\",\"d\":\"{big}\"}}}}}}]);\n")
     );
+}
+
+#[tokio::test]
+async fn bad_segments_answer_400_and_end_the_connection() {
+    // The official emulator never answers a packet that is not base64 and stops answering
+    // the connection at all; this server answers 400 and ends the connection, so the next
+    // request gets a reset and the SDK reconnects.
+    let (address, database) = start(ServerConfig::default()).await;
+    let reset = format!(
+        "pRTLPCB(0,[{{\"t\":\"c\",\"d\":{{\"t\":\"r\",\"d\":\"{address}\"}}}}]);\npLPCommand('close');\n"
+    );
+    for (ns, bad) in [("lpb1", "%25%25%25"), ("lpb2", "_w..")] {
+        let (mut lp, _) = Lp::start(&address, ns).await;
+        lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+        assert_eq!(database.lock().unwrap().listen_count(), 1);
+        let target = format!(
+            "/.lp?id={}&pw={}&ser=50&seg0=1&ts0=1&d0={bad}",
+            lp.id, lp.pw
+        );
+        assert_eq!(
+            get(&address, "GET", &target, "").await,
+            (
+                400,
+                "application/json; charset=utf-8".to_owned(),
+                "{\n  \"error\" : \"Bad Request\"\n}\n".to_owned()
+            ),
+            "{bad}"
+        );
+        assert_eq!(database.lock().unwrap().listen_count(), 0, "{bad}");
+        assert_eq!(lp.poll(&[]).await, reset, "{bad}");
+    }
+    // Far-ahead segments with no data are bounded by their number.
+    let (mut lp, _) = Lp::start(&address, "lpb3").await;
+    let mut refused = None;
+    for batch in 0..2000u64 {
+        // An echo keeps each request from being held.
+        let mut target = lp.target(&[&request(batch, "echo", "{}")]);
+        for i in 1..=40u64 {
+            write!(
+                target,
+                "&seg{i}={}&ts{i}=1&d{i}=",
+                1_000_000 + batch * 40 + i
+            )
+            .unwrap();
+        }
+        let (status, _, _) = get(&address, "GET", &target, "").await;
+        if status == 400 {
+            refused = Some(batch);
+            break;
+        }
+    }
+    assert!(
+        refused.is_some(),
+        "80,000 waiting segments were all accepted"
+    );
+    assert_eq!(lp.poll(&[]).await, reset);
+}
+
+#[tokio::test]
+async fn a_malformed_percent_escape_is_a_bad_request_before_anything_else() {
+    let (address, database) = start(ServerConfig::default()).await;
+    let bad = (
+        400,
+        "application/json; charset=utf-8".to_owned(),
+        "{\n  \"error\" : \"Bad Request\"\n}\n".to_owned(),
+    );
+    assert_eq!(
+        get(
+            &address,
+            "GET",
+            "/.lp?start=t&ser=1&cb=1&v=5&ns=lpe&x=%zz",
+            ""
+        )
+        .await,
+        bad
+    );
+    let (mut lp, _) = Lp::start(&address, "lpe").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    let target = format!("/.lp?id={}&pw={}&ser=60&x=%+f", lp.id, lp.pw);
+    assert_eq!(get(&address, "GET", &target, "").await, bad);
+    // The request never reached the connection.
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
 }
 
 #[tokio::test]
@@ -454,6 +522,30 @@ async fn a_message_the_server_cannot_handle_ends_the_connection() {
 }
 
 #[tokio::test]
+async fn a_listen_with_a_null_tag_answers_an_internal_error_and_the_next_request_a_reset() {
+    // The official emulator over long polling: the request answers the internal error, the
+    // connection is gone, and the next request gets the reset of an unknown connection.
+    let (address, database) = start(ServerConfig::default()).await;
+    let (mut lp, _) = Lp::start(&address, "lp9").await;
+    assert_eq!(
+        lp.poll(&[&request(
+            1,
+            "q",
+            r#"{"p":"/a","h":"","t":null,"q":{"l":2,"vf":"l"}}"#
+        )])
+        .await,
+        "pRTLPCB(1,[{\"t\":\"d\",\"d\":{\"r\":1,\"b\":{\"s\":\"internal_error\",\"d\":\"An internal error occurred\"}}}]);\n"
+    );
+    assert_eq!(database.lock().unwrap().listen_count(), 0);
+    assert_eq!(
+        lp.poll(&[]).await,
+        format!(
+            "pRTLPCB(0,[{{\"t\":\"c\",\"d\":{{\"t\":\"r\",\"d\":\"{address}\"}}}}]);\npLPCommand('close');\n"
+        )
+    );
+}
+
+#[tokio::test]
 async fn pushes_waiting_for_a_request_go_before_the_connections_own() {
     let (address, _) = start(ServerConfig::default()).await;
     let (mut lp, _) = Lp::start(&address, "lp6").await;
@@ -468,7 +560,8 @@ async fn pushes_waiting_for_a_request_go_before_the_connections_own() {
 
 #[tokio::test]
 async fn a_connection_whose_waiting_messages_pass_a_bound_is_dropped() {
-    // In bytes: one large push is enough.
+    // In bytes: a push larger than the budget is taken into an empty outbox (the official
+    // emulator delivers it), and the next one while it waits is too many.
     let (address, database) = start(ServerConfig {
         stream_queue_bytes: 10_000,
         ..ServerConfig::default()
@@ -483,6 +576,8 @@ async fn a_connection_whose_waiting_messages_pass_a_bound_is_dropped() {
         &format!("\"{}\"", "x".repeat(20_000)),
     )
     .await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    get(&address, "PUT", "/a.json?ns=lp7", "1").await;
     assert_eq!(database.lock().unwrap().listen_count(), 0);
     assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
     // In messages: more pushes than the queue takes.
@@ -516,6 +611,23 @@ async fn bounds_are_inclusive_and_regular_requests_keep_a_connection() {
     get(&address, "PUT", "/a.json?ns=lp9", &format!("\"{value}\"")).await;
     assert_eq!(database.lock().unwrap().listen_count(), 1);
     assert_eq!(lp.poll(&[]).await, format!("pRTLPCB(2,[{message}]);\n"));
+    // Two pushes waiting together up to exactly the budget are kept too.
+    let first = r#"{"t":"d","d":{"b":{"p":"a","d":1},"a":"d"}}"#;
+    let second = r#"{"t":"d","d":{"b":{"p":"a","d":2},"a":"d"}}"#;
+    let (address, database) = start(ServerConfig {
+        stream_queue_bytes: first.len() + second.len(),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lp11").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    get(&address, "PUT", "/a.json?ns=lp11", "1").await;
+    get(&address, "PUT", "/a.json?ns=lp11", "2").await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    assert_eq!(
+        lp.poll(&[]).await,
+        format!("pRTLPCB(2,[{first},{second}]);\n")
+    );
     // A connection asking again within twice the hold time stays open.
     let (address, _) = start(ServerConfig {
         long_poll_hold: Duration::from_millis(400),
@@ -529,4 +641,103 @@ async fn bounds_are_inclusive_and_regular_requests_keep_a_connection() {
         .poll(&[&request(2, "echo", r#"{"d":"b"}"#)])
         .await
         .starts_with("pRTLPCB(2,"));
+}
+
+#[tokio::test]
+async fn passwords_come_from_the_operating_system_not_the_database_seed() {
+    // Two servers built the same way, with the same database seed: a password that followed
+    // the seed would let any page that can reach the port poll another connection.
+    let (first, _) = start(ServerConfig::default()).await;
+    let (second, _) = start(ServerConfig::default()).await;
+    let (a, _) = Lp::start(&first, "pw1").await;
+    let (b, _) = Lp::start(&second, "pw1").await;
+    assert_eq!(a.id, b.id, "the client numbers are the same");
+    assert_ne!(a.pw, b.pw);
+    for pw in [&a.pw, &b.pw] {
+        assert_eq!(pw.len(), 10, "{pw}");
+        assert!(pw.bytes().all(|c| c.is_ascii_alphanumeric()), "{pw}");
+    }
+}
+
+#[tokio::test]
+async fn a_push_into_an_abandoned_held_request_waits_for_the_next_one() {
+    let (address, _) = start(ServerConfig::default()).await;
+    let (mut lp, _) = Lp::start(&address, "lpa").await;
+    let (number, _) = read_packet(&lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await);
+    // A request is held, and its client goes away without an answer.
+    let target = lp.target(&[]);
+    let mut abandoned = TcpStream::connect(&address).await.unwrap();
+    abandoned
+        .write_all(
+            format!("GET {target} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(abandoned);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    get(&address, "PUT", "/a.json?ns=lpa", "7").await;
+    // The next request gets the push, numbered right after the last answer the client read.
+    let (next, messages) = read_packet(&lp.poll(&[]).await);
+    assert_eq!(next, number + 1);
+    assert_eq!(
+        messages,
+        vec![r#"{"d":{"a":"d","b":{"d":7,"p":"a"}},"t":"d"}"#.to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_long_polling_connection_writes_what_it_registered_when_it_ends() {
+    let (address, _) = start(ServerConfig {
+        long_poll_hold: Duration::from_millis(300),
+        ..ServerConfig::default()
+    })
+    .await;
+    // Ended by the page's unload request.
+    let (mut lp, _) = Lp::start(&address, "lpo").await;
+    lp.poll(&[&request(1, "o", r#"{"p":"/gone","d":true}"#)])
+        .await;
+    let target = format!("/.lp?disconn=t&id={}&pw={}", lp.id, lp.pw);
+    get(&address, "GET", &target, "").await;
+    assert_eq!(
+        get(&address, "GET", "/gone.json?ns=lpo", "").await.2,
+        "true"
+    );
+    // Ended because nobody asked again within the hold time.
+    let (mut lp, _) = Lp::start(&address, "lpo").await;
+    lp.poll(&[&request(1, "o", r#"{"p":"/idle","d":1}"#)]).await;
+    lp.poll(&[]).await;
+    assert_eq!(get(&address, "GET", "/idle.json?ns=lpo", "").await.2, "1");
+}
+
+#[tokio::test]
+async fn reaped_and_overflowing_long_polling_connections_write_what_they_registered() {
+    // The reaper: no request for twice the hold time.
+    let (address, _) = start(ServerConfig {
+        long_poll_hold: Duration::from_millis(200),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lpr").await;
+    lp.poll(&[&request(1, "o", r#"{"p":"/reaped","d":1}"#)])
+        .await;
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(get(&address, "GET", "/reaped.json?ns=lpr", "").await.2, "1");
+    // A full outbox.
+    let (address, _) = start(ServerConfig {
+        stream_queue_bytes: 10_000,
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lpf").await;
+    lp.poll(&[
+        &request(1, "o", r#"{"p":"/over","d":1}"#),
+        &request(2, "q", r#"{"p":"/a","h":""}"#),
+    ])
+    .await;
+    let big = format!("\"{}\"", "x".repeat(20_000));
+    get(&address, "PUT", "/a.json?ns=lpf", &big).await;
+    get(&address, "PUT", "/a.json?ns=lpf", "1").await;
+    assert_eq!(get(&address, "GET", "/over.json?ns=lpf", "").await.2, "1");
 }

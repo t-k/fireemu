@@ -774,17 +774,12 @@ fn decode_condition(
     };
     let function = match condition.value_type.as_ref() {
         Some(V::FunctionValue(function)) => function,
-        Some(V::FieldReferenceValue(_)) => {
-            return Ok((decode_operand(condition, unrecorded)?, None))
-        }
-        // Production kept the row for `true` and dropped it for a constant of every other kind
-        // (FS-ENT-ORACLE O-3 and O-4, `comparisons#where-constant-*`, `conditions#where-*`).
-        _ if is_literal(condition) => return Ok((decode_operand(condition, unrecorded)?, None)),
-        _ => {
-            return Err(Status::unimplemented(
-                "this where condition is not observed locally",
-            ))
-        }
+        // A field, or a literal: production kept the row for `true` and dropped it for a
+        // constant of every other kind (FS-ENT-ORACLE O-3 and O-4,
+        // `comparisons#where-constant-*`, `conditions#where-*`), and refused a literal holding
+        // a field or function as it does anywhere (O-4 `literals#*`); the operand decoder answers
+        // each.
+        _ => return Ok((decode_operand(condition, unrecorded)?, None)),
     };
     let Some(def) = pipeline_exec::function(&function.name) else {
         return Err(Status::unimplemented(

@@ -8081,6 +8081,17 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
             "field name '__name__' is reserved.".to_owned(),
         ),
         (
+            "a where condition literal holding a field",
+            vec![
+                collection(),
+                pipeline_stage(
+                    "where",
+                    array_value(vec![i(1), map_value(&[("a", f("i"))])]),
+                ),
+            ],
+            "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned(),
+        ),
+        (
             "an argument literal array of a map with an empty key",
             select(pipeline_function(
                 "equal",

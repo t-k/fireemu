@@ -165,3 +165,31 @@ export async function queries(hostPort, suffix) {
   }
   return byQuery;
 }
+
+/**
+ * onDisconnect over WebSockets: one app registers set, update, remove and a cancelled write,
+ * then goes offline; another app reads what the server wrote for it.
+ */
+export async function disconnect(hostPort, suffix) {
+  const events = [];
+  const [wa, w] = clientApp(hostPort, `od${suffix}`, `od-writer${suffix}`);
+  const [ra, r] = clientApp(hostPort, `od${suffix}`, `od-reader${suffix}`);
+  const ref = (d, p) => db.ref(d, p);
+  await db.set(ref(w, 'presence'), { writer: { state: 'online' }, tmp: 1, x: { z: 2 } });
+  db.onValue(ref(r, 'presence'), (snap) => events.push(['value presence', normalize(snap.val())]));
+  await sleep(300);
+  await db.onDisconnect(ref(w, 'presence/writer')).set({ state: 'offline', at: db.serverTimestamp() });
+  await db.onDisconnect(ref(w, 'presence/tmp')).remove();
+  await db.onDisconnect(ref(w, 'presence/x')).update({ y: 1, 'deep/k': db.increment(3) });
+  await db.onDisconnect(ref(w, 'presence/prio')).setWithPriority('p', 4);
+  const cancelled = db.onDisconnect(ref(w, 'presence/cancelled'));
+  await cancelled.set(1);
+  await cancelled.cancel();
+  events.push(['--', 'writer offline']);
+  db.goOffline(w);
+  await sleep(800);
+  events.push(['read', normalize((await db.get(ref(r, 'presence'))).exportVal())]);
+  await deleteApp(wa);
+  await deleteApp(ra);
+  return events;
+}

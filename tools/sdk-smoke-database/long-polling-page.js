@@ -1,6 +1,7 @@
 // The long-polling smoke page: the browser build of firebase 12.18.0 forced to long polling.
 // Two apps (a writer and a reader) go through writes, reads, listens, a transaction and a
-// disconnect with writes on both sides before reconnecting. The events land in
+// disconnect with writes on both sides before reconnecting, then the writer's onDisconnect
+// writes as it goes offline. The events land in
 // window.__result.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js';
 import * as db from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js';
@@ -60,5 +61,19 @@ const settle = async (label, fn) => {
   await step('reader online', async () => { db.goOnline(b); await sleep(2500); });
   await step('get after reconnect', async () => record('writer sees h', (await db.get(ref(a, 'room/h'))).val()));
   await step('remove room', () => db.remove(ref(a, 'room')));
+  db.onValue(ref(b, 'presence'), log('value presence'));
+  // The listen settles before the writes it is to see, so its first value is null.
+  await sleep(800);
+  await step('writer registers onDisconnect', async () => {
+    await db.set(ref(a, 'presence'), { writer: { state: 'online' }, tmp: 1, x: { z: 2 } });
+    await db.onDisconnect(ref(a, 'presence/writer')).set({ state: 'offline', at: db.serverTimestamp() });
+    await db.onDisconnect(ref(a, 'presence/tmp')).remove();
+    await db.onDisconnect(ref(a, 'presence/x')).update({ y: 1 });
+    const cancelled = db.onDisconnect(ref(a, 'presence/cancelled'));
+    await cancelled.set(1);
+    await cancelled.cancel();
+  });
+  await step('writer offline', async () => { db.goOffline(a); await sleep(1500); });
+  await step('reader reads presence', async () => record('presence', (await db.get(ref(b, 'presence'))).val()));
   window.__result = events;
 })().catch((e) => { window.__result = { fatal: String((e && e.stack) || e) }; });

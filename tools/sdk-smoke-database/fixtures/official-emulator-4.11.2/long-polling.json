@@ -400,6 +400,48 @@
    {
     "n": 8
    }
+  ],
+  [
+   "value presence",
+   "presence",
+   null
+  ],
+  [
+   "--",
+   "writer registers onDisconnect"
+  ],
+  [
+   "value presence",
+   "presence",
+   {
+    "tmp": 1,
+    "writer": {
+     "state": "online"
+    },
+    "x": {
+     "z": 2
+    }
+   }
+  ],
+  [
+   "--",
+   "writer offline"
+  ],
+  [
+   "--",
+   "reader reads presence"
+  ],
+  [
+   "presence",
+   {
+    "tmp": 1,
+    "writer": {
+     "state": "online"
+    },
+    "x": {
+     "z": 2
+    }
+   }
   ]
  ],
  "transports": [

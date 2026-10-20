@@ -1,0 +1,55 @@
+[
+ [
+  "value presence",
+  {
+   "tmp": 1,
+   "writer": {
+    "state": "online"
+   },
+   "x": {
+    "z": 2
+   }
+  }
+ ],
+ [
+  "--",
+  "writer offline"
+ ],
+ [
+  "value presence",
+  {
+   "writer": {
+    "at": "<TS>",
+    "state": "offline"
+   },
+   "x": {
+    "deep": {
+     "k": 3
+    },
+    "y": 1,
+    "z": 2
+   },
+   "prio": "p"
+  }
+ ],
+ [
+  "read",
+  {
+   "writer": {
+    "at": "<TS>",
+    "state": "offline"
+   },
+   "x": {
+    "deep": {
+     "k": 3
+    },
+    "y": 1,
+    "z": 2
+   },
+   "prio": {
+    ".value": "p",
+    ".priority": 4
+   }
+  }
+ ]
+]

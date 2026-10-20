@@ -1,7 +1,7 @@
 // Runs the Realtime Database smokes against one server and compares them with the
 // recording of the official emulator (firebase-database-emulator v4.11.2) in fixtures/.
 //
-//   node run.mjs [--host <host:port>] [--only crud,listen,queries,long-polling]
+//   node run.mjs [--host <host:port>] [--only crud,listen,queries,disconnect,long-polling]
 //                [--record <dir>] [--expect <dir>]
 //
 // The host defaults to FIREBASE_DATABASE_EMULATOR_HOST, so that
@@ -12,7 +12,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { crud, listen, queries } from './smokes.mjs';
+import { crud, disconnect, listen, queries } from './smokes.mjs';
 import { firstDifference } from './compare.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +32,7 @@ const smokes = {
   crud,
   listen,
   queries,
+  disconnect,
   'long-polling': async (h, s) => (await import('./long-polling.mjs')).longPolling(h, s),
 };
 const selected = (option('--only') ?? Object.keys(smokes).join(',')).split(',');

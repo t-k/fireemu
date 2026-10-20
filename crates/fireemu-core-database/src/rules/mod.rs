@@ -101,6 +101,9 @@ pub struct Rules {
     root: RuleNode,
 }
 
+/// The stack of the thread that parses and checks rules.
+const COMPILE_STACK_BYTES: usize = 256 * 1024 * 1024;
+
 /// Who asks, and when.
 pub struct Requester<'a> {
     /// `auth`: the claims as the server shows them (`uid`, `provider`, `token`), or null.
@@ -110,10 +113,23 @@ pub struct Requester<'a> {
 }
 
 impl Rules {
-    /// Checks and compiles a rules tree.
+    /// Checks and compiles a rules tree. Parsing and checking recurse once per level of
+    /// nesting, which the bounds let reach a few thousand frames in a debug build, so they run
+    /// on a thread of their own with room for that, whatever the caller's stack.
     pub fn compile(spec: &RuleSpec) -> Result<Self, RulesError> {
-        Ok(Self {
-            root: compile_node(spec, &BTreeSet::new())?,
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("rules-compile".to_owned())
+                .stack_size(COMPILE_STACK_BYTES)
+                .spawn_scoped(scope, || compile_node(spec, &BTreeSet::new()))
+                .map_err(|error| RulesError {
+                    line: 1,
+                    column: 1,
+                    message: format!("Could not start checking the rules: {error}"),
+                })?
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                .map(|root| Self { root })
         })
     }
 

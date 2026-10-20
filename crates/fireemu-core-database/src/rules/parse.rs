@@ -337,35 +337,95 @@ impl Lexer<'_> {
             .map_err(|_| ExprError::new(start, "Unsupported javascript syntax."))
     }
 
+    /// A string literal, with its escapes read as the official emulator's JavaScript reads
+    /// them: `\n \t \r \b \f \v`, `\xXX`, `\uXXXX` (a pair of escaped surrogates is one
+    /// character), legacy octal (`\101`, `\0`), and any other escaped character standing for
+    /// itself (so an incomplete `\u004` is `u004`). An escaped surrogate that pairs with
+    /// nothing has no counterpart in this text and is refused.
     fn string(&mut self, start: usize, quote: char) -> Result<(usize, Token), ExprError> {
         self.at += 1;
         let mut text = String::new();
+        let mut units: Vec<u16> = Vec::new();
         loop {
             let Some(&c) = self.chars.get(self.at) else {
                 return Err(ExprError::new(start, "Unterminated string literal."));
             };
             self.at += 1;
             if c == quote {
+                Self::flush_units(start, &mut units, &mut text)?;
                 return Ok((start, Token::Str(text)));
             }
-            if c == '\\' {
-                let Some(&escaped) = self.chars.get(self.at) else {
-                    return Err(ExprError::new(start, "Unterminated string literal."));
-                };
-                self.at += 1;
-                text.push(match escaped {
-                    'n' => '\n',
-                    't' => '\t',
-                    'r' => '\r',
-                    'b' => '\u{8}',
-                    'f' => '\u{c}',
-                    '0' => '\0',
-                    other => other,
-                });
-            } else {
+            if c != '\\' {
+                Self::flush_units(start, &mut units, &mut text)?;
                 text.push(c);
+                continue;
+            }
+            let Some(&escaped) = self.chars.get(self.at) else {
+                return Err(ExprError::new(start, "Unterminated string literal."));
+            };
+            self.at += 1;
+            let hex = |lexer: &Self, n: usize| -> Option<u32> {
+                let digits: String = lexer.chars.get(lexer.at..lexer.at + n)?.iter().collect();
+                (digits.len() == n && digits.chars().all(|d| d.is_ascii_hexdigit()))
+                    .then(|| u32::from_str_radix(&digits, 16).ok())
+                    .flatten()
+            };
+            let code = match escaped {
+                'n' => u32::from('\n'),
+                't' => u32::from('\t'),
+                'r' => u32::from('\r'),
+                'b' => 0x8,
+                'f' => 0xC,
+                'v' => 0xB,
+                'u' => match hex(self, 4) {
+                    Some(code) => {
+                        self.at += 4;
+                        code
+                    }
+                    None => u32::from('u'),
+                },
+                'x' => match hex(self, 2) {
+                    Some(code) => {
+                        self.at += 2;
+                        code
+                    }
+                    None => u32::from('x'),
+                },
+                '0'..='7' => {
+                    // Up to three octal digits, at most \377.
+                    let longest = if escaped <= '3' { 3 } else { 2 };
+                    let mut value = escaped.to_digit(8).unwrap_or(0);
+                    let mut taken = 1;
+                    while taken < longest {
+                        match self.chars.get(self.at).and_then(|d| d.to_digit(8)) {
+                            Some(digit) => {
+                                value = value * 8 + digit;
+                                self.at += 1;
+                                taken += 1;
+                            }
+                            None => break,
+                        }
+                    }
+                    value
+                }
+                other => u32::from(other),
+            };
+            if let Ok(unit) = u16::try_from(code) {
+                units.push(unit);
+            } else {
+                Self::flush_units(start, &mut units, &mut text)?;
+                text.extend(char::from_u32(code));
             }
         }
+    }
+
+    /// Decodes the UTF-16 units read from escapes; a surrogate without its pair is refused.
+    fn flush_units(start: usize, units: &mut Vec<u16>, text: &mut String) -> Result<(), ExprError> {
+        for decoded in char::decode_utf16(units.drain(..)) {
+            let c = decoded.map_err(|_| ExprError::new(start, "Unsupported javascript syntax."))?;
+            text.push(c);
+        }
+        Ok(())
     }
 
     fn regex(&mut self, start: usize) -> Result<(usize, Token), ExprError> {
@@ -531,7 +591,7 @@ fn check_anchors(pattern: &str) -> Result<(), &'static str> {
 /// Parses one rule expression. An optional trailing `;` is allowed; a second expression
 /// after it is not.
 pub fn parse(text: &str) -> Result<Expr, ExprError> {
-    let expr = parse_text(text)?;
+    let expr = parse_text(text, MAX_EXPRESSION_DEPTH).0?;
     // The counter above bounds the parser's own recursion; the tree it built is measured
     // too, since an operand read early can land deep (`1 - (…) - 0 - 0 …`, review r3 M6c).
     if expr.depth() > MAX_EXPRESSION_DEPTH {
@@ -540,7 +600,9 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
     Ok(expr)
 }
 
-fn parse_text(text: &str) -> Result<Expr, ExprError> {
+/// Parses with the parser's own recursion bounded at `limit`; also answers the deepest it
+/// reached.
+fn parse_text(text: &str, limit: usize) -> (Result<Expr, ExprError>, usize) {
     let chars: Vec<char> = text.chars().collect();
     let mut parser = Parser {
         lexer: Lexer {
@@ -550,29 +612,38 @@ fn parse_text(text: &str) -> Result<Expr, ExprError> {
         peeked: None,
         regex_next: true,
         depth: 0,
+        limit,
+        deepest: 0,
     };
-    let expr = parser.ternary()?;
-    let (at, token) = parser.next()?;
-    match token {
-        Token::End => Ok(expr),
-        Token::Punct(";") => {
-            let (at, token) = parser.next()?;
-            if token == Token::End {
-                Ok(expr)
-            } else {
-                Err(ExprError::new(
-                    at,
-                    "Rule expressions may not contain multiple expressions.",
-                ))
+    let parsed = parser.statement();
+    (parsed, parser.deepest)
+}
+
+impl Parser<'_> {
+    fn statement(&mut self) -> Result<Expr, ExprError> {
+        let expr = self.ternary()?;
+        let (at, token) = self.next()?;
+        match token {
+            Token::End => Ok(expr),
+            Token::Punct(";") => {
+                let (at, token) = self.next()?;
+                if token == Token::End {
+                    Ok(expr)
+                } else {
+                    Err(ExprError::new(
+                        at,
+                        "Rule expressions may not contain multiple expressions.",
+                    ))
+                }
             }
+            token @ Token::Punct(")" | "]") => {
+                Err(ExprError::new(self.rhino_end(at, &token), "syntax error"))
+            }
+            token => Err(ExprError::new(
+                self.rhino_end(at, &token),
+                "missing ; before statement",
+            )),
         }
-        token @ Token::Punct(")" | "]") => {
-            Err(ExprError::new(parser.rhino_end(at, &token), "syntax error"))
-        }
-        token => Err(ExprError::new(
-            parser.rhino_end(at, &token),
-            "missing ; before statement",
-        )),
     }
 }
 
@@ -594,6 +665,10 @@ struct Parser<'a> {
     regex_next: bool,
     /// How deep the operand being read is nested.
     depth: usize,
+    /// The bound on `depth` (`MAX_EXPRESSION_DEPTH`).
+    limit: usize,
+    /// The deepest `depth` reached.
+    deepest: usize,
 }
 
 impl Parser<'_> {
@@ -758,7 +833,8 @@ impl Parser<'_> {
     /// One level deeper, refused past the bound.
     fn deeper(&mut self) -> Result<(), ExprError> {
         self.depth += 1;
-        if self.depth > MAX_EXPRESSION_DEPTH {
+        self.deepest = self.deepest.max(self.depth);
+        if self.depth > self.limit {
             return Err(ExprError::new(0, "Rule expression may not be empty."));
         }
         Ok(())
@@ -766,7 +842,8 @@ impl Parser<'_> {
 
     fn unary(&mut self) -> Result<Expr, ExprError> {
         self.depth += 1;
-        let operand = if self.depth > MAX_EXPRESSION_DEPTH {
+        self.deepest = self.deepest.max(self.depth);
+        let operand = if self.depth > self.limit {
             Err(ExprError::new(0, "Rule expression may not be empty."))
         } else {
             self.unary_operand()
@@ -964,6 +1041,30 @@ mod tests {
             if let Some((depth, real)) = measured {
                 prop_assert_eq!(depth, real);
                 prop_assert!(depth <= MAX_EXPRESSION_DEPTH, "{}", depth);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// And conversely: an expression is refused exactly when its tree is deeper than the
+        /// bound or the parser itself had to go deeper (groups and unary operators count there
+        /// without being nodes).
+        #[test]
+        fn an_expression_within_the_bound_parses(text in composed()) {
+            let rule = format!("{text} < 0");
+            let (accepted, measured) = on_big_stack(move || {
+                let accepted = parse(&rule).is_ok();
+                let (tree, deepest) = parse_text(&rule, usize::MAX);
+                (accepted, tree.ok().map(|tree| (tree.depth(), deepest)))
+            });
+            if let Some((depth, deepest)) = measured {
+                prop_assert_eq!(
+                    accepted,
+                    depth <= MAX_EXPRESSION_DEPTH && deepest <= MAX_EXPRESSION_DEPTH,
+                    "tree {} parser {}", depth, deepest
+                );
             }
         }
     }

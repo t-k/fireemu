@@ -34,7 +34,10 @@ impl Pattern {
         let dialect_only =
             opens_special_group(&text) || text.contains("[[:") || escapes_a_letter(&text);
         let search = (!dialect_only)
-            .then(|| Regex::new(&search_source(&utf16_view(&text), &flags)).ok())
+            .then(|| {
+                let view = utf16_view(&text, flags.contains('i'));
+                Regex::new(&search_source(&view, &flags)).ok()
+            })
             .flatten()
             .map(Arc::new);
         Self {
@@ -49,24 +52,43 @@ impl Pattern {
     pub fn matches(&self, subject: &str) -> Option<bool> {
         self.search
             .as_ref()?
-            .is_full_match(&utf16_view(subject))
+            .is_full_match(&utf16_view(subject, self.flags.contains('i')))
             .ok()
     }
 }
 
 /// Text as a sequence of UTF-16 units, which is what the official emulator (Java) matches:
-/// a character outside the Basic Multilingual Plane becomes its two surrogates, each written
-/// as a private-use character of its own (U+F0000 plus the surrogate's offset), so `.` and a
-/// class take one surrogate, and a literal takes both. Nothing else in the text is outside
-/// the Basic Multilingual Plane once surrogates are written so, so nothing collides.
-fn utf16_view(text: &str) -> String {
-    if text.chars().all(|c| u32::from(c) <= 0xFFFF) {
+/// a character outside the Basic Multilingual Plane becomes its two surrogates. Every unit
+/// from U+D800 up (the surrogates and U+E000–U+FFFF alike) is written as the private-use
+/// character U+F0000 plus its offset from U+D800, so each surrogate is a character of its own
+/// (`.` and a class take one, a literal both) and ranges keep Java's order: surrogates below
+/// U+E000, U+FFFF last. Nothing else in the text is that high once it is written so, so
+/// nothing collides. With `fold` (the `i` flag) a letter in U+E000–U+FFFF, such as a
+/// full-width one, is first lowered, since the shifted characters fold no more.
+fn utf16_view(text: &str, fold: bool) -> String {
+    if text.chars().all(|c| u32::from(c) < 0xD800) {
         return text.to_owned();
     }
+    let lowered: String;
+    let text = if fold {
+        lowered = text
+            .chars()
+            .map(|c| {
+                let mut lower = c.to_lowercase();
+                match (lower.next(), lower.next()) {
+                    (Some(l), None) if (0xE000..=0xFFFF).contains(&u32::from(c)) => l,
+                    _ => c,
+                }
+            })
+            .collect();
+        &lowered
+    } else {
+        text
+    };
     text.encode_utf16()
         .map(|unit| {
             let code = match unit {
-                0xD800..=0xDFFF => 0xF_0000 + u32::from(unit - 0xD800),
+                0xD800.. => 0xF_0000 + u32::from(unit - 0xD800),
                 _ => u32::from(unit),
             };
             char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER)

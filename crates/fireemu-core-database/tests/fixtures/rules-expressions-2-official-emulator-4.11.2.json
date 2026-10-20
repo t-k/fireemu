@@ -3367,5 +3367,677 @@
   "load": 200,
   "error": null,
   "read": 200
+ },
+ {
+  "expr": "''.matches(/^[ -😀]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(''.matches(/^[ -😀]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'＄'.matches(/^[ -😀]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('＄'.matches(/^[ -😀]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'＄'.matches(/^[ -😀]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('＄'.matches(/^[ -😀]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'abc＄'.matches(/^[ -😀]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('abc＄'.matches(/^[ -😀]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/^[ -😀]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('a'.matches(/^[ -😀]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "''.matches(/^[-😀]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(''.matches(/^[-😀]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'😀'.matches(/^[😀-😁]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('😀'.matches(/^[😀-😁]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'😀'.matches(/^[😀-😁]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('😀'.matches(/^[😀-😁]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'😀'.matches(/^[가-￿]{2}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('😀'.matches(/^[가-￿]{2}$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'😀'.matches(/^[ -￿]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('😀'.matches(/^[ -￿]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a😀'.matches(/^[ -￿]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('a😀'.matches(/^[ -￿]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'😀'.matches(/^[퟿-￿]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('😀'.matches(/^[퟿-￿]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'＄'.matches(/^[ -￿]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('＄'.matches(/^[ -￿]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "''.matches(/^[퟿-￿]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(''.matches(/^[퟿-￿]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'😀'.matches(/^[^a]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('😀'.matches(/^[^a]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'＄'.matches(/^[^😀]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('＄'.matches(/^[^😀]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'😀'.matches(/^[＄-￿]+$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('😀'.matches(/^[＄-￿]+$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'＄'.matches(/^[😀]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('＄'.matches(/^[😀]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'ａ'.matches(/^Ａ$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('ａ'.matches(/^Ａ$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Ａ'.matches(/^ａ$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Ａ'.matches(/^ａ$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Ｃ'.matches(/^[ａ-ｚ]$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Ｃ'.matches(/^[ａ-ｚ]$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ｃ'.matches(/^[Ａ-Ｚ]$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('ｃ'.matches(/^[Ａ-Ｚ]$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Ｃ'.matches(/^[ａ-ｚ]$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('Ｃ'.matches(/^[ａ-ｚ]$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'ä'.matches(/^Ä$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('ä'.matches(/^Ä$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Ａ'.matches(/^[a-z]$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('Ａ'.matches(/^[a-z]$/i))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'\\u0041' == 'A'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\u0041' == 'A')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\x41' == 'A'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\x41' == 'A')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\u0041'.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\u0041'.length == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'A<'.contains('\\u003c')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('A<'.contains('\\u003c'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\u0041\\u003c'.contains('<')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\u0041\\u003c'.contains('<'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\ud83d\\ude00' == '😀'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\ud83d\\ude00' == '😀')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\ud83d'.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\ud83d'.length == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\ude00\\ud83d'.length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\ude00\\ud83d'.length == 2)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\v' == 'v'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('\\v' == 'v')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'\\v'.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\v'.length == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\101' == 'A'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\101' == 'A')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\101'.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\101'.length == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\0' == ''",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('\\0' == '')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'\\u004' == 'u004'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\u004' == 'u004')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\xG1' == 'xG1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\xG1' == 'xG1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\u{41}' == 'A'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('\\u{41}' == 'A')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'\\u00e9' == 'é'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\u00e9' == 'é')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\x' == 'x'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\x' == 'x')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\U0041' == 'U0041'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\U0041' == 'U0041')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\12' == '\\u000a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\12' == '\\u000a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\8' == '8'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\8' == '8')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'A'.matches(/\\u0041/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('A'.matches(/\\u0041/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'A'.matches(/\\x41/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('A'.matches(/\\x41/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
  }
 ]

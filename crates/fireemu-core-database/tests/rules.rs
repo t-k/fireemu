@@ -175,6 +175,19 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
         r#""'x'.matches(/^\\x$/)" : read false, expected true"#,
         r#""!'aa'.matches(/^(a)\\1$/)" : read false, expected true"#,
         r#""'a'.matches(/a**/)" : read false, expected true"#,
+        // Ranges whose endpoints are surrogates of one character are, read by UTF-16 unit,
+        // reversed or not ranges at all: an error here, false and true there.
+        // A lone escaped surrogate has no counterpart in this text: refused at load.
+        // `\u` and `\x` in a pattern are escaped letters of the dialect: an error.
+        r#""!('\u{e000}'.matches(/^[\u{e000}-😀]$/))" : read false, expected true"#,
+        r#""!('😀'.matches(/^[😀-😁]$/))" : read false, expected true"#,
+        r#""!('😀'.matches(/^[😀-😁]+$/))" : read false, expected true"#,
+        r#""'\\ud83d'.length == 1" : refused: 1:25: Unsupported javascript syntax."#,
+        r#""!('\\ud83d'.length == 1)" : refused: 1:27: Unsupported javascript syntax."#,
+        r#""'\\ude00\\ud83d'.length == 2" : refused: 1:25: Unsupported javascript syntax."#,
+        r#""!('\\ude00\\ud83d'.length == 2)" : refused: 1:27: Unsupported javascript syntax."#,
+        r#""!('A'.matches(/\\u0041/))" : read false, expected true"#,
+        r#""!('A'.matches(/\\x41/))" : read false, expected true"#,
     ]
     .into_iter()
     .collect();
@@ -823,6 +836,32 @@ fn shallow_pieces_composed_deep_are_refused_at_load() {
             let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
         });
     }
+}
+
+#[test]
+fn a_bare_postfix_chain_is_bounded_by_its_nodes() {
+    // `!`, the receiver, 298 `.parent()` calls (two nodes each) and `.exists()`: 600 nodes,
+    // and as many levels for the parser.
+    let chain = |n: usize| format!("!root{}.exists()", ".parent()".repeat(n));
+    assert!(load_deep(chain(298)).is_ok());
+    assert_eq!(
+        load_deep(chain(299)).unwrap_err(),
+        "Rule expression may not be empty."
+    );
+}
+
+#[test]
+fn compiling_needs_no_stack_from_the_caller() {
+    // Rules::compile parses on a thread of its own: 100,000 nested groups are refused on a
+    // worker's stack without running out of it.
+    let text = format!("{}true{}", "(".repeat(100_000), ")".repeat(100_000));
+    let refused = on_stack(WORKER_STACK_BYTES, move || {
+        Rules::compile(&read_rule_at_t(&text))
+            .map(|_| ())
+            .unwrap_err()
+            .message
+    });
+    assert_eq!(refused, "Rule expression may not be empty.");
 }
 
 #[test]

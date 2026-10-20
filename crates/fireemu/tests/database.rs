@@ -888,3 +888,79 @@ fn a_deep_rule_from_any_access_token_never_stops_the_daemon() {
         assert_eq!(request(port, "GET", "/.json?ns=deep", &[], "").0, 200);
     }
 }
+
+/// `1 - (inner) - 0 - 0 …`: the inner expression lands `tail` levels below the outermost
+/// operator although it is read first.
+fn left_nested(inner: &str, tail: usize) -> String {
+    format!("1 - ({inner}){}", " - 0".repeat(tail))
+}
+
+#[test]
+fn a_deep_rule_built_from_shallow_pieces_never_stops_the_daemon() {
+    // Each piece nests 590 levels, which alone is within the bound; nested six times they
+    // are about 3,500 levels deep (review r3 M6c).
+    let dir = Scratch::new("database", "composed-rule");
+    let config = dir.join("emulator.json");
+    std::fs::write(&config, r#"{"schemaVersion":1,"profile":"emulator"}"#).unwrap();
+    let daemon = Daemon::start(&[
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    let mut sub = "1".to_owned();
+    for _ in 0..6 {
+        sub = left_nested(&sub, 590);
+    }
+    let mut parents = "root.child('a')".to_owned();
+    for _ in 0..6 {
+        parents = format!(
+            "root.child({parents}.val() + 'a'){}",
+            ".parent()".repeat(590)
+        );
+    }
+    let mut index = "auth".to_owned();
+    for _ in 0..6 {
+        index = format!("auth[{index} == null ? 'a' : 'b']{}", ".y".repeat(590));
+    }
+    for rule in [
+        format!("{sub} < 0"),
+        format!("{parents}.val() == null"),
+        format!("{index} == null"),
+        format!("({sub} < 0) ? true : false"),
+    ] {
+        let body = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+        let headers = ["Authorization: Bearer anything"];
+        let (status, _) = request(
+            port,
+            "PUT",
+            "/.settings/rules.json?ns=deep",
+            &headers,
+            &body,
+        );
+        // Whether it is refused or loaded, reading and replacing it leave the daemon running.
+        let _ = std::panic::catch_unwind(|| request(port, "GET", "/.json?ns=deep", &[], ""));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            TcpStream::connect(("127.0.0.1", port)).is_ok(),
+            "the daemon stopped on reading a rule it answered {status} to"
+        );
+        let (replaced, _) = request(
+            port,
+            "PUT",
+            "/.settings/rules.json?ns=deep",
+            &headers,
+            r#"{"rules":{}}"#,
+        );
+        assert_eq!(
+            replaced,
+            200,
+            "the daemon stopped after a rule ({status}) {}",
+            rule.len()
+        );
+        assert_eq!(request(port, "GET", "/.json?ns=other", &[], "").0, 200);
+    }
+}

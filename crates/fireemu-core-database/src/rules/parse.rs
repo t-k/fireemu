@@ -92,7 +92,8 @@ impl BinaryOp {
     }
 }
 
-/// An expression, with the character offset where it starts.
+/// An expression, with the character offset where it starts. Its depth is bounded when it
+/// is parsed, and it is dropped without recursion.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     /// Where it starts.
@@ -135,6 +136,73 @@ pub enum ExprKind {
     Chain(BinaryOp, Vec<Expr>),
     /// `condition ? then : otherwise`
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
+}
+
+impl ExprKind {
+    /// The sub-expressions, by reference.
+    fn children(&self) -> Vec<&Expr> {
+        match self {
+            Self::Bool(_)
+            | Self::Number(_)
+            | Self::Str(_)
+            | Self::Null
+            | Self::Regex(_)
+            | Self::Name(_) => Vec::new(),
+            Self::Member(object, _) | Self::Not(object) | Self::Neg(object) => vec![object],
+            Self::Index(a, b) | Self::Binary(_, a, b) => vec![a, b],
+            Self::Ternary(a, b, c) => vec![a, b, c],
+            Self::Call(callee, items) => std::iter::once(&**callee).chain(items).collect(),
+            Self::Array(items) | Self::Chain(_, items) => items.iter().collect(),
+        }
+    }
+
+    /// The sub-expressions, taken out.
+    fn into_children(self) -> Vec<Expr> {
+        match self {
+            Self::Bool(_)
+            | Self::Number(_)
+            | Self::Str(_)
+            | Self::Null
+            | Self::Regex(_)
+            | Self::Name(_) => Vec::new(),
+            Self::Member(object, _) | Self::Not(object) | Self::Neg(object) => vec![*object],
+            Self::Index(a, b) | Self::Binary(_, a, b) => vec![*a, *b],
+            Self::Ternary(a, b, c) => vec![*a, *b, *c],
+            Self::Call(callee, mut items) => {
+                items.push(*callee);
+                items
+            }
+            Self::Array(items) | Self::Chain(_, items) => items,
+        }
+    }
+}
+
+impl Expr {
+    /// The depth of the tree (a leaf is 1): how deep the checker and the evaluator recurse.
+    pub(crate) fn depth(&self) -> usize {
+        let mut deepest = 0;
+        let mut pending = vec![(self, 1)];
+        while let Some((expr, depth)) = pending.pop() {
+            deepest = deepest.max(depth);
+            pending.extend(
+                expr.kind
+                    .children()
+                    .into_iter()
+                    .map(|child| (child, depth + 1)),
+            );
+        }
+        deepest
+    }
+}
+
+impl Drop for Expr {
+    /// Takes the tree apart level by level, so dropping a deep one never recurses.
+    fn drop(&mut self) {
+        let mut pending = std::mem::replace(&mut self.kind, ExprKind::Null).into_children();
+        while let Some(mut expr) = pending.pop() {
+            pending.extend(std::mem::replace(&mut expr.kind, ExprKind::Null).into_children());
+        }
+    }
 }
 
 struct Lexer<'a> {
@@ -463,6 +531,16 @@ fn check_anchors(pattern: &str) -> Result<(), &'static str> {
 /// Parses one rule expression. An optional trailing `;` is allowed; a second expression
 /// after it is not.
 pub fn parse(text: &str) -> Result<Expr, ExprError> {
+    let expr = parse_text(text)?;
+    // The counter above bounds the parser's own recursion; the tree it built is measured
+    // too, since an operand read early can land deep (`1 - (…) - 0 - 0 …`, review r3 M6c).
+    if expr.depth() > MAX_EXPRESSION_DEPTH {
+        return Err(ExprError::new(0, "Rule expression may not be empty."));
+    }
+    Ok(expr)
+}
+
+fn parse_text(text: &str) -> Result<Expr, ExprError> {
     let chars: Vec<char> = text.chars().collect();
     let mut parser = Parser {
         lexer: Lexer {
@@ -746,15 +824,19 @@ impl Parser<'_> {
             } else if self.eat("[")? {
                 let index = self.ternary()?;
                 self.close("]", "missing ] in index expression")?;
-                expr = match index.kind {
+                let mut index = index;
+                expr = match std::mem::replace(&mut index.kind, ExprKind::Null) {
                     ExprKind::Str(name) => Expr {
                         at: expr.at,
                         kind: ExprKind::Member(Box::new(expr), name),
                     },
-                    _ => Expr {
-                        at: expr.at,
-                        kind: ExprKind::Index(Box::new(expr), Box::new(index)),
-                    },
+                    kind => {
+                        index.kind = kind;
+                        Expr {
+                            at: expr.at,
+                            kind: ExprKind::Index(Box::new(expr), Box::new(index)),
+                        }
+                    }
                 };
             } else if self.eat("(")? {
                 let mut arguments = Vec::new();
@@ -820,5 +902,90 @@ impl Parser<'_> {
             }
         };
         Ok(Expr { at, kind })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The depth measured by recursion, to check the iterative measure against.
+    fn recursive_depth(expr: &Expr) -> usize {
+        1 + expr
+            .kind
+            .children()
+            .into_iter()
+            .map(recursive_depth)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn on_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(512 * 1024 * 1024)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    /// A numeric expression built from every way an operand can nest, `n` times each.
+    fn composed() -> impl Strategy<Value = String> {
+        Just("1".to_owned()).prop_recursive(5, 64, 1, |inner| {
+            (inner, 0usize..5, 0usize..400).prop_map(|(e, shape, n)| match shape {
+                0 => format!("1 - ({e}){}", " - 0".repeat(n)),
+                1 => format!("{}({e}){}", "-(".repeat(n % 50), ")".repeat(n % 50)),
+                2 => format!(
+                    "{}({e}){}",
+                    "(true ? ".repeat(n % 100),
+                    " : 1)".repeat(n % 100)
+                ),
+                3 => format!("root.child('a' + ({e})){}.val()", ".parent()".repeat(n / 2)),
+                _ => format!(
+                    "auth[({e}) == null ? 'a' : 'b']{} == null ? 1 : 2",
+                    ".y".repeat(n)
+                ),
+            })
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Whatever the composition, an expression that parses is at most the bound deep,
+        /// as the tree is measured, and the measure is the tree's real depth.
+        #[test]
+        fn a_parsed_expression_is_never_deeper_than_the_bound(text in composed()) {
+            let rule = format!("{text} < 0");
+            let measured = on_big_stack(move || {
+                parse(&rule).ok().map(|expr| (expr.depth(), recursive_depth(&expr)))
+            });
+            if let Some((depth, real)) = measured {
+                prop_assert_eq!(depth, real);
+                prop_assert!(depth <= MAX_EXPRESSION_DEPTH, "{}", depth);
+            }
+        }
+    }
+
+    #[test]
+    fn a_deep_tree_is_dropped_without_recursion() {
+        // Built by hand past any bound, it is dropped on an ordinary stack.
+        let mut expr = Expr {
+            at: 0,
+            kind: ExprKind::Number(1.0),
+        };
+        for _ in 0..1_000_000 {
+            expr = Expr {
+                at: 0,
+                kind: ExprKind::Not(Box::new(expr)),
+            };
+        }
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || drop(expr))
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

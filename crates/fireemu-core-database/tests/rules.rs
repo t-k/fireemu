@@ -723,7 +723,7 @@ fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
             |n| format!("{}true", "false ? false : ".repeat(n)),
             599,
         ),
-        ("minus", |n| format!("1{} < 0", " - 1".repeat(n)), 599),
+        ("minus", |n| format!("1{} < 0", " - 1".repeat(n)), 598),
     ];
     let tree = seed();
     for (name, shape, expected) in shapes {
@@ -749,6 +749,70 @@ fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
         }
         // The deepest is evaluated on a worker's stack without running out of it.
         let rules = load_deep(shape(ok)).unwrap();
+        let root = tree.root().cloned();
+        on_stack(WORKER_STACK_BYTES, move || {
+            let auth = auth();
+            let requester = Requester {
+                auth: &auth,
+                now: 0,
+            };
+            let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
+        });
+    }
+}
+
+/// `1 - (inner) - 0 - 0 …`: the inner expression lands `tail` levels below the outermost
+/// operator although it is read first.
+fn left_nested(inner: &str, tail: usize) -> String {
+    format!("1 - ({inner}){}", " - 0".repeat(tail))
+}
+
+#[test]
+fn shallow_pieces_composed_deep_are_refused_at_load() {
+    // Each piece is within the bound alone; composed they are thousands of levels deep
+    // (review r3 M6c), and are refused however they nest.
+    let nest = |piece: &dyn Fn(&str) -> String, seed: &str, times: usize| {
+        (0..times).fold(seed.to_owned(), |inner, _| piece(&inner))
+    };
+    let sub = nest(&|inner| left_nested(inner, 590), "1", 6);
+    let parents = nest(
+        &|inner| format!("root.child({inner}.val() + 'a'){}", ".parent()".repeat(590)),
+        "root.child('a')",
+        6,
+    );
+    let index = nest(
+        &|inner| format!("auth[{inner} == null ? 'a' : 'b']{}", ".y".repeat(590)),
+        "auth",
+        6,
+    );
+    for text in [
+        format!("{sub} < 0"),
+        format!("{parents}.val() == null"),
+        format!("{index} == null"),
+        format!("({sub} < 0) ? true : false"),
+        format!("true ? ({sub} < 0) : false"),
+    ] {
+        assert_eq!(
+            load_deep(text.clone()).unwrap_err(),
+            "Rule expression may not be empty.",
+            "{}",
+            &text[..40]
+        );
+    }
+    // Composed within the bound, they load and are evaluated on a worker's stack.
+    let tree = seed();
+    for text in [
+        format!("{} < 0", nest(&|inner| left_nested(inner, 90), "1", 6)),
+        format!(
+            "{}.val() == null",
+            nest(
+                &|inner| format!("root.child({inner}.val() + 'a'){}", ".parent()".repeat(40)),
+                "root.child('a')",
+                5,
+            )
+        ),
+    ] {
+        let rules = load_deep(text).unwrap();
         let root = tree.root().cloned();
         on_stack(WORKER_STACK_BYTES, move || {
             let auth = auth();

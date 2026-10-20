@@ -463,6 +463,20 @@ fn cases() -> Vec<Case> {
             },
             expect: None,
         },
+        // A gap surface is served, so the manifest may list what it serves.
+        Case {
+            name: "gap-in-manifest",
+            mutate: |contract, manifest, _| {
+                set(contract, "surfaces/1/scope", json!("active"));
+                set(contract, "surfaces/1/state", json!("gap"));
+                set(
+                    manifest,
+                    "FS-RPC-1/implemented",
+                    json!(["GetDocument", "Realtime Database references"]),
+                );
+            },
+            expect: None,
+        },
         Case {
             name: "gap-without-terms",
             mutate: |contract, _, _| {

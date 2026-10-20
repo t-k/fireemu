@@ -1,0 +1,11 @@
+# Realtime Database regular-expression differential fuzz
+
+Compares `matches()` in Realtime Database rules between fireemu and the official database emulator (firebase-database-emulator v4.11.2), both on loopback. Each generated subject, pattern and flags gives two rules, the match and its negation, so a difference shows in the polarity where it lets a read through.
+
+- `gen.py` generates expressions from the grammar fireemu accepts: classes and ranges, escapes (`\w \d \s \S \W \D` and escaped punctuation), the `i` flag, astral and full-width characters, KELVIN SIGN, LONG S, dotless and dotted i, and the empty string; `edges` adds grammar edges (operators that start an alternative, empty groups, stray braces, `//`).
+- `probe.mjs` loads each expression as `.read` of `/t` in a fresh namespace and records the load answer and the read status.
+- `compare.py` reports every row where the answers differ. A row is BLOCKING when fireemu allows (200) where the official emulator denies (401) or refuses the rules (400); any other difference is a denial on fireemu's side (a rule error, RTDB-03c) and is listed.
+- `round.sh` runs one round against a fresh official emulator (it holds every namespace in memory, so each round starts it again).
+- `select.py` builds the fixed corpus from recorded rounds: hand-written rows, rows with grammar edges, and seeded samples of denied and agreeing rows. The result is `crates/fireemu-core-database/tests/fixtures/rules-expressions-3-official-emulator-4.11.2.json`, which `every_recorded_pattern_decides_as_the_official_emulator_or_denies` checks without the official emulator, so CI runs it.
+
+The official emulator stalls and runs out of memory on wide ranges beyond ASCII under `i` (`/^[😀-￿]+$/i`); `gen.py` keeps such ranges narrow.

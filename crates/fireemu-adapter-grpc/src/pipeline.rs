@@ -734,30 +734,19 @@ fn decode_select(
             ));
         }
         // Production's texts (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`), which the
-        // official emulator answers too: a reserved name is named before the path is read.
-        if alias == "__name__" {
+        // official emulator answers too. A path refuses reserved names but `__name__`.
+        let path = FieldPath::parse(alias).map_err(|_| {
+            Status::invalid_argument(if alias.split('.').any(is_reserved_name) {
+                format!("Stage 'select': field name '{alias}' is reserved.")
+            } else {
+                format!(
+                    r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+                )
+            })
+        })?;
+        if path.is_document_name() {
             return Err(Status::invalid_argument(format!(
                 "Stage 'select': field name '{alias}' is reserved and can not be overwritten."
-            )));
-        }
-        if alias.split('.').any(is_reserved_name) {
-            return Err(Status::invalid_argument(format!(
-                "Stage 'select': field name '{alias}' is reserved."
-            )));
-        }
-        let path = FieldPath::parse(alias).map_err(|_| {
-            Status::invalid_argument(format!(
-                r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
-            ))
-        })?;
-        if path.is_document_name()
-            || path
-                .segments()
-                .iter()
-                .any(|segment| is_reserved_name(segment))
-        {
-            return Err(Status::invalid_argument(format!(
-                "Stage 'select': field name '{alias}' is reserved."
             )));
         }
         aliases.push((alias, path, decode_operand(value, unrecorded, true)?));

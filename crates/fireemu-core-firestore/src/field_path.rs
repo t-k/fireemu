@@ -159,6 +159,13 @@ impl FieldPath {
     pub fn from_segments<'a>(
         segments: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, FieldPathError> {
+        Self::checked(segments, false)
+    }
+
+    fn checked<'a>(
+        segments: impl IntoIterator<Item = &'a str>,
+        allow_reserved: bool,
+    ) -> Result<Self, FieldPathError> {
         let segments: Vec<String> = segments.into_iter().map(str::to_owned).collect();
         if segments.is_empty() {
             return Err(FieldPathError::Empty);
@@ -178,7 +185,7 @@ impl FieldPath {
                     maximum: MAX_FIELD_NAME_BYTES,
                 });
             }
-            if is_reserved(s) && s != DOCUMENT_NAME {
+            if is_reserved(s) && s != DOCUMENT_NAME && !allow_reserved {
                 return Err(FieldPathError::ReservedSegment { index });
             }
             // Path bytes are counted on the raw segment bytes plus separators; backtick
@@ -196,6 +203,17 @@ impl FieldPath {
 
     /// Parses the canonical dotted representation.
     pub fn parse(input: &str) -> Result<Self, FieldPathError> {
+        Self::parse_checked(input, false)
+    }
+
+    /// Parses like [`Self::parse`] but accepts reserved `__.*__` segments: a pipeline `select`
+    /// alias may nest a reserved name below another field (the official emulator answers
+    /// `select({"a.__x__": ...})` with `{a: {__x__: ...}}`).
+    pub fn parse_allowing_reserved(input: &str) -> Result<Self, FieldPathError> {
+        Self::parse_checked(input, true)
+    }
+
+    fn parse_checked(input: &str, allow_reserved: bool) -> Result<Self, FieldPathError> {
         if input.is_empty() {
             return Err(FieldPathError::Empty);
         }
@@ -284,7 +302,7 @@ impl FieldPath {
             });
         }
         segments.push(current);
-        Self::from_segments(segments.iter().map(String::as_str))
+        Self::checked(segments.iter().map(String::as_str), allow_reserved)
     }
 
     /// Segments.

@@ -6138,10 +6138,6 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
             request(vec![typed("collection", s("/users/u1"))]),
         ),
         (
-            "where(string)",
-            request(vec![stage("collection", 1), typed("where", s("x"))]),
-        ),
-        (
             "unknown option",
             request(vec![
                 stage("collection", 1),
@@ -6451,18 +6447,8 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             unsupported,
         ),
         (
-            "other function",
-            vec![expression("less_than", vec![pipeline_field("score"), i(7)])],
-            unsupported,
-        ),
-        (
             "eq alias",
             vec![expression("eq", vec![pipeline_field("score"), i(7)])],
-            unsupported,
-        ),
-        (
-            "reversed operands",
-            vec![expression("equal", vec![i(7), pipeline_field("score")])],
             unsupported,
         ),
         (
@@ -6477,43 +6463,11 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             unsupported,
         ),
         (
-            "document name",
-            vec![pipeline_equal("__name__", s("x"))],
-            unsupported,
-        ),
-        (
-            "array literal",
-            vec![pipeline_equal(
-                "score",
-                pb::Value {
-                    value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![i(7)] })),
-                },
-            )],
-            unsupported,
-        ),
-        (
-            "map literal",
-            vec![pipeline_equal(
-                "score",
-                pb::Value {
-                    value_type: Some(V::MapValue(pb::MapValue {
-                        fields: [("n".into(), i(7))].into_iter().collect(),
-                    })),
-                },
-            )],
-            unsupported,
-        ),
-        (
             "expression right",
             vec![pipeline_equal(
                 "score",
                 pipeline_function("abs", vec![i(7)]),
             )],
-            unsupported,
-        ),
-        (
-            "field right",
-            vec![pipeline_equal("score", pipeline_field("other"))],
             unsupported,
         ),
         ("zero arity", vec![expression("equal", vec![])], invalid),
@@ -6766,6 +6720,43 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         .into_iter()
         .collect()
     );
+    // `__name__`, a literal and the document ID of a missing field are select values
+    // (FS-ENT-ORACLE O-1 recorded production answering them).
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", s("nest")),
+                pipeline_select_map(vec![
+                    ("n", name()),
+                    ("lit", i(7)),
+                    (
+                        "gone",
+                        pipeline_function("document_id", vec![pipeline_field("missing")]),
+                    ),
+                ]),
+                pipeline_stage("limit", i(1)),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(
+        docs[0].fields,
+        [
+            ("n".to_owned(), reference("nest/a")),
+            ("lit".to_owned(), i(7)),
+            (
+                "gone".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::NullValue(0))
+                }
+            )
+        ]
+        .into_iter()
+        .collect()
+    );
     // A reference literal is a function argument.
     let docs = drain_pipeline(
         client
@@ -6824,26 +6815,10 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     function.options.insert("unexpected".into(), i(1));
     let cases = [
         (
-            "parent of a top-level document",
-            vec![pipeline_select_map(vec![(
-                "up",
-                pipeline_function("parent", vec![name()]),
-            )])],
-            unsupported,
-        ),
-        (
             "document_id of a non-reference field",
             vec![pipeline_select_map(vec![(
                 "id",
                 pipeline_function("document_id", vec![pipeline_field("name")]),
-            )])],
-            unsupported,
-        ),
-        (
-            "document_id of a missing field",
-            vec![pipeline_select_map(vec![(
-                "id",
-                pipeline_function("document_id", vec![pipeline_field("missing")]),
             )])],
             unsupported,
         ),
@@ -6856,14 +6831,6 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
             unsupported,
         ),
         (
-            "equal in select",
-            vec![pipeline_select_map(vec![(
-                "same",
-                pipeline_function("equal", vec![pipeline_field("name"), s("a")]),
-            )])],
-            unsupported,
-        ),
-        (
             "unknown function in select",
             vec![pipeline_select_map(vec![(
                 "abs",
@@ -6872,35 +6839,12 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
             unsupported,
         ),
         (
-            "value function as a where condition",
-            vec![pipeline_stage(
-                "where",
-                pipeline_function("document_id", vec![name()]),
-            )],
-            unsupported,
-        ),
-        (
-            "bare document name in select",
-            vec![pipeline_select_map(vec![("n", name())])],
-            unsupported,
-        ),
-        (
-            "literal in select",
-            vec![pipeline_select_map(vec![("n", s("x"))])],
-            unsupported,
-        ),
-        (
-            "reference literal in select",
-            vec![pipeline_select_map(vec![("n", reference("nest/a"))])],
-            unsupported,
-        ),
-        (
             "equal in select with a malformed argument",
             vec![pipeline_select_map(vec![(
                 "same",
                 pipeline_function("equal", vec![pipeline_field("a..b"), s("a")]),
             )])],
-            unsupported,
+            invalid,
         ),
         (
             "equal with one argument",
@@ -6981,11 +6925,14 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     assert!(handle.await.unwrap_err().is_cancelled());
 }
 
-/// Inputs whose production result is unrecorded: the strict profile refuses them, the
-/// emulator profile answers what the official emulator (firebase-tools 15.28.2, Enterprise)
-/// answers (null for a document function of a missing or null value, the documents root for
-/// the parent of a top-level document) and refuses what it refuses (another type).
+/// Document functions: both profiles answer what production answered in FS-ENT-ORACLE O-1
+/// (null for `document_id` of a missing value, the documents root for the parent of a
+/// top-level document). Inputs whose production result is unrecorded are refused by strict;
+/// the emulator profile answers what the official emulator (firebase-tools 15.28.2,
+/// Enterprise) answers (null for `collection_id` of null) and refuses what it refuses
+/// (another type, as `INVALID_ARGUMENT`).
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
     let name = || pipeline_field("__name__");
     let select = || {
@@ -7034,8 +6981,43 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
             .await
             .unwrap();
         if policy == IndexValidationPolicy::Production {
+            // collection_id of null is unrecorded in production.
             let err = pipeline_error(&mut client, select()).await;
             assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+            // document_id of a missing field and the parent of a top-level document are
+            // recorded (FS-ENT-ORACLE O-1).
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(vec![
+                        pipeline_stage("collection", s("edge")),
+                        pipeline_select_map(vec![
+                            (
+                                "missing",
+                                pipeline_function("document_id", vec![pipeline_field("missing")]),
+                            ),
+                            ("up", pipeline_function("parent", vec![name()])),
+                        ]),
+                    ]))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert_eq!(
+                docs[0].fields,
+                [
+                    ("missing".to_owned(), null.clone()),
+                    (
+                        "up".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::ReferenceValue(DOCS.to_owned())),
+                        }
+                    ),
+                ]
+                .into_iter()
+                .collect()
+            );
         } else {
             let docs = drain_pipeline(
                 client
@@ -7062,21 +7044,311 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
                 .collect()
             );
         }
+        // A mistyped argument: unrecorded in production, INVALID_ARGUMENT in the official
+        // emulator.
         let err = pipeline_error(&mut client, mistyped()).await;
-        assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        let (code, fireemu_code) = if policy == IndexValidationPolicy::Production {
+            (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
+        } else {
+            (tonic::Code::InvalidArgument, "FS_PIPE_INVALID")
+        };
+        assert_eq!(err.code(), code, "{policy:?}: {err}");
+        assert_eq!(err.metadata().get("fireemu-code").unwrap(), fireemu_code);
+        if code == tonic::Code::InvalidArgument {
+            assert_eq!(
+                err.message(),
+                "The function document_id(...) requires `Reference` but got `STRING`."
+            );
+        }
+        handle.abort();
+    }
+}
+
+/// FS-ENT-ORACLE O-2 rows over gRPC, both profiles: a `where` on a non-boolean function result
+/// (`document_id`, `parent`, `array`, `map`) answers with no rows, and a stored -0.0 reads back
+/// with its sign.
+#[tokio::test]
+async fn execute_pipeline_answers_the_o2_rows() {
+    let f = pipeline_field;
+    let collection = || pipeline_stage("collection", s("kinds"));
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        let negative_zero = pb::Value {
+            value_type: Some(pb::value::ValueType::DoubleValue(-0.0)),
+        };
+        let flag = pb::Value {
+            value_type: Some(pb::value::ValueType::BooleanValue(true)),
+        };
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "kinds/d",
+                    &[("b2", flag), ("nz", negative_zero)],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for condition in [
+            pipeline_function("document_id", vec![f("__name__")]),
+            pipeline_function("parent", vec![f("__name__")]),
+            pipeline_function("array", vec![f("b2")]),
+            pipeline_function("map", vec![s("k"), f("b2")]),
+        ] {
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(vec![
+                        collection(),
+                        pipeline_stage("where", condition),
+                    ]))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert!(docs.is_empty(), "{policy:?}");
+        }
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(vec![
+                    collection(),
+                    pipeline_select_map(vec![("v", f("nz"))]),
+                ]))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        let Some(pb::value::ValueType::DoubleValue(zero)) = docs[0].fields["v"].value_type else {
+            panic!("{docs:?}")
+        };
+        assert!(zero == 0.0 && zero.is_sign_negative(), "{policy:?}");
+        handle.abort();
+    }
+}
+
+/// Refusals FS-ENT-ORACLE O-1 recorded byte for byte, over gRPC: the six select alias
+/// refusals (production's texts, the overlap with its `ErrorInfo`), the map literal of fields
+/// as a select value, and `document_id` of the documents root at run time. Strict refuses
+/// only the recorded literal shape with production's text; other literals holding
+/// expressions stay `UNIMPLEMENTED` there and are `INVALID_ARGUMENT` under the emulator
+/// profile, as the official emulator answers them.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_recorded_refusals_answer_production_texts() {
+    use pb::value::ValueType as V;
+    let map = |fields: &[(&str, pb::Value)]| pb::Value {
+        value_type: Some(V::MapValue(pb::MapValue {
+            fields: fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        })),
+    };
+    let array = |values: Vec<pb::Value>| pb::Value {
+        value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+    };
+    let f = pipeline_field;
+    let collection = || pipeline_stage("collection", s("recorded"));
+    let path_text = |alias: &str| {
+        format!(
+            r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+        )
+    };
+    let aliases = [
+        ("total-count", path_text("total-count")),
+        ("名前", path_text("名前")),
+        ("1st", path_text("1st")),
+        (
+            "__x__",
+            "Stage 'select': field name '__x__' is reserved.".to_owned(),
+        ),
+        (
+            "__name__",
+            "Stage 'select': field name '__name__' is reserved and can not be overwritten."
+                .to_owned(),
+        ),
+    ];
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let strict = policy == IndexValidationPolicy::Production;
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("recorded/d", &[("i", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for (alias, text) in &aliases {
+            let err = pipeline_error(
+                &mut client,
+                vec![collection(), pipeline_select_map(vec![(alias, f("i"))])],
+            )
+            .await;
+            assert_eq!(
+                err.code(),
+                tonic::Code::InvalidArgument,
+                "{policy:?} {alias}"
+            );
+            assert_eq!(err.message(), text, "{policy:?} {alias}");
+        }
+        let overlap = pipeline_error(
+            &mut client,
+            vec![
+                collection(),
+                pipeline_select_map(vec![("m", f("i")), ("m.r", f("i"))]),
+            ],
+        )
+        .await;
+        assert_eq!(overlap.code(), tonic::Code::InvalidArgument);
         assert_eq!(
-            err.metadata().get("fireemu-code").unwrap(),
-            "FS_PIPE_UNSUPPORTED_STAGE"
+            overlap.message(),
+            "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+        );
+        assert_eq!(
+            fireemu_adapter_grpc::production_status::details_to_json(overlap.details()),
+            Some(vec![serde_json::json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {"field": "m.r"},
+                "reason": "OVERLAPPING_PROPERTY_PATHS",
+            })]),
+            "{policy:?}"
+        );
+        // The recorded map literal: a select value of field references.
+        let recorded = pipeline_error(
+            &mut client,
+            vec![
+                collection(),
+                pipeline_select_map(vec![("v", map(&[("k", f("i")), ("l", f("x"))]))]),
+            ],
+        )
+        .await;
+        assert_eq!(recorded.code(), tonic::Code::InvalidArgument, "{policy:?}");
+        assert_eq!(
+            recorded.message(),
+            "Value type is not supported: FIELD_REFERENCE_VALUE"
+        );
+        // Literals holding expressions in shapes production has not answered.
+        for (label, stages) in [
+            (
+                "nested map",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![("v", map(&[("a", map(&[("b", f("i"))]))]))]),
+                ],
+            ),
+            (
+                "map holding an array of a field",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![("v", map(&[("a", array(vec![f("i")]))]))]),
+                ],
+            ),
+            (
+                "map mixing a field and a function",
+                vec![
+                    collection(),
+                    pipeline_select_map(vec![(
+                        "v",
+                        map(&[
+                            ("a", f("i")),
+                            ("b", pipeline_function("document_id", vec![f("__name__")])),
+                        ]),
+                    )]),
+                ],
+            ),
+            (
+                "map literal as an argument",
+                vec![
+                    collection(),
+                    pipeline_stage(
+                        "where",
+                        pipeline_function("equal", vec![f("m"), map(&[("a", f("i"))])]),
+                    ),
+                ],
+            ),
+        ] {
+            let err = pipeline_error(&mut client, stages).await;
+            if strict {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+            } else {
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
+                assert!(
+                    err.message().starts_with("Value type is not supported: "),
+                    "{label}: {err}"
+                );
+            }
+        }
+        // The select width: 64 fields answer, 65 are refused with production's text
+        // (FS-ENT-ORACLE O-2, `fs-ent-pipeline/o2/select-width`).
+        let wide = |n: usize| {
+            let names: Vec<String> = (0..n).map(|k| format!("a{k:02}")).collect();
+            vec![
+                collection(),
+                pipeline_select_map(names.iter().map(|name| (name.as_str(), f("i"))).collect()),
+            ]
+        };
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(wide(64)))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        assert_eq!(docs[0].fields.len(), 64, "{policy:?}");
+        let err = pipeline_error(&mut client, wide(65)).await;
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{policy:?}");
+        assert_eq!(
+            err.message(),
+            "The 'select(...)' stage is limited to 64 fields but this stage has 65."
+        );
+        // document_id of the documents root, refused at run time as production refuses it.
+        let root = pipeline_error(
+            &mut client,
+            vec![
+                collection(),
+                pipeline_select_map(vec![(
+                    "v",
+                    pipeline_function(
+                        "document_id",
+                        vec![pipeline_function("parent", vec![f("__name__")])],
+                    ),
+                )]),
+            ],
+        )
+        .await;
+        assert_eq!(root.code(), tonic::Code::InvalidArgument, "{policy:?}");
+        assert_eq!(
+            root.message(),
+            "document_id(...) requires a non-empty path."
+        );
+        assert_eq!(
+            root.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_INVALID"
         );
         handle.abort();
     }
 }
 
-/// A select alias is a field path, as the official emulator (firebase-tools 15.28.2,
-/// Enterprise) treats it: `select('profile.score')` answers `{profile: {score}}`. Production
-/// is unobserved, so strict refuses every alias that is not a plain identifier (UNIMPLEMENTED,
-/// before any other alias check); the emulator profile refuses what the official emulator
-/// refuses (an invalid path, a reserved name, an alias inside another) as `INVALID_ARGUMENT`.
+/// A select alias is a field path under both profiles, as production (FS-ENT-ORACLE O-1) and
+/// the official emulator (firebase-tools 15.28.2, Enterprise) treat it: `select('profile.score')`
+/// answers `{profile: {score}}`, and an invalid path, a reserved name or an alias inside
+/// another is `INVALID_ARGUMENT`.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_select_aliases_are_field_paths() {
@@ -7104,10 +7376,6 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         ])
     };
     let invalid = [
-        (
-            "invalid path",
-            stages(vec![("a..b", pipeline_field("top"))]),
-        ),
         (
             "document name",
             stages(vec![("__name__", pipeline_field("top"))]),
@@ -7160,79 +7428,429 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             })
             .await
             .unwrap();
-        let strict = policy == IndexValidationPolicy::Production;
-        if strict {
-            for aliases in [
-                vec![("x.y", pipeline_field("top"))],
-                vec![("`q.r`", pipeline_field("top"))],
-            ] {
-                let err = pipeline_error(&mut client, stages(aliases)).await;
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
-                assert_eq!(
-                    err.metadata().get("fireemu-code").unwrap(),
-                    "FS_PIPE_UNSUPPORTED_STAGE"
-                );
-            }
-            // A plain identifier, `_` included, still answers under strict; only a name both
-            // starting and ending with `__` is reserved.
-            let docs = drain_pipeline(
-                client
-                    .execute_pipeline(pipeline_request(stages(vec![
-                        ("_plain1", pipeline_field("top")),
-                        ("__lead", pipeline_field("top")),
-                        ("trail__", pipeline_field("top")),
-                    ])))
-                    .await
-                    .unwrap()
-                    .into_inner(),
-                1,
-            )
-            .await;
-            assert_eq!(
-                docs[0].fields,
-                [
-                    ("_plain1".to_owned(), s("t")),
-                    ("__lead".to_owned(), s("t")),
-                    ("trail__".to_owned(), s("t")),
-                ]
-                .into_iter()
-                .collect()
-            );
-        } else {
-            let docs = drain_pipeline(
-                client
-                    .execute_pipeline(pipeline_request(nested()))
-                    .await
-                    .unwrap()
-                    .into_inner(),
-                1,
-            )
-            .await;
-            assert_eq!(
-                docs[0].fields,
-                [
-                    ("x".to_owned(), map(&[("y", s("t"))])),
-                    ("m".to_owned(), map(&[("s", i(7)), ("r", i(2))])),
-                    ("q.r".to_owned(), s("t")),
-                    ("plain".to_owned(), s("t")),
-                ]
-                .into_iter()
-                .collect()
-            );
-        }
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(nested()))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        assert_eq!(
+            docs[0].fields,
+            [
+                ("x".to_owned(), map(&[("y", s("t"))])),
+                ("m".to_owned(), map(&[("s", i(7)), ("r", i(2))])),
+                ("q.r".to_owned(), s("t")),
+                ("plain".to_owned(), s("t")),
+            ]
+            .into_iter()
+            .collect(),
+            "{policy:?}"
+        );
+        // Only a name both starting and ending with `__` is reserved.
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(stages(vec![
+                    ("_plain1", pipeline_field("top")),
+                    ("__lead", pipeline_field("top")),
+                    ("trail__", pipeline_field("top")),
+                ])))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        assert_eq!(
+            docs[0].fields,
+            [
+                ("_plain1".to_owned(), s("t")),
+                ("__lead".to_owned(), s("t")),
+                ("trail__".to_owned(), s("t")),
+            ]
+            .into_iter()
+            .collect()
+        );
         for (label, refused) in invalid.clone() {
             let err = pipeline_error(&mut client, refused).await;
-            let (code, fireemu_code) = if strict {
-                (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
-            } else {
-                (tonic::Code::InvalidArgument, "FS_PIPE_INVALID")
-            };
-            assert_eq!(err.code(), code, "{policy:?} {label}: {err}");
+            assert_eq!(
+                err.code(),
+                tonic::Code::InvalidArgument,
+                "{policy:?} {label}: {err}"
+            );
             assert_eq!(
                 err.metadata().get("fireemu-code").unwrap(),
-                fireemu_code,
+                "FS_PIPE_INVALID",
                 "{label}"
             );
+        }
+        // Alias shapes production has not answered: strict refuses them as unobserved; the
+        // emulator profile answers as the official emulator does (a quoted reserved name is
+        // refused, a reserved name below another field is a nested key).
+        let strict = policy == IndexValidationPolicy::Production;
+        for (alias, official) in [
+            ("a..b", Some("Invalid property path")),
+            (
+                "`__x__`",
+                Some("Stage 'select': field name '__x__' is reserved."),
+            ),
+            (
+                "`__name__`",
+                Some(
+                    "Stage 'select': field name '__name__' is reserved and can not be overwritten.",
+                ),
+            ),
+            ("a.__x__", None),
+            ("a.__name__", None),
+        ] {
+            let request = stages(vec![(alias, pipeline_field("top"))]);
+            if strict {
+                let err = pipeline_error(&mut client, request).await;
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{alias}: {err}");
+            } else if let Some(text) = official {
+                let err = pipeline_error(&mut client, request).await;
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{alias}: {err}");
+                assert!(err.message().starts_with(text), "{alias}: {err}");
+            } else {
+                let docs = drain_pipeline(
+                    client
+                        .execute_pipeline(pipeline_request(request))
+                        .await
+                        .unwrap()
+                        .into_inner(),
+                    1,
+                )
+                .await;
+                let leaf = alias.trim_start_matches("a.");
+                assert_eq!(
+                    docs[0].fields,
+                    [("a".to_owned(), map(&[(leaf, s("t"))]))]
+                        .into_iter()
+                        .collect(),
+                    "{alias}"
+                );
+            }
+        }
+        handle.abort();
+    }
+}
+
+/// `PX1a`: the six comparisons stand anywhere an expression stands, with fields and literals
+/// on either side, and `array` / `map` construct values. FS-ENT-ORACLE O-1 recorded production
+/// answering these as the official emulator does, so both profiles answer them. A literal
+/// holding an expression is refused, and what production has not answered differs by profile.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
+    use pb::value::ValueType as V;
+    let array = |values: Vec<pb::Value>| pb::Value {
+        value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+    };
+    let map = |fields: &[(&str, pb::Value)]| pb::Value {
+        value_type: Some(V::MapValue(pb::MapValue {
+            fields: fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        })),
+    };
+    let null = pb::Value {
+        value_type: Some(V::NullValue(0)),
+    };
+    let boolean = |b: bool| pb::Value {
+        value_type: Some(V::BooleanValue(b)),
+    };
+    let f = pipeline_field;
+    let call = pipeline_function;
+    let collection = || pipeline_stage("collection", s("cmp"));
+    let condition = |name: &str, args| pipeline_stage("where", call(name, args));
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let strict = policy == IndexValidationPolicy::Production;
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write(
+                        "cmp/a",
+                        &[
+                            ("i", i(1)),
+                            ("s", s("a")),
+                            ("arr", array(vec![i(1), s("a")])),
+                            ("m", map(&[("a", i(1))])),
+                            ("n", null.clone()),
+                        ],
+                    ),
+                    update_write(
+                        "cmp/b",
+                        &[
+                            ("i", i(5)),
+                            ("flag", boolean(true)),
+                            (
+                                "d",
+                                pb::Value {
+                                    value_type: Some(V::DoubleValue(1.5)),
+                                },
+                            ),
+                        ],
+                    ),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let run = |stages: Vec<pb::pipeline::Stage>| {
+            let mut client = client.clone();
+            async move {
+                match client.execute_pipeline(pipeline_request(stages)).await {
+                    Err(status) => Err(status),
+                    Ok(response) => {
+                        let mut stream = response.into_inner();
+                        let mut out = Vec::new();
+                        loop {
+                            match stream.message().await {
+                                Err(status) => break Err(status),
+                                Ok(None) => break Ok(out),
+                                Ok(Some(r)) => out.extend(r.results.into_iter().map(|d| d.fields)),
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let fields =
+            |entries: &[(&str, pb::Value)]| -> std::collections::HashMap<String, pb::Value> {
+                entries
+                    .iter()
+                    .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                    .collect()
+            };
+        // Both profiles: comparisons in where and select, literals on either side.
+        let got = run(vec![
+            collection(),
+            condition("less_than", vec![f("i"), i(3)]),
+            pipeline_select_map(vec![
+                ("lt", call("less_than", vec![f("i"), i(3)])),
+                ("ge", call("greater_than_or_equal", vec![f("i"), i(1)])),
+                ("ne", call("not_equal", vec![f("s"), s("b")])),
+            ]),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(
+            got,
+            vec![fields(&[
+                ("lt", boolean(true)),
+                ("ge", boolean(true)),
+                ("ne", boolean(true))
+            ])],
+            "{policy:?}"
+        );
+        let got = run(vec![
+            collection(),
+            condition("greater_than", vec![i(3), f("i")]),
+            pipeline_select_map(vec![("i", f("i"))]),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(got, vec![fields(&[("i", i(1))])], "{policy:?} reversed");
+        // A field as the whole condition keeps the rows where it is true (production drops a
+        // row whose condition is an integer, null or missing).
+        let got = run(vec![
+            collection(),
+            pipeline_stage("where", f("flag")),
+            pipeline_select_map(vec![("i", f("i"))]),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(got, vec![fields(&[("i", i(5))])], "{policy:?} where(flag)");
+        let got = run(vec![collection(), pipeline_stage("where", f("i"))])
+            .await
+            .unwrap();
+        assert!(got.is_empty(), "{policy:?} where(i)");
+        // Answers production recorded (FS-ENT-ORACLE O-1), under both profiles.
+        let only_a = || condition("equal", vec![f("s"), s("a")]);
+        let select_i = || pipeline_select_map(vec![("i", f("i"))]);
+        let answered = [
+            (
+                "field to field",
+                vec![
+                    collection(),
+                    condition("equal", vec![f("i"), f("i")]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))]), fields(&[("i", i(5))])],
+            ),
+            (
+                "literal to literal",
+                vec![
+                    collection(),
+                    condition("less_than", vec![s("a"), i(1)]),
+                    select_i(),
+                ],
+                vec![],
+            ),
+            (
+                "ordering across kinds",
+                vec![
+                    collection(),
+                    condition("less_than", vec![f("s"), i(1)]),
+                    select_i(),
+                ],
+                vec![],
+            ),
+            (
+                "array and map construction",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![
+                        ("arr", call("array", vec![f("i"), f("x")])),
+                        ("map", call("map", vec![s("k"), f("i"), s("k2"), f("x")])),
+                        ("lit", array(vec![i(1), array(vec![i(2)])])),
+                    ]),
+                ],
+                vec![fields(&[
+                    ("arr", array(vec![i(1), null.clone()])),
+                    ("map", map(&[("k", i(1))])),
+                    ("lit", array(vec![i(1), array(vec![i(2)])])),
+                ])],
+            ),
+            (
+                "null equality in select",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![
+                        ("v", call("equal", vec![f("n"), null.clone()])),
+                        ("x", call("equal", vec![f("x"), i(1)])),
+                        ("lt", call("less_than", vec![f("n"), i(1)])),
+                    ]),
+                ],
+                vec![fields(&[
+                    ("v", boolean(true)),
+                    ("x", boolean(false)),
+                    ("lt", boolean(false)),
+                ])],
+            ),
+            (
+                "absent not_equal at the top",
+                vec![
+                    collection(),
+                    condition("not_equal", vec![f("x"), i(1)]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))]), fields(&[("i", i(5))])],
+            ),
+        ];
+        for (label, stages, official) in answered {
+            assert_eq!(run(stages).await.unwrap(), official, "{policy:?} {label}");
+        }
+        // Cells production has not answered: strict refuses them until a recording does (a
+        // missing field against an array or map literal, a double as the whole condition);
+        // the emulator profile answers as the official emulator. Two strings field to field
+        // and a string condition are recorded (FS-ENT-ORACLE O-2) and answered.
+        let unanswered = [
+            (
+                "missing field against an array literal",
+                vec![
+                    collection(),
+                    condition("equal", vec![f("arr"), array(vec![i(1), s("a")])]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))])],
+            ),
+            (
+                "missing field against a map literal",
+                vec![
+                    collection(),
+                    condition("equal", vec![f("m"), map(&[("a", i(1))])]),
+                    select_i(),
+                ],
+                vec![fields(&[("i", i(1))])],
+            ),
+            (
+                "a double as the whole condition",
+                vec![collection(), pipeline_stage("where", f("d")), select_i()],
+                vec![],
+            ),
+        ];
+        for (label, stages, expected) in [
+            (
+                "two strings field to field",
+                vec![
+                    collection(),
+                    only_a(),
+                    pipeline_select_map(vec![("v", call("less_than", vec![f("s"), f("s")]))]),
+                ],
+                vec![fields(&[("v", boolean(false))])],
+            ),
+            (
+                "a string as the whole condition",
+                vec![collection(), pipeline_stage("where", f("s")), select_i()],
+                vec![],
+            ),
+        ] {
+            assert_eq!(run(stages).await.unwrap(), expected, "{policy:?} {label}");
+        }
+        for (label, stages, official) in unanswered {
+            let got = run(stages).await;
+            if strict {
+                let err = got.unwrap_err();
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                assert_eq!(
+                    err.metadata().get("fireemu-code").unwrap(),
+                    "FS_PIPE_UNSUPPORTED_STAGE",
+                    "{label}"
+                );
+            } else {
+                assert_eq!(got.unwrap(), official, "{label}");
+            }
+        }
+        // A literal holding an expression: production and the official emulator refuse a map
+        // literal holding a field; strict leaves the other shapes unobserved.
+        let refused = |stages| async {
+            let err = run(stages).await.unwrap_err();
+            (err.code(), err.message().to_owned())
+        };
+        assert_eq!(
+            refused(vec![
+                collection(),
+                pipeline_select_map(vec![("v", map(&[("k", f("i"))]))]),
+            ])
+            .await,
+            (
+                tonic::Code::InvalidArgument,
+                "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned()
+            )
+        );
+        let expression_array = refused(vec![
+            collection(),
+            pipeline_select_map(vec![("v", array(vec![f("i")]))]),
+        ])
+        .await;
+        let constant_where = run(vec![collection(), pipeline_stage("where", boolean(true))]).await;
+        if strict {
+            assert_eq!(expression_array.0, tonic::Code::Unimplemented);
+            assert_eq!(
+                constant_where.unwrap_err().code(),
+                tonic::Code::Unimplemented
+            );
+        } else {
+            assert_eq!(
+                expression_array,
+                (
+                    tonic::Code::InvalidArgument,
+                    "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned()
+                )
+            );
+            assert_eq!(constant_where.unwrap().len(), 2);
         }
         handle.abort();
     }
@@ -7878,14 +8496,31 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
             "limit before select",
             vec![collection("items"), limit(1), select("name")],
         ),
-        (
-            "document metadata",
-            vec![collection("items"), select("__name__")],
-        ),
     ] {
         let err = client.execute_pipeline(request(stages)).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
     }
+    // `__name__` selects the document reference (FS-ENT-ORACLE O-1).
+    let named = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![
+                collection("items"),
+                select("__name__"),
+                limit(1),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert!(
+        matches!(
+            named[0].fields.get("label").and_then(|v| v.value_type.as_ref()),
+            Some(pb::value::ValueType::ReferenceValue(name)) if name.starts_with(DOCS)
+        ),
+        "{named:?}"
+    );
     for selector in [
         ConsistencySelector::Transaction(vec![1]),
         ConsistencySelector::NewTransaction(pb::TransactionOptions::default()),

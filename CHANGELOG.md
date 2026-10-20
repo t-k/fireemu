@@ -10,17 +10,26 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
-- Enterprise pipelines run locally on a new pipeline executor. Besides top-level fields, `where(equal(...))` and `select` accept nested field paths (`a.b`) and `documentId`, `collectionId` and `parent` of a document reference. Inputs whose production result is unrecorded, such as the parent of a top-level document or the document ID of a missing field, are refused with `UNIMPLEMENTED` under the strict profile; the emulator profile answers them as the official emulator does (the documents root reference, null). A refusal found while streaming may follow results already sent. Every other function stays refused.
-- The REST `:executePipeline` route executes the same pipeline subset on an Enterprise database under both profiles, so the Web SDK's `firebase/firestore/lite/pipelines` works against fireemu. Results arrive as one JSON array element each; a refusal answers the error alone, without partial results.
 - The Firebase Realtime Database is served, without a compatibility claim yet: the REST API with event streams, and the WebSocket and long-polling protocols the SDKs use, with listens and queries. It starts with `--only database`, `emulators.database` in `firebase.json`, `daemon.databasePort` or `--database-port` (port 9000 by default), and `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST`. Behavior is compared with the official emulator, and where production has not been observed it follows that emulator and may change. Security Rules are not evaluated: a database is open, or with the new `database.defaultAccess = "locked"` (the `productionExact` default, strict profile only) only the emulator's `owner` credential reads and writes. The start banner's `database rules:` line names the access in effect. Import, export, Functions triggers and a UI view are not supported yet; an export taken while the database is served prints a warning that its data is left out.
 
 ### Changed
 
 - A `firebase.json` with `emulators.database`, which `firebase init` writes, now starts the Realtime Database on that port, where it used to be reported as unsupported. A port already in use (9000 is also PHP-FPM's default) now stops startup; choose another with `--database-port`, or leave the database out with `--only`. `--only database` is no longer refused.
 - The `database` section of `firebase.json` is now checked for shape (`rules`, `instance`, `target` and the ignored `predeploy` / `postdeploy` hooks); an unknown key there stops startup. When the database is served, a warning says that the rules files it names are not enforced.
+
+## [0.28.0] - 2026-10-20
+
+### Added
+
+- Enterprise pipelines run locally on a new pipeline executor. Besides top-level fields, `where(equal(...))` and `select` accept nested field paths (`a.b`) and `documentId`, `collectionId` and `parent` of a document reference. The parent of a top-level document is the documents root reference and the document ID of a missing field is null under both profiles, as production answers them. Inputs whose production result is unrecorded, such as the collection ID of a missing field, are refused with `UNIMPLEMENTED` under the strict profile; the emulator profile answers them as the official emulator does. A refusal found while streaming may follow results already sent. Every other function stays refused.
+- Pipelines evaluate the comparisons `equal`, `not_equal`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal` anywhere an expression stands, with fields and literals on either side, and `array` / `map` construction, literal select values and `__name__` as the document reference; a field or a function such as `documentId` may be a whole `where` condition, which keeps the row only when it is true. Production answered every comparison, construction and condition probe of FS-ENT-ORACLE O-1 and O-2 as the official emulator does (810 comparison cells: every pair of kinds but vectors, missing fields, integers and doubles compared exactly as one kind), so both profiles answer those alike. The emulator profile also answers what production has not been asked (vectors, a `where` on a double, `collection_id` of a missing value, a repeated `map` key, a literal select value that is not a finite number or an array of finite numbers, so infinities and NaN included, a reserved name inside an alias path) as the official emulator does; the strict profile refuses those with `UNIMPLEMENTED`. Recorded refusals answer production's texts, such as the select alias refusals. A stored `-0.0` keeps its sign when read back, as in production (the official emulator stores it as `0.0`), and compares equal to `0` and `0.0`.
+- The REST `:executePipeline` route executes the same pipeline subset on an Enterprise database under both profiles, so the Web SDK's `firebase/firestore/lite/pipelines` works against fireemu. Results arrive as one JSON array element each; a refusal answers the error alone, without partial results.
+
+### Changed
+
+- A pipeline `select` stage now sets at most 64 fields: 65 or more are refused with `INVALID_ARGUMENT`, as production and the official emulator refuse them.
 - Pipeline results without a `select` are now the source documents, with their name, create time and update time, under both profiles, so `PipelineResult.ref`, `id`, `createTime` and `updateTime` work in the SDKs. Every response also carries an execution time (the read time of the pipeline's snapshot). Results after a `select` are still fields only.
-- Under the strict profile, a pipeline `select` alias that is not a plain identifier is now refused with `UNIMPLEMENTED` until production is observed. This includes a dotted or quoted alias, which is what the SDKs send for `select('a.b')`. Such an alias used to answer a flat `"a.b"` key. To keep answering under strict, give the field an explicit simple alias, such as `field('a.b').as('ab')`.
-- Under the emulator profile, a pipeline `select` alias is now read as a field path, as the official emulator reads it: `select('a.b')` answers `{a: {b}}`, and a quoted alias is unquoted. An invalid path, a reserved name or an alias inside another alias is refused with `INVALID_ARGUMENT`.
+- A pipeline `select` alias is now read as a field path under both profiles, as production and the official emulator read it: `select('a.b')` answers `{a: {b}}` where it used to answer a flat `"a.b"` key, and a quoted alias is unquoted. An invalid path, a reserved name or an alias inside another alias is refused with `INVALID_ARGUMENT`, with production's text. Alias shapes production has not answered (a quoted reserved name, a reserved name below another field such as `a.__x__`, an invalid quoted or dotted alias) are refused with `UNIMPLEMENTED` under the strict profile; the emulator profile answers them as the official emulator does, so `a.__x__` is a nested key there.
 
 ## [0.27.1] - 2026-10-19
 
@@ -854,7 +863,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.27.1...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/t-k/fireemu/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/t-k/fireemu/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/t-k/fireemu/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/t-k/fireemu/compare/v0.25.0...v0.26.0

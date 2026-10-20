@@ -8,6 +8,8 @@ const coverage = JSON.parse(await readFile(new URL("./sdk-listen-coverage.json",
 
 const expected = Object.freeze({
   "@firebase/rules-unit-testing": "5.0.2",
+  // The Admin pipeline smoke imports the pipeline helpers from the client firebase-admin wraps.
+  "@google-cloud/firestore": "8.7.1",
   "@google-cloud/pubsub": "4.11.0",
   firebase: "12.18.0",
   "firebase-admin": "14.3.0",

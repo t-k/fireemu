@@ -129,11 +129,14 @@ fn push_queue(messages: usize) -> (PushQueue, Pushes) {
 }
 
 impl PushQueue {
-    /// Queues a message; `false` when the queue is full in messages or in bytes.
+    /// Queues a message; `false` when the queue is full in messages or in bytes. An empty
+    /// queue takes any one message, so a single write larger than the budget reaches its
+    /// listeners, as on the official emulator.
     fn offer(&self, message: String, budget: usize) -> bool {
         let size = message.len();
         let before = self.bytes.fetch_add(size, AtomicOrdering::SeqCst);
-        if before.saturating_add(size) > budget || self.sender.try_send(message).is_err() {
+        let over = before > 0 && before.saturating_add(size) > budget;
+        if over || self.sender.try_send(message).is_err() {
             self.bytes.fetch_sub(size, AtomicOrdering::SeqCst);
             return false;
         }
@@ -660,6 +663,23 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
 mod tests {
     use super::*;
     use crate::rest::RestOptions;
+
+    #[tokio::test]
+    async fn an_empty_queue_takes_any_one_message_and_then_the_byte_budget_holds() {
+        let (queue, mut pushes) = push_queue(10);
+        let big = "x".repeat(100);
+        assert!(queue.offer(big.clone(), 10));
+        // Something waits: one more byte passes the budget.
+        assert!(!queue.offer("1".to_owned(), 10));
+        assert_eq!(pushes.recv().await.as_deref(), Some(big.as_str()));
+        // Emptied again, it takes the next message whatever its size.
+        assert!(queue.offer(big.clone(), 10));
+        assert_eq!(pushes.recv().await.as_deref(), Some(big.as_str()));
+        // Within the budget, messages wait together up to it, inclusive.
+        assert!(queue.offer("12345".to_owned(), 10));
+        assert!(queue.offer("67890".to_owned(), 10));
+        assert!(!queue.offer("a".to_owned(), 10));
+    }
 
     fn shared() -> Shared {
         Shared {

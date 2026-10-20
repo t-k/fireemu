@@ -118,9 +118,11 @@ pub(super) fn deliver(connection: &Connection, message: String, budget: usize) -
     if state.closed {
         return false;
     }
+    // An empty outbox takes any one message, as an empty push queue does.
+    let alone = state.outbox.is_empty();
     state.outbox_bytes += message.len();
     state.outbox.push(message);
-    if state.outbox_bytes > budget || state.outbox.len() > connection.queue {
+    if (!alone && state.outbox_bytes > budget) || state.outbox.len() > connection.queue {
         state.end();
         return false;
     }

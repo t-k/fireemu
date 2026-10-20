@@ -627,7 +627,9 @@ async fn a_listener_that_stops_reading_is_dropped_once_its_queue_fills() {
 }
 
 #[tokio::test]
-async fn a_listener_whose_waiting_messages_pass_the_byte_budget_is_dropped() {
+async fn a_message_larger_than_the_byte_budget_reaches_a_listener_with_an_empty_queue() {
+    // The official emulator delivers it. The queue unit tests pin the drop that follows
+    // when a second message would wait with it.
     let (address, database) = start_with(ServerConfig {
         stream_queue_bytes: 10_000,
         realtime_idle: Duration::from_secs(120),
@@ -641,10 +643,15 @@ async fn a_listener_whose_waiting_messages_pass_the_byte_budget_is_dropped() {
         .await;
     reader.next_text().await;
     assert_eq!(database.lock().unwrap().listen_count(), 1);
-    // One message larger than the budget: the queue is far from full in messages.
     let big = format!("\"{}\"", "x".repeat(20_000));
     exchange(&address, "PUT", "/s.json?ns=w11&print=silent", &big).await;
-    assert_eq!(database.lock().unwrap().listen_count(), 0);
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    // It arrives, split into frames as the SDK reads a long message.
+    let mut received = String::new();
+    while !received.contains("xxxxx\"") {
+        received.push_str(&reader.next_text().await);
+    }
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
 }
 
 #[tokio::test]

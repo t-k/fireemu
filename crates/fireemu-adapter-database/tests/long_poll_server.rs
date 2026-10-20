@@ -560,7 +560,8 @@ async fn pushes_waiting_for_a_request_go_before_the_connections_own() {
 
 #[tokio::test]
 async fn a_connection_whose_waiting_messages_pass_a_bound_is_dropped() {
-    // In bytes: one large push is enough.
+    // In bytes: a push larger than the budget is taken into an empty outbox (the official
+    // emulator delivers it), and the next one while it waits is too many.
     let (address, database) = start(ServerConfig {
         stream_queue_bytes: 10_000,
         ..ServerConfig::default()
@@ -575,6 +576,8 @@ async fn a_connection_whose_waiting_messages_pass_a_bound_is_dropped() {
         &format!("\"{}\"", "x".repeat(20_000)),
     )
     .await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    get(&address, "PUT", "/a.json?ns=lp7", "1").await;
     assert_eq!(database.lock().unwrap().listen_count(), 0);
     assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
     // In messages: more pushes than the queue takes.

@@ -4,9 +4,14 @@
 //! messages waiting to be sent and at most one held request. Pushes from other connections
 //! and REST go straight into the outbox under the database lock, so they keep commit order
 //! with the connection's own answers. A new request first releases the held one with what
-//! is waiting (possibly nothing), then hands its packets to the session. Locks are taken in
-//! the order database, listeners, connection; a connection's state is only locked with the
-//! database lock held, and the registry lock is taken alone or last.
+//! is waiting (possibly nothing), then hands its packets to the session.
+//!
+//! Locks: a connection's state is locked only with the database lock held, by every path
+//! (`poll`, an expired hold, `disconn`, the reaper and `deliver`), so the database lock
+//! serializes them. Under it the order varies: `deliver` takes the listeners and then a
+//! connection, `close` a connection and then the listeners and the registry. That cannot
+//! deadlock, because neither runs without the database lock. The registry lock is never held
+//! while the database lock is taken.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -55,9 +60,8 @@ struct State {
     outbox_bytes: usize,
     /// The number of the next answer that carries messages.
     next_packet: u64,
-    /// The held request: its ticket and where its answer goes.
-    held: Option<(u64, oneshot::Sender<String>)>,
-    next_ticket: u64,
+    /// Where the held request's answer goes.
+    held: Option<oneshot::Sender<String>>,
     last_request: Instant,
     closed: bool,
 }
@@ -77,12 +81,23 @@ impl State {
         body
     }
 
-    /// Answers the held request, if any, with what is waiting.
+    /// Answers the held request, if any, with what is waiting. A held request whose client
+    /// went away takes nothing: its packet number and messages wait for the next request,
+    /// since the SDK reads packets strictly in order.
     fn release(&mut self) {
-        if let Some((_, sender)) = self.held.take() {
-            let body = self.take_packet();
-            // A held request whose client went away has nobody to read it.
-            let _ = sender.send(body);
+        let Some(sender) = self.held.take() else {
+            return;
+        };
+        if sender.is_closed() {
+            return;
+        }
+        let messages = std::mem::take(&mut self.outbox);
+        match sender.send(packet(self.next_packet, &messages)) {
+            Ok(()) => {
+                self.outbox_bytes = 0;
+                self.next_packet += 1;
+            }
+            Err(_) => self.outbox = messages,
         }
     }
 
@@ -242,7 +257,6 @@ fn start(shared: &Arc<Shared>, target: &str, host: &str, callback: Option<i32>) 
             outbox_bytes: 0,
             next_packet: 1,
             held: None,
-            next_ticket: 0,
             last_request: Instant::now(),
             closed: false,
         }),
@@ -272,7 +286,7 @@ async fn poll(
     segments: Vec<Segment>,
     host: &str,
 ) -> Response<Body> {
-    let (ticket, mut receiver) = {
+    let mut receiver = {
         let mut database = lock_database(shared);
         let mut state = connection.lock();
         if state.closed {
@@ -303,35 +317,45 @@ async fn poll(
             return script(state.take_packet());
         }
         let (sender, receiver) = oneshot::channel();
-        let ticket = state.next_ticket;
-        state.next_ticket += 1;
-        state.held = Some((ticket, sender));
-        (ticket, receiver)
+        state.held = Some(sender);
+        receiver
     };
-    match tokio::time::timeout(shared.config.long_poll_hold, &mut receiver).await {
-        Ok(Ok(body)) => script(body),
-        // The connection was closed while the request waited.
-        Ok(Err(_)) => script(String::new()),
-        Err(_) => {
-            let expired = {
-                let mut database = lock_database(shared);
-                let mut state = connection.lock();
-                let expired = state.held.as_ref().is_some_and(|(held, _)| *held == ticket);
-                if expired {
-                    // Nobody asked again within the hold time: the client is gone.
-                    close(shared, &mut database, connection, &mut state);
-                }
-                expired
-            };
-            if expired {
-                return script(NOTHING.to_owned());
-            }
-            // Released just as the hold ended.
-            match receiver.await {
-                Ok(body) => script(body),
-                Err(_) => script(String::new()),
-            }
+    if let Ok(answer) = tokio::time::timeout(shared.config.long_poll_hold, &mut receiver).await {
+        // An error: the connection was closed while the request waited.
+        return script(answer.unwrap_or_default());
+    }
+    let mut database = lock_database(shared);
+    let mut state = connection.lock();
+    match expiry(&mut receiver) {
+        Expiry::Released(body) => script(body),
+        Expiry::Closed => script(String::new()),
+        Expiry::Held => {
+            // Nobody asked again within the hold time: the client is gone.
+            close(shared, &mut database, connection, &mut state);
+            script(NOTHING.to_owned())
         }
+    }
+}
+
+/// What became of a held request whose hold time ran out.
+#[derive(Debug, PartialEq, Eq)]
+enum Expiry {
+    /// A later request or a push answered it just as the hold ended.
+    Released(String),
+    /// The connection was closed.
+    Closed,
+    /// It is still the held request.
+    Held,
+}
+
+/// Reads the held request's channel with the connection's state locked: the request is
+/// answered and the connection closed only under that lock, so an empty, open channel means
+/// the request is still held.
+fn expiry(receiver: &mut oneshot::Receiver<String>) -> Expiry {
+    match receiver.try_recv() {
+        Ok(body) => Expiry::Released(body),
+        Err(oneshot::error::TryRecvError::Closed) => Expiry::Closed,
+        Err(oneshot::error::TryRecvError::Empty) => Expiry::Held,
     }
 }
 
@@ -390,5 +414,25 @@ async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
             close(&shared, &mut database, &connection, &mut state);
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expiry, oneshot, Expiry};
+
+    #[test]
+    fn an_expired_hold_tells_released_closed_and_held_apart() {
+        let (sender, mut receiver) = oneshot::channel();
+        sender.send("pRTLPCB(3,[]);\n".to_owned()).unwrap();
+        assert_eq!(
+            expiry(&mut receiver),
+            Expiry::Released("pRTLPCB(3,[]);\n".to_owned())
+        );
+        let (sender, mut receiver) = oneshot::channel::<String>();
+        drop(sender);
+        assert_eq!(expiry(&mut receiver), Expiry::Closed);
+        let (_sender, mut receiver) = oneshot::channel::<String>();
+        assert_eq!(expiry(&mut receiver), Expiry::Held);
     }
 }

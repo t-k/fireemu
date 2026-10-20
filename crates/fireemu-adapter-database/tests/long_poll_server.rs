@@ -638,3 +638,31 @@ async fn passwords_come_from_the_operating_system_not_the_database_seed() {
         assert!(pw.bytes().all(|c| c.is_ascii_alphanumeric()), "{pw}");
     }
 }
+
+#[tokio::test]
+async fn a_push_into_an_abandoned_held_request_waits_for_the_next_one() {
+    let (address, _) = start(ServerConfig::default()).await;
+    let (mut lp, _) = Lp::start(&address, "lpa").await;
+    let (number, _) = read_packet(&lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await);
+    // A request is held, and its client goes away without an answer.
+    let target = lp.target(&[]);
+    let mut abandoned = TcpStream::connect(&address).await.unwrap();
+    abandoned
+        .write_all(
+            format!("GET {target} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(abandoned);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    get(&address, "PUT", "/a.json?ns=lpa", "7").await;
+    // The next request gets the push, numbered right after the last answer the client read.
+    let (next, messages) = read_packet(&lp.poll(&[]).await);
+    assert_eq!(next, number + 1);
+    assert_eq!(
+        messages,
+        vec![r#"{"d":{"a":"d","b":{"d":7,"p":"a"}},"t":"d"}"#.to_owned()]
+    );
+}

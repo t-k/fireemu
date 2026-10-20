@@ -412,6 +412,121 @@ const widthProgram = {
   ]),
 };
 
+// --- O-2: the comparison cells O-1 left open (PX1a round 2 review M3) ---
+
+/**
+ * Two values of every kind but vectors (`x` and `y` are never set). The `2` field of a kind
+ * orders after the first one.
+ */
+export const KIND_DOC = {
+  n: nul(),
+  b: bool(false),
+  b2: bool(true),
+  nan: nan(),
+  i: int(1),
+  d5: dbl(1.5),
+  ts: ts("2020-01-01T00:00:00Z"),
+  ts2: ts("2020-01-01T00:00:01Z"),
+  s: str("a"),
+  s2: str("b"),
+  by: { bytesValue: "AA==" },
+  by2: { bytesValue: "AQ==" },
+  r: ref("kinds/a"),
+  r2: ref("kinds/b"),
+  g: { geoPointValue: { latitude: 0, longitude: 0 } },
+  g2: { geoPointValue: { latitude: 0, longitude: 1 } },
+  arr: arr(int(1)),
+  arr2: arr(int(2)),
+  m: map({ a: int(1) }),
+  m2: map({ a: int(2) }),
+};
+
+/** One field of each kind, in the canonical kind order. */
+export const KINDS = ["n", "b", "nan", "i", "ts", "s", "by", "r", "g", "arr", "m"];
+/** The second field of each kind for ordering within a kind (NaN and null against themselves). */
+const SECOND = { n: "n", b: "b2", nan: "nan", i: "d5", ts: "ts2", s: "s2", by: "by2", r: "r2", g: "g2", arr: "arr2", m: "m2" };
+const OPS = [
+  "equal",
+  "not_equal",
+  "less_than",
+  "less_than_or_equal",
+  "greater_than",
+  "greater_than_or_equal",
+];
+/** The most aliases one comparison step selects (the official emulator allows 64). */
+export const CELLS_PER_STEP = 48;
+
+/** Every comparison cell O-2 records, as `[alias, left field, right field, op]`. */
+export const COMPARISON_CELLS = [
+  // Every ordered pair of different kinds, under every comparison.
+  ...OPS.flatMap((op) =>
+    KINDS.flatMap((left) =>
+      KINDS.filter((right) => right !== left).map((right) => [`${op}__${left}__${right}`, left, right, op]),
+    ),
+  ),
+  // Field to field within each kind, both ways (NaN and null against themselves).
+  ...OPS.flatMap((op) =>
+    KINDS.flatMap((kind) => {
+      const second = SECOND[kind];
+      const pairs = second === kind ? [[kind, kind]] : [[kind, second], [second, kind]];
+      return pairs.map(([left, right]) => [`${op}__${left}__${right}`, left, right, op]);
+    }),
+  ),
+  // Missing fields: two of them, and one against a value or null.
+  ...OPS.flatMap((op) =>
+    [["x", "y"], ["x", "i"], ["i", "x"], ["x", "n"], ["n", "x"]].map(([left, right]) => [
+      `${op}__${left}__${right}`,
+      left,
+      right,
+      op,
+    ]),
+  ),
+];
+
+const comparisonSteps = [];
+for (let k = 0; k < COMPARISON_CELLS.length; k += CELLS_PER_STEP) {
+  const cells = COMPARISON_CELLS.slice(k, k + CELLS_PER_STEP);
+  comparisonSteps.push(
+    step(
+      `cells-${String(k / CELLS_PER_STEP + 1).padStart(2, "0")}`,
+      pipeline(
+        collection("kinds"),
+        select(
+          Object.fromEntries(
+            cells.map(([alias, left, right, op]) => [alias, fn(op, fld(left), fld(right))]),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/** `[label, condition]` pairs whose value is not a boolean, evaluated with `where`. */
+export const NON_BOOLEAN_CONDITIONS = [
+  ["document-id", fn("document_id", fld("__name__"))],
+  ["parent", fn("parent", fld("__name__"))],
+  ["array", fn("array", fld("b2"))],
+  ["map", fn("map", str("k"), fld("b2"))],
+];
+
+const comparisonProgram = {
+  id: "fs-ent-pipeline/o2/comparisons",
+  seed: [["kinds/d", KIND_DOC]],
+  steps: [
+    ...comparisonSteps,
+    ...NON_BOOLEAN_CONDITIONS.map(([label, condition]) =>
+      step(
+        `where-${label}`,
+        pipeline(
+          collection("kinds"),
+          stage("where", condition),
+          select({ id: fn("document_id", fld("__name__")) }),
+        ),
+      ),
+    ),
+  ],
+};
+
 export const PROGRAMS = [
   expressionProgram,
   whereProgram,
@@ -421,4 +536,5 @@ export const PROGRAMS = [
   aliasProgram,
   numberProgram,
   widthProgram,
+  comparisonProgram,
 ];

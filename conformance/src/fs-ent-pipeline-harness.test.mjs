@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  CELLS_PER_STEP,
+  COMPARISON_CELLS,
+  KINDS,
+  KIND_DOC,
+  NON_BOOLEAN_CONDITIONS,
   NUMBER_CONDITIONS,
   NUMBER_DOC,
   NUMBER_EXPRESSIONS,
@@ -124,7 +129,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 199);
+  assert.equal(requests, 220);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline"]);
   // The only writes are the order program's single-document commits into `ord`.
@@ -142,6 +147,7 @@ test("the corpus validates, stays within its budget and only reads pipelines or 
     STATIC_REFUSALS,
     NUMBER_EXPRESSIONS,
     NUMBER_CONDITIONS,
+    NON_BOOLEAN_CONDITIONS,
   ]) {
     assert.equal(new Set(labels(pairs)).size, pairs.length);
     for (const label of labels(pairs)) assert.match(label, /^[a-z0-9-]+$/);
@@ -156,11 +162,15 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
   const o2 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o2/");
   assert.deepEqual(
     o2.map((p) => p.id),
-    ["fs-ent-pipeline/o2/numbers", "fs-ent-pipeline/o2/select-width"],
+    [
+      "fs-ent-pipeline/o2/numbers",
+      "fs-ent-pipeline/o2/select-width",
+      "fs-ent-pipeline/o2/comparisons",
+    ],
   );
   assert.equal(
     o2.reduce((n, p) => n + p.steps.length, 0),
-    37,
+    58,
   );
   // The O-1 programs keep the digests their production rows were recorded under.
   const recorded = JSON.parse(
@@ -199,6 +209,50 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
     assert.equal(aliases.length, step.id.startsWith("select-64") ? 64 : 65, step.id);
     assert.equal(new Set(aliases).size, aliases.length);
   }
+});
+
+test("O-2 compares every pair of kinds and each kind with itself under every comparison, in steps below the select width", () => {
+  const program = PROGRAMS.find((p) => p.id === "fs-ent-pipeline/o2/comparisons");
+  const cells = new Map(COMPARISON_CELLS.map(([alias, left, right, op]) => [alias, { left, right, op }]));
+  assert.equal(cells.size, COMPARISON_CELLS.length);
+  const ops = ["equal", "not_equal", "less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal"];
+  for (const op of ops) {
+    for (const left of KINDS) {
+      for (const right of KINDS) {
+        if (left !== right) assert.ok(cells.has(`${op}__${left}__${right}`), `${op} ${left} ${right}`);
+      }
+    }
+    // NaN and null against themselves, two missing fields, a missing field against a value.
+    for (const pair of ["nan__nan", "n__n", "x__y", "x__i", "i__x", "ts__ts2", "ts2__ts", "g__g2", "m__m2", "r__r2", "by__by2", "arr__arr2"]) {
+      assert.ok(cells.has(`${op}__${pair}`), `${op} ${pair}`);
+    }
+  }
+  assert.equal(cells.size, 6 * (11 * 10 + 20 + 5));
+  // Every cell is selected exactly once, in steps of at most CELLS_PER_STEP aliases (the
+  // official emulator answers at most 64), each alias a plain identifier.
+  const selected = [];
+  for (const step of program.steps.filter((s) => s.id.startsWith("cells-"))) {
+    const fields = step.body.structuredPipeline.pipeline.stages[1].args[0].mapValue.fields;
+    const aliases = Object.keys(fields);
+    assert.ok(aliases.length <= CELLS_PER_STEP && CELLS_PER_STEP < 64, step.id);
+    for (const alias of aliases) {
+      assert.match(alias, /^[a-z][a-z0-9_]*$/);
+      const { left, right, op } = cells.get(alias);
+      assert.deepEqual(fields[alias], {
+        functionValue: { name: op, args: [{ fieldReferenceValue: left }, { fieldReferenceValue: right }] },
+      });
+    }
+    selected.push(...aliases);
+  }
+  assert.deepEqual(selected.toSorted(), [...cells.keys()].toSorted());
+  // The probe document holds two values of every kind but never `x` or `y`.
+  for (const kind of KINDS) assert.ok(KIND_DOC[kind], kind);
+  assert.equal(KIND_DOC.x, undefined);
+  assert.equal(KIND_DOC.y, undefined);
+  assert.deepEqual(
+    program.steps.filter((s) => s.id.startsWith("where-")).map((s) => s.id),
+    ["where-document-id", "where-parent", "where-array", "where-map"],
+  );
 });
 
 test("every step stays in the named database on both transports", () => {

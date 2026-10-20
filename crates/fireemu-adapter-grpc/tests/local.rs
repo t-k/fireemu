@@ -7781,7 +7781,47 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             },
             Some(arity.to_owned()),
         ),
+        (
+            "aggregate without groups, quoted alias",
+            stage("aggregate", vec![map(vec![("`c`", count())])]),
+            Some(arity.to_owned()),
+        ),
         // Across stages, the official emulator answers every alias check before an empty map.
+        (
+            "add_fields, then add_fields empty alias",
+            {
+                let mut stages = stage("add_fields", vec![map(vec![("t", pipeline_field("top"))])]);
+                stages.extend(
+                    stage("add_fields", vec![map(vec![("", pipeline_field("top"))])])
+                        .into_iter()
+                        .skip(1),
+                );
+                stages
+            },
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "add_fields empty map, then add_fields empty alias",
+            {
+                let mut stages = stage("add_fields", vec![map(vec![])]);
+                stages.extend(
+                    stage("add_fields", vec![map(vec![("", pipeline_field("top"))])])
+                        .into_iter()
+                        .skip(1),
+                );
+                stages
+            },
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "distinct empty map, then select empty map",
+            {
+                let mut stages = stage("distinct", vec![map(vec![])]);
+                stages.extend(stage("select", vec![map(vec![])]).into_iter().skip(1));
+                stages
+            },
+            Some("The 'distinct(...)' stage requires at least one field.".to_owned()),
+        ),
         (
             "select empty map, then add_fields empty alias",
             {

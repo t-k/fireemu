@@ -924,8 +924,9 @@ fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status>
 /// is `deferred` until every stage's other checks are done. Production answered
 /// `aggregate({c: count()})` directly after the collection with the official arity text
 /// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/results/metadata#aggregate`), so strict answers that
-/// text for that shape (a non-empty map of plain valid aliases to functions, at `position` 1)
-/// and leaves every other shape here to the unsupported-stage refusal.
+/// text for that shape (a non-empty map of plain valid aliases, at `position` 1; the request
+/// validator already refuses accumulators that are not functions) and leaves every other shape
+/// here to the unsupported-stage refusal.
 fn check_unrun_alias_stage(
     stage: &pb::pipeline::Stage,
     position: usize,
@@ -938,13 +939,8 @@ fn check_unrun_alias_stage(
             position == 1
                 && map_fields(&stage.args[0]).is_some_and(|fields| {
                     !fields.is_empty()
-                        && fields.iter().all(|(alias, value)| {
-                            !alias.contains(['.', '`'])
-                                && parse_alias(alias, unrecorded).is_ok()
-                                && matches!(
-                                    value.value_type,
-                                    Some(pb::value::ValueType::FunctionValue(_))
-                                )
+                        && fields.keys().all(|alias| {
+                            !alias.contains(['.', '`']) && parse_alias(alias, unrecorded).is_ok()
                         })
                 })
         };

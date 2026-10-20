@@ -76,6 +76,16 @@ fn an_invalid_namespace_is_refused_before_the_upgrade() {
 }
 
 #[test]
+fn a_malformed_percent_escape_is_refused_before_the_upgrade() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let refused = db
+        .open_realtime("/.ws?v=5&ns=w1&x=%zz", None, NOW)
+        .unwrap_err();
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.message, "Bad Request");
+}
+
+#[test]
 fn put_get_merge_and_server_values() {
     let mut db = Database::new(RestOptions::default(), 1);
     let (mut s, _) = open(&mut db, "/.ws?v=5&ns=w1");

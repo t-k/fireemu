@@ -21,6 +21,8 @@ pub struct KeyAt {
     pub line: usize,
     /// The column, in characters.
     pub column: usize,
+    /// How many objects and arrays enclose the key's object (0 for the outermost).
+    pub depth: usize,
 }
 
 /// The deepest nesting read; deeper bodies are refused rather than exhausting the stack.
@@ -157,6 +159,7 @@ impl<'a> Parser<'a> {
                     key: key.clone(),
                     line,
                     column,
+                    depth,
                 });
             }
             self.skip_whitespace();

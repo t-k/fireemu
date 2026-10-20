@@ -32,14 +32,21 @@ impl Number {
     }
 
     /// `self + delta` as `ServerValue.increment` computes it: integer addition while it does
-    /// not overflow, double addition otherwise.
-    pub fn increment(self, delta: Self) -> Option<Self> {
+    /// not overflow, double addition otherwise. A double sum beyond the range stops at the
+    /// largest double of its sign, as the official emulator answers.
+    #[must_use]
+    pub fn increment(self, delta: Self) -> Self {
         if let (Self::Int(a), Self::Int(b)) = (self, delta) {
             if let Some(sum) = a.checked_add(b) {
-                return Some(Self::Int(sum));
+                return Self::Int(sum);
             }
         }
-        Self::from_f64(self.as_f64() + delta.as_f64())
+        let sum = self.as_f64() + delta.as_f64();
+        Self::Double(if sum.is_finite() {
+            sum
+        } else {
+            f64::MAX.copysign(sum)
+        })
     }
 
     /// The exact numeric order, also between integers and doubles.

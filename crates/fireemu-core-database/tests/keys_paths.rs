@@ -227,20 +227,25 @@ fn integral_doubles_beyond_the_safe_range_equal_their_integers() {
 fn increment_adds_integers_exactly_and_falls_back_to_doubles_on_overflow() {
     assert!(matches!(
         Number::Int(2).increment(Number::Int(3)),
-        Some(Number::Int(5))
+        Number::Int(5)
     ));
     assert!(matches!(
         Number::Int(i64::MAX).increment(Number::Int(1)),
-        Some(Number::Double(d)) if d == 9_223_372_036_854_775_808.0
+        Number::Double(d) if d == 9_223_372_036_854_775_808.0
     ));
-    assert!(
-        matches!(Number::Int(1).increment(Number::Double(0.5)), Some(Number::Double(d)) if d == 1.5)
-    );
+    assert!(matches!(Number::Int(1).increment(Number::Double(0.5)), Number::Double(d) if d == 1.5));
     assert!(matches!(
         Number::Double(0.5).increment(Number::Double(0.5)),
-        Some(Number::Double(d)) if d == 1.0
+        Number::Double(d) if d == 1.0
     ));
-    assert!(Number::Double(f64::MAX)
-        .increment(Number::Double(f64::MAX))
-        .is_none());
+    // A double sum beyond the range stops at the largest double, as the official emulator
+    // answers (1e308 + 1e308 is 1.7976931348623157E308).
+    assert!(matches!(
+        Number::Double(1e308).increment(Number::Double(1e308)),
+        Number::Double(d) if d == f64::MAX
+    ));
+    assert!(matches!(
+        Number::Double(-1e308).increment(Number::Double(-1e308)),
+        Number::Double(d) if d == f64::MIN
+    ));
 }

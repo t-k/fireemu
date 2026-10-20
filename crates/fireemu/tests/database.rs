@@ -653,3 +653,37 @@ fn emulators_export_writes_the_database_section_without_a_warning() {
     let metadata = std::fs::read_to_string(export.join("firebase-export-metadata.json")).unwrap();
     assert!(metadata.contains(r#""database""#), "{metadata}");
 }
+
+#[test]
+fn a_session_snapshot_restores_the_database() {
+    let probe = r#"auth="Authorization: Bearer $FIREEMU_CONTROL_TOKEN"
+db="http://$FIREBASE_DATABASE_EMULATOR_HOST/.json?ns=demo-rtdb-default-rtdb"
+owner="Authorization: Bearer owner"
+curl -s -o /dev/null -X PUT -H "$owner" "$db" -d '{"kept":1}'
+curl -s -o /dev/null -w 'capture %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots" -d '{"name": "held"}'
+curl -s -o /dev/null -X PUT -H "$owner" "$db" -d '{"later":2}'
+curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots/held:restore" -d '{}'
+printf 'value '
+curl -s -H "$owner" "$db"
+echo"#;
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["exec", "--no-config-discovery", "--project", PROJECT])
+        .args([
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+            "--http-port",
+            "0",
+        ])
+        .args(["--", "/bin/sh", "-c", probe])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let log = format!("{stdout}{}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{log}");
+    assert!(stdout.contains("capture 200"), "{log}");
+    assert!(stdout.contains("restore 200"), "{log}");
+    assert!(stdout.contains(r#"value {"kept":1}"#), "{log}");
+}

@@ -3534,12 +3534,13 @@ fn control_state(
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases and their field
-    // configuration, buckets, users, fault plan, text indexes) and, for the default session, the shared parts (clock, both
+    // configuration, buckets, Realtime Database namespaces, users, fault plan, text indexes) and, for the default session, the shared parts (clock, both
     // rulesets; a restore also resets the functions runtime).
     let mut snapshot_hooks: Vec<Arc<dyn fireemu_adapter_http::control::SnapshotHook>> = vec![
         Arc::new(snapshots::Firestore(backend.clone())),
         Arc::new(snapshots::FieldConfig(backend.clone())),
         Arc::new(snapshots::Storage(storage.clone())),
+        Arc::new(snapshots::RealtimeDatabase(realtime_database.clone())),
         Arc::new(snapshots::Auth(registry.clone())),
         Arc::new(snapshots::Faults(faults.clone(), cfg.auth_project.clone())),
         Arc::new(snapshots::TextIndexes(text_indexes.clone())),

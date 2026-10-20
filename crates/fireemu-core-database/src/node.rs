@@ -361,6 +361,29 @@ impl Node {
         Some(node)
     }
 
+    /// A cheap, saturating estimate of the heap bytes this node retains: the node itself, each
+    /// child's key (with its `String`) and node, and the bytes of string values and string
+    /// priorities. Numbers and booleans live inside the node.
+    pub fn retained_bytes(&self) -> u64 {
+        let mut bytes = size_of::<Self>() as u64;
+        if let Some(Priority::String(priority)) = &self.priority {
+            bytes = bytes.saturating_add(priority.len() as u64);
+        }
+        match &self.content {
+            Content::Leaf(Leaf::String(text)) => bytes = bytes.saturating_add(text.len() as u64),
+            Content::Leaf(_) => {}
+            Content::Children(children) => {
+                for (key, child) in children {
+                    bytes = bytes
+                        .saturating_add(size_of::<String>() as u64)
+                        .saturating_add(key.len() as u64)
+                        .saturating_add(child.retained_bytes());
+                }
+            }
+        }
+        bytes
+    }
+
     /// The number of key levels below this node (0 for a leaf).
     pub fn depth(&self) -> usize {
         match &self.content {

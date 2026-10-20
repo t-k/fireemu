@@ -256,6 +256,60 @@ impl SnapshotHook for Storage {
     }
 }
 
+/// The session's Realtime Database namespaces: those whose project (see
+/// [`fireemu_adapter_database::namespace::project_of`]) the session owns. A restore empties
+/// the owned namespaces the snapshot does not hold, streams and listens see the restored
+/// values, and onDisconnect writes registered for them are dropped, as a reset drops them.
+pub struct RealtimeDatabase(pub Arc<Mutex<fireemu_adapter_database::rest::Database>>);
+
+impl RealtimeDatabase {
+    fn owned(scope: &Scope) -> impl Fn(&str) -> bool + '_ {
+        move |namespace| {
+            scope.owns_project(fireemu_adapter_database::namespace::project_of(namespace))
+        }
+    }
+}
+
+impl SnapshotHook for RealtimeDatabase {
+    fn name(&self) -> &'static str {
+        "database"
+    }
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let database = self
+            .0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Realtime Database"))?;
+        Ok(Arc::new(
+            database.capture_namespaces_where(Self::owned(scope)),
+        ))
+    }
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<fireemu_adapter_database::rest::NamespacesSnapshot>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .lock()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the Realtime Database"))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let snapshot = part
+            .downcast_ref::<fireemu_adapter_database::rest::NamespacesSnapshot>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Realtime Database"))?
+            .restore_namespaces_where(Self::owned(scope), snapshot);
+        Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<fireemu_adapter_database::rest::NamespacesSnapshot>()
+            .map_or(
+                0,
+                fireemu_adapter_database::rest::NamespacesSnapshot::retained_bytes,
+            )
+    }
+}
+
 /// The session's users, credentials, codes and tokens -- captured as an
 /// [`AuthSnapshot`], which holds no TOTP secret material (`INV-AUTH-003`, ADR-034): enrolled
 /// TOTP factors are kept with a detached secret and rebound on restore to the secret the

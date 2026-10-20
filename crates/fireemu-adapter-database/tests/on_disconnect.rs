@@ -533,3 +533,29 @@ fn a_session_reset_drops_the_registrations_of_the_namespaces_it_clears() {
     assert!(db.drain_events().is_empty());
     assert_eq!(rest(&mut db, "GET", "/.json?ns=other", ""), r#"{"b":2}"#);
 }
+
+#[test]
+fn a_snapshot_restore_drops_the_registrations_of_the_namespaces_it_restores() {
+    // As a reset does: a connection from before the restore never writes into it when it ends.
+    let mut db = Database::new(RestOptions::default(), 1);
+    let owned = |ns: &str| fireemu_adapter_database::namespace::project_of(ns) == "demo";
+    let snapshot = db.capture_namespaces_where(owned);
+    let mut restored = open(&mut db, "demo-default-rtdb");
+    let mut kept = open(&mut db, "other");
+    send(
+        &mut db,
+        &mut restored,
+        &request(1, "o", r#"{"p":"/a","d":1}"#),
+    );
+    send(&mut db, &mut kept, &request(1, "o", r#"{"p":"/b","d":2}"#));
+    db.restore_namespaces_where(owned, &snapshot);
+    db.drain_events();
+    db.close_realtime(restored.client(), LATER);
+    db.close_realtime(kept.client(), LATER);
+    assert_eq!(
+        rest(&mut db, "GET", "/.json?ns=demo-default-rtdb", ""),
+        "null"
+    );
+    assert!(db.drain_events().is_empty());
+    assert_eq!(rest(&mut db, "GET", "/.json?ns=other", ""), r#"{"b":2}"#);
+}

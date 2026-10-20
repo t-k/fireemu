@@ -211,16 +211,39 @@ struct Lexer<'a> {
 }
 
 impl Lexer<'_> {
-    fn skip_space(&mut self) {
-        while self.at < self.chars.len() && self.chars[self.at].is_whitespace() {
-            self.at += 1;
+    /// Skips white space and comments, which JavaScript reads anywhere: `//` to the end of
+    /// the line and `/* … */`. A `/` followed by `/` or `*` never starts a regular expression.
+    fn skip_space(&mut self) -> Result<(), ExprError> {
+        loop {
+            match (self.chars.get(self.at), self.chars.get(self.at + 1)) {
+                (Some(c), _) if c.is_whitespace() => self.at += 1,
+                (Some('/'), Some('/')) => {
+                    while self
+                        .chars
+                        .get(self.at)
+                        .is_some_and(|c| !matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+                    {
+                        self.at += 1;
+                    }
+                }
+                (Some('/'), Some('*')) => {
+                    let body = self.at + 2;
+                    let end = (body..self.chars.len().saturating_sub(1))
+                        .find(|&i| self.chars[i] == '*' && self.chars[i + 1] == '/');
+                    let Some(end) = end else {
+                        return Err(ExprError::new(self.chars.len(), "unterminated comment"));
+                    };
+                    self.at = end + 2;
+                }
+                _ => return Ok(()),
+            }
         }
     }
 
     /// The next token and where it starts. `regex_allowed` is true where an operand is
     /// expected, so a `/` starts a regular expression there and divides elsewhere.
     fn next(&mut self, regex_allowed: bool) -> Result<(usize, Token), ExprError> {
-        self.skip_space();
+        self.skip_space()?;
         let start = self.at;
         let Some(&c) = self.chars.get(self.at) else {
             return Ok((start, Token::End));
@@ -499,6 +522,14 @@ fn check_whitespace_classes(pattern: &str) -> Result<(), &'static str> {
 /// open `{n}`, `{n,}` or `{n,m}` ("integer expected" or "expected '}'" where it stops). An
 /// escape such as `\p` is one character, so `\p{L}` is a count without its integer.
 fn check_groups_and_counts(pattern: &str) -> Result<(), String> {
+    regex_shape(pattern).map(|_| ())
+}
+
+/// Reads a pattern as the official emulator's grammar does (see [`check_groups_and_counts`])
+/// and answers whether an alternative starts with `|`, `)`, `*`, `+`, `?` or `{`, which that
+/// grammar reads as a literal character: `(a|))` is a group of `a` or `)`, and `(|a)` a group
+/// of `|a`. The scan keeps its own stack, so nesting costs no recursion.
+pub(crate) fn regex_shape(pattern: &str) -> Result<bool, String> {
     let (start, body) = match pattern.strip_prefix('^') {
         Some(body) => ("", body),
         None => (".*", pattern),
@@ -507,55 +538,153 @@ fn check_groups_and_counts(pattern: &str) -> Result<(), String> {
         Some(body) => (body, ""),
         None => (body, ".*"),
     };
-    let wrapped: Vec<char> = format!("{start}{body}{end}").chars().collect();
+    let chars: Vec<char> = format!("{start}{body}{end}").chars().collect();
+    if chars.is_empty() {
+        // `^$`: the empty string.
+        return Ok(false);
+    }
     let illegal = |what: String| Err(format!("Illegal regular expression, {what}"));
+    let mut literal_operator = false;
     let mut depth = 0usize;
     let mut i = 0;
-    while i < wrapped.len() {
-        match wrapped[i] {
-            '\\' => i += 1,
-            '[' => {
-                // A class ends at the first `]` after its first member.
-                i += 2;
-                while i < wrapped.len() && wrapped[i] != ']' {
-                    if wrapped[i] == '\\' {
-                        i += 1;
-                    }
+    // Whether the next character starts an alternative (and so is read as an atom whatever it
+    // is), as at the start and after `(` and `|`.
+    let mut alternative_start = true;
+    loop {
+        // One atom.
+        match chars.get(i) {
+            None => return illegal("unexpected end-of-string".to_owned()),
+            Some('[') => {
+                i += 1;
+                if chars.get(i) == Some(&'^') {
                     i += 1;
                 }
-            }
-            '(' => depth += 1,
-            ')' if depth == 0 => return illegal("end-of-string expected".to_owned()),
-            ')' => depth -= 1,
-            '{' => {
-                let digits = |from: usize| {
-                    let mut to = from;
-                    while wrapped.get(to).is_some_and(char::is_ascii_digit) {
-                        to += 1;
+                loop {
+                    i = class_member_end(&chars, i)?;
+                    if chars.get(i).is_none_or(|c| *c == ']') {
+                        break;
                     }
-                    to
-                };
+                }
+                if i >= chars.len() {
+                    return illegal(format!("expected ']' at position {i}"));
+                }
+                i += 1;
+            }
+            Some('(') if chars.get(i + 1) == Some(&')') => i += 2,
+            Some('(') => {
+                depth += 1;
+                i += 1;
+                alternative_start = true;
+                continue;
+            }
+            Some('\\') => {
+                if i + 1 >= chars.len() {
+                    return illegal("unexpected end-of-string".to_owned());
+                }
+                i += 2;
+            }
+            Some(c) => {
+                if alternative_start && matches!(c, '|' | ')' | '*' | '+' | '?' | '{') {
+                    literal_operator = true;
+                }
+                i += 1;
+            }
+        }
+        alternative_start = false;
+        // Its repetitions, then what follows: more of the concatenation, another alternative,
+        // the group's end (the group is an atom: its repetitions follow) or the pattern's.
+        loop {
+            i = repetitions_end(&chars, i)?;
+            match chars.get(i) {
+                None if depth == 0 => return Ok(literal_operator),
+                None => return illegal(format!("expected ')' at position {i}")),
+                Some('|') => {
+                    i += 1;
+                    alternative_start = true;
+                }
+                Some(')') if depth == 0 => return illegal("end-of-string expected".to_owned()),
+                Some(')') => {
+                    depth -= 1;
+                    i += 1;
+                    continue;
+                }
+                Some(_) => {}
+            }
+            break;
+        }
+    }
+}
+
+/// The end of the repetitions (`*`, `+`, `?`, `{n}`, `{n,}`, `{n,m}`) at `chars[i]`.
+fn repetitions_end(chars: &[char], mut i: usize) -> Result<usize, String> {
+    let digits = |from: usize| {
+        let mut to = from;
+        while chars.get(to).is_some_and(char::is_ascii_digit) {
+            to += 1;
+        }
+        to
+    };
+    while let Some(c) = chars.get(i) {
+        match c {
+            '*' | '+' | '?' => i += 1,
+            '{' => {
                 let after = digits(i + 1);
                 if after == i + 1 {
-                    return illegal(format!("integer expected at position {}", i + 1));
+                    return Err(format!(
+                        "Illegal regular expression, integer expected at position {}",
+                        i + 1
+                    ));
                 }
                 let mut at = after;
-                if wrapped.get(at) == Some(&',') {
+                if chars.get(at) == Some(&',') {
                     at = digits(at + 1);
                 }
-                if wrapped.get(at) != Some(&'}') {
-                    return illegal(format!("expected '}}' at position {at}"));
+                if chars.get(at) != Some(&'}') {
+                    return Err(format!(
+                        "Illegal regular expression, expected '}}' at position {at}"
+                    ));
                 }
-                i = at;
+                i = at + 1;
             }
-            _ => {}
+            _ => break,
         }
+    }
+    Ok(i)
+}
+
+/// The end of the class member at `chars[i]`, as the official emulator reads one: after a
+/// `\`, `d`, `s`, `w`, `D`, `S` or `W` names a class; otherwise one character follows, itself
+/// optionally escaped, so `\\]` is the character `]` there and does not close the class.
+/// `-` and a second character make a range, unless `]` follows the `-`.
+fn class_member_end(chars: &[char], mut i: usize) -> Result<usize, String> {
+    if chars.get(i) == Some(&'\\') {
+        i += 1;
+        if chars
+            .get(i)
+            .is_some_and(|c| matches!(c, 'd' | 's' | 'w' | 'D' | 'S' | 'W'))
+        {
+            return Ok(i + 1);
+        }
+    }
+    i = class_char_end(chars, i)?;
+    if chars.get(i) == Some(&'-') {
+        i += 1;
+        if chars.get(i) != Some(&']') {
+            i = class_char_end(chars, i)?;
+        }
+    }
+    Ok(i)
+}
+
+/// The end of one character of a class, which an optional `\` escapes.
+fn class_char_end(chars: &[char], mut i: usize) -> Result<usize, String> {
+    if chars.get(i) == Some(&'\\') {
         i += 1;
     }
-    if depth > 0 {
-        return illegal(format!("expected ')' at position {}", wrapped.len()));
+    if i >= chars.len() {
+        return Err("Illegal regular expression, unexpected end-of-string".to_owned());
     }
-    Ok(())
+    Ok(i + 1)
 }
 
 /// The anchors of a pattern, as the official emulator checks them: a final `$` is the end

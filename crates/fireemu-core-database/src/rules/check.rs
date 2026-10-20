@@ -405,7 +405,12 @@ impl CallSite<'_> {
             }
             "toLowerCase" | "toUpperCase" => self.arity(0).map(|()| Ty::Str),
             _ => {
-                self.arity(1)?;
+                if self.arguments.len() != 1 {
+                    return Err(ExprError::new(
+                        self.at,
+                        "matches() expects 1 regular expression literal argument.",
+                    ));
+                }
                 if self.types[0].is(&[Ty::Regex]) {
                     Ok(Ty::Bool)
                 } else {

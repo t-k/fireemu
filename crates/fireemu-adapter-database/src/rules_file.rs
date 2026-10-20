@@ -119,7 +119,8 @@ impl Reader {
                 self.line += 1;
                 self.column = 1;
             } else {
-                self.column += 1;
+                // Columns count UTF-16 units, as the official emulator (Java) counts them.
+                self.column += c.len_utf16();
             }
         }
     }

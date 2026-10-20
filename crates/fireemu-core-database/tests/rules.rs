@@ -188,6 +188,17 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
         r#""!('\\ude00\\ud83d'.length == 2)" : refused: 1:27: Unsupported javascript syntax."#,
         r#""!('A'.matches(/\\u0041/))" : read false, expected true"#,
         r#""!('A'.matches(/\\x41/))" : read false, expected true"#,
+        // `\W` and `\D` complement a language there; `i` is read only for ASCII patterns.
+        r#""'a'.matches(/^\\D$/)" : read false, expected true"#,
+        r#""'-'.matches(/^\\W$/)" : read false, expected true"#,
+        r#""'ａ'.matches(/^Ａ$/i)" : read false, expected true"#,
+        r#""'Ａ'.matches(/^ａ$/i)" : read false, expected true"#,
+        r#""'Ｃ'.matches(/^[ａ-ｚ]$/i)" : read false, expected true"#,
+        r#""'ｃ'.matches(/^[Ａ-Ｚ]$/i)" : read false, expected true"#,
+        r#""'ä'.matches(/^Ä$/i)" : read false, expected true"#,
+        r#""'-＄'.matches(/^\\W＄$/i)" : read false, expected true"#,
+        r#""'a＄'.matches(/^\\D＄$/i)" : read false, expected true"#,
+        r#""'A＄'.matches(/^a＄$/i)" : read false, expected true"#,
     ]
     .into_iter()
     .collect();

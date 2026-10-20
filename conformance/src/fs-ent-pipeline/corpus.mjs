@@ -996,6 +996,287 @@ const o4ComparisonProgram = {
   ],
 };
 
+// --- O-5: what PX1d still answers UNIMPLEMENTED, and which function names exist ---
+
+/** Document functions of collections whose name is not ASCII (the "lacks /" index counts UTF-16). */
+export const O5_NAMES = [
+  ["document-id-hiragana", fn("document_id", ref("あ"))],
+  ["parent-hiragana", fn("parent", ref("あ"))],
+  ["document-id-subcollection-hiragana", fn("document_id", ref("c/x/あ"))],
+  ["document-id-emoji", fn("document_id", ref("😀"))],
+  ["collection-id-accented", fn("collection_id", ref("é"))],
+];
+
+const o5NameProgram = {
+  id: "fs-ent-pipeline/o5/names",
+  seed: [["nm5/d", { i: int(1) }]],
+  steps: O5_NAMES.map(([label, expression]) =>
+    step(label, pipeline(collection("nm5"), select({ v: expression }))),
+  ),
+};
+
+/** Map keys that are not plain names, in a literal that holds an expression. */
+export const O5_LITERAL_KEYS = [
+  ["key-reserved-with-field", mapOf({ __x__: fld("i") })],
+  ["key-empty-with-field", mapOf({ "": fld("i") })],
+  ["key-type-with-field", mapOf({ __type__: fld("i") })],
+  ["key-dotted-with-function", mapOf({ "a.b": docId() })],
+  ["nested-key-name-with-field", mapOf({ a: mapOf({ __name__: fld("i") }) })],
+  ["array-of-map-reserved-key-with-field", list(mapOf({ __x__: fld("i") }))],
+];
+
+const o5LiteralKeyProgram = {
+  id: "fs-ent-pipeline/o5/literal-keys",
+  seed: [["lk5/d", { i: int(1) }]],
+  steps: O5_LITERAL_KEYS.map(([label, literal]) =>
+    step(label, pipeline(collection("lk5"), select({ v: literal }))),
+  ),
+};
+
+const fo5 = () => collection("fo5");
+
+/**
+ * Which check answers first: a function name that does not exist, a function's argument count,
+ * the empty select of an earlier stage and an argument's type.
+ */
+export const O5_FUNCTION_ORDER = [
+  ["select-unknown-function", [select({ v: fn("nope_fn") })]],
+  ["select-empty-name", [select({ v: fn("") })]],
+  ["select-capitalized-name", [select({ v: fn("Equal", fld("i"), int(1)) })]],
+  ["select-empty-then-where-arity", [select({}), stage("where", fn("add", fld("i")))]],
+  ["select-empty-then-where-type", [select({}), stage("where", fn("not", fld("i")))]],
+  ["select-empty-then-where-known-no-arguments", [select({}), stage("where", fn("equal"))]],
+  ["where-unknown-then-select-empty", [stage("where", fn("nope_fn")), select({})]],
+  ["select-arity-then-select-unknown", [select({ v: fn("add") }), select({ v: fn("nope_fn") })]],
+  ["select-arity-before-unknown", [select({ a: fn("add"), b: fn("nope_fn") })]],
+  ["select-unknown-before-arity", [select({ a: fn("nope_fn"), b: fn("add") })]],
+  ["unknown-as-first-argument", [select({ v: fn("equal", fn("nope_fn"), fld("i")) })]],
+  ["arity-around-unknown-argument", [select({ v: fn("add", fn("nope_fn")) })]],
+  ["unknown-in-array-literal", [select({ v: list(fn("nope_fn")) })]],
+];
+
+const o5FunctionOrderProgram = {
+  id: "fs-ent-pipeline/o5/function-order",
+  seed: [["fo5/d", { i: int(1) }]],
+  steps: O5_FUNCTION_ORDER.map(([label, stages]) => step(label, pipeline(fo5(), ...stages))),
+};
+
+/**
+ * Every function name of the official emulator 1.22.0's registry
+ * (cloud/datastore/catalog/function/function_registry.binarypb in its jar: names and their
+ * operator spellings), then the names @firebase/firestore 4.17.1 sends that the registry lacks.
+ */
+export const O5_FUNCTION_NAMES = [
+  "get_field",
+  "offset",
+  "row",
+  "make_struct",
+  "struct_get",
+  "count",
+  "count_if",
+  "count_distinct",
+  "sum",
+  "average",
+  "minimum",
+  "maximum",
+  "first",
+  "last",
+  "array_agg",
+  "array_agg_distinct",
+  "logical_or",
+  "negate",
+  "-",
+  "add",
+  "+",
+  "subtract",
+  "multiply",
+  "*",
+  "divide",
+  "/",
+  "mod",
+  "%",
+  "bit_not",
+  "~",
+  "bit_left_shift",
+  "<<",
+  "bit_right_shift",
+  ">>",
+  "rand",
+  "abs",
+  "ceil",
+  "floor",
+  "round",
+  "pow",
+  "sqrt",
+  "log",
+  "ln",
+  "log10",
+  "exp",
+  "trunc",
+  "array",
+  "array_length",
+  "array_concat",
+  "join",
+  "array_contains",
+  "array_contains_any",
+  "array_contains_all",
+  "array_get",
+  "array_transform",
+  "array_filter",
+  "array_reverse",
+  "array_slice",
+  "array_first",
+  "array_first_n",
+  "array_last",
+  "array_last_n",
+  "maximum_n",
+  "minimum_n",
+  "array_index_of",
+  "array_index_of_all",
+  "less_than",
+  "<",
+  "less_than_or_equal",
+  "<=",
+  "equal",
+  "==",
+  "not_equal",
+  "!=",
+  "greater_than",
+  ">",
+  "greater_than_or_equal",
+  ">=",
+  "orders_after",
+  "cmp",
+  "current_document",
+  "is_error",
+  "if_error",
+  "if_absent",
+  "exists",
+  "is_absent",
+  "list_shredded_fields",
+  "error",
+  "reverse",
+  "concat",
+  "length",
+  "storage_size",
+  "and",
+  "AND",
+  "or",
+  "OR",
+  "xor",
+  "XOR",
+  "nor",
+  "not",
+  "NOT",
+  "conditional",
+  "switch_on",
+  "switch",
+  "equal_any",
+  "not_equal_any",
+  "if_null",
+  "coalesce",
+  "map",
+  "map_get",
+  "map_set",
+  "map_remove",
+  "map_merge",
+  "mask",
+  "map_keys",
+  "map_values",
+  "map_entries",
+  "namespace",
+  "parent",
+  "collection_id",
+  "document_id",
+  "has_ancestor",
+  "opaque_document_id",
+  "reference_slice",
+  "autogen_document_id",
+  "replace_document_id",
+  "document_matches",
+  "matches",
+  "score",
+  "snippet",
+  "geo_distance",
+  "search_field",
+  "to_row_id",
+  "string_concat",
+  "like",
+  "regex_contains",
+  "regex_match",
+  "regex_find",
+  "regex_find_all",
+  "to_lower",
+  "to_upper",
+  "char_length",
+  "byte_length",
+  "starts_with",
+  "ends_with",
+  "string_reverse",
+  "string_repeat",
+  "string_replace_all",
+  "string_replace_one",
+  "substring",
+  "string_contains",
+  "trim",
+  "ltrim",
+  "rtrim",
+  "split",
+  "string_index_of",
+  "current_timestamp",
+  "unix_micros_to_timestamp",
+  "unix_millis_to_timestamp",
+  "unix_seconds_to_timestamp",
+  "timestamp_to_unix_micros",
+  "timestamp_to_unix_millis",
+  "timestamp_to_unix_seconds",
+  "timestamp_add",
+  "timestamp_subtract",
+  "timestamp_trunc",
+  "timestamp_extract",
+  "timestamp_diff",
+  "type",
+  "is_type",
+  "euclidean_distance",
+  "cosine_distance",
+  "manhattan_distance",
+  "dot_product",
+  "vector_length",
+  "between",
+  "eq_any",
+  "is_nan",
+  "is_null",
+];
+/** Names whose call without arguments answers a value that changes between runs. */
+const O5_RANDOM_FUNCTIONS = new Set(["rand", "autogen_document_id", "current_timestamp"]);
+
+/** A step id for any function name: the name itself, or its code points when it is not plain. */
+export const functionNameStep = (name) =>
+  name === ""
+    ? "fn-empty"
+    : /^[a-z0-9_]+$/.test(name)
+      ? `fn-${name}`
+      : `fn-u${[...name].map((c) => c.codePointAt(0).toString(16)).join("-")}`;
+
+/**
+ * Each name called with no argument: an unknown name answers that it does not exist and a known
+ * one its argument count (or its value), so the rows give production's function list. The names
+ * whose value is random take one argument instead, to answer the argument count.
+ */
+const o5FunctionNameProgram = {
+  id: "fs-ent-pipeline/o5/function-names",
+  seed: [["fx5/d", { i: int(1) }]],
+  steps: O5_FUNCTION_NAMES.map((name) =>
+    step(
+      functionNameStep(name),
+      pipeline(
+        collection("fx5"),
+        select({ v: O5_RANDOM_FUNCTIONS.has(name) ? fn(name, fld("i")) : fn(name) }),
+      ),
+    ),
+  ),
+};
+
 export const PROGRAMS = [
   expressionProgram,
   whereProgram,
@@ -1017,4 +1298,8 @@ export const PROGRAMS = [
   o4FunctionProgram,
   o4DocumentProgram,
   o4ComparisonProgram,
+  o5NameProgram,
+  o5LiteralKeyProgram,
+  o5FunctionOrderProgram,
+  o5FunctionNameProgram,
 ];

@@ -141,7 +141,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 384);
+  assert.equal(requests, 587);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get"]);
   // The only writes are single-document commits into the program's own collection: the order
@@ -200,7 +200,7 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
       await import("node:fs/promises")
     ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
-  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[234]\//.test(p.id));
+  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[2345]\//.test(p.id));
   assert.equal(o1.length, 6);
   for (const program of o1) {
     assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
@@ -385,7 +385,7 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS) {
+  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o5/"))) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
   for (const program of o3) {
@@ -496,7 +496,7 @@ test("O-4 records only its seven new programs, comparisons last, within its requ
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS) {
+  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o5/"))) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
   // O-4 recorded under the request layer that recorded O-1 (2026-10-20).
@@ -797,4 +797,107 @@ test("a seed commit is a reviewed single-document write into the named database"
   guardRestRequest(request, ctx);
   assert.throws(() => seedCommit("seed-x", "/abs/d", fields), /relative/);
   assert.throws(() => seedCommit("seed-x", "odd", fields), /document path/);
+});
+
+test("O-5 records only its four new programs, within its request cap: 2 x (203 + 60) + 5", async () => {
+  const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const {
+    O5_FUNCTION_NAMES,
+    O5_FUNCTION_ORDER,
+    O5_LITERAL_KEYS,
+    O5_NAMES,
+    functionNameStep,
+    seedHoldsVector,
+  } = await import("./fs-ent-pipeline/corpus.mjs");
+  const o5 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o5/");
+  assert.deepEqual(
+    o5.map((p) => p.id),
+    [
+      "fs-ent-pipeline/o5/names",
+      "fs-ent-pipeline/o5/literal-keys",
+      "fs-ent-pipeline/o5/function-order",
+      "fs-ent-pipeline/o5/function-names",
+    ],
+  );
+  assert.deepEqual(
+    o5.map((p) => p.steps.length),
+    [O5_NAMES.length, O5_LITERAL_KEYS.length, O5_FUNCTION_ORDER.length, O5_FUNCTION_NAMES.length],
+  );
+  assert.deepEqual([O5_NAMES.length, O5_LITERAL_KEYS.length, O5_FUNCTION_ORDER.length], [5, 6, 13]);
+  // Reads only: every step is a REST executePipeline in the program's own collection, and each
+  // program seeds one document without a vector through the harness.
+  for (const program of o5) {
+    assert.equal(program.seed.length, 1, program.id);
+    assert.equal(seedHoldsVector(program), false, program.id);
+    const own = program.seed[0][0].split("/")[0];
+    for (const s of program.steps) {
+      assert.equal(s.rpc, "executePipeline", `${program.id}#${s.id}`);
+      assert.equal(s.transport, undefined, `${program.id}#${s.id}`);
+      const [first] = s.body.structuredPipeline.pipeline.stages;
+      assert.deepEqual(first, { name: "collection", args: [{ referenceValue: `/${own}` }] });
+    }
+  }
+  assert.deepEqual(ceilings(o5), { maxRequests: 203, maxHarnessRequests: 60 });
+  const worst = 1 + 2 + 2 * (203 + 60) + 2;
+  assert.equal(worst, 531);
+  // O-5 is not recorded yet; the earlier programs keep their recorded digests.
+  const recorded = JSON.parse(
+    await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  ).programs;
+  for (const program of o5) assert.equal(recorded[program.id], undefined, program.id);
+  for (const program of PROGRAMS.filter((p) => !o5.includes(p))) {
+    assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
+  }
+});
+
+test("the O-5 name sweep calls every registry and SDK name once, each under its own step", async () => {
+  const { O5_FUNCTION_NAMES, functionNameStep } = await import("./fs-ent-pipeline/corpus.mjs");
+  const sweep = PROGRAMS.find((p) => p.id === "fs-ent-pipeline/o5/function-names");
+  assert.equal(new Set(O5_FUNCTION_NAMES).size, O5_FUNCTION_NAMES.length);
+  assert.equal(O5_FUNCTION_NAMES.length, 179);
+  // The registry's operator spellings, the names the official emulator does not know and the
+  // names only the SDK sends are all in the sweep; so are the names fireemu runs.
+  for (const name of [
+    "+",
+    "==",
+    "AND",
+    "<<",
+    "switch",
+    "score",
+    "geo_distance",
+    "count",
+    "logical_or",
+    "between",
+    "eq_any",
+    "is_nan",
+    "is_null",
+    "equal",
+    "document_id",
+    "map",
+    "array",
+  ]) {
+    assert.ok(O5_FUNCTION_NAMES.includes(name), name);
+  }
+  // Step ids are unique, plain, and map back to their name.
+  const ids = O5_FUNCTION_NAMES.map(functionNameStep);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const id of ids) assert.match(id, /^fn-[a-z0-9_-]+$/);
+  assert.equal(functionNameStep(""), "fn-empty");
+  assert.equal(functionNameStep("add"), "fn-add");
+  assert.equal(functionNameStep("<="), "fn-u3c-3d");
+  assert.equal(functionNameStep("AND"), "fn-u41-4e-44");
+  assert.deepEqual(
+    sweep.steps.map((s) => s.id),
+    ids,
+  );
+  // Each step selects one call of its name: no argument, except the names whose value is random,
+  // which take one so that production answers their argument count.
+  for (const [index, s] of sweep.steps.entries()) {
+    const [, selectStage] = s.body.structuredPipeline.pipeline.stages;
+    const call = selectStage.args[0].mapValue.fields.v.functionValue;
+    assert.equal(call.name, O5_FUNCTION_NAMES[index]);
+    const random = ["rand", "autogen_document_id", "current_timestamp"].includes(call.name);
+    assert.deepEqual(call.args, random ? [{ fieldReferenceValue: "i" }] : [], call.name);
+  }
 });

@@ -211,7 +211,7 @@ test("a partial recording that cannot be written still returns the outcome for m
       lane,
       secrets: () => [],
       write: async (path, ...rest) => {
-        if (String(path).endsWith(".partial.json")) {
+        if (/recording-\d\.partial\.json$/.test(String(path))) {
           throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
         }
         return writeFile(path, ...rest);
@@ -224,6 +224,8 @@ test("a partial recording that cannot be written still returns the outcome for m
     assert.equal(out.outcome, "aborted-fatal");
     assert.match(out.error, /harness seed answered 400/);
     assert.match(out.error, /partial recording not written: ENOSPC/);
+    // The partial fixture is derived from the partial recording, so it is not written either.
+    assert.doesNotMatch(out.error, /partial fixture/);
     // The partial recording still counts toward the ledger's requests.
     assert.equal(out.recordings.length, 2);
     assert.equal(existsSync(join(runDir, "recording-1.json")), true);

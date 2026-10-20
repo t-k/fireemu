@@ -1642,6 +1642,41 @@ fn a_realtime_database_file_name_is_lowercased_into_its_namespace() {
     assert!(log.contains(r#"{"a":1}"#), "{log}");
 }
 
+/// An import is a write, so a server timestamp in it takes the suite's clock in milliseconds.
+#[cfg(unix)]
+#[test]
+fn a_realtime_database_import_resolves_server_timestamps_in_milliseconds() {
+    let dir = scratch("rtdb-timestamp");
+    let export = database_export_dir(&dir, &[("stamped.json", r#"{"t":{".sv":"timestamp"}}"#)]);
+    let probe = r#"printf 'stamp '; curl -s -H "Authorization: Bearer owner" "http://$FIREBASE_DATABASE_EMULATOR_HOST/t.json?ns=stamped"; echo"#;
+    let millis = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    };
+
+    let before = millis();
+    let output = exec()
+        .args(["--only", "database", "--database-port", "0", "--import"])
+        .arg(&export)
+        .args(["--", "/bin/sh", "-c", probe])
+        .output()
+        .unwrap();
+    let after = millis();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    let stamp: u128 = log
+        .lines()
+        .find_map(|line| line.strip_prefix("stamp "))
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or_else(|| panic!("{log}"));
+    assert!(
+        (before..=after).contains(&stamp),
+        "{before} <= {stamp} <= {after}"
+    );
+}
+
 #[test]
 fn a_realtime_database_file_that_is_not_json_refuses_the_import() {
     let dir = scratch("rtdb-bad-json");

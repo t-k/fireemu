@@ -1516,6 +1516,62 @@ mod tests {
     /// populated store and zero for a part that is not its shape, so the session byte budget
     /// counts the Auth part and never miscounts a foreign one.
     #[test]
+    fn the_database_hook_names_its_part_and_refuses_a_foreign_or_poisoned_one() {
+        use fireemu_adapter_database::rest::{Database, RestOptions};
+        use std::sync::{Arc, Mutex};
+
+        let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 1)));
+        let hook = super::RealtimeDatabase(database.clone());
+        let scope = Scope::Project("demo-app".to_owned());
+        assert_eq!(hook.name(), "database");
+        let part = hook.capture(&scope).expect("capture");
+        hook.validate(&scope, &part).expect("its own part");
+
+        let foreign: super::SnapshotPart = Arc::new(7u8);
+        let refused = hook.validate(&scope, &foreign).unwrap_err();
+        assert_eq!(refused.part, "database");
+        assert_eq!(refused.message, "the captured part is not this hook's");
+
+        let poisoner = database.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.lock().unwrap();
+            panic!("poison the database");
+        })
+        .join();
+        let refused = hook.validate(&scope, &part).unwrap_err();
+        assert_eq!(refused.part, "database");
+        assert_eq!(refused.message, "the Realtime Database is poisoned");
+    }
+
+    #[test]
+    fn the_database_hook_counts_the_owned_namespaces_in_the_retained_bytes() {
+        use fireemu_adapter_database::rest::{Database, NamespacesSnapshot, RestOptions};
+        use std::sync::{Arc, Mutex};
+
+        let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 1)));
+        let hook = super::RealtimeDatabase(database.clone());
+        let scope = Scope::Project("demo-app".to_owned());
+        let empty = hook.capture(&scope).expect("capture");
+        assert_eq!(hook.retained_bytes(&empty), 0);
+
+        database
+            .lock()
+            .unwrap()
+            .import_text("demo-app-default-rtdb", r#"{"a":"text"}"#, 0)
+            .unwrap();
+        let part = hook.capture(&scope).expect("capture");
+        let expected = part
+            .downcast_ref::<NamespacesSnapshot>()
+            .map(NamespacesSnapshot::retained_bytes)
+            .unwrap();
+        assert!(expected > 1, "{expected}");
+        assert_eq!(hook.retained_bytes(&part), expected);
+
+        let foreign: super::SnapshotPart = Arc::new(7u8);
+        assert_eq!(hook.retained_bytes(&foreign), 0);
+    }
+
+    #[test]
     fn the_auth_hook_estimates_retained_bytes_and_ignores_a_foreign_part() {
         use fireemu_core_auth::mfa::TotpPolicy;
         use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};

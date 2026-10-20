@@ -2780,6 +2780,15 @@ fn read_database_section(
     dir: &Path,
     section: &Section,
 ) -> Result<Vec<(String, String)>, ArtifactError> {
+    read_database_section_within(dir, section, IMPORT_DATABASE_BYTES_LIMIT)
+}
+
+/// [`read_database_section`] with `limit` bytes for all files together.
+fn read_database_section_within(
+    dir: &Path,
+    section: &Section,
+    limit: u64,
+) -> Result<Vec<(String, String)>, ArtifactError> {
     let section_dir = dir.join(&section.path);
     ensure_directory_inside(dir, &section_dir)
         .map_err(|e| ArtifactError::new("database", &section_dir, e))?;
@@ -2811,15 +2820,15 @@ fn read_database_section(
         files.push((namespace, path));
     }
     files.sort();
-    let mut remaining_bytes = IMPORT_DATABASE_BYTES_LIMIT;
+    let mut remaining_bytes = limit;
     let mut namespaces = Vec::with_capacity(files.len());
     for (namespace, path) in files {
         let text = read_text_inside_budgeted(
             dir,
             &path,
             &mut remaining_bytes,
-            IMPORT_DATABASE_BYTES_LIMIT,
-            IMPORT_DATABASE_BYTES_LIMIT,
+            limit,
+            limit,
             "Realtime Database files",
         )
         .map_err(|e| ArtifactError::new("database", &path, e))?;
@@ -5202,6 +5211,41 @@ mod tests {
     #[cfg(unix)]
     fn budget_dir(name: &str) -> TrustedTempDir {
         TrustedTempDir::new(&format!("import-budget-{name}"))
+    }
+
+    /// The Realtime Database files share one budget: 1 GiB, as the Storage and Firestore
+    /// sections do. A budget the files fit is read; one byte less refuses the section.
+    #[cfg(unix)]
+    #[test]
+    fn the_realtime_database_files_share_one_byte_budget() {
+        assert_eq!(super::IMPORT_DATABASE_BYTES_LIMIT, 1 << 30);
+        let root = budget_dir("database");
+        let section_dir = root.path().join("database_export");
+        std::fs::create_dir_all(&section_dir).unwrap();
+        std::fs::write(section_dir.join("a.json"), r#"{"x":1}"#).unwrap();
+        std::fs::write(section_dir.join("b.json"), r#"{"y":2}"#).unwrap();
+        std::fs::write(section_dir.join("notes.txt"), "ignored").unwrap();
+        let section = fireemu_core_export::metadata::Section {
+            version: "4.11.2".to_owned(),
+            path: "database_export".to_owned(),
+            metadata_file: None,
+        };
+        let read = super::read_database_section_within(root.path(), &section, 14).unwrap();
+        assert_eq!(
+            read,
+            vec![
+                ("a".to_owned(), r#"{"x":1}"#.to_owned()),
+                ("b".to_owned(), r#"{"y":2}"#.to_owned())
+            ]
+        );
+        let refused = super::read_database_section_within(root.path(), &section, 13)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused
+                .contains("the Realtime Database files exceed the 13 byte cumulative import limit"),
+            "{refused}"
+        );
     }
 
     #[test]

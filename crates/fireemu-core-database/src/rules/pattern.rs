@@ -39,8 +39,7 @@ impl Pattern {
             || text.contains("[[:")
             || escapes_a_letter(&text)
             || escapes_a_backslash_in_a_class(&text)
-            || super::parse::regex_shape(&text) != Ok(false)
-            || repeats_the_search_prefix(&text);
+            || super::parse::regex_shape(&text) != Ok(false);
         let search = (!dialect_only)
             .then(|| {
                 let source = if flags.contains('i') {
@@ -137,13 +136,6 @@ fn escapes_a_backslash_in_a_class(text: &str) -> bool {
         i += 1;
     }
     false
-}
-
-/// Whether an unanchored pattern starts with a repetition. The official emulator searches by
-/// writing `.*` before such a pattern, so `/{2}/` repeats that `.*` and matches anything; here
-/// the search is a separate group.
-fn repeats_the_search_prefix(text: &str) -> bool {
-    text.starts_with(['*', '+', '?', '{'])
 }
 
 /// Whether an unescaped `(` is followed by `?`.
@@ -327,19 +319,140 @@ fn push_ranges(out: &mut String, ranges: &[(char, char)]) {
     }
 }
 
+/// The search as the official emulator writes it: `.*` before a pattern that does not start
+/// with `^` and after one that does not end with `$`, joined as text, so the first and last
+/// alternatives take them (`/a|q/` is `.*a|q.*`) and a leading repetition repeats the `.*`.
+/// Its quantifiers then read as there (see [`nest_quantifiers`]).
 fn search_source(text: &str) -> String {
-    // `.` matches any character, a newline included.
-    let mut source = String::from("(?s)");
+    let mut body = String::new();
     if !text.starts_with('^') {
-        source.push_str("(?s:.)*?");
+        body.push_str(ANY_RUN);
     }
-    source.push_str("(?:");
-    source.push_str(text);
-    source.push(')');
+    body.push_str(text);
     if !text.ends_with('$') {
-        source.push_str("(?s:.)*");
+        body.push_str(ANY_RUN);
     }
-    source
+    // `.` matches any character, a newline included.
+    format!("(?s){}", nest_quantifiers(&body))
+}
+
+/// Any run of characters, newlines included.
+const ANY_RUN: &str = "(?s:.)*";
+
+/// The pattern with every quantifier that follows another one applied to the repetition before
+/// it, as the official emulator reads it: it has no lazy or possessive forms, so `a+?` is
+/// `(?:a+)?`, `a**` is `(?:a*)*` and `a{2}{2}` is `(?:a{2}){2}`. A `{` that does not open a
+/// count is a character. Groups this text opens itself (`(?:`, `(?s:`) are groups.
+fn nest_quantifiers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 8);
+    // Where each open group starts in `out`, and where the last atom starts.
+    let mut groups: Vec<usize> = Vec::new();
+    let mut atom: Option<usize> = None;
+    let mut quantified = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let quantifier_end = match chars[i] {
+            '*' | '+' | '?' => Some(i + 1),
+            '{' => count_end(&chars, i),
+            _ => None,
+        };
+        if let (Some(end), Some(start)) = (quantifier_end, atom) {
+            if quantified {
+                out.insert_str(start, "(?:");
+                out.push(')');
+            }
+            out.extend(&chars[i..end]);
+            quantified = true;
+            i = end;
+            continue;
+        }
+        quantified = false;
+        let start = out.len();
+        match chars[i] {
+            '\\' => {
+                out.extend(chars.get(i..(i + 2).min(chars.len())).into_iter().flatten());
+                i += 2;
+                atom = Some(start);
+            }
+            '[' => {
+                let end = class_end(&chars, i);
+                out.extend(&chars[i..end]);
+                i = end;
+                atom = Some(start);
+            }
+            '(' => {
+                groups.push(start);
+                out.push('(');
+                i += 1;
+                // This text's own non-capturing and flag groups.
+                if chars.get(i) == Some(&'?') {
+                    while let Some(&c) = chars.get(i) {
+                        out.push(c);
+                        i += 1;
+                        if c == ':' {
+                            break;
+                        }
+                    }
+                }
+                atom = None;
+            }
+            ')' => {
+                out.push(')');
+                i += 1;
+                atom = groups.pop();
+            }
+            '|' => {
+                out.push('|');
+                i += 1;
+                atom = None;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+                atom = Some(start);
+            }
+        }
+    }
+    out
+}
+
+/// The end of the count `{n}`, `{n,}` or `{n,m}` that starts at `chars[i]`, if it is one.
+fn count_end(chars: &[char], i: usize) -> Option<usize> {
+    let digits = |from: usize| {
+        let mut to = from;
+        while chars.get(to).is_some_and(char::is_ascii_digit) {
+            to += 1;
+        }
+        to
+    };
+    let mut at = digits(i + 1);
+    if at == i + 1 {
+        return None;
+    }
+    if chars.get(at) == Some(&',') {
+        at = digits(at + 1);
+    }
+    (chars.get(at) == Some(&'}')).then_some(at + 1)
+}
+
+/// The end of the class that starts at `chars[i]` (`[`): its first member, `]` included, is
+/// always a member, and escapes are pairs.
+fn class_end(chars: &[char], i: usize) -> usize {
+    let mut at = i + 1;
+    if chars.get(at) == Some(&'^') {
+        at += 1;
+    }
+    let mut first = true;
+    while let Some(&c) = chars.get(at) {
+        match c {
+            '\\' => at += 2,
+            ']' if !first => return at + 1,
+            _ => at += 1,
+        }
+        first = false;
+    }
+    chars.len()
 }
 
 #[cfg(test)]
@@ -360,7 +473,6 @@ mod tests {
             (r"^\n$", "\n"),
             (r"^\1$", "1"),
             (r"^\b$", "b"),
-            ("^a**$", "a"),
         ] {
             assert_eq!(matches(text, subject), None, "{text}");
         }
@@ -494,10 +606,6 @@ mod tests {
         ] {
             assert_eq!(matches(text, "a"), None, "{text}");
         }
-        // An unanchored pattern that starts with a repetition repeats the search's `.*` there.
-        for text in ["{2}", "+a", "?a", "{1,2}b"] {
-            assert_eq!(matches(text, "a"), None, "{text}");
-        }
         // An empty group and an unanchored trailing `|` are read alike.
         assert_eq!(matches("^x()$", "x"), Some(true));
         assert_eq!(matches("a|", "zz"), Some(true));
@@ -539,6 +647,66 @@ mod tests {
         // A class escape as a range endpoint is not folded (the official emulator ends the
         // member at the escape).
         assert_eq!(matches_i(r"^[\d-z]$", "5"), None);
+    }
+
+    #[test]
+    fn a_quantifier_after_a_quantifier_applies_to_the_repetition() {
+        // The official emulator has no lazy quantifiers: `a+?` is `(a+)?`, and every further
+        // quantifier repeats what comes before it.
+        for (text, subject, expected) in [
+            ("^a+?$", "", true),
+            ("^a+?$", "aa", true),
+            ("^a*?$", "", true),
+            ("^a??$", "a", true),
+            ("^a??$", "aa", false),
+            ("^a{2}?$", "", true),
+            ("^a{2}?$", "a", false),
+            ("^(ab){2}?$", "", true),
+            ("^(ab){2}?$", "ab", false),
+            ("^a{1,2}?$", "", true),
+            ("^a+?b$", "b", true),
+            ("a+?b", "b", true),
+            ("^a**$", "aaa", true),
+            ("^a+*$", "", true),
+            ("^a{2}+$", "aaaa", true),
+            ("^a{2}+$", "aaa", false),
+            ("^a{2}{2}$", "aaaa", true),
+            ("^a{2}{2}$", "aa", false),
+            ("^x(ab)+?$", "x", true),
+        ] {
+            assert_eq!(matches(text, subject), Some(expected), "{text} {subject:?}");
+        }
+        assert_eq!(matches_i("^[A-z]+?$", ""), Some(true));
+    }
+
+    #[test]
+    fn the_search_wraps_the_outer_alternatives_only() {
+        // `.*` is written before and after the pattern, so `/a|q/` is `.*a|q.*` there.
+        for (text, subject, expected) in [
+            ("a|q", "ab", false),
+            ("a|q", "ba", true),
+            ("a|q", "qa", true),
+            ("a|q", "aq", false),
+            ("a|q$", "aq", false),
+            ("a|q$", "xa", true),
+            ("^a|q", "ax", false),
+            ("^a|q", "qx", true),
+            ("a|b|c", "xbx", false),
+            ("a|b|c", "xa", true),
+            ("a|b|c", "cx", true),
+            ("(x|y)a|c", "yax", false),
+            ("(a|b)|c", "xab", true),
+            ("^..|q", "*{z", false),
+            ("a|", "zz", true),
+            ("b", "abc", true),
+        ] {
+            assert_eq!(matches(text, subject), Some(expected), "{text} {subject:?}");
+        }
+        assert_eq!(matches_i("[a-]|[a-z]!", "aK"), Some(false));
+        // A pattern that starts with a repetition repeats that `.*`.
+        assert_eq!(matches("{2}", "a"), Some(true));
+        assert_eq!(matches("+a", "xa"), Some(true));
+        assert_eq!(matches("?a", "b"), Some(false));
     }
 
     #[test]

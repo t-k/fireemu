@@ -211,12 +211,12 @@ struct Lexer<'a> {
 }
 
 impl Lexer<'_> {
-    /// Skips white space and comments, which JavaScript reads anywhere: `//` to the end of
+    /// Skips white space (see [`is_space`]) and comments, which JavaScript reads anywhere: `//` to the end of
     /// the line and `/* … */`. A `/` followed by `/` or `*` never starts a regular expression.
     fn skip_space(&mut self) -> Result<(), ExprError> {
         loop {
             match (self.chars.get(self.at), self.chars.get(self.at + 1)) {
-                (Some(c), _) if c.is_whitespace() => self.at += 1,
+                (Some(&c), _) if is_space(c) => self.at += 1,
                 (Some('/'), Some('/')) => {
                     while self
                         .chars
@@ -262,6 +262,9 @@ impl Lexer<'_> {
             while let Some(&c) = self.chars.get(self.at) {
                 if c.is_alphanumeric() || c == '_' || c == '$' {
                     name.push(c);
+                    self.at += 1;
+                } else if is_format(c) {
+                    // Dropped from the name (`tr\u{200b}ue` is `true`).
                     self.at += 1;
                 } else {
                     break;
@@ -463,9 +466,16 @@ impl Lexer<'_> {
                 ));
             };
             self.at += 1;
+            if is_format(c) {
+                // Dropped from the pattern, as there.
+                continue;
+            }
             match c {
                 '\\' => {
                     pattern.push(c);
+                    while self.chars.get(self.at).copied().is_some_and(is_format) {
+                        self.at += 1;
+                    }
                     let Some(&next) = self.chars.get(self.at) else {
                         return Err(ExprError::new(
                             self.chars.len(),
@@ -497,8 +507,9 @@ impl Lexer<'_> {
             }
         }
         check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
-        check_whitespace_classes(&pattern).map_err(|message| ExprError::new(start, message))?;
+        // The grammar's errors come first there; `\s` fails when the automaton is built.
         check_groups_and_counts(&pattern).map_err(|message| ExprError::new(start, message))?;
+        check_whitespace_classes(&pattern).map_err(|message| ExprError::new(start, message))?;
         Ok((start, Token::Regex(pattern, flags)))
     }
 }
@@ -513,6 +524,37 @@ fn check_whitespace_classes(pattern: &str) -> Result<(), &'static str> {
         }
     }
     Ok(())
+}
+
+/// Whether `c` separates tokens as on the official emulator (recorded 2026-10-21): Unicode
+/// white space and line terminators except U+0085, which it reads as part of a name, U+FEFF,
+/// and the format characters it skips (see [`is_format`]).
+fn is_space(c: char) -> bool {
+    (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}' || is_format(c)
+}
+
+/// The format characters (Unicode category Cf) the official emulator's JavaScript reader
+/// drops from names and regular-expression literals and skips between tokens (recorded
+/// 2026-10-21 on Java 21; a string literal keeps them, and U+FEFF is only white space there).
+/// The reader works on UTF-16 units, so no character outside the Basic Multilingual Plane is
+/// one: those are refused, as there. This is Java 21's list of Cf characters in that plane.
+fn is_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61c}'
+            | '\u{6dd}'
+            | '\u{70f}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{fff9}'..='\u{fffb}'
+    )
 }
 
 /// The groups and counted repetitions of a pattern, as the official emulator checks them. It

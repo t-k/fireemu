@@ -344,6 +344,7 @@ impl Database {
         parsed: Option<ParsedBody>,
         now_millis: i64,
     ) -> Result<Handled, Refusal> {
+        request::check_escapes(&request.target)?;
         let method = request
             .header("X-HTTP-Method-Override")
             .unwrap_or(&request.method)

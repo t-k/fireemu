@@ -11,6 +11,7 @@ description = "Realtime Database REST and streaming (SSE) transport over the dat
 [dependencies]
 fireemu-adapter-support = { path = "../fireemu-adapter-support" }
 fireemu-core-database = { path = "../fireemu-core-database" }
+fireemu-core-types = { path = "../fireemu-core-types" }
 serde_json.workspace = true
 bytes = "1"
 http-body-util = "0.1"

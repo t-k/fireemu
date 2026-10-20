@@ -1126,6 +1126,73 @@ fn strict_answers_a_refusal_only_when_no_other_part_is_unobserved() {
             strict: None,
             emulator: (400, empty_alias),
         },
+        // Stages out of the subset's order or repeated, beside a recorded refusal.
+        Case {
+            label: "select {\"\": i} then where(equal(i, 1))",
+            stages: vec![
+                stage("select", vec![map(vec![("", field("i"))])]),
+                stage("where", vec![func("equal", vec![field("i"), int(1)])]),
+            ],
+            strict: None,
+            emulator: (400, empty_alias),
+        },
+        Case {
+            label: "where(equal(i, [i])) twice",
+            stages: vec![
+                stage(
+                    "where",
+                    vec![func(
+                        "equal",
+                        vec![
+                            field("i"),
+                            json!({ "arrayValue": { "values": [field("i")] } }),
+                        ],
+                    )],
+                ),
+                stage("where", vec![func("equal", vec![field("i"), int(1)])]),
+            ],
+            strict: None,
+            emulator: (400, literal_text),
+        },
+        Case {
+            label: "select {\"\": i} then limit 1 twice",
+            stages: vec![
+                stage("select", vec![map(vec![("", field("i"))])]),
+                stage("limit", vec![int(1)]),
+                stage("limit", vec![int(1)]),
+            ],
+            strict: None,
+            emulator: (400, empty_alias),
+        },
+        Case {
+            label: "select {\"\": i} then limit 1 then offset 1",
+            stages: vec![
+                stage("select", vec![map(vec![("", field("i"))])]),
+                stage("limit", vec![int(1)]),
+                stage("offset", vec![int(1)]),
+            ],
+            strict: None,
+            emulator: (400, empty_alias),
+        },
+        Case {
+            label: "select {\"\": i} then offset 1 then limit 1",
+            stages: vec![
+                stage("select", vec![map(vec![("", field("i"))])]),
+                stage("offset", vec![int(1)]),
+                stage("limit", vec![int(1)]),
+            ],
+            strict: Some((400, empty_alias)),
+            emulator: (400, empty_alias),
+        },
+        Case {
+            label: "a one-argument aggregate of a failing constant",
+            stages: vec![stage(
+                "aggregate",
+                vec![map(vec![("c", func("document_id", vec![int(1)]))])],
+            )],
+            strict: Some((400, AGGREGATE_ARITY)),
+            emulator: (400, AGGREGATE_ARITY),
+        },
         // Recorded orders stay answered (O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`).
         Case {
             label: "select {\"\": i} alone",

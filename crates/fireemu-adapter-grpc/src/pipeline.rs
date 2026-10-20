@@ -467,12 +467,7 @@ pub fn compile_pipeline(
     let mut validated_unrun = false;
     let compiled = (|| -> Result<(), Status> {
         for (position, stage) in pipeline.stages.iter().enumerate().skip(1) {
-            let rank = match stage.name.as_str() {
-                "where" | "select" => 1,
-                "offset" => 2,
-                "limit" => 3,
-                _ => 4,
-            };
+            let rank = stage_rank(&stage.name);
             if rank < last_rank {
                 return Err(Status::unimplemented(
                     "pipeline stages are out of supported order",
@@ -1189,55 +1184,25 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
 fn holds_unobserved_part(stages: &[pb::pipeline::Stage]) -> bool {
     let unobserved = |result: Result<(), Status>| matches!(result, Err(e) if e.code() == tonic::Code::Unimplemented);
     let strict = Unrecorded::Refuse;
-    let (mut last_rank, mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
-        (0u8, false, false, false, false);
+    let mut last_rank = 0u8;
+    let mut seen = std::collections::BTreeSet::new();
     for (position, stage) in stages.iter().enumerate().skip(1) {
-        let one_argument_aggregate = stage.name == "aggregate" && stage.args.len() == 1;
-        if !one_argument_aggregate && constant_call_fails(stage) {
-            return true;
-        }
-        let rank = match stage.name.as_str() {
-            "where" | "select" => 1,
-            "offset" => 2,
-            "limit" => 3,
-            _ => 4,
-        };
-        if rank < last_rank {
+        let rank = stage_rank(&stage.name);
+        // A stage out of the subset's order, or a repeated one (a where after a select too).
+        if rank < last_rank
+            || !seen.insert(stage.name.as_str())
+            || (stage.name == "where" && seen.contains("select"))
+        {
             return true;
         }
         last_rank = rank;
-        match stage.name.as_str() {
-            "where" => {
-                if seen_where || seen_select || seen_limit {
-                    return true;
-                }
-                seen_where = true;
-                if unobserved(decode_condition(stage, strict).map(|_| ())) {
-                    return true;
-                }
-            }
+        let part_unobserved = match stage.name.as_str() {
+            "where" => unobserved(decode_condition(stage, strict).map(|_| ())),
             "select" => {
-                if seen_select {
-                    return true;
-                }
-                seen_select = true;
-                if !stage.args.first().is_some_and(is_empty_map)
+                !stage.args.first().is_some_and(is_empty_map)
                     && unobserved(decode_select(stage, strict).map(|_| ()))
-                {
-                    return true;
-                }
             }
-            "offset" | "limit" => {
-                let seen = if stage.name == "offset" {
-                    &mut seen_offset
-                } else {
-                    &mut seen_limit
-                };
-                if *seen || unobserved(count_argument(stage, strict).map(|_| ())) {
-                    return true;
-                }
-                *seen = true;
-            }
+            "offset" | "limit" => unobserved(count_argument(stage, strict).map(|_| ())),
             _ => {
                 return stages[position..].iter().any(|rest| {
                     let name = rest.name.as_str();
@@ -1256,9 +1221,23 @@ fn holds_unobserved_part(stages: &[pb::pipeline::Stage]) -> bool {
                         }
                 })
             }
+        };
+        if part_unobserved || constant_call_fails(stage) {
+            return true;
         }
     }
     false
+}
+
+/// The subset's order of stages after the input: `where` and `select`, then `offset`, then
+/// `limit`; anything else is not run.
+fn stage_rank(name: &str) -> u8 {
+    match name {
+        "where" | "select" => 1,
+        "offset" => 2,
+        "limit" => 3,
+        _ => 4,
+    }
 }
 
 /// Whether a function call a stage holds (at any depth of its arguments and alias maps) fails

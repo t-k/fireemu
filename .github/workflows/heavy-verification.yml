@@ -286,6 +286,16 @@ jobs:
       # populate another target's registry sources, so fetch the whole locked graph first (as ci.yml does).
       - name: fetch locked dependency graph for offline authority checks
         run: cargo fetch --locked
+      # Suites that run the real SDKs (the Functions runtime, eventarc_authentication) load them from
+      # the pinned conformance install, as the ci.yml and release.yml test jobs do. No pnpm cache.
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: the pinned real SDKs for the suites that run them
+        run: pnpm -C conformance install --frozen-lockfile
       - name: the whole suite (profile pr)
         run: cargo nextest run --workspace --profile pr --locked
 

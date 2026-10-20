@@ -132,6 +132,18 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub("        run: cargo fetch --locked\n", "        run: \"true\"\n"), "must fetch the locked graph")
   end
 
+  def test_a_nextest_job_without_the_conformance_install_is_refused
+    assert_violation(REAL.sub("        run: pnpm -C conformance install --frozen-lockfile\n", "        run: \"true\"\n"), "must install the conformance SDKs before the suite")
+  end
+
+  def test_an_unpinned_pnpm_version_is_refused
+    assert_violation(REAL.sub(/^          version: 10\.32\.1\n/, ""), "must pin the pnpm version")
+  end
+
+  def test_a_setup_node_that_caches_is_refused
+    assert_violation(REAL.sub("          node-version: 24\n", "          node-version: 24\n          cache: pnpm\n"), "setup-node must not cache")
+  end
+
   def test_a_summary_upload_that_skips_a_failed_merge_is_refused
     source = REAL.sub("        if: always()\n        with:\n          name: mutants-summary", "        with:\n          name: mutants-summary")
     assert_violation(source, "even when the merge failed")

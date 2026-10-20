@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-20
+
 ### Added
 
 - Enterprise pipelines run locally on a new pipeline executor. Besides top-level fields, `where(equal(...))` and `select` accept nested field paths (`a.b`) and `documentId`, `collectionId` and `parent` of a document reference. The parent of a top-level document is the documents root reference and the document ID of a missing field is null under both profiles, as production answers them. Inputs whose production result is unrecorded, such as the collection ID of a missing field, are refused with `UNIMPLEMENTED` under the strict profile; the emulator profile answers them as the official emulator does. A refusal found while streaming may follow results already sent. Every other function stays refused.
@@ -852,7 +854,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.27.1...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/t-k/fireemu/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/t-k/fireemu/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/t-k/fireemu/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/t-k/fireemu/compare/v0.25.0...v0.26.0

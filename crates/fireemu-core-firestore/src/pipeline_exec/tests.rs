@@ -960,3 +960,88 @@ fn select_aliases_are_field_paths() {
     .into();
     assert_eq!(out, vec![expected]);
 }
+
+#[test]
+fn strict_answers_only_the_argument_and_key_types_production_recorded() {
+    let constant = |v: Value| Expr::Constant(v);
+    let others = [
+        Value::Double(1.5),
+        Value::Timestamp(crate::value::Timestamp::new(0, 0).unwrap()),
+        Value::Bytes(vec![0]),
+        Value::GeoPoint(crate::value::GeoPoint::new(1.0, 1.0).unwrap()),
+        Value::Array(vec![Value::Integer(1)]),
+        Value::Vector(vec![1.0]),
+    ];
+    let recorded = [
+        s("c/x"),
+        Value::Integer(1),
+        Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))])),
+        Value::Boolean(true),
+    ];
+    let r = row("c/x", &[]);
+    for name in ["document_id", "collection_id", "parent"] {
+        for value in &recorded {
+            let e = call(name, vec![constant(value.clone())]);
+            let wrong = Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Reference",
+                got: type_name(value),
+            });
+            assert_eq!(
+                e.eval_in(&r, Unrecorded::Refuse),
+                wrong,
+                "{name}({value:?})"
+            );
+            assert_eq!(e.eval_in(&r, Unrecorded::OfficialEmulator), wrong);
+        }
+        for value in &others {
+            let e = call(name, vec![constant(value.clone())]);
+            assert!(
+                unobserved(&e.eval_in(&r, Unrecorded::Refuse)),
+                "{name}({value:?})"
+            );
+            assert_eq!(
+                e.eval_in(&r, Unrecorded::OfficialEmulator),
+                Eval::Error(EvalError::WrongType {
+                    function: name,
+                    expected: "Reference",
+                    got: type_name(value),
+                }),
+                "{name}({value:?})"
+            );
+        }
+    }
+    // map(...) keys: an integer and a boolean recorded (O-3, O-4).
+    let map_of = |key: Value| call("map", vec![constant(key), constant(Value::Integer(1))]);
+    for key in [Value::Integer(1), Value::Boolean(true)] {
+        let text = Eval::Error(EvalError::Invalid(format!(
+            "map key must be of type STRING, given type is {}",
+            type_name(&key)
+        )));
+        assert_eq!(map_of(key.clone()).eval_in(&r, Unrecorded::Refuse), text);
+        assert_eq!(map_of(key).eval_in(&r, Unrecorded::OfficialEmulator), text);
+    }
+    for key in [Value::Double(1.5), Value::Null, Value::Array(vec![])] {
+        assert!(
+            unobserved(&map_of(key.clone()).eval_in(&r, Unrecorded::Refuse)),
+            "{key:?}"
+        );
+        assert_eq!(
+            map_of(key.clone()).eval_in(&r, Unrecorded::OfficialEmulator),
+            Eval::Error(EvalError::Invalid(format!(
+                "map key must be of type STRING, given type is {}",
+                type_name(&key)
+            )))
+        );
+    }
+    // A string key is a key under both.
+    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            map_of(s("k")).eval_in(&r, unrecorded),
+            Eval::Value(Value::Map(BTreeMap::from([(
+                "k".to_owned(),
+                Value::Integer(1)
+            )])))
+        );
+    }
+}

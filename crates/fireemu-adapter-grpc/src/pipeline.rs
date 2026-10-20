@@ -1186,8 +1186,8 @@ fn unrun_values_validated(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -
     };
     match (stage.name.as_str(), stage.args.as_slice()) {
         ("aggregate", [accumulated, groups]) => accumulators(accumulated) && operands(groups),
-        ("aggregate", _) => false,
-        (_, [aliases]) => operands(aliases),
+        // A one-argument aggregate got its arity text before; one of three or more is here.
+        (name, [aliases]) if name != "aggregate" => operands(aliases),
         _ => false,
     }
 }

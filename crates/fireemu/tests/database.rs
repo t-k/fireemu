@@ -686,12 +686,17 @@ fn emulators_export_prints_the_database_warning_the_hub_answers() {
 /// The unsigned ID token `@firebase/rules-unit-testing` mints for `uid` of the test project
 /// (the SDK's `mockUserToken` shape).
 fn mock_token(uid: &str) -> String {
+    mock_token_for(PROJECT, uid)
+}
+
+/// The SDK's mock token for `uid` of `project`.
+fn mock_token_for(project: &str, uid: &str) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
     let claims = format!(
-        r#"{{"iss":"https://securetoken.google.com/{PROJECT}","aud":"{PROJECT}","iat":{now},"exp":{},"auth_time":{now},"sub":"{uid}","user_id":"{uid}","firebase":{{"sign_in_provider":"custom","identities":{{}}}}}}"#,
+        r#"{{"iss":"https://securetoken.google.com/{project}","aud":"{project}","iat":{now},"exp":{},"auth_time":{now},"sub":"{uid}","user_id":"{uid}","firebase":{{"sign_in_provider":"custom","identities":{{}}}}}}"#,
         now + 3600
     );
     format!(
@@ -720,6 +725,7 @@ fn sign_up(daemon: &Daemon, email: &str, tenant: Option<&str>) -> (String, Strin
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one matrix: profile x token kind x instance kind
 fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
     let dir = Scratch::new("database", "credentials");
     let firebase_json = dir.join("firebase.json");
@@ -782,11 +788,18 @@ fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
         let other = "other-default-rtdb";
         let auth = |token: &str| format!("&auth={token}");
         // A token fireemu's Auth issued for the project is its user on every instance of the
-        // project, and nobody on another project's instance.
+        // project, and nobody on another project's instance; under the emulator profile its
+        // tokens are unsigned, and an unsigned token is its user anywhere, as on the official
+        // emulator.
         assert_eq!(read(default, &own, &auth(&signed), &[]), 200, "{name}");
         assert_eq!(read(named, &own, &auth(&signed), &[]), 200, "{name}");
-        assert_eq!(read(other, &own, &auth(&signed), &[]), 401, "{name}");
-        assert_eq!(read(other, "/anon", &auth(&signed), &[]), nobody, "{name}");
+        let (elsewhere, anonymous) = if strict { (401, 401) } else { (200, 401) };
+        assert_eq!(read(other, &own, &auth(&signed), &[]), elsewhere, "{name}");
+        assert_eq!(
+            read(other, "/anon", &auth(&signed), &[]),
+            anonymous,
+            "{name}"
+        );
         // So is a tenant's token.
         let tenant_own = format!("/users/{tenant_uid}");
         assert_eq!(
@@ -794,8 +807,9 @@ fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
             200,
             "{name}"
         );
-        // The SDK's mock token is its user on its project's instances while unsigned tokens
-        // are admitted (not under productionExact), and nobody elsewhere.
+        // The SDK's mock token is its user while unsigned tokens are admitted (not under
+        // productionExact): on its project's instances, and under the emulator profile on any
+        // instance whatever project it names, as on the official emulator; nobody elsewhere.
         let mock = mock_token("u1");
         let mock_status = if exact { 401 } else { 200 };
         assert_eq!(
@@ -808,8 +822,20 @@ fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
             mock_status,
             "{name}"
         );
-        assert_eq!(read(other, "/users/u1", &auth(&mock), &[]), 401, "{name}");
-        assert_eq!(read(other, "/anon", &auth(&mock), &[]), nobody, "{name}");
+        let anywhere = if strict { 401 } else { 200 };
+        assert_eq!(
+            read(other, "/users/u1", &auth(&mock), &[]),
+            anywhere,
+            "{name}"
+        );
+        let foreign = mock_token_for("someone-else", "u1");
+        assert_eq!(
+            read(default, "/users/u1", &auth(&foreign), &[]),
+            anywhere,
+            "{name}"
+        );
+        // Under strict it is refused there; under the emulator profile it is a user, not anonymous.
+        assert_eq!(read(other, "/anon", &auth(&mock), &[]), 401, "{name}");
         // Access tokens: any one is an administrator under the emulator profile, only `owner`
         // under strict; `auth=owner` names no one.
         let other_bearer = ["Authorization: Bearer ya29.other"];
@@ -825,5 +851,40 @@ fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
             "{name}"
         );
         assert_eq!(read(default, "/anon", "&auth=owner", &[]), nobody, "{name}");
+    }
+}
+
+#[test]
+fn a_deep_rule_from_any_access_token_never_stops_the_daemon() {
+    // Under the emulator profile any access token may load rules.
+    let dir = Scratch::new("database", "deep-rule");
+    let config = dir.join("emulator.json");
+    std::fs::write(&config, r#"{"schemaVersion":1,"profile":"emulator"}"#).unwrap();
+    let daemon = Daemon::start(&[
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    let deep_child = format!("root{}.val() == null", ".child('a')".repeat(10_000));
+    let deep_ternary = format!(
+        "{}true{}",
+        "true ? ".repeat(10_000),
+        " : false".repeat(10_000)
+    );
+    for rule in [deep_child, deep_ternary] {
+        let body = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+        let (status, text) = request(
+            port,
+            "PUT",
+            "/.settings/rules.json?ns=deep",
+            &["Authorization: Bearer anything"],
+            &body,
+        );
+        assert_eq!(status, 400, "{text}");
+        assert_eq!(request(port, "GET", "/.json?ns=deep", &[], "").0, 200);
     }
 }

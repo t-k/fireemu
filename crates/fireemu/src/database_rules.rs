@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use fireemu_adapter_database::rest::{Credentials, Database};
 use fireemu_core_auth::jwt::{
-    decode_token, verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance,
+    decode_token, is_unsigned_token, verify_rules_token_for_project, RulesTokenPolicy,
+    TokenAcceptance,
 };
 use fireemu_core_auth::store::AuthRegistry;
 use fireemu_core_types::time::LogicalInstant;
@@ -29,23 +30,34 @@ pub(crate) fn project_of_instance<'a>(instance: &'a str, daemon_project: &'a str
 /// `auth=` ID token is a user when fireemu's Auth verifies it as a token of the instance's
 /// project, against that project's store (its tenant's, for a tenant token), with
 /// `auth.allowUnsignedIdTokens` deciding unsigned tokens, as Firestore verifies them (review M5).
+/// The official emulator admits an unsigned mock token whatever project it names, and so does
+/// the emulator profile while unsigned tokens are admitted: such a token is checked against the
+/// project it names (review S7). Signed tokens, and every token under strict, keep the binding.
 pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> Credentials {
     let policy = RulesTokenPolicy::new(cfg.token_acceptance, cfg.auth_allow_unsigned_id_tokens);
     let registry = Arc::clone(registry);
     let daemon_project = cfg.auth_project.clone();
+    let strict = cfg.token_acceptance == TokenAcceptance::Verified;
+    let any_mock_audience = !strict && cfg.auth_allow_unsigned_id_tokens;
     Credentials {
-        strict: cfg.token_acceptance == TokenAcceptance::Verified,
+        strict,
         id_tokens: Some(Arc::new(move |token: &str, instance: &str, now: i64| {
-            let project = project_of_instance(instance, &daemon_project);
             let default = registry.default_store();
-            let tenant = {
+            let (tenant, audience) = {
                 let store = default.lock().ok()?;
-                decode_token(token, store.signer())
-                    .ok()
-                    .and_then(|decoded| {
-                        let tenant = decoded.payload.get("firebase")?.get("tenant")?;
-                        tenant.as_str().map(str::to_owned)
-                    })
+                let decoded = decode_token(token, store.signer()).ok();
+                let claim = |path: &[&str]| {
+                    let mut value = decoded.as_ref()?.payload.get(path[0])?;
+                    for key in &path[1..] {
+                        value = value.get(key)?;
+                    }
+                    value.as_str().map(str::to_owned)
+                };
+                (claim(&["firebase", "tenant"]), claim(&["aud"]))
+            };
+            let project = match &audience {
+                Some(audience) if any_mock_audience && is_unsigned_token(token) => audience,
+                _ => project_of_instance(instance, &daemon_project),
             };
             let store = match tenant {
                 Some(tenant) => registry.tenant_store(project, &tenant)?,

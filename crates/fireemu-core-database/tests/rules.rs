@@ -25,7 +25,12 @@ fn read_rule_at_t(expr: &str) -> RuleSpec {
     let mut positions = Vec::new();
     for c in expr.chars() {
         positions.push((1, column));
-        column += if c == '"' || c == '\\' { 2 } else { 1 };
+        // As JSON.stringify writes it, in UTF-16 units.
+        column += match c {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            c if u32::from(c) < 0x20 => 6,
+            c => c.len_utf16(),
+        };
     }
     positions.push((1, column));
     let mut t = RuleSpec::default();
@@ -140,6 +145,57 @@ fn differences(fixture: &str) -> Vec<String> {
         }
     }
     failures
+}
+
+/// The regular-expression rows of the r6 differential fuzz (and the review rows), recorded on
+/// the official emulator. A row marked `"fireemu": "denies"` uses a construct whose meaning
+/// there fireemu does not reproduce (RTDB-03c): it is a rule error here, so the read is
+/// denied where the official emulator allows it. No row is the other way round: fireemu never
+/// allows a read the official emulator denies, and loads every rule it loads.
+#[test]
+fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
+    let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-expressions-3-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    // A lone escaped surrogate has no counterpart in this text: refused at load (review r5
+    // S13), where the official emulator loads it.
+    let (refused, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) = corpus
+        .into_iter()
+        .partition(|entry| entry.get("fireemu").is_some_and(|f| f == "refuses"));
+    assert_eq!(refused.len(), 8);
+    for entry in &refused {
+        let error = Rules::compile(&read_rule_at_t(entry["expr"].as_str().unwrap())).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .ends_with("Unsupported javascript syntax."),
+            "{entry}: {error}"
+        );
+        assert_eq!(entry["load"], 200);
+    }
+    let (denied, agreeing): (Vec<serde_json::Value>, Vec<serde_json::Value>) = corpus
+        .into_iter()
+        .partition(|entry| entry.get("fireemu").is_some());
+    assert!(agreeing.len() > 600 && denied.len() > 150);
+    // Both refuse it; the official emulator places the error of an expression that spans a
+    // line break elsewhere on the line.
+    let known = [
+        r#""!(true\n// x)" : error 1:38: missing ) in parenthetical vs 1:30: missing ) in parenthetical"#,
+    ];
+    let failures = differences(&serde_json::to_string(&agreeing).unwrap());
+    assert_eq!(failures, known, "{failures:#?}");
+    let denied: Vec<serde_json::Value> = denied
+        .into_iter()
+        .map(|mut entry| {
+            assert_eq!(entry["fireemu"], "denies");
+            assert_eq!(entry["read"], 200, "{entry}");
+            entry["read"] = 401.into();
+            entry
+        })
+        .collect();
+    let failures = differences(&serde_json::to_string(&denied).unwrap());
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]

@@ -15,33 +15,54 @@ use fireemu_core_types::time::LogicalInstant;
 
 use crate::config::RuntimeConfig;
 
-/// The credentials of the profile: under `strict` only `owner` is an administrator; an
-/// `auth=` ID token is a user when fireemu's Auth verifies it for the namespace's project
-/// (with `auth.allowUnsignedIdTokens` deciding unsigned tokens), checked against the store
-/// of the project the token names.
+/// The project a database instance belongs to: `<project>-default-rtdb` is its project's
+/// default instance, and any other instance (a named one from `firebase.json`, or one a
+/// client names) belongs to the daemon's project, as the configuration assumes.
+pub(crate) fn project_of_instance<'a>(instance: &'a str, daemon_project: &'a str) -> &'a str {
+    instance
+        .strip_suffix("-default-rtdb")
+        .filter(|project| !project.is_empty())
+        .unwrap_or(daemon_project)
+}
+
+/// The credentials of the profile: under `strict` only `owner` is an administrator. An
+/// `auth=` ID token is a user when fireemu's Auth verifies it as a token of the instance's
+/// project, against that project's store (its tenant's, for a tenant token), with
+/// `auth.allowUnsignedIdTokens` deciding unsigned tokens, as Firestore verifies them (review M5).
 pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> Credentials {
     let policy = RulesTokenPolicy::new(cfg.token_acceptance, cfg.auth_allow_unsigned_id_tokens);
     let registry = Arc::clone(registry);
+    let daemon_project = cfg.auth_project.clone();
     Credentials {
         strict: cfg.token_acceptance == TokenAcceptance::Verified,
-        id_tokens: Some(Arc::new(move |token: &str, project: &str, now: i64| {
+        id_tokens: Some(Arc::new(move |token: &str, instance: &str, now: i64| {
+            let project = project_of_instance(instance, &daemon_project);
             let default = registry.default_store();
-            let audience = {
+            let tenant = {
                 let store = default.lock().ok()?;
-                let decoded = decode_token(token, store.signer()).ok()?;
-                decoded.payload.get("aud")?.as_str()?.to_owned()
+                decode_token(token, store.signer())
+                    .ok()
+                    .and_then(|decoded| {
+                        let tenant = decoded.payload.get("firebase")?.get("tenant")?;
+                        tenant.as_str().map(str::to_owned)
+                    })
             };
-            let store = registry.store_for(&audience).unwrap_or(default);
+            let store = match tenant {
+                Some(tenant) => registry.tenant_store(project, &tenant)?,
+                None => registry.store_for(project).unwrap_or(default),
+            };
             let store = store.lock().ok()?;
-            verify_rules_token_for_project(
+            let decoded = verify_rules_token_for_project(
                 token,
                 &store,
                 LogicalInstant::from_nanos(i128::from(now) * 1_000_000),
                 policy,
                 project,
             )
-            .ok()
-            .map(|decoded| decoded.payload_json)
+            .ok()?;
+            // A token of another project is never a user here, whichever store verified it.
+            let audience = decoded.payload.get("aud")?.as_str()?;
+            (audience == project).then_some(decoded.payload_json)
         })),
     }
 }

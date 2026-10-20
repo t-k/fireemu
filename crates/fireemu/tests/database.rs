@@ -689,24 +689,61 @@ fn mock_token(uid: &str) -> String {
     )
 }
 
+/// Signs a user up on the Auth emulator (in `tenant`, if any): the uid and the ID token.
+fn sign_up(daemon: &Daemon, email: &str, tenant: Option<&str>) -> (String, String) {
+    let tenant = tenant.map_or(String::new(), |t| format!(r#","tenantId":"{t}""#));
+    let (status, body) = request(
+        daemon.auth_port(),
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key",
+        &["Content-Type: application/json"],
+        &format!(r#"{{"email":"{email}","password":"hunter22","returnSecureToken":true{tenant}}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    (
+        body["localId"].as_str().unwrap().to_owned(),
+        body["idToken"].as_str().unwrap().to_owned(),
+    )
+}
+
 #[test]
-fn credentials_follow_the_profile_and_fireemu_auth() {
+fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
     let dir = Scratch::new("database", "credentials");
     let firebase_json = dir.join("firebase.json");
     std::fs::write(
         &firebase_json,
-        r#"{"database":{"rules":"database.rules.json"}}"#,
+        r#"{"database":[
+            {"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"},
+            {"instance":"demo-rtdb-secondary","rules":"database.rules.json"},
+            {"instance":"other-default-rtdb","rules":"database.rules.json"}]}"#,
     )
     .unwrap();
     std::fs::write(
         dir.join("database.rules.json"),
-        r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}}}}"#,
+        r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}},
+            "anon":{".read":"auth == null"}}}"#,
     )
     .unwrap();
-    let start = |name: &str, config: &str| {
+    let tenants = r#""auth":{"multiTenant":{"allowTenants":true},"tenants":[{"tenantId":"acme-x7k2q","displayName":"acme","allowPasswordSignup":true}]}"#;
+    let profiles = [
+        (
+            "emulator",
+            format!(r#"{{"schemaVersion":1,"profile":"emulator",{tenants}}}"#),
+        ),
+        (
+            "strict",
+            format!(r#"{{"schemaVersion":1,"profile":"strict",{tenants}}}"#),
+        ),
+        (
+            "exact",
+            format!(r#"{{"schemaVersion":1,"profile":"strict","productionExact":true,{tenants}}}"#),
+        ),
+    ];
+    for (name, config) in profiles {
         let path = dir.join(format!("{name}.json"));
         std::fs::write(&path, config).unwrap();
-        Daemon::start(&[
+        let daemon = Daemon::start(&[
             "--firebase-json",
             firebase_json.to_str().unwrap(),
             "--config",
@@ -715,55 +752,66 @@ fn credentials_follow_the_profile_and_fireemu_auth() {
             "database,auth",
             "--database-port",
             "0",
-        ])
-    };
-    let read = |port: u16, path: &str, query: &str, headers: &[&str]| {
-        let target = format!("{path}.json?ns={PROJECT}-default-rtdb{query}");
-        request(port, "GET", &target, headers, "").0
-    };
-    let mock = format!("&auth={}", mock_token("u1"));
-    let other_bearer = ["Authorization: Bearer ya29.other"];
-    // The emulator profile reads credentials as the official emulator: a mock token is its
-    // user, any access token an administrator, and `auth=owner` nobody.
-    let emulator = start("emulator", r#"{"schemaVersion":1,"profile":"emulator"}"#);
-    let port = emulator.database_port();
-    assert_eq!(read(port, "/users/u1", &mock, &[]), 200);
-    assert_eq!(read(port, "/users/u2", &mock, &[]), 401);
-    assert_eq!(read(port, "/users/u2", "", &other_bearer), 200);
-    assert_eq!(read(port, "/users/u1", "&auth=owner", &[]), 401);
-    drop(emulator);
-    // The strict profile admits only `owner` as an administrator and refuses a credential
-    // that names no one; the mock token stays a user while auth.allowUnsignedIdTokens is on.
-    let strict = start("strict", r#"{"schemaVersion":1,"profile":"strict"}"#);
-    let port = strict.database_port();
-    assert_eq!(read(port, "/users/u1", &mock, &[]), 200);
-    assert_eq!(read(port, "/users/u2", "", &other_bearer), 401);
-    assert_eq!(read(port, "/users/u1", "&auth=owner", &[]), 401);
-    drop(strict);
-    // productionExact: only a token fireemu's Auth issued (and verifies) is a user.
-    let exact = start(
-        "exact",
-        r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
-    );
-    let port = exact.database_port();
-    let (status, body) = request(
-        exact.auth_port(),
-        "POST",
-        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key",
-        &["Content-Type: application/json"],
-        r#"{"email":"rtdb@example.com","password":"hunter22","returnSecureToken":true}"#,
-    );
-    assert_eq!(status, 200, "{body}");
-    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let uid = body["localId"].as_str().unwrap();
-    let id_token = body["idToken"].as_str().unwrap();
-    let own = format!("/users/{uid}");
-    assert_eq!(read(port, &own, &format!("&auth={id_token}"), &[]), 200);
-    // A mock token for a user Auth does not know is no longer admitted.
-    assert_eq!(read(port, "/users/u1", &mock, &[]), 401);
-    assert_eq!(read(port, "/users/u2", "", &other_bearer), 401);
-    assert_eq!(
-        read(port, "/users/u2", "", &["Authorization: Bearer owner"]),
-        200
-    );
+        ]);
+        let port = daemon.database_port();
+        let read = |ns: &str, path: &str, query: &str, headers: &[&str]| {
+            let target = format!("{path}.json?ns={ns}{query}");
+            request(port, "GET", &target, headers, "").0
+        };
+        let (uid, signed) = sign_up(&daemon, "rtdb@example.com", None);
+        let (tenant_uid, tenant_token) = sign_up(&daemon, "t@example.com", Some("acme-x7k2q"));
+        let strict = name != "emulator";
+        let exact = name == "exact";
+        // A credential that names no one: anonymous under the emulator profile, 401 under strict.
+        let nobody = if strict { 401 } else { 200 };
+        let own = format!("/users/{uid}");
+        let default = "demo-rtdb-default-rtdb";
+        let named = "demo-rtdb-secondary";
+        let other = "other-default-rtdb";
+        let auth = |token: &str| format!("&auth={token}");
+        // A token fireemu's Auth issued for the project is its user on every instance of the
+        // project, and nobody on another project's instance.
+        assert_eq!(read(default, &own, &auth(&signed), &[]), 200, "{name}");
+        assert_eq!(read(named, &own, &auth(&signed), &[]), 200, "{name}");
+        assert_eq!(read(other, &own, &auth(&signed), &[]), 401, "{name}");
+        assert_eq!(read(other, "/anon", &auth(&signed), &[]), nobody, "{name}");
+        // So is a tenant's token.
+        let tenant_own = format!("/users/{tenant_uid}");
+        assert_eq!(
+            read(default, &tenant_own, &auth(&tenant_token), &[]),
+            200,
+            "{name}"
+        );
+        // The SDK's mock token is its user on its project's instances while unsigned tokens
+        // are admitted (not under productionExact), and nobody elsewhere.
+        let mock = mock_token("u1");
+        let mock_status = if exact { 401 } else { 200 };
+        assert_eq!(
+            read(default, "/users/u1", &auth(&mock), &[]),
+            mock_status,
+            "{name}"
+        );
+        assert_eq!(
+            read(named, "/users/u1", &auth(&mock), &[]),
+            mock_status,
+            "{name}"
+        );
+        assert_eq!(read(other, "/users/u1", &auth(&mock), &[]), 401, "{name}");
+        assert_eq!(read(other, "/anon", &auth(&mock), &[]), nobody, "{name}");
+        // Access tokens: any one is an administrator under the emulator profile, only `owner`
+        // under strict; `auth=owner` names no one.
+        let other_bearer = ["Authorization: Bearer ya29.other"];
+        let expected = if strict { 401 } else { 200 };
+        assert_eq!(
+            read(default, "/users/u2", "", &other_bearer),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            read(default, "/users/u2", "", &["Authorization: Bearer owner"]),
+            200,
+            "{name}"
+        );
+        assert_eq!(read(default, "/anon", "&auth=owner", &[]), nobody, "{name}");
+    }
 }

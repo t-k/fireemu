@@ -416,12 +416,21 @@ impl Session {
                 Some(other) => Json::String(render(other, Style::Compact)),
                 None => Json::Null,
             }),
-            "auth" => {
-                let (answer, access) =
-                    authenticate(arguments, db, &self.namespace, context.now_millis)?;
-                self.become_(db, access, context.now_millis);
-                Ok(answer)
-            }
+            "auth" => match authenticate(arguments, db, &self.namespace, context.now_millis) {
+                Ok((answer, access)) => {
+                    self.become_(db, access, context.now_millis);
+                    Ok(answer)
+                }
+                Err(refusal) => {
+                    // A refused token leaves the connection signed out under strict (review
+                    // S1); the official emulator, and so the emulator profile, keeps the user
+                    // it had (reauth-probe).
+                    if db.options().credentials.strict {
+                        self.become_(db, Access::Anonymous, context.now_millis);
+                    }
+                    Err(refusal)
+                }
+            },
             "gauth" => {
                 let access = match arguments.get("cred") {
                     // The official emulator does not answer a gauth without a credential.
@@ -1006,7 +1015,7 @@ fn authenticate(
     // reads them, and a missing claim is named.
     if credentials.id_tokens.is_some() {
         let auth = credentials
-            .user(cred, crate::namespace::project_of(namespace), now)
+            .user(cred, namespace, now)
             .ok_or_else(unparsable_token)?;
         let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
         return Ok((answer, Access::User(auth)));

@@ -838,13 +838,13 @@ fn rules_loaded_outside_a_request_wake_the_flush() {
 /// emulator profile and under strict.
 type Case<'a> = (&'a str, String, Vec<(&'a str, &'a str)>, u16, u16);
 
-/// A verifier that accepts only tokens whose `sub` starts with `ok-` and that are minted for
-/// `demo` (standing in for fireemu's Auth), answering the claims it decoded.
+/// A verifier that accepts only tokens whose `sub` starts with `ok-`, presented to
+/// `demo-default-rtdb` (standing in for fireemu's Auth), answering the claims it decoded.
 fn verifier() -> fireemu_adapter_database::rest::IdTokenVerifier {
-    std::sync::Arc::new(|token: &str, project: &str, _now: i64| {
+    std::sync::Arc::new(|token: &str, namespace: &str, _now: i64| {
         let claims = token.split('.').nth(1)?;
         let text = b64_decode(claims)?;
-        (project == "demo" && text.contains("\"sub\":\"ok-")).then_some(text)
+        (namespace == "demo-default-rtdb" && text.contains("\"sub\":\"ok-")).then_some(text)
     })
 }
 
@@ -1397,4 +1397,46 @@ fn a_write_that_makes_a_read_false_cancels_the_listens_instead_of_telling_them()
     );
     assert_eq!(pushes_to(&mut db, client), Vec::<String>::new());
     assert!(events.is_empty(), "{events:?}");
+}
+
+#[test]
+fn a_refused_token_signs_the_connection_out_under_strict_only() {
+    // The official emulator keeps the user after a refused token (docs.local reauth-probe).
+    let rules = r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}},"anon":{".read":"auth == null"}}}"#;
+    let good = token(r#"{"sub":"ok-1","iat":1}"#);
+    for strict in [false, true] {
+        let mut db = with_credentials(strict, true);
+        load(&mut db, "demo-default-rtdb", rules);
+        let mut session = open(&mut db, "demo-default-rtdb");
+        let client = session.client();
+        send(
+            &mut db,
+            &mut session,
+            1,
+            "auth",
+            &format!(r#"{{"cred":"{good}"}}"#),
+        );
+        send(
+            &mut db,
+            &mut session,
+            2,
+            "q",
+            r#"{"p":"/users/ok-1","h":""}"#,
+        );
+        pushes_to(&mut db, client);
+        let refused_token = send(&mut db, &mut session, 3, "auth", r#"{"cred":"garbage"}"#);
+        let own = send(&mut db, &mut session, 4, "g", r#"{"p":"/users/ok-1"}"#);
+        let anon = send(&mut db, &mut session, 5, "g", r#"{"p":"/anon"}"#);
+        let unparsable = reply(3, "invalid_token", r#""Could not parse auth token.""#);
+        if strict {
+            let cancel = r#"{"t":"d","d":{"b":{"p":"users/ok-1","q":null},"a":"c"}}"#.to_owned();
+            assert_eq!(refused_token, vec![cancel, unparsable]);
+            assert_eq!(own, vec![refused(4)]);
+            assert_eq!(anon, vec![reply(5, "ok", "null")]);
+        } else {
+            assert_eq!(refused_token, vec![unparsable]);
+            assert_eq!(own, vec![reply(4, "ok", "null")]);
+            assert_eq!(anon, vec![refused(5)]);
+        }
+    }
 }

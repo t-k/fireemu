@@ -34,8 +34,9 @@ use crate::rules_file;
 /// The credential of the local administrator (firebase-tools sends `Bearer owner`).
 pub(crate) const OWNER: &str = "owner";
 
-/// Checks an `auth=` ID token for a namespace's project at a time (milliseconds), and answers
-/// its claims as JSON text when the token is accepted.
+/// Checks an `auth=` ID token presented to a namespace at a time (milliseconds), and answers
+/// its claims as JSON text when the token is a user of the namespace's project. The verifier
+/// decides which project a namespace belongs to.
 pub type IdTokenVerifier = Arc<dyn Fn(&str, &str, i64) -> Option<String> + Send + Sync>;
 
 /// How credentials are read.
@@ -58,10 +59,10 @@ impl fmt::Debug for Credentials {
 }
 
 impl Credentials {
-    /// The `auth` of an ID token for `project`, if it names a user.
-    pub(crate) fn user(&self, token: &str, project: &str, now: i64) -> Option<Json> {
+    /// The `auth` of an ID token presented to `namespace`, if it names a user.
+    pub(crate) fn user(&self, token: &str, namespace: &str, now: i64) -> Option<Json> {
         let claims = match &self.id_tokens {
-            Some(verify) => crate::json_parse::parse(&verify(token, project, now)?).ok()?,
+            Some(verify) => crate::json_parse::parse(&verify(token, namespace, now)?).ok()?,
             None => crate::realtime::jwt_claims(token)?,
         };
         let Json::Object(claims) = claims else {
@@ -105,8 +106,7 @@ impl Access {
         let Some(token) = params.get("auth") else {
             return Ok(Self::Anonymous);
         };
-        let project = crate::namespace::project_of(namespace);
-        match credentials.user(token, project, now) {
+        match credentials.user(token, namespace, now) {
             Some(auth) => Ok(Self::User(auth)),
             None if credentials.strict => Err(Refused),
             None => Ok(Self::Anonymous),

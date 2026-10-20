@@ -2478,5 +2478,26 @@
   "load": 400,
   "error": "1:28: missing ; before statement\n",
   "read": null
+ },
+ {
+  "expr": "'a' + 9500000000000000000 == 'a9.5E18'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + -9223372036854775808 == 'a-9223372036854775808'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + -9500000000000000000 == 'a-9.5E18'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
  }
 ]

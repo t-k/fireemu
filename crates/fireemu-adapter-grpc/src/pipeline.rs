@@ -1545,32 +1545,18 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
     let mut out = Vec::new();
     for (position, stage) in stages.iter().enumerate().skip(1) {
         let name = stage.name.as_str();
-        let mut push = |check: Check| {
-            out.push(Refusal {
-                position,
-                stage: name.to_owned(),
-                check,
-            });
-        };
+        let mut found: Vec<Check> = Vec::new();
         match name {
-            "aggregate" if stage.args.len() == 1 => push(Check::AggregateArity),
+            "aggregate" if stage.args.len() == 1 => found.push(Check::AggregateArity),
             "where" => {
-                let inside: Vec<Check> = stage.args.iter().flat_map(value_checks).collect();
-                if inside.is_empty() {
-                    if let Err(error) = decode_condition(stage, strict) {
-                        if error.code() == tonic::Code::InvalidArgument {
-                            push(Check::Other);
-                        }
-                    }
-                }
-                for check in inside {
-                    push(check);
+                for check in stage.args.iter().flat_map(value_checks) {
+                    found.push(check);
                 }
             }
             "limit" | "offset" => {
                 if let Err(error) = count_argument(stage, strict) {
                     if error.code() == tonic::Code::InvalidArgument {
-                        push(if error.message().starts_with("Expected ") {
+                        found.push(if error.message().starts_with("Expected ") {
                             Check::CountType
                         } else {
                             Check::CountNegative
@@ -1584,7 +1570,7 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
                         && stage.args.get(1).is_some_and(is_empty_map)
                         && !stage.args.first().is_some_and(is_empty_map))
                 {
-                    push(Check::EmptyMap);
+                    found.push(Check::EmptyMap);
                 }
                 if name == "select"
                     && stage
@@ -1593,9 +1579,8 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
                         .and_then(map_fields)
                         .is_some_and(|fields| fields.len() > MAX_SELECT_FIELDS)
                 {
-                    push(Check::Width);
+                    found.push(Check::Width);
                 }
-                let mut parts = 0;
                 for alias in aliases(stage) {
                     let result = if name == "select" {
                         decode_alias(alias).map(|_| ())
@@ -1604,36 +1589,33 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
                     };
                     if let Err(error) = &result {
                         if error.code() == tonic::Code::InvalidArgument {
-                            parts += 1;
-                            push(alias_check(error));
+                            found.push(alias_check(error));
                         }
                     } else if name != "select" && reserved_alias(name, alias).is_some() {
                         // A reserved alias of a stage fireemu does not run (strict refuses it
                         // alone; beside another refusal it is a second one).
-                        parts += 1;
-                        push(Check::Other);
+                        found.push(Check::Other);
                     }
                 }
                 for value in values(stage) {
                     for check in value_checks(value) {
-                        parts += 1;
-                        push(check);
+                        found.push(check);
                     }
                 }
                 if unrun_stage_name_error(stage).is_some() {
-                    parts += 1;
-                    push(Check::Other);
+                    found.push(Check::Other);
                 }
                 // The checks of the whole select once each part passed: an alias inside
                 // another, a repeated one.
-                if name == "select" && parts == 0 && !stage.args.iter().any(is_empty_map) {
+                let parts_found = !found.is_empty();
+                if name == "select" && !parts_found && !stage.args.iter().any(is_empty_map) {
                     if let Err(error) = decode_select(stage, strict) {
                         if error.code() == tonic::Code::InvalidArgument
                             && !error
                                 .message()
                                 .starts_with("The 'select(...)' stage is limited")
                         {
-                            push(
+                            found.push(
                                 if error
                                     .message()
                                     .starts_with("The request is invalid because")
@@ -1649,6 +1631,11 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
             }
             _ => {}
         }
+        out.extend(found.into_iter().map(|check| Refusal {
+            position,
+            stage: name.to_owned(),
+            check,
+        }));
     }
     out
 }
@@ -1667,9 +1654,9 @@ fn refusals_recorded(refusals: &[Refusal]) -> bool {
         // No classified refusal (fireemu's own check refused) falls to the last arm.
         [one] => recorded(one),
         [first, second] => {
+            // The list is in stage order, so the second refusal is in a later stage.
             first.stage == "select"
                 && first.check == Check::EmptyMap
-                && second.position > first.position
                 && ((second.stage == "limit" && second.check == Check::CountType)
                     || (second.stage == "add_fields" && second.check == Check::AliasEmpty))
         }

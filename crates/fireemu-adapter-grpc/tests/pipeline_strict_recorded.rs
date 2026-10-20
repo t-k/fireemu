@@ -1621,3 +1621,85 @@ fn the_round_four_checks_hold_in_every_position() {
     ]);
     check(cases);
 }
+
+#[test]
+fn strict_answers_a_refusal_only_in_the_stage_production_recorded_it() {
+    let list = |values: Vec<Value>| json!({ "arrayValue": { "values": values } });
+    let empty = || stage("select", vec![map(vec![])]);
+    let invalid_path = "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)";
+    check(vec![
+        Case {
+            label: "where(equal(i, [i]))",
+            stages: vec![stage(
+                "where",
+                vec![func("equal", vec![field("i"), list(vec![field("i")])])],
+            )],
+            strict: None,
+            emulator: (400, "Value type is not supported: FIELD_REFERENCE_VALUE"),
+        },
+        Case {
+            label: "where(equal(i, [i])) then select {\"\": i}",
+            stages: vec![
+                stage(
+                    "where",
+                    vec![func("equal", vec![field("i"), list(vec![field("i")])])],
+                ),
+                stage("select", vec![map(vec![("", field("i"))])]),
+            ],
+            strict: None,
+            emulator: (400, "Value type is not supported: FIELD_REFERENCE_VALUE"),
+        },
+        Case {
+            label: "select {} then limit(-1)",
+            stages: vec![empty(), stage("limit", vec![int(-1)])],
+            strict: None,
+            emulator: (400, "The 'limit(...)' cannot have a negative value: -1"),
+        },
+        Case {
+            label: "select {} then add_fields {a..b: top}",
+            stages: vec![
+                empty(),
+                stage("add_fields", vec![map(vec![("a..b", field("top"))])]),
+            ],
+            strict: None,
+            emulator: (400, invalid_path),
+        },
+        Case {
+            label: "select {v: equal(map(i, 1), [i])}",
+            stages: vec![select(func(
+                "equal",
+                vec![
+                    func("map", vec![field("i"), int(1)]),
+                    list(vec![field("i")]),
+                ],
+            ))],
+            strict: None,
+            emulator: (400, "map keys must be constants/literals"),
+        },
+        Case {
+            label: "aggregate {a..b: count()} by {}",
+            stages: vec![stage(
+                "aggregate",
+                vec![map(vec![("a..b", func("count", vec![]))]), map(vec![])],
+            )],
+            strict: None,
+            emulator: (400, invalid_path),
+        },
+        // Recorded in this stage: answered.
+        Case {
+            label: "add_fields {a..b: top}",
+            stages: vec![stage("add_fields", vec![map(vec![("a..b", field("top"))])])],
+            strict: Some((400, invalid_path)),
+            emulator: (400, invalid_path),
+        },
+        Case {
+            label: "select {} then add_fields {\"\": top}",
+            stages: vec![
+                empty(),
+                stage("add_fields", vec![map(vec![("", field("top"))])]),
+            ],
+            strict: Some((400, "Invalid empty property path string.")),
+            emulator: (400, "Invalid empty property path string."),
+        },
+    ]);
+}

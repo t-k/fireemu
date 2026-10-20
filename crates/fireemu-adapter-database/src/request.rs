@@ -40,6 +40,8 @@ pub enum Location {
     Data(Path),
     /// Under `/.settings` (served with the rules, RTDB-03).
     Settings,
+    /// Under `/.inspect`: what follows, as written (`databases.json` lists the namespaces).
+    Inspect(String),
 }
 
 /// Splits `target` into its path and decoded query parameters (the last of a repeated
@@ -78,6 +80,12 @@ pub fn check_escapes(target: &str) -> Result<(), Refusal> {
 
 /// The database location a raw path names. `writing` adds the depth limit.
 pub fn location(raw_path: &str, writing: bool, limits: &Limits) -> Result<Location, Refusal> {
+    // `/.inspect` is answered whatever follows it, `.json` or not.
+    if let Some(rest) = raw_path.trim_start_matches('/').strip_prefix(".inspect") {
+        if rest.is_empty() || rest.starts_with('/') {
+            return Ok(Location::Inspect(rest.trim_start_matches('/').to_owned()));
+        }
+    }
     let Some(stem) = raw_path.strip_suffix(".json") else {
         return Err(Refusal {
             status: 400,
@@ -123,6 +131,32 @@ pub struct Output {
     pub callback: Option<String>,
     /// `download=` (attachment file name).
     pub download: Option<String>,
+}
+
+/// `disableTriggers` on a write (import sends it): `true` or `false`, and only from an
+/// administrator (an OAuth access token, which the official emulator does not verify; an
+/// `auth=` user is not one). Reads ignore it.
+pub fn check_disable_triggers(
+    params: &BTreeMap<String, String>,
+    writing: bool,
+    authorization: Option<&str>,
+) -> Result<(), Refusal> {
+    let Some(value) = params.get("disableTriggers").filter(|_| writing) else {
+        return Ok(());
+    };
+    if value != "true" && value != "false" {
+        return Err(Refusal::bad(
+            "disableTriggers should be one of {true, false}",
+        ));
+    }
+    let administrator = authorization.is_some_and(|v| v.starts_with("Bearer "))
+        || params.contains_key("access_token");
+    if !administrator {
+        return Err(Refusal::bad(
+            "Only users with firebasedatabase.instances.update permissions are allowed to specify disableTriggers",
+        ));
+    }
+    Ok(())
 }
 
 /// Reads the output options and checks `format` and `writeSizeLimit`.

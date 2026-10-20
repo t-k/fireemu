@@ -1,5 +1,6 @@
 // Writes the REST requests of the FS-ENT-ORACLE pipeline corpus programs the production
-// fixture holds (seeds and steps, `{docs}` left as written) to conformance/fs-ent-pipeline-requests.json, for the Rust replay test in
+// fixture holds (seeds and steps, `{docs}` left as written) to
+// conformance/fs-ent-pipeline-requests.json, for the Rust replay test in
 // crates/fireemu-adapter-grpc that runs them against the in-process REST surface and compares
 // the answers with conformance/fs-ent-pipeline-production.json.
 //

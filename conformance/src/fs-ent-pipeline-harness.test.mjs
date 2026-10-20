@@ -5,7 +5,9 @@ import {
   CELLS_PER_STEP,
   O3_ALIASES,
   O3_CELLS,
+  O3_CONDITIONS,
   O3_KIND_DOC,
+  O3_LITERALS,
   COMPARISON_CELLS,
   KINDS,
   KIND_DOC,
@@ -426,6 +428,20 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   );
   // A vector is written as a vector.
   assert.equal(O3_KIND_DOC.v.mapValue.fields.__type__.stringValue, "__vector__");
+  // Every field a cell or a where condition reads is seeded, except the missing field x.
+  const seeded = Object.keys(o3[1].seed[0][1]);
+  const read = [
+    ...O3_CELLS.flatMap(([, left, right]) => [left, right]),
+    ...O3_CONDITIONS.flatMap(([, c]) => (c.fieldReferenceValue ? [c.fieldReferenceValue] : [])),
+  ];
+  assert.deepEqual(
+    [...new Set(read)].filter((f) => !seeded.includes(f)),
+    ["x"],
+  );
+  // -0.0 is asked as a select literal and inside an array literal, written with its sign.
+  const literals = Object.fromEntries(O3_LITERALS);
+  assert.deepEqual(literals["negative-zero"], { doubleValue: "-0" });
+  assert.deepEqual(literals["negative-zero-in-array"].arrayValue.values[1], { doubleValue: "-0" });
 });
 
 test("the committed REST request export is the corpus's", async () => {

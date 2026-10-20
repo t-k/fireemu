@@ -345,9 +345,6 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 other,
             )),
         }),
-        // The argument's type and sign are the adapter's to answer per profile, in stage order
-        // (the official emulator names the type it got, or the negative value).
-        "limit" | "offset" => Ok(()),
         "distinct" => args.iter().enumerate().try_for_each(|(i, a)| match a {
             Arg::Field(_) | Arg::Function { .. } => Ok(()),
             Arg::Map(_) => alias_map(name, i, a, "a map of aliases to expressions"),
@@ -424,6 +421,9 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 )),
             }
         }
+        // limit and offset among them: their argument's type and sign are the adapter's to
+        // answer per profile, in stage order (the official emulator names the type it got, or
+        // the negative value).
         _ => Ok(()),
     }
 }

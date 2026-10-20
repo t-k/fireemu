@@ -194,6 +194,7 @@ fn document_functions_split_the_reference() {
 /// of a top-level collection names the reference and its length. It refuses the inputs
 /// production has not answered.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
     let collection = "projects/p/databases/(default)/documents/c";
     let r = row(

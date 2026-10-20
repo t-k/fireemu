@@ -382,19 +382,11 @@ fn nest_quantifiers(text: &str) -> String {
                 atom = Some(start);
             }
             '(' => {
+                // A `?` right after `(` (this text's own `(?:` and `(?s:`) has no atom
+                // before it, so it is copied as it is.
                 groups.push(start);
                 out.push('(');
                 i += 1;
-                // This text's own non-capturing and flag groups.
-                if chars.get(i) == Some(&'?') {
-                    while let Some(&c) = chars.get(i) {
-                        out.push(c);
-                        i += 1;
-                        if c == ':' {
-                            break;
-                        }
-                    }
-                }
                 atom = None;
             }
             ')' => {

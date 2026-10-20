@@ -11882,5 +11882,132 @@
   "load": 200,
   "error": null,
   "read": 200
+ },
+ {
+  "expr": "']a]a'.matches(/^[]a]{2}{2}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(']a]a'.matches(/^[]a]{2}{2}$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "']a]b'.matches(/^[]a]{2}{2}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(']a]b'.matches(/^[]a]{2}{2}$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "']a]a'.matches(/^[\\]a]{2}{2}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(']a]a'.matches(/^[\\]a]{2}{2}$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'xyxy'.matches(/^[^]a]{2}{2}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('xyxy'.matches(/^[^]a]{2}{2}$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'xyx]'.matches(/^[^]a]{2}{2}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('xyx]'.matches(/^[^]a]{2}{2}$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'ab'.matches(/^a\\​.$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('ab'.matches(/^a\\​.$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a.'.matches(/^a\\​.$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('a.'.matches(/^a\\​.$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'aaaa'.matches(/^(a){2}{2}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('aaaa'.matches(/^(a){2}{2}$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'aa'.matches(/^(?:a)$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('aa'.matches(/^(?:a)$/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
  }
 ]

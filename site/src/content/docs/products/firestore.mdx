@@ -54,16 +54,16 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 
 A `where` keeps a row only when its condition (a comparison, a field or another supported function) is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and every answer carries the execution time. A stored `-0.0` reads back as `-0.0`, as in production; the official emulator stores it as `0.0`.
 
-The answers follow production as recorded by fireemu's production observations (comparisons across value types, missing fields, integer and double values compared exactly, select alias rules and refusal texts). Where production has not been observed, the profiles differ:
+The answers follow production as recorded by fireemu's production observations (comparisons across value types, vectors and missing fields, integer and double values compared exactly, conditions of every kind, literal values, select alias rules and the alias length limit, document functions and refusal texts). Where production has not been observed, the profiles differ:
 
 | Input | `strict` | `emulator` |
 |---|---|---|
-| A comparison of vectors, or a missing field against a string, bytes or another non-numeric value outside a `where` field filter | `UNIMPLEMENTED` | Answered as the official emulator answers it |
-| A `where` on a double, timestamp, bytes, geo point or vector | `UNIMPLEMENTED` | The row is dropped |
-| `collectionId` or `parent` of a missing or `null` value | `UNIMPLEMENTED` | `null` |
-| A repeated or non-string `map(...)` key | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
-| A literal `select` value other than a finite number or an array of finite numbers (infinities and NaN included) | `UNIMPLEMENTED` | Returned as written |
-| A quoted reserved alias (`` `__x__` ``), or a reserved name below another field (`a.__x__`) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, or a nested field, as the official emulator answers |
+| A literal `select` value holding a vector | `UNIMPLEMENTED` | Returned as written |
+| A `where` on a constant integer, timestamp or other kind besides `true`, `false`, `null`, a double and a string | `UNIMPLEMENTED` | The row is kept only for `true` |
+| A `select` alias of 1500 bytes or more holding non-ASCII characters | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, as for an ASCII alias |
+| A document function of an argument that is not a reference, a string, `null` or missing | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
+| A `map(...)` key that is neither a string nor an integer, or a repeated key with a missing value | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
+| An array or map literal holding both fields and functions, or used as a function argument | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
 
 Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.
 

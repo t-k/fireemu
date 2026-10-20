@@ -188,40 +188,47 @@ fn document_functions_split_the_reference() {
     );
 }
 
-/// Strict answers what FS-ENT-ORACLE O-1 recorded from production (`document_id` of a missing
-/// or null value is null, the parent of a top-level document is the documents root) and
-/// refuses the inputs production has not answered.
+/// Strict answers what FS-ENT-ORACLE O-1 and O-3 recorded from production: every document
+/// function of a missing or null value is null, the parent of a top-level document is the
+/// documents root, a string argument is refused with `FUNCTION_WRONG_TYPE`, and `document_id`
+/// of a top-level collection names the reference and its length. It refuses the inputs
+/// production has not answered.
 #[test]
 fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
+    let collection = "projects/p/databases/(default)/documents/c";
     let r = row(
         "c/x",
         &[
             ("str", s("c/x")),
+            ("num", Value::Integer(1)),
             ("null", Value::Null),
-            (
-                "collection",
-                Value::Reference("projects/p/databases/(default)/documents/c".into()),
-            ),
+            ("collection", Value::Reference(collection.into())),
         ],
     );
-    for arg in ["missing", "null"] {
-        assert_eq!(
-            call("document_id", vec![field(arg)]).eval(&r),
-            Eval::Value(Value::Null),
-            "{arg}"
-        );
-    }
     for name in ["document_id", "collection_id", "parent"] {
-        for arg in ["str", "collection"] {
-            let e = call(name, vec![field(arg)]).eval(&r);
-            assert!(unobserved(&e), "{name}({arg}) = {e:?}");
+        for arg in ["missing", "null"] {
+            assert_eq!(
+                call(name, vec![field(arg)]).eval(&r),
+                Eval::Value(Value::Null),
+                "{name}({arg})"
+            );
         }
+        assert_eq!(
+            call(name, vec![field("str")]).eval(&r),
+            Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Reference",
+                got: "STRING"
+            }),
+            "{name}(str)"
+        );
+        // Another argument type is unrecorded.
+        let e = call(name, vec![field("num")]).eval(&r);
+        assert!(unobserved(&e), "{name}(num) = {e:?}");
     }
     for name in ["collection_id", "parent"] {
-        for arg in ["missing", "null"] {
-            let e = call(name, vec![field(arg)]).eval(&r);
-            assert!(unobserved(&e), "{name}({arg}) = {e:?}");
-        }
+        let e = call(name, vec![field("collection")]).eval(&r);
+        assert!(unobserved(&e), "{name}(collection) = {e:?}");
     }
     assert_eq!(
         call("parent", vec![field("__name__")]).eval(&r),
@@ -229,22 +236,39 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
             "projects/p/databases/(default)/documents".into()
         ))
     );
-    // Only the exact documents root answers production's INVALID_ARGUMENT; a collection that
-    // happens to be named `documents` is no root, and its answer is unrecorded.
+    // The exact documents root: production refuses its ID and its collection ID, and answers
+    // null for its parent. A top-level collection (one named `documents` too): its ID is
+    // refused naming the reference and its length. A deeper collection, or a malformed root,
+    // is unrecorded.
     let reference = |name: &str| Expr::Constant(Value::Reference(name.to_owned()));
+    let root = "projects/p/databases/(default)/documents";
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        for name in ["document_id", "collection_id"] {
+            assert_eq!(
+                call(name, vec![reference(root)]).eval_in(&r, unrecorded),
+                Eval::Error(EvalError::Invalid(format!(
+                    "{name}(...) requires a non-empty path."
+                )))
+            );
+        }
         assert_eq!(
-            call(
-                "document_id",
-                vec![reference("projects/p/databases/(default)/documents")]
-            )
-            .eval_in(&r, unrecorded),
-            Eval::Error(EvalError::Invalid(
-                "document_id(...) requires a non-empty path.".into()
-            ))
+            call("parent", vec![reference(root)]).eval_in(&r, unrecorded),
+            Eval::Value(Value::Null)
         );
         for name in [
+            collection,
             "projects/p/databases/(default)/documents/documents",
+        ] {
+            assert_eq!(
+                call("document_id", vec![reference(name)]).eval_in(&r, unrecorded),
+                Eval::Error(EvalError::Invalid(format!(
+                    "Document parent name \"{name}\" lacks \"/\" at index {}.",
+                    name.len()
+                ))),
+                "{name}"
+            );
+        }
+        for name in [
             "projects/p/databases/(default)/documents/a/b/documents",
             "projects//databases/(default)/documents",
         ] {
@@ -255,10 +279,10 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
         }
     }
     // An error argument propagates unchanged.
-    let inner = call("parent", vec![field("str")]).eval(&r);
+    let inner = call("parent", vec![field("num")]).eval(&r);
     assert!(unobserved(&inner));
     assert_eq!(
-        call("document_id", vec![call("parent", vec![field("str")])]).eval(&r),
+        call("document_id", vec![call("parent", vec![field("num")])]).eval(&r),
         inner
     );
 }
@@ -348,7 +372,7 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
     );
     assert!(matches!(
         execute(vec![Stage::Where(error)], input.clone()),
-        Err(EvalError::Unobserved {
+        Err(EvalError::WrongType {
             function: "parent",
             ..
         })
@@ -366,23 +390,29 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
             Vec::<BTreeMap<String, Value>>::new()
         );
     }
-    // A string condition drops the row too (FS-ENT-ORACLE O-2); a double is unrecorded.
+    // A string condition drops the row too (FS-ENT-ORACLE O-2), and so do a double, NaN, a
+    // timestamp, bytes, a geo point and a vector (O-3), in both profiles.
     assert!(execute(vec![Stage::Where(field("k"))], input.clone())
         .unwrap()
         .is_empty());
-    let double = vec![Stage::Where(Expr::Constant(Value::Double(1.5)))];
-    assert!(matches!(
-        execute(double.clone(), input.clone()),
-        Err(EvalError::Unobserved {
-            function: "where",
-            ..
-        })
-    ));
-    assert!(
-        execute_in(double, input.clone(), Unrecorded::OfficialEmulator)
-            .unwrap()
-            .is_empty()
-    );
+    for value in [
+        Value::Double(1.5),
+        Value::Double(f64::NAN),
+        Value::Timestamp(crate::value::Timestamp::new(0, 0).unwrap()),
+        Value::Bytes(vec![1]),
+        Value::GeoPoint(crate::value::GeoPoint::new(0.0, 1.0).unwrap()),
+        Value::Vector(vec![1.0]),
+    ] {
+        for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let stages = vec![Stage::Where(Expr::Constant(value.clone()))];
+            assert!(
+                execute_in(stages, input.clone(), unrecorded)
+                    .unwrap()
+                    .is_empty(),
+                "{value:?} {unrecorded:?}"
+            );
+        }
+    }
     let flag = vec![row("c/a", &[("f", Value::Boolean(true))]), row("c/b", &[])];
     assert_eq!(
         execute(vec![Stage::Where(field("f"))], flag.clone()).unwrap(),
@@ -694,7 +724,7 @@ fn errors_and_functions_describe_themselves() {
 
 #[test]
 fn document_functions_name_why_an_input_is_unobserved() {
-    let r = row("c/x", &[("str", s("c/x"))]);
+    let r = row("c/x", &[("num", Value::Integer(1))]);
     let reason = |name: &str, arg: Expr| match call(name, vec![arg]).eval(&r) {
         Eval::Error(EvalError::Unobserved { function, reason }) => {
             assert_eq!(function, name);
@@ -704,23 +734,17 @@ fn document_functions_name_why_an_input_is_unobserved() {
     };
     for name in ["document_id", "collection_id", "parent"] {
         assert_eq!(
-            reason(name, field("str")),
+            reason(name, field("num")),
             "the argument is not a document reference"
         );
         assert_eq!(
             reason(
                 name,
                 Expr::Constant(Value::Reference(
-                    "projects/p/databases/(default)/documents/c".into()
+                    "projects/p/databases/(default)/documents/c/x/s".into()
                 ))
             ),
             "the reference does not name a document"
-        );
-    }
-    for name in ["collection_id", "parent"] {
-        assert_eq!(
-            reason(name, field("missing")),
-            "the argument is absent or null"
         );
     }
     // A reference constant names its document.
@@ -736,11 +760,10 @@ fn document_functions_name_why_an_input_is_unobserved() {
     );
 }
 
-/// The official emulator (firebase-tools 15.28.2, Enterprise) answers null for a document
-/// function of a missing or null value and refuses other types with `INVALID_ARGUMENT`; the
-/// emulator profile follows it. Strict answers only what production answered (FS-ENT-ORACLE
-/// O-1): `document_id` of a missing or null value, the parent of a top-level document, and
-/// the `INVALID_ARGUMENT` for `document_id` of the documents root.
+/// The official emulator (firebase-tools 15.28.2, Enterprise) refuses every argument type but a
+/// reference with `INVALID_ARGUMENT`; the emulator profile follows it. Production refused a
+/// string the same way (FS-ENT-ORACLE O-3), so strict refuses a string and leaves the other
+/// types unrecorded. Both answer null for a missing or null value, as production does.
 #[test]
 fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers() {
     let r = row(
@@ -752,47 +775,47 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
         ],
     );
     let official = |e: &Expr| e.eval_in(&r, Unrecorded::OfficialEmulator);
-    let invalid = |message: &str| Eval::Error(EvalError::Invalid(message.to_owned()));
+    let wrong = |function: &'static str, got: &'static str| {
+        Eval::Error(EvalError::WrongType {
+            function,
+            expected: "Reference",
+            got,
+        })
+    };
     for name in ["document_id", "collection_id", "parent"] {
         for arg in ["missing", "null"] {
             let e = call(name, vec![field(arg)]);
             assert_eq!(official(&e), Eval::Value(Value::Null), "{name}({arg})");
-            if name != "document_id" {
-                assert!(unobserved(&e.eval(&r)), "{name}({arg})");
-            }
+            assert_eq!(e.eval(&r), Eval::Value(Value::Null), "{name}({arg})");
         }
-        for (arg, kind) in [("str", "STRING"), ("num", "LONG")] {
-            let e = call(name, vec![field(arg)]);
-            assert_eq!(
-                official(&e),
-                invalid(&format!(
-                    "The function {name}(...) requires `Reference` but got `{kind}`."
-                )),
-                "{name}({arg})"
-            );
-            assert!(unobserved(&e.eval(&r)), "{name}({arg})");
-        }
+        let text = call(name, vec![field("str")]);
+        assert_eq!(official(&text), wrong(name, "STRING"));
+        assert_eq!(text.eval(&r), wrong(name, "STRING"));
+        let number = call(name, vec![field("num")]);
+        assert_eq!(official(&number), wrong(name, "LONG"));
+        assert!(unobserved(&number.eval(&r)), "{name}(num)");
     }
+    assert_eq!(
+        wrong("parent", "STRING"),
+        Eval::Error(EvalError::WrongType {
+            function: "parent",
+            expected: "Reference",
+            got: "STRING"
+        })
+    );
+    assert_eq!(
+        EvalError::WrongType {
+            function: "parent",
+            expected: "Reference",
+            got: "STRING"
+        }
+        .to_string(),
+        "The function parent(...) requires `Reference` but got `STRING`."
+    );
     let root = Value::Reference("projects/p/databases/(default)/documents".to_owned());
     let top_parent = call("parent", vec![field("__name__")]);
     assert_eq!(official(&top_parent), Eval::Value(root.clone()));
     assert_eq!(top_parent.eval(&r), Eval::Value(root));
-    // The root names no document: production refuses its ID, and the official emulator its
-    // collection ID too.
-    let id = call("document_id", vec![top_parent.clone()]);
-    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
-        assert_eq!(
-            id.eval_in(&r, unrecorded),
-            invalid("document_id(...) requires a non-empty path.")
-        );
-    }
-    let collection = call("collection_id", vec![top_parent.clone()]);
-    assert_eq!(
-        official(&collection),
-        invalid("collection_id(...) requires a non-empty path.")
-    );
-    assert!(unobserved(&collection.eval(&r)));
-    assert!(unobserved(&official(&call("parent", vec![top_parent]))));
     // A subcollection document's parent is the same in both.
     let sub = row("c/x/s/y", &[]);
     let up = call("parent", vec![field("__name__")]);

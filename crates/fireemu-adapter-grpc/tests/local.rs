@@ -6814,13 +6814,22 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     };
     function.options.insert("unexpected".into(), i(1));
     let cases = [
+        // A map or an integer argument is unrecorded; production refused a string (O-3).
         (
-            "document_id of a non-reference field",
+            "document_id of a map or integer field",
+            vec![pipeline_select_map(vec![(
+                "id",
+                pipeline_function("document_id", vec![pipeline_field("profile")]),
+            )])],
+            unsupported,
+        ),
+        (
+            "document_id of a string field",
             vec![pipeline_select_map(vec![(
                 "id",
                 pipeline_function("document_id", vec![pipeline_field("name")]),
             )])],
-            unsupported,
+            invalid,
         ),
         (
             "document_id of a path literal",
@@ -6828,7 +6837,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "id",
                 pipeline_function("document_id", vec![s("nest/a")]),
             )])],
-            unsupported,
+            invalid,
         ),
         (
             "unknown function in select",
@@ -6925,43 +6934,28 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     assert!(handle.await.unwrap_err().is_cancelled());
 }
 
-/// Document functions: both profiles answer what production answered in FS-ENT-ORACLE O-1
-/// (null for `document_id` of a missing value, the documents root for the parent of a
-/// top-level document). Inputs whose production result is unrecorded are refused by strict;
-/// the emulator profile answers what the official emulator (firebase-tools 15.28.2,
-/// Enterprise) answers (null for `collection_id` of null) and refuses what it refuses
-/// (another type, as `INVALID_ARGUMENT`).
+/// Document functions: both profiles answer what production answered in FS-ENT-ORACLE O-1 and
+/// O-3: null for a missing or null value, the documents root for the parent of a top-level
+/// document and null for its parent, `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail for
+/// a string, and for `document_id` of a top-level collection a refusal naming the reference and
+/// its length. Another argument type is unrecorded: strict refuses it, the emulator profile
+/// refuses it as the official emulator (firebase-tools 15.28.2, Enterprise) does.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
     let name = || pipeline_field("__name__");
-    let select = || {
+    let select = |value: pb::Value| {
         vec![
             pipeline_stage("collection", s("edge")),
-            pipeline_select_map(vec![
-                (
-                    "missing",
-                    pipeline_function("document_id", vec![pipeline_field("missing")]),
-                ),
-                (
-                    "nul",
-                    pipeline_function("collection_id", vec![pipeline_field("nul")]),
-                ),
-                ("up", pipeline_function("parent", vec![name()])),
-            ]),
+            pipeline_select_map(vec![("v", value)]),
         ]
     };
-    let mistyped = || {
-        vec![
-            pipeline_stage("collection", s("edge")),
-            pipeline_select_map(vec![(
-                "id",
-                pipeline_function("document_id", vec![pipeline_field("name")]),
-            )]),
-        ]
-    };
+    let call = |function: &str, arg: pb::Value| pipeline_function(function, vec![arg]);
     let null = pb::Value {
         value_type: Some(pb::value::ValueType::NullValue(0)),
+    };
+    let reference = |name: &str| pb::Value {
+        value_type: Some(pb::value::ValueType::ReferenceValue(name.to_owned())),
     };
     for policy in [
         IndexValidationPolicy::Production,
@@ -6974,30 +6968,24 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
                 database: DB.to_owned(),
                 writes: vec![update_write(
                     "edge/a",
-                    &[("name", s("a")), ("nul", null.clone())],
+                    &[("name", s("a")), ("nul", null.clone()), ("num", i(1))],
                 )],
                 ..Default::default()
             })
             .await
             .unwrap();
-        if policy == IndexValidationPolicy::Production {
-            // collection_id of null is unrecorded in production.
-            let err = pipeline_error(&mut client, select()).await;
-            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
-            // document_id of a missing field and the parent of a top-level document are
-            // recorded (FS-ENT-ORACLE O-1).
+        let mut answered = vec![
+            (call("parent", name()), reference(DOCS)),
+            (call("parent", call("parent", name())), null.clone()),
+        ];
+        for function in ["document_id", "collection_id", "parent"] {
+            answered.push((call(function, pipeline_field("missing")), null.clone()));
+            answered.push((call(function, pipeline_field("nul")), null.clone()));
+        }
+        for (value, expected) in answered {
             let docs = drain_pipeline(
                 client
-                    .execute_pipeline(pipeline_request(vec![
-                        pipeline_stage("collection", s("edge")),
-                        pipeline_select_map(vec![
-                            (
-                                "missing",
-                                pipeline_function("document_id", vec![pipeline_field("missing")]),
-                            ),
-                            ("up", pipeline_function("parent", vec![name()])),
-                        ]),
-                    ]))
+                    .execute_pipeline(pipeline_request(select(value.clone())))
                     .await
                     .unwrap()
                     .into_inner(),
@@ -7006,47 +6994,60 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
             .await;
             assert_eq!(
                 docs[0].fields,
-                [
-                    ("missing".to_owned(), null.clone()),
-                    (
-                        "up".to_owned(),
-                        pb::Value {
-                            value_type: Some(pb::value::ValueType::ReferenceValue(DOCS.to_owned())),
-                        }
-                    ),
-                ]
-                .into_iter()
-                .collect()
-            );
-        } else {
-            let docs = drain_pipeline(
-                client
-                    .execute_pipeline(pipeline_request(select()))
-                    .await
-                    .unwrap()
-                    .into_inner(),
-                1,
-            )
-            .await;
-            assert_eq!(
-                docs[0].fields,
-                [
-                    ("missing".to_owned(), null.clone()),
-                    ("nul".to_owned(), null.clone()),
-                    (
-                        "up".to_owned(),
-                        pb::Value {
-                            value_type: Some(pb::value::ValueType::ReferenceValue(DOCS.to_owned())),
-                        }
-                    ),
-                ]
-                .into_iter()
-                .collect()
+                [("v".to_owned(), expected)].into_iter().collect(),
+                "{policy:?} {value:?}"
             );
         }
-        // A mistyped argument: unrecorded in production, INVALID_ARGUMENT in the official
+        // A string argument, recorded with its detail.
+        for function in ["document_id", "collection_id", "parent"] {
+            let err =
+                pipeline_error(&mut client, select(call(function, pipeline_field("name")))).await;
+            assert_eq!(
+                err.code(),
+                tonic::Code::InvalidArgument,
+                "{policy:?}: {err}"
+            );
+            assert_eq!(
+                err.message(),
+                format!("The function {function}(...) requires `Reference` but got `STRING`.")
+            );
+            assert_eq!(
+                fireemu_adapter_grpc::production_status::details_to_json(err.details()),
+                Some(vec![serde_json::json!({
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {"function_name": function},
+                    "reason": "FUNCTION_WRONG_TYPE",
+                })]),
+                "{policy:?} {function}"
+            );
+        }
+        // document_id of a top-level collection names the reference and its length.
+        let collection = format!("{DOCS}/fns");
+        let err = pipeline_error(
+            &mut client,
+            select(call("document_id", reference(&collection))),
+        )
+        .await;
+        assert_eq!(
+            err.code(),
+            tonic::Code::InvalidArgument,
+            "{policy:?}: {err}"
+        );
+        assert_eq!(
+            err.message(),
+            format!(
+                "Document parent name \"{collection}\" lacks \"/\" at index {}.",
+                collection.len()
+            )
+        );
+        // An integer argument: unrecorded in production, INVALID_ARGUMENT in the official
         // emulator.
-        let err = pipeline_error(&mut client, mistyped()).await;
+        let err = pipeline_error(
+            &mut client,
+            select(call("document_id", pipeline_field("num"))),
+        )
+        .await;
         let (code, fireemu_code) = if policy == IndexValidationPolicy::Production {
             (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
         } else {
@@ -7057,7 +7058,7 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
         if code == tonic::Code::InvalidArgument {
             assert_eq!(
                 err.message(),
-                "The function document_id(...) requires `Reference` but got `STRING`."
+                "The function document_id(...) requires `Reference` but got `LONG`."
             );
         }
         handle.abort();
@@ -7241,22 +7242,49 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
             recorded.message(),
             "Value type is not supported: FIELD_REFERENCE_VALUE"
         );
-        // Literals holding expressions in shapes production has not answered.
-        for (label, stages) in [
+        // The literal shapes O-3 recorded, and their compositions: a select value whose
+        // expressions, at any depth, are all fields or all functions.
+        for (label, value, kind) in [
             (
                 "nested map",
-                vec![
-                    collection(),
-                    pipeline_select_map(vec![("v", map(&[("a", map(&[("b", f("i"))]))]))]),
-                ],
+                map(&[("a", map(&[("b", f("i"))]))]),
+                "FIELD_REFERENCE_VALUE",
             ),
             (
                 "map holding an array of a field",
-                vec![
-                    collection(),
-                    pipeline_select_map(vec![("v", map(&[("a", array(vec![f("i")]))]))]),
-                ],
+                map(&[("a", array(vec![f("i")]))]),
+                "FIELD_REFERENCE_VALUE",
             ),
+            (
+                "array of a field",
+                array(vec![f("i")]),
+                "FIELD_REFERENCE_VALUE",
+            ),
+            (
+                "map of a function",
+                map(&[("a", pipeline_function("document_id", vec![f("__name__")]))]),
+                "FUNCTION_VALUE",
+            ),
+            (
+                "map mixing a field and a literal",
+                map(&[("a", f("i")), ("b", i(1))]),
+                "FIELD_REFERENCE_VALUE",
+            ),
+        ] {
+            let err = pipeline_error(
+                &mut client,
+                vec![collection(), pipeline_select_map(vec![("v", value)])],
+            )
+            .await;
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
+            assert_eq!(
+                err.message(),
+                format!("Value type is not supported: {kind}"),
+                "{label}"
+            );
+        }
+        // Literals holding expressions in shapes production has not answered.
+        for (label, stages) in [
             (
                 "map mixing a field and a function",
                 vec![
@@ -7490,18 +7518,14 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         // emulator profile answers as the official emulator does (a quoted reserved name is
         // refused, a reserved name below another field is a nested key).
         let strict = policy == IndexValidationPolicy::Production;
-        // An empty alias: production is unrecorded, so strict refuses it as unobserved; the
-        // emulator profile answers the official emulator's text.
+        // An empty alias: production answered the official text over REST and gRPC (O-3).
         let err = pipeline_error(&mut client, stages(vec![("", pipeline_field("top"))])).await;
-        if strict {
-            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
-        } else {
-            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
-            assert_eq!(err.message(), "Invalid empty property path string.");
-        }
-        // The length limit, as the official emulator answers it: the segments are joined with
-        // '.' after unquoting, and 1500 bytes or more is refused with that joined text. Under
-        // the limit both profiles answer; at it strict refuses as unobserved.
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+        assert_eq!(err.message(), "Invalid empty property path string.");
+        // The length limit, as production answered it (O-3) and the official emulator alike:
+        // the segments are joined with '.' after unquoting, and 1500 bytes or more is refused
+        // with that joined text and a PROPERTY_PATH_TOO_LONG detail. Production's rows were
+        // ASCII, so strict refuses a non-ASCII path at the limit as unobserved.
         let quoted = |inner: &str| format!("`{inner}`");
         let a1499 = "a".repeat(1499);
         let a1500 = "a".repeat(1500);
@@ -7564,13 +7588,24 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             let request = stages(vec![(alias.as_str(), pipeline_field("top"))]);
             if let Some(reference) = refused {
                 let err = pipeline_error(&mut client, request).await;
-                if strict {
+                if strict && !reference.is_ascii() {
                     assert_eq!(err.code(), tonic::Code::Unimplemented, "{}", alias.len());
                 } else {
                     assert_eq!(err.code(), tonic::Code::InvalidArgument, "{}", alias.len());
                     assert_eq!(
                         err.message(),
                         format!("The field reference '{reference}' is longer than 1500 bytes."),
+                        "{}",
+                        alias.len()
+                    );
+                    assert_eq!(
+                        fireemu_adapter_grpc::production_status::details_to_json(err.details()),
+                        Some(vec![serde_json::json!({
+                            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                            "domain": "firestore.googleapis.com",
+                            "metadata": {"field": reference, "limit": "1500"},
+                            "reason": "PROPERTY_PATH_TOO_LONG",
+                        })]),
                         "{}",
                         alias.len()
                     );
@@ -7593,9 +7628,10 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                 );
             }
         }
-        // A plain over-length alias that also fails the regex gets the regex text in the
-        // emulator profile (the official emulator checks the syntax first); production's order
-        // is unrecorded.
+        // Production answered these shapes as the official emulator does (O-1, O-3): invalid
+        // and reserved aliases with their texts, a reserved name below another field as a
+        // nested key, and a long invalid name with the syntax text (the syntax is checked
+        // first).
         let long_alias = "a".repeat(1501);
         let dashes = "-".repeat(1501);
         for (alias, official) in [
@@ -7616,10 +7652,7 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             (dashes.as_str(), Some("Invalid property path \"---")),
         ] {
             let request = stages(vec![(alias, pipeline_field("top"))]);
-            if strict {
-                let err = pipeline_error(&mut client, request).await;
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{alias}: {err}");
-            } else if let Some(text) = official {
+            if let Some(text) = official {
                 let err = pipeline_error(&mut client, request).await;
                 assert_eq!(err.code(), tonic::Code::InvalidArgument, "{alias}: {err}");
                 assert!(err.message().starts_with(text), "{alias}: {err}");
@@ -8135,11 +8168,10 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
         for (label, stages, official) in answered {
             assert_eq!(run(stages).await.unwrap(), official, "{policy:?} {label}");
         }
-        // Cells production has not answered: strict refuses them until a recording does (a
-        // missing field against an array or map literal, a double as the whole condition);
-        // the emulator profile answers as the official emulator. Two strings field to field
-        // and a string condition are recorded (FS-ENT-ORACLE O-2) and answered.
-        let unanswered = [
+        // Cells O-2 and O-3 recorded, answered in both profiles: a missing field against an
+        // array or map literal, a double or a string as the whole condition, two strings field
+        // to field.
+        for (label, stages, expected) in [
             (
                 "missing field against an array literal",
                 vec![
@@ -8163,8 +8195,6 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
                 vec![collection(), pipeline_stage("where", f("d")), select_i()],
                 vec![],
             ),
-        ];
-        for (label, stages, expected) in [
             (
                 "two strings field to field",
                 vec![
@@ -8182,58 +8212,33 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
         ] {
             assert_eq!(run(stages).await.unwrap(), expected, "{policy:?} {label}");
         }
-        for (label, stages, official) in unanswered {
-            let got = run(stages).await;
-            if strict {
-                let err = got.unwrap_err();
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
-                assert_eq!(
-                    err.metadata().get("fireemu-code").unwrap(),
-                    "FS_PIPE_UNSUPPORTED_STAGE",
-                    "{label}"
-                );
-            } else {
-                assert_eq!(got.unwrap(), official, "{label}");
-            }
-        }
-        // A literal holding an expression: production and the official emulator refuse a map
-        // literal holding a field; strict leaves the other shapes unobserved.
+        // A literal holding an expression: production refused a map literal holding a field
+        // (O-1) and an array holding one (O-3) as the official emulator does. A `true`
+        // condition keeps the rows and an integer one is unrecorded (O-3 recorded `true`,
+        // `false`, null, a double and a string).
         let refused = |stages| async {
             let err = run(stages).await.unwrap_err();
             (err.code(), err.message().to_owned())
         };
-        assert_eq!(
-            refused(vec![
-                collection(),
-                pipeline_select_map(vec![("v", map(&[("k", f("i"))]))]),
-            ])
-            .await,
-            (
-                tonic::Code::InvalidArgument,
-                "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned()
-            )
-        );
-        let expression_array = refused(vec![
-            collection(),
-            pipeline_select_map(vec![("v", array(vec![f("i")]))]),
-        ])
-        .await;
-        let constant_where = run(vec![collection(), pipeline_stage("where", boolean(true))]).await;
-        if strict {
-            assert_eq!(expression_array.0, tonic::Code::Unimplemented);
+        for value in [map(&[("k", f("i"))]), array(vec![f("i")])] {
             assert_eq!(
-                constant_where.unwrap_err().code(),
-                tonic::Code::Unimplemented
-            );
-        } else {
-            assert_eq!(
-                expression_array,
+                refused(vec![collection(), pipeline_select_map(vec![("v", value)])]).await,
                 (
                     tonic::Code::InvalidArgument,
                     "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned()
                 )
             );
-            assert_eq!(constant_where.unwrap().len(), 2);
+        }
+        let constant_where = run(vec![collection(), pipeline_stage("where", boolean(true))]).await;
+        assert_eq!(constant_where.unwrap().len(), 2, "{policy:?}");
+        let integer_where = run(vec![collection(), pipeline_stage("where", i(1))]).await;
+        if strict {
+            assert_eq!(
+                integer_where.unwrap_err().code(),
+                tonic::Code::Unimplemented
+            );
+        } else {
+            assert!(integer_where.unwrap().is_empty());
         }
         handle.abort();
     }

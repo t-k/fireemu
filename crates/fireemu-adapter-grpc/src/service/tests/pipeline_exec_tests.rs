@@ -613,10 +613,9 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
                     "a",
                     pb::value::ValueType::ReferenceValue(format!("{PARENT}/o/z")),
                 ),
-                (
-                    "b",
-                    pb::value::ValueType::StringValue("not a reference".into()),
-                ),
+                // An integer is an argument type production has not answered (it answered a
+                // string, FS-ENT-ORACLE O-3).
+                ("b", pb::value::ValueType::IntegerValue(7)),
             ]
             .into_iter()
             .map(|(id, r)| pb::Write {

@@ -7070,8 +7070,8 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
             assert_eq!(body.as_array().map(Vec::len), Some(1), "{label}");
         }
         // The parent of a top-level document is the documents root under both profiles
-        // (FS-ENT-ORACLE O-1); its document ID is INVALID_ARGUMENT as in production, its
-        // collection ID INVALID_ARGUMENT as in the official emulator and unrecorded under strict.
+        // (FS-ENT-ORACLE O-1); its document ID and collection ID are INVALID_ARGUMENT as in
+        // production (O-1, O-3).
         let up = json!({"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}});
         let select = |v: &Value| {
             pipeline_body(
@@ -7095,7 +7095,11 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
         let (status, body) = run(select(
             &json!({"functionValue": {"name": "collection_id", "args": [up]}}),
         ));
-        assert_eq!(status, if strict { 501 } else { 400 }, "{body}");
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            stream_error(&body)["error"]["message"],
+            "collection_id(...) requires a non-empty path."
+        );
         assert_eq!(body.as_array().map(Vec::len), Some(1));
     }
 }
@@ -7239,6 +7243,7 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
                 "strict={strict}"
             );
         }
+        // The literal kinds FS-ENT-ORACLE O-3 recorded, and arrays and maps of them.
         for literal in [
             json!({"stringValue": "x"}),
             json!({"booleanValue": true}),
@@ -7248,12 +7253,21 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
             json!({"arrayValue": {"values": [{"stringValue": "x"}]}}),
         ] {
             let (status, body) = select(literal.clone());
+            assert_eq!(status, 200, "strict={strict} {literal}: {body}");
             assert_eq!(
-                status,
-                if strict { 501 } else { 200 },
-                "strict={strict} {literal}: {body}"
+                body[0]["results"][0]["fields"]["v"], literal,
+                "strict={strict}"
             );
         }
+        // A vector literal is unrecorded.
+        let (status, body) = select(
+            json!({"mapValue": {"fields": {"__type__": {"stringValue": "__vector__"}, "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}}),
+        );
+        assert_eq!(
+            status,
+            if strict { 501 } else { 200 },
+            "strict={strict}: {body}"
+        );
     }
 }
 

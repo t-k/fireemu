@@ -7689,6 +7689,9 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
     }
 }
 
+/// A labelled pipeline and the fields of its one result.
+type Answered<'a> = (&'a str, Vec<pb::pipeline::Stage>, Vec<(String, pb::Value)>);
+
 /// Inputs production has not answered, where the emulator profile answers as the official
 /// emulator (1.22.0, probed locally) answers them and strict refuses them as unobserved: a
 /// repeated `map(...)` key with a missing value (only two present values repeat), a key that
@@ -7729,7 +7732,6 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
         })),
     };
     // Answered by the official emulator: (label, stages, the emulator profile's result fields).
-    type Answered<'a> = (&'a str, Vec<pb::pipeline::Stage>, Vec<(String, pb::Value)>);
     let answered: Vec<Answered> = vec![
         (
             "repeated key, first value missing",

@@ -7324,6 +7324,14 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             "reserved-looking",
             stages(vec![("__x__", pipeline_field("top"))]),
         ),
+        (
+            "quoted reserved name",
+            stages(vec![("`__x__`", pipeline_field("top"))]),
+        ),
+        (
+            "quoted document name",
+            stages(vec![("`__name__`", pipeline_field("top"))]),
+        ),
     ];
     for policy in [
         IndexValidationPolicy::Production,

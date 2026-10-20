@@ -372,10 +372,50 @@ fn strict_answers_the_classic_field_versus_literal_shapes() {
         &condition("not_equal", vec![field("x"), lit("a")])
             .eval_condition_in(&r, Unrecorded::Refuse)
     ));
-    // Two fields of one kind are no classic shape.
+    // Two fields of one kind are no classic shape, nor are two literals.
     assert!(unobserved(
         &call("less_than", vec![field("s"), field("s")]).eval_in(&r, Unrecorded::Refuse)
     ));
+    assert!(unobserved(
+        &call("less_than", vec![lit("a"), lit("b")]).eval_in(&r, Unrecorded::Refuse)
+    ));
+    // A document function of a field is a classic operand (the finite subset's equality of a
+    // document ID and a literal); another function of a field is not.
+    let id = || call("document_id", vec![field("__name__")]);
+    assert_eq!(
+        condition("equal", vec![id(), lit("d")]).eval_condition_in(&r, Unrecorded::Refuse),
+        boolean(true)
+    );
+    assert_eq!(
+        call("less_than", vec![id(), lit("e")]).eval_in(&r, Unrecorded::Refuse),
+        boolean(true)
+    );
+    assert!(unobserved(
+        &condition(
+            "equal",
+            vec![
+                call("array", vec![field("s")]),
+                Expr::Constant(Value::Integer(1))
+            ]
+        )
+        .eval_condition_in(&r, Unrecorded::Refuse)
+    ));
+    // Null, NaN, arrays and maps are not ordered by a classic filter.
+    let n = row(vec![("n".to_owned(), Value::Null)]);
+    for literal in [Value::Null] {
+        assert!(unobserved(
+            &call("less_than", vec![field("n"), Expr::Constant(literal)])
+                .eval_in(&n, Unrecorded::Refuse)
+        ));
+    }
+    // A refused comparison names itself.
+    for op in OPS {
+        let got = call(op, vec![field("s"), field("g")]).eval_in(&r, Unrecorded::Refuse);
+        assert!(
+            matches!(&got, Eval::Error(EvalError::Unobserved { function, .. }) if function == &op),
+            "{op}: {got:?}"
+        );
+    }
 }
 
 /// The comparison answers FS-ENT-ORACLE O-1 recorded from production for its probe document

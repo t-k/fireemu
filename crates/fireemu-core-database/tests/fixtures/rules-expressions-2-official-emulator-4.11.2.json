@@ -2695,5 +2695,47 @@
   "load": 400,
   "error": "1:37: Illegal regular expression, integer expected at position 8\n",
   "read": null
+ },
+ {
+  "expr": "'a'.matches(/a[(]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/^[(]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/ab[)]c/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/^ab[{]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/^abc[x](y/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected ')' at position 10\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/abc[x]{y}/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, integer expected at position 9\n",
+  "read": null
  }
 ]

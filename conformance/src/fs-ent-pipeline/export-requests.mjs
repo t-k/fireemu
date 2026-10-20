@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 
 import { assertCompleteFixture } from "../fs-query-index/fixture-scan.mjs";
 import { PROGRAMS } from "./corpus.mjs";
+import { isMainModule } from "../fs-query-index/main-module.mjs";
 
 export const EXPORT = new URL("../../fs-ent-pipeline-requests.json", import.meta.url);
 const FIXTURE = new URL("../../fs-ent-pipeline-production.json", import.meta.url);
@@ -40,7 +41,7 @@ export function exportText(programs = recordedPrograms()) {
   return `${JSON.stringify(out)}\n`;
 }
 
-if (import.meta.main) {
+if (isMainModule(import.meta)) {
   const text = exportText();
   if (process.argv[2] === "--check") {
     const current = await readFile(EXPORT, "utf8").catch(() => "");

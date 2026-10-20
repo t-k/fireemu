@@ -280,11 +280,12 @@ test("meta.json that cannot be written is reported, never thrown, so the ledger 
       throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
     };
     const meta1 = { ...meta, programs: [] };
-    assert.equal(
+    // A recorded run whose meta.json fails is not recorded: the fixture is not written either.
+    assert.deepEqual(
       await run.writeMeta({ runDir, meta: meta1, outcome: "recorded", write: failing }),
-      "meta.json not written: ENOSPC: no space left on device",
+      { outcome: "not-written", error: "meta.json not written: ENOSPC: no space left on device" },
     );
-    assert.equal(
+    assert.deepEqual(
       await run.writeMeta({
         runDir,
         meta: meta1,
@@ -292,17 +293,23 @@ test("meta.json that cannot be written is reported, never thrown, so the ledger 
         error: "seed refused",
         write: failing,
       }),
-      "seed refused (meta.json not written: ENOSPC: no space left on device)",
+      {
+        outcome: "aborted",
+        error: "seed refused (meta.json not written: ENOSPC: no space left on device)",
+      },
     );
-    assert.equal(
+    assert.deepEqual(
       await run.writeMeta({ runDir, meta: meta1, outcome: "aborted", error: "seed refused" }),
-      "seed refused",
+      { outcome: "aborted", error: "seed refused" },
     );
     const written = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
     assert.equal(written.outcome, "aborted");
     assert.equal(written.error, "seed refused");
     assert.equal((await stat(join(runDir, "meta.json"))).mode & 0o777, 0o600);
-    assert.equal(await run.writeMeta({ runDir, meta: meta1, outcome: "recorded" }), undefined);
+    assert.deepEqual(await run.writeMeta({ runDir, meta: meta1, outcome: "recorded" }), {
+      outcome: "recorded",
+      error: undefined,
+    });
   }));
 
 test("check, export-comparison and the request export read the committed fixture through the guard", () =>
@@ -517,4 +524,38 @@ test("the CLIs run through a symlinked directory and a directory whose name hold
       assert.match(usage.stderr, /^usage: run\.mjs /, base);
     }
   });
+});
+
+test("the main-module check falls back to a realpath comparison where import.meta.main is missing", async () => {
+  const { isMainModule } = await import("./fs-query-index/main-module.mjs");
+  const { mkdir, symlink } = await import("node:fs/promises");
+  const { pathToFileURL } = await import("node:url");
+  await withDir(async (dir) => {
+    const real = join(dir, "real dir");
+    await mkdir(real);
+    const file = join(real, "cli.mjs");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(file, "");
+    const linked = join(dir, "linked");
+    await symlink(real, linked);
+    const url = pathToFileURL(file).href;
+    // A Node that sets import.meta.main decides alone.
+    assert.equal(isMainModule({ url, main: true }, "/elsewhere"), true);
+    assert.equal(isMainModule({ url, main: false }, file), false);
+    // Without it, the paths are compared after resolving links (Node 20 and 22 before 22.18).
+    assert.equal(isMainModule({ url, main: undefined }, file), true);
+    assert.equal(isMainModule({ url, main: undefined }, join(linked, "cli.mjs")), true);
+    assert.equal(isMainModule({ url, main: undefined }, join(dir, "other.mjs")), false);
+    assert.equal(isMainModule({ url, main: undefined }, undefined), false);
+  });
+  // Every CLI uses the shared check.
+  for (const cli of [
+    "./fs-query-index/unknown-rows.mjs",
+    "./fs-query-index/run.mjs",
+    "./fs-ent-pipeline/export-requests.mjs",
+  ]) {
+    const source = await readFile(new URL(cli, import.meta.url), "utf8");
+    assert.match(source, /if \(isMainModule\(import\.meta\)\) \{/, cli);
+    assert.doesNotMatch(source, /if \(import\.meta\.main\)/, cli);
+  }
 });

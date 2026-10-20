@@ -11,7 +11,8 @@
 //                                                       fireemu-oracle-query/(default) and update
 //                                                       fs-query-index-production.json
 //   node src/fs-query-index/run.mjs rebuild-fixture <runDir> [--skip-changed]
-//   node src/fs-query-index/unknown-rows.mjs <log> [--expect <n>]
+//   node src/fs-query-index/unknown-rows.mjs <log> --expect <n>
+//                                                       (packets pass 2 x the planned steps)
 //                                                       the run-close check: step lines whose
 //                                                       outcome production did not settle
 //   node src/fs-query-index/run.mjs check               run the corpus against fireemu and
@@ -45,6 +46,7 @@ import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { assertCompleteFixture, loadCommittedFixture, scanFixture } from "./fixture-scan.mjs";
 import { LANES, selectLane } from "./lanes.mjs";
+import { isMainModule } from "./main-module.mjs";
 
 const execFileAsync = promisify(execFile);
 const LANE = selectLane();
@@ -610,8 +612,10 @@ export async function recordRecordings({
 }
 
 /**
- * Writes the run's meta.json; a failure is returned in the error (the caller still appends the
- * ledger row of a run that has sent requests), never thrown.
+ * Writes the run's meta.json and returns the outcome and error for the ledger row: a failure is
+ * added to the error, never thrown (the caller still appends the row of a run that has sent
+ * requests), and a recorded run whose meta.json failed is `not-written`, as its fixture is not
+ * written either.
  */
 export async function writeMeta({ runDir, meta, outcome, error, partial, write = writeFile }) {
   try {
@@ -620,10 +624,13 @@ export async function writeMeta({ runDir, meta, outcome, error, partial, write =
       JSON.stringify({ ...meta, outcome, error, ...(partial ? { partial } : {}) }, null, 2),
       { mode: 0o600 },
     );
-    return error;
+    return { outcome, error };
   } catch (failed) {
     const reason = `meta.json not written: ${String(failed.message ?? failed)}`;
-    return error ? `${error} (${reason})` : reason;
+    return {
+      outcome: outcome === "recorded" ? "not-written" : outcome,
+      error: error ? `${error} (${reason})` : reason,
+    };
   }
 }
 
@@ -702,7 +709,7 @@ async function recordProductionLocked() {
   const { recordings, partial } = recorded;
   let { outcome, error } = recorded;
   // writeMeta never throws, so the ledger row below always lands.
-  error = await writeMeta({ runDir, meta, outcome, error, partial });
+  ({ outcome, error } = await writeMeta({ runDir, meta, outcome, error, partial }));
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const failures = recordings.flatMap((r) => r.failures);
   try {
@@ -1035,8 +1042,8 @@ async function exportComparison(out) {
 }
 
 const mode = process.argv[2];
-// `import.meta.main`: a launch through a symlink or an escaped path still runs the mode.
-if (import.meta.main) {
+// `isMainModule`: a launch through a symlink or an escaped path still runs the mode.
+if (isMainModule(import.meta)) {
   if (mode === "verify-indexes") await verifyIndexes();
   else if (mode === "preflight") await preflight(await accessToken());
   else if (mode === "record-production") await recordProduction();

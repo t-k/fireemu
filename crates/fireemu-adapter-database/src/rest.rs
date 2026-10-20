@@ -732,8 +732,12 @@ impl Database {
     }
 
     /// Empties every namespace `cleared` accepts, as a session reset does: their streams and
-    /// listens see the data go, through the waker.
+    /// listens see the data go, through the waker, and the onDisconnect writes registered for
+    /// them are dropped, so a connection from before the reset never writes into the new
+    /// session when it ends.
     pub fn clear_namespaces_where(&mut self, cleared: impl Fn(&str) -> bool) {
+        self.on_disconnect
+            .retain(|_, (namespace, _)| !cleared(namespace));
         let names: Vec<String> = self
             .namespaces
             .keys()

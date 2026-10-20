@@ -509,3 +509,27 @@ fn under_deny_all_only_the_owner_registers() {
     };
     assert_eq!(String::from_utf8(response.body).unwrap(), r#"{"a":1}"#);
 }
+
+#[test]
+fn a_session_reset_drops_the_registrations_of_the_namespaces_it_clears() {
+    // A connection from the previous test must not write into the new session.
+    let mut db = Database::new(RestOptions::default(), 1);
+    let mut cleared = open(&mut db, "demo-default-rtdb");
+    let mut kept = open(&mut db, "other");
+    send(
+        &mut db,
+        &mut cleared,
+        &request(1, "o", r#"{"p":"/a","d":1}"#),
+    );
+    send(&mut db, &mut kept, &request(1, "o", r#"{"p":"/b","d":2}"#));
+    db.clear_namespaces_where(|ns| fireemu_adapter_database::namespace::project_of(ns) == "demo");
+    db.drain_events();
+    db.close_realtime(cleared.client(), LATER);
+    db.close_realtime(kept.client(), LATER);
+    assert_eq!(
+        rest(&mut db, "GET", "/.json?ns=demo-default-rtdb", ""),
+        "null"
+    );
+    assert!(db.drain_events().is_empty());
+    assert_eq!(rest(&mut db, "GET", "/.json?ns=other", ""), r#"{"b":2}"#);
+}

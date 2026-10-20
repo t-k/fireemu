@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- A pipeline `select` alias longer than 1500 bytes is now refused with `UNIMPLEMENTED` under the strict profile, since production's answer is unrecorded; the emulator profile answers the official emulator's `INVALID_ARGUMENT` text. Production's invalid-path text now answers only the alias shapes it was recorded for.
+
 ## [0.28.0] - 2026-10-20
 
 ### Added

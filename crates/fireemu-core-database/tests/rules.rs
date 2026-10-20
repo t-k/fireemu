@@ -505,7 +505,7 @@ mod properties {
             let path = Path::from_keys(keys[..grants.len()].iter().copied());
             let auth = Json::Null;
             let requester = Requester { auth: &auth, now: 0 };
-            let expected = grants.iter().any(|g| *g == Some(true));
+            let expected = grants.contains(&Some(true));
             prop_assert_eq!(rules.can_read(None, &path, None, &requester), expected);
         }
     }

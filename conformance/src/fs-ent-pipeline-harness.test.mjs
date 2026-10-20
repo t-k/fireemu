@@ -463,7 +463,7 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   assert.deepEqual(literals["negative-zero-in-array"].arrayValue.values[1], { doubleValue: "-0" });
 });
 
-test("O-4 records only its seven new programs, comparisons last, within its request cap: 2 x (84 + 82) + 5", async () => {
+test("O-4 records only its seven new programs, comparisons last, within its request cap: 2 x (84 + 88) + 5", async () => {
   const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
   const { readFile } = await import("node:fs/promises");
   const o4 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o4/");

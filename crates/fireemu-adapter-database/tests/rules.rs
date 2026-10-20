@@ -785,3 +785,51 @@ fn rules_loaded_outside_a_request_reach_streams_through_the_flush_queue() {
     assert_eq!(db.drain_events(), vec![(id, SseEvent::cancel())]);
     assert_eq!(db.rules_text("lo"), r#"{"rules":{".read":false}}"#);
 }
+
+#[test]
+fn on_disconnect_updates_are_checked_as_one_update() {
+    let mut db = db();
+    load(
+        &mut db,
+        "om",
+        r#"{"rules":{".read":true,"x":{".write":false},"y":{".write":true},
+            "z":{".write":true,".validate":"newData.isNumber()"}}}"#,
+    );
+    let mut session = open(&mut db, "om");
+    let mut frames = Vec::new();
+    for (r, body) in (1..).zip([
+        r#"{"p":"/","d":{"x":1,"y":1}}"#,
+        r#"{"p":"/","d":{"y":2}}"#,
+        r#"{"p":"/","d":{"z":"s"}}"#,
+        r#"{"p":"/","d":{"z":3,"y":4}}"#,
+    ]) {
+        frames.extend(send(&mut db, &mut session, r, "om", body));
+    }
+    assert_eq!(
+        frames,
+        vec![
+            refused(1),
+            reply(2, "ok", r#""""#),
+            refused(3),
+            reply(4, "ok", r#""""#),
+        ]
+    );
+    db.close_realtime(session.client(), LATER);
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=om", &[], ""),
+        (200, r#"{"y":4,"z":3}"#.to_owned())
+    );
+}
+
+#[test]
+fn rules_loaded_outside_a_request_wake_the_flush() {
+    let mut db = db();
+    let woken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&woken);
+    db.set_waker(std::sync::Arc::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    db.load_rules("wk", r#"{"rules":{".read":true}}"#, NOW)
+        .unwrap();
+    assert!(woken.load(std::sync::atomic::Ordering::SeqCst) > 0);
+}

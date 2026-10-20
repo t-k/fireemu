@@ -578,7 +578,13 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
 #[test]
 fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
     let double = |d: f64| json!({ "doubleValue": d });
-    let reserved_type = "field name '__type__' is reserved.";
+    // The official emulator 1.22.0's vector checks, in its order: a missing value, a value that
+    // is no array, another key, no element, an element that is no double, NaN
+    // (docs.local probe px1e-official-1/2).
+    let missing = "Vector map is missing key 'value'.";
+    let not_array = "Vector value type must be an array.";
+    let extraneous = "Vector value map has extraneous entries.";
+    let doubles = "Vector must only contain values of type 'double'";
     check(vec![
         Case {
             label: "vector of doubles",
@@ -596,19 +602,19 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
             label: "vector of integers",
             stages: vec![select(vector(vec![int(1)]))],
             strict: None,
-            emulator: (200, ""),
+            emulator: (400, doubles),
         },
         Case {
             label: "vector of a double and an integer",
             stages: vec![select(vector(vec![double(1.0), int(2)]))],
             strict: None,
-            emulator: (200, ""),
+            emulator: (400, doubles),
         },
         Case {
             label: "vector without value",
             stages: vec![select(map(vec![("__type__", string("__vector__"))]))],
             strict: None,
-            emulator: (400, reserved_type),
+            emulator: (400, missing),
         },
         Case {
             label: "vector with an extra key",
@@ -621,7 +627,7 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
                 ("x", int(1)),
             ]))],
             strict: None,
-            emulator: (400, reserved_type),
+            emulator: (400, extraneous),
         },
         Case {
             label: "vector whose value is no array",
@@ -630,7 +636,7 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
                 ("value", string("x")),
             ]))],
             strict: None,
-            emulator: (400, reserved_type),
+            emulator: (400, not_array),
         },
         Case {
             label: "array holding a vector of integers",
@@ -638,19 +644,100 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
                 json!({ "arrayValue": { "values": [vector(vec![int(1)])] } }),
             )],
             strict: None,
-            emulator: (200, ""),
+            emulator: (400, doubles),
         },
         Case {
             label: "where on a vector of integers",
             stages: vec![stage("where", vec![vector(vec![int(1)])])],
             strict: None,
-            emulator: (200, ""),
+            emulator: (400, doubles),
         },
         Case {
             label: "where on a vector of doubles",
             stages: vec![stage("where", vec![vector(vec![double(1.0)])])],
             strict: Some((200, "")),
             emulator: (200, ""),
+        },
+        Case {
+            label: "empty vector",
+            stages: vec![select(vector(vec![]))],
+            strict: None,
+            emulator: (400, "Cannot have a zero length vector."),
+        },
+        Case {
+            label: "vector of NaN",
+            stages: vec![select(vector(vec![json!({ "doubleValue": "NaN" })]))],
+            strict: None,
+            emulator: (400, "Vectors cannot contain NaN values."),
+        },
+        Case {
+            label: "vector without value and with another key",
+            stages: vec![select(map(vec![
+                ("__type__", string("__vector__")),
+                ("x", int(1)),
+            ]))],
+            strict: None,
+            emulator: (400, missing),
+        },
+        Case {
+            label: "vector of integers with another key",
+            stages: vec![select(map(vec![
+                ("__type__", string("__vector__")),
+                ("value", json!({ "arrayValue": { "values": [int(1)] } })),
+                ("x", int(1)),
+            ]))],
+            strict: None,
+            emulator: (400, extraneous),
+        },
+        Case {
+            label: "empty vector with another key",
+            stages: vec![select(map(vec![
+                ("__type__", string("__vector__")),
+                ("value", json!({ "arrayValue": {} })),
+                ("x", int(1)),
+            ]))],
+            strict: None,
+            emulator: (400, extraneous),
+        },
+        Case {
+            label: "vector whose value is null",
+            stages: vec![select(map(vec![
+                ("__type__", string("__vector__")),
+                ("value", json!({ "nullValue": null })),
+            ]))],
+            strict: None,
+            emulator: (400, not_array),
+        },
+        // The vector check comes before the key and expression checks of the literal.
+        Case {
+            label: "{\"\": 1, a: vector of integers}",
+            stages: vec![select(map(vec![("", int(1)), ("a", vector(vec![int(1)]))]))],
+            strict: None,
+            emulator: (400, doubles),
+        },
+        Case {
+            label: "{a: vector of integers, b: field}",
+            stages: vec![select(map(vec![
+                ("a", vector(vec![int(1)])),
+                ("b", field("i")),
+            ]))],
+            strict: None,
+            emulator: (400, doubles),
+        },
+        Case {
+            label: "equal(vector of integers, 1)",
+            stages: vec![select(func("equal", vec![vector(vec![int(1)]), int(1)]))],
+            strict: None,
+            emulator: (400, doubles),
+        },
+        Case {
+            label: "[vector without value, vector of integers]",
+            stages: vec![select(json!({ "arrayValue": { "values": [
+                map(vec![("__type__", string("__vector__"))]),
+                vector(vec![int(1)]),
+            ] } }))],
+            strict: None,
+            emulator: (400, missing),
         },
         // One refusable key is recorded (O-4 `o4/literals#key-empty`, `#key-reserved`); which
         // of several production names is not, nor `__name__`.
@@ -749,6 +836,7 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
             // answers the empty select (a text difference, both refuse).
             emulator: (400, EMPTY_SELECT),
         },
+        // The official emulator ignores function options; production has not answered them.
         Case {
             label: "document_id with options",
             stages: vec![select(json!({ "functionValue": {
@@ -757,7 +845,30 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
                 "options": { "x": int(1) },
             } }))],
             strict: None,
-            emulator: (400, "function \"document_id\" takes no options"),
+            emulator: (200, ""),
+        },
+        Case {
+            label: "where(equal(i, 1)) with options",
+            stages: vec![stage(
+                "where",
+                vec![json!({ "functionValue": {
+                "name": "equal",
+                "args": [field("i"), int(1)],
+                "options": { "x": int(1) },
+            } })],
+            )],
+            strict: None,
+            emulator: (200, ""),
+        },
+        Case {
+            label: "map(\"k\", i) with a field option",
+            stages: vec![select(json!({ "functionValue": {
+                "name": "map",
+                "args": [string("k"), field("i")],
+                "options": { "x": field("i") },
+            } }))],
+            strict: None,
+            emulator: (200, ""),
         },
         // Recorded texts of the functions it runs stay answered.
         Case {

@@ -645,11 +645,13 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                     "map keys must be constants/literals",
                 ));
             }
-            if !function.options.is_empty() {
-                return Err(own_text(
-                    format!("function {:?} takes no options", function.name),
-                    unrecorded,
-                ));
+            // The official emulator ignores function options; production has not answered
+            // them, so strict refuses them as unobserved.
+            if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
+                return Err(Status::unimplemented(format!(
+                    "function {:?} options are not observed locally",
+                    function.name
+                )));
             }
             let args = function
                 .args
@@ -662,6 +664,16 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
+        // The official emulator checks the vectors a literal holds before anything else of
+        // it; production recorded well-formed vectors only, so strict refuses the rest.
+        Some(_) if vector_literal_error(value).is_some() => match unrecorded {
+            Unrecorded::Refuse => Err(Status::unimplemented(
+                "a malformed vector is not observed locally",
+            )),
+            Unrecorded::OfficialEmulator => Err(Status::invalid_argument(
+                vector_literal_error(value).unwrap_or_default(),
+            )),
+        },
         Some(_) => match expression_kind(value) {
             // Production read literals of every kind, maps keyed by any name but an empty or a
             // reserved one (FS-ENT-ORACLE O-3, O-4 `o4/literals#*`); strict answers the shapes
@@ -769,6 +781,47 @@ fn decode_official_literal(
     }
 }
 
+/// The official emulator's refusal of the first malformed vector a literal holds (arrays in
+/// order, maps in key order: the wire map keeps no order), in its order of checks: a missing
+/// `value`, a `value` that is no array, another key, no element, an element that is no double,
+/// a NaN element (firebase-tools 15.28.2, Firestore emulator 1.22.0).
+fn vector_literal_error(value: &pb::Value) -> Option<&'static str> {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().find_map(vector_literal_error),
+        Some(V::MapValue(map)) if is_vector_literal(value) => {
+            let elements = match map.fields.get("value").map(|v| v.value_type.as_ref()) {
+                None => return Some("Vector map is missing key 'value'."),
+                Some(Some(V::ArrayValue(array))) => &array.values,
+                Some(_) => return Some("Vector value type must be an array."),
+            };
+            if map.fields.len() != 2 {
+                return Some("Vector value map has extraneous entries.");
+            }
+            if elements.is_empty() {
+                return Some("Cannot have a zero length vector.");
+            }
+            if !elements
+                .iter()
+                .all(|e| matches!(e.value_type, Some(V::DoubleValue(_))))
+            {
+                return Some("Vector must only contain values of type 'double'");
+            }
+            elements
+                .iter()
+                .any(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_nan()))
+                .then_some("Vectors cannot contain NaN values.")
+        }
+        Some(V::MapValue(map)) => {
+            let mut keys: Vec<_> = map.fields.keys().collect();
+            keys.sort();
+            keys.into_iter()
+                .find_map(|key| vector_literal_error(&map.fields[key]))
+        }
+        _ => None,
+    }
+}
+
 /// Whether production recorded a literal of this shape: every vector map is
 /// `{__type__: "__vector__", value: [doubles]}` with at least one element (O-3, O-4
 /// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`), at most one map key
@@ -785,7 +838,7 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
                     && matches!(
                         map.fields.get("value").and_then(|v| v.value_type.as_ref()),
                         Some(V::ArrayValue(array)) if !array.values.is_empty()
-                            && array.values.iter().all(|e| matches!(e.value_type, Some(V::DoubleValue(_))))
+                            && array.values.iter().all(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_finite()))
                     )
             }
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
@@ -857,11 +910,18 @@ fn decode_condition(
     }
     // Every boolean function of the table is a comparison of two arguments; the wording is
     // the finite subset's.
-    if def.arity != Arity::Exact(function.args.len()) || !function.options.is_empty() {
+    if def.arity != Arity::Exact(function.args.len()) {
         return Err(own_text(
             format!("{} requires exactly two arguments and no options", def.name),
             unrecorded,
         ));
+    }
+    // Options are ignored by the official emulator and unobserved in production, as above.
+    if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
+        return Err(Status::unimplemented(format!(
+            "function {:?} options are not observed locally",
+            def.name
+        )));
     }
     let args = function
         .args

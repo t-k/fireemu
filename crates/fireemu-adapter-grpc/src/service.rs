@@ -660,7 +660,13 @@ impl Firestore for GatewayService {
             }
             return Err(status);
         }
-        let ast = crate::pipeline::validate_pipeline(request.get_ref())?;
+        let registry_unrecorded = if self.gateway.production_refusals() {
+            fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
+        } else {
+            fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+        };
+        let ast = crate::pipeline::validate_pipeline(request.get_ref())
+            .map_err(|error| crate::pipeline::registry_status(error, registry_unrecorded))?;
         if self.local_backend().is_some() {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;

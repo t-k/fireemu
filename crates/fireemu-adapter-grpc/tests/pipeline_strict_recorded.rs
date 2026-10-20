@@ -1037,3 +1037,205 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
         },
     ]);
 }
+
+#[test]
+fn strict_answers_a_refusal_only_when_no_other_part_is_unobserved() {
+    // Coordinator ruling (px-coordinator-rulings.md, PX1d r3): under strict an INVALID_ARGUMENT
+    // answer needs every stage, value, literal and call of the pipeline to pass strict's own
+    // checks, unless a recorded row shows that error winning over that kind of part.
+    let empty = || stage("select", vec![map(vec![])]);
+    let empty_alias = "Invalid empty property path string.";
+    let limit_text = "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.";
+    let literal_text = "Value type is not supported: FIELD_REFERENCE_VALUE";
+    check(vec![
+        Case {
+            label: "select {\"\": i} then where(nope_fn())",
+            stages: vec![
+                stage("select", vec![map(vec![("", field("i"))])]),
+                stage("where", vec![func("nope_fn", vec![])]),
+            ],
+            strict: None,
+            emulator: (400, empty_alias),
+        },
+        Case {
+            label: "limit(\"x\") then where(equal(i, 1))",
+            stages: vec![
+                stage("limit", vec![string("x")]),
+                stage("where", vec![func("equal", vec![field("i"), int(1)])]),
+            ],
+            strict: None,
+            emulator: (400, limit_text),
+        },
+        Case {
+            label: "select {v: [i]} then sort",
+            stages: vec![
+                select(json!({ "arrayValue": { "values": [field("i")] } })),
+                stage("sort", vec![func("ascending", vec![field("i")])]),
+            ],
+            strict: None,
+            emulator: (400, literal_text),
+        },
+        Case {
+            label: "where(equal(i, [i])) then select {v: nope_fn()}",
+            stages: vec![
+                stage(
+                    "where",
+                    vec![func(
+                        "equal",
+                        vec![
+                            field("i"),
+                            json!({ "arrayValue": { "values": [field("i")] } }),
+                        ],
+                    )],
+                ),
+                select(func("nope_fn", vec![])),
+            ],
+            strict: None,
+            emulator: (400, literal_text),
+        },
+        Case {
+            label: "limit(\"x\") then add_fields {a: nope_fn()}",
+            stages: vec![
+                stage("limit", vec![string("x")]),
+                stage(
+                    "add_fields",
+                    vec![map(vec![("a", func("nope_fn", vec![]))])],
+                ),
+            ],
+            strict: None,
+            emulator: (400, limit_text),
+        },
+        Case {
+            label: "a one-argument aggregate then sort",
+            stages: vec![
+                stage(
+                    "aggregate",
+                    vec![map(vec![("c", func("count", vec![field("n")]))])],
+                ),
+                stage("sort", vec![func("ascending", vec![field("i")])]),
+            ],
+            strict: None,
+            emulator: (400, AGGREGATE_ARITY),
+        },
+        Case {
+            label: "select {\"\": i} then limit(true)",
+            stages: vec![
+                stage("select", vec![map(vec![("", field("i"))])]),
+                stage("limit", vec![json!({ "booleanValue": true })]),
+            ],
+            strict: None,
+            emulator: (400, empty_alias),
+        },
+        // Recorded orders stay answered (O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`).
+        Case {
+            label: "select {\"\": i} alone",
+            stages: vec![stage("select", vec![map(vec![("", field("i"))])])],
+            strict: Some((400, empty_alias)),
+            emulator: (400, empty_alias),
+        },
+        Case {
+            label: "select {} then limit(\"x\")",
+            stages: vec![empty(), stage("limit", vec![string("x")])],
+            strict: Some((400, limit_text)),
+            emulator: (400, limit_text),
+        },
+        Case {
+            label: "limit 1 then a one-argument aggregate",
+            stages: vec![
+                stage("limit", vec![int(1)]),
+                stage("aggregate", vec![map(vec![("c", func("count", vec![]))])]),
+            ],
+            strict: Some((400, AGGREGATE_ARITY)),
+            emulator: (400, AGGREGATE_ARITY),
+        },
+        Case {
+            label: "add_fields {t: top} then select {}",
+            stages: vec![
+                stage("add_fields", vec![map(vec![("t", field("top"))])]),
+                empty(),
+            ],
+            strict: Some((400, EMPTY_SELECT)),
+            emulator: (400, EMPTY_SELECT),
+        },
+        Case {
+            label: "select {} then add_fields {\"\": top}",
+            stages: vec![
+                empty(),
+                stage("add_fields", vec![map(vec![("", field("top"))])]),
+            ],
+            strict: Some((400, empty_alias)),
+            emulator: (400, empty_alias),
+        },
+        Case {
+            label: "select {v: [i]} alone",
+            stages: vec![select(json!({ "arrayValue": { "values": [field("i")] } }))],
+            strict: Some((400, literal_text)),
+            emulator: (400, literal_text),
+        },
+    ]);
+}
+
+#[test]
+fn strict_refuses_the_stage_registry_texts_and_unrecorded_empty_constructions() {
+    let with_options = json!({
+        "name": "select",
+        "args": [map(vec![("v", field("i"))])],
+        "options": { "x": int(1) },
+    });
+    check(vec![
+        Case {
+            label: "limit()",
+            stages: vec![stage("limit", vec![])],
+            strict: None,
+            emulator: (400, "stage \"limit\" takes 1 argument(s), got 0"),
+        },
+        Case {
+            label: "offset(1, 2)",
+            stages: vec![stage("offset", vec![int(1), int(2)])],
+            strict: None,
+            emulator: (400, "stage \"offset\" takes 1 argument(s), got 2"),
+        },
+        Case {
+            label: "where(true, true)",
+            stages: vec![stage(
+                "where",
+                vec![
+                    json!({ "booleanValue": true }),
+                    json!({ "booleanValue": true }),
+                ],
+            )],
+            strict: None,
+            emulator: (400, "stage \"where\" takes 1 argument(s), got 2"),
+        },
+        Case {
+            label: "select with a stage option",
+            stages: vec![with_options],
+            strict: None,
+            emulator: (400, "stage \"select\": option \"x\": no such option"),
+        },
+        Case {
+            label: "array()",
+            stages: vec![select(func("array", vec![]))],
+            strict: None,
+            emulator: (200, ""),
+        },
+        Case {
+            label: "map()",
+            stages: vec![select(func("map", vec![]))],
+            strict: None,
+            emulator: (200, ""),
+        },
+        Case {
+            label: "array(i)",
+            stages: vec![select(func("array", vec![field("i")]))],
+            strict: Some((200, "")),
+            emulator: (200, ""),
+        },
+        Case {
+            label: "vector of -0.0",
+            stages: vec![select(vector(vec![json!({ "doubleValue": -0.0 })]))],
+            strict: None,
+            emulator: (200, ""),
+        },
+    ]);
+}

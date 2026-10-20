@@ -1565,13 +1565,14 @@ impl RestState {
         }
         let body = self.transcoded("executePipeline", body)?;
         let request = pipeline_json::request_from_json(database, &body).map_err(|e| bad(&e))?;
-        let ast = crate::pipeline::validate_pipeline(&request)?;
-        let canonical = ast.canonical_text();
         let unrecorded = if self.gateway.production_refusals() {
             fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
         } else {
             fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
         };
+        let ast = crate::pipeline::validate_pipeline(&request)
+            .map_err(|error| crate::pipeline::registry_status(error, unrecorded))?;
+        let canonical = ast.canonical_text();
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let refuse = |error| crate::service::pipeline_status(error, &canonical);

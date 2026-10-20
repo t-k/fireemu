@@ -22,6 +22,28 @@ use crate::decode::Parent;
 /// Option keys a `StructuredPipeline` may carry.
 const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 
+/// A stage-registry refusal under the given profile. The registry's texts (a stage's argument
+/// count, argument shape, options, input position) are fireemu's own, which no production row
+/// holds, so strict refuses those pipelines as unobserved; the emulator profile keeps the
+/// texts.
+#[must_use]
+pub fn registry_status(error: Status, unrecorded: Unrecorded) -> Status {
+    let invalid = error
+        .metadata()
+        .get("fireemu-code")
+        .is_some_and(|code| code == "FS_PIPE_INVALID");
+    if unrecorded == Unrecorded::Refuse && invalid {
+        return with_code(
+            Status::unimplemented(format!(
+                "{}; this text is not observed locally",
+                error.message()
+            )),
+            "FS_PIPE_UNSUPPORTED_STAGE",
+        );
+    }
+    error
+}
+
 /// Decodes and canonicalizes the request's pipeline. Errors carry the `FS_PIPE_*` code in
 /// the `fireemu-code` metadata like the gateway's rejections.
 #[allow(clippy::too_many_lines)]
@@ -540,16 +562,18 @@ pub fn compile_pipeline(
         (Ok(()), Some(empty)) => Err(empty),
         (result, _) => result,
     };
-    // An argument-type refusal is answered per row, and its order against an empty map or a
-    // later stage's check is unrecorded (coordinator ruling (a), 2026-10-20): under strict,
-    // such a text is answered only when no function call fails on its constants.
+    // Under strict a refusal is answered only when every other part of the pipeline passes
+    // strict's own checks, since production's order between that refusal and an unobserved
+    // part is unrecorded (coordinator rulings of 2026-10-20: option (a) for a call that fails
+    // on its constants, and the general strict gate). The exceptions are the orders O-1 to O-4
+    // recorded, which `holds_unobserved_part` leaves out.
     if let Err(error) = outcome {
         if unrecorded == Unrecorded::Refuse
             && error.code() == tonic::Code::InvalidArgument
-            && pipeline.stages.iter().any(constant_call_fails)
+            && holds_unobserved_part(&pipeline.stages)
         {
             return Err(Status::unimplemented(
-                "a function that fails on its constants beside another refusal is not observed locally",
+                "a refusal beside a part whose order production has not answered is not observed locally",
             ));
         }
         return Err(error);
@@ -650,6 +674,17 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
             if pipeline_exec::function(&function.name).is_none() {
                 return Err(Status::unimplemented(format!(
                     "function {:?} is unsupported locally",
+                    function.name
+                )));
+            }
+            // Production built arrays and maps of one element or more (FS-ENT-ORACLE O-1, O-3,
+            // O-4); an empty `array()` or `map()` is unrecorded.
+            if matches!(function.name.as_str(), "array" | "map")
+                && function.args.is_empty()
+                && unrecorded == Unrecorded::Refuse
+            {
+                return Err(Status::unimplemented(format!(
+                    "{}() without arguments is not observed locally",
                     function.name
                 )));
             }
@@ -839,7 +874,8 @@ fn vector_literal_error(value: &pb::Value) -> Option<&'static str> {
 }
 
 /// Whether production recorded a literal of this shape: every vector map is
-/// `{__type__: "__vector__", value: [doubles]}` with at least one element (O-3, O-4
+/// `{__type__: "__vector__", value: [doubles]}` with at least one element, every one finite and
+/// none a negative zero (O-3, O-4
 /// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`), at most one map key
 /// is empty or reserved (production named one, O-4 `literals#key-empty`, `#key-reserved`;
 /// which of several it names is unrecorded), and no key is `__name__` (only the official
@@ -854,7 +890,7 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
                     && matches!(
                         map.fields.get("value").and_then(|v| v.value_type.as_ref()),
                         Some(V::ArrayValue(array)) if !array.values.is_empty()
-                            && array.values.iter().all(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_finite()))
+                            && array.values.iter().all(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_finite() && !(d == 0.0 && d.is_sign_negative())))
                     )
             }
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
@@ -1144,6 +1180,89 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
         Some(V::PipelineValue(_)) => "PIPELINE_VALUE",
         None => "VALUE_TYPE_NOT_SET",
     }
+}
+
+/// Whether a stage after the collection input fails strict's own checks with UNIMPLEMENTED
+/// (an unknown or unrun function, an unrecorded literal or argument, a stage out of the
+/// subset's order, a call that fails on its constants), checked through the whole pipeline
+/// however an earlier stage was refused. The recorded orders are left out: an unrun
+/// `add_fields`, `distinct`, `aggregate` or `select` whose values pass fireemu's checks (its
+/// own arity, alias and empty-map checks were answered before such a stage, O-4
+/// `o4/stages#*`), and the whole of a one-argument `aggregate`, whose arity was answered over
+/// anything it holds (O-1 `results/metadata#aggregate`, O-4 `#aggregate-one-*`).
+fn holds_unobserved_part(stages: &[pb::pipeline::Stage]) -> bool {
+    let unobserved = |result: Result<(), Status>| matches!(result, Err(e) if e.code() == tonic::Code::Unimplemented);
+    let strict = Unrecorded::Refuse;
+    let (mut last_rank, mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
+        (0u8, false, false, false, false);
+    for (position, stage) in stages.iter().enumerate().skip(1) {
+        let one_argument_aggregate = stage.name == "aggregate" && stage.args.len() == 1;
+        if !one_argument_aggregate && constant_call_fails(stage) {
+            return true;
+        }
+        let rank = match stage.name.as_str() {
+            "where" | "select" => 1,
+            "offset" => 2,
+            "limit" => 3,
+            _ => 4,
+        };
+        if rank < last_rank {
+            return true;
+        }
+        last_rank = rank;
+        match stage.name.as_str() {
+            "where" => {
+                if seen_where || seen_select || seen_limit {
+                    return true;
+                }
+                seen_where = true;
+                if unobserved(decode_condition(stage, strict).map(|_| ())) {
+                    return true;
+                }
+            }
+            "select" => {
+                if seen_select {
+                    return true;
+                }
+                seen_select = true;
+                if !stage.args.first().is_some_and(is_empty_map)
+                    && unobserved(decode_select(stage, strict).map(|_| ()))
+                {
+                    return true;
+                }
+            }
+            "offset" | "limit" => {
+                let seen = if stage.name == "offset" {
+                    &mut seen_offset
+                } else {
+                    &mut seen_limit
+                };
+                if *seen || unobserved(count_argument(stage, strict).map(|_| ())) {
+                    return true;
+                }
+                *seen = true;
+            }
+            _ => {
+                return stages[position..].iter().any(|rest| {
+                    let name = rest.name.as_str();
+                    if name == "aggregate" && rest.args.len() == 1 {
+                        return false;
+                    }
+                    constant_call_fails(rest)
+                        || match name {
+                            "limit" | "offset" => {
+                                unobserved(count_argument(rest, strict).map(|_| ()))
+                            }
+                            "add_fields" | "distinct" | "aggregate" | "select" => {
+                                !unrun_values_validated(rest, strict)
+                            }
+                            _ => true,
+                        }
+                })
+            }
+        }
+    }
+    false
 }
 
 /// Whether a function call a stage holds (at any depth of its arguments and alias maps) fails

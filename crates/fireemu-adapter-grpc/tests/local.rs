@@ -6804,7 +6804,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                     ),
                 ),
                 pipeline_select("name"),
-                pipeline_offset(0),
+                // (No offset: strict answers only the recorded offsets.)
                 pipeline_stage("limit", i(5)),
             ]))
             .await
@@ -7226,21 +7226,26 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
             ],
         )
         .await;
-        assert_eq!(overlap.code(), tonic::Code::InvalidArgument);
-        assert_eq!(
+        // The text names the later alias of the request's map, an order strict cannot see.
+        if policy == IndexValidationPolicy::Production {
+            assert_eq!(overlap.code(), tonic::Code::Unimplemented, "{overlap}");
+        } else {
+            assert_eq!(overlap.code(), tonic::Code::InvalidArgument);
+            assert_eq!(
             overlap.message(),
             "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
         );
-        assert_eq!(
-            fireemu_adapter_grpc::production_status::details_to_json(overlap.details()),
-            Some(vec![serde_json::json!({
-                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                "domain": "firestore.googleapis.com",
-                "metadata": {"field": "m.r"},
-                "reason": "OVERLAPPING_PROPERTY_PATHS",
-            })]),
-            "{policy:?}"
-        );
+            assert_eq!(
+                fireemu_adapter_grpc::production_status::details_to_json(overlap.details()),
+                Some(vec![serde_json::json!({
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {"field": "m.r"},
+                    "reason": "OVERLAPPING_PROPERTY_PATHS",
+                })]),
+                "{policy:?}"
+            );
+        }
         // The recorded map literal: a select value of field references.
         let recorded = pipeline_error(
             &mut client,
@@ -7590,7 +7595,11 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         for (label, refused) in invalid.clone() {
             let err = pipeline_error(&mut client, refused).await;
             // A repeated path answers fireemu's own text, which strict refuses as unobserved.
-            if policy == IndexValidationPolicy::Production && label == "same path twice" {
+            // An alias inside another names the later alias of the request's map, an order
+            // strict cannot see.
+            if policy == IndexValidationPolicy::Production
+                && (label == "same path twice" || label == "alias inside another")
+            {
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
                 continue;
             }
@@ -8956,7 +8965,13 @@ async fn execute_pipeline_where_equal_pushes_filter_before_limit() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
-    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    let (mut client, _clock, handle) = start_with_edition_and_policy(
+        FirestoreEdition::Enterprise,
+        // The executor's semantics with every limit and offset the cases use (strict answers
+        // only the recorded values).
+        IndexValidationPolicy::Emulator,
+    )
+    .await;
     let collection = "pipeline-scale";
     client
         .commit(pb::CommitRequest {
@@ -9094,7 +9109,16 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state() {
-    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    // Strict answers only the offsets production recorded (5000000000), so the paging runs
+    // under the emulator profile and the strict refusals on their own client.
+    let (mut client, _clock, handle) = start_with_edition_and_policy(
+        FirestoreEdition::Enterprise,
+        IndexValidationPolicy::Emulator,
+    )
+    .await;
+    let (mut strict, _strict_clock, strict_handle) =
+        start_with_edition(FirestoreEdition::Enterprise).await;
+
     let collection = "pipeline-offset";
     client
         .commit(pb::CommitRequest {
@@ -9260,6 +9284,13 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .into_inner();
     assert!(drain_pipeline(too_large, 1).await.is_empty());
 
+    // Strict answers only the offsets production recorded (5000000000): a small one is
+    // unobserved.
+    let small = strict
+        .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(1)]))
+        .await
+        .unwrap_err();
+    assert_eq!(small.code(), tonic::Code::Unimplemented, "{small}");
     // Production refused only a string offset (O-4 `stages#offset-string`); the official
     // emulator's texts for a negative offset and another type are unrecorded, so strict
     // refuses them as unobserved (the emulator profile answers them, see
@@ -9274,7 +9305,7 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         ),
         ("unset", pb::Value::default()),
     ] {
-        let error = client
+        let error = strict
             .execute_pipeline(execute(vec![
                 collection_stage(),
                 pipeline_stage("offset", value),
@@ -9283,7 +9314,7 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
     }
-    let error = client
+    let error = strict
         .execute_pipeline(execute(vec![
             collection_stage(),
             pipeline_stage("offset", s("x")),
@@ -9321,7 +9352,7 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         ),
     ] {
         // The stage registry's own texts are unobserved in production: strict refuses them.
-        let error = client
+        let error = strict
             .execute_pipeline(execute(vec![collection_stage(), offset]))
             .await
             .unwrap_err();
@@ -9358,6 +9389,7 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         );
     }
     assert_eq!(source_after, source_before);
+    strict_handle.abort();
     handle.abort();
     assert!(handle.await.unwrap_err().is_cancelled());
 }
@@ -9367,7 +9399,13 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
 async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit() {
     use pb::execute_pipeline_request::ConsistencySelector;
 
-    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    let (mut client, _, handle) = start_with_edition_and_policy(
+        FirestoreEdition::Enterprise,
+        // The executor's semantics with every limit and offset the cases use (strict answers
+        // only the recorded values).
+        IndexValidationPolicy::Emulator,
+    )
+    .await;
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -12988,7 +13026,7 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
         let filtered = responses(vec![
             pipeline_stage("collection", s("meta")),
             pipeline_equal("n", i(2)),
-            pipeline_offset(0),
+            // (No offset: strict answers only the recorded offsets.)
             pipeline_stage("limit", i(1)),
         ])
         .await;

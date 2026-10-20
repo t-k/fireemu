@@ -964,7 +964,7 @@ fn select_aliases_are_field_paths() {
             (alias("m.s"), field("profile.score")),
             (alias("m.r"), field("profile.rank")),
             (alias("`q.r`"), field("top")),
-            (alias("gone.deep"), field("missing")),
+            (alias("`gone.deep`"), field("missing")),
         ])],
         input,
     )
@@ -979,6 +979,70 @@ fn select_aliases_are_field_paths() {
     ]
     .into();
     assert_eq!(out, vec![expected]);
+}
+
+/// A nested alias whose value is missing: the official emulator keeps its parents as empty maps
+/// (`{a.b.c: missing}` gives `{a: {b: {}}}`, and a sibling alias fills the same parent), which
+/// production has not answered, so strict refuses it as unobserved.
+#[test]
+fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profile() {
+    let input = vec![row("c/x", &[("top", s("t"))])];
+    let map = |entries: &[(&str, Value)]| {
+        Value::Map(
+            entries
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        )
+    };
+    let empty = || Value::Map(BTreeMap::new());
+    let cases: Vec<(Vec<(FieldPath, Expr)>, Vec<(&str, Value)>)> = vec![
+        (
+            vec![(alias("a.b.c"), field("missing"))],
+            vec![("a", map(&[("b", empty())]))],
+        ),
+        (
+            vec![
+                (alias("a.b"), field("missing")),
+                (alias("a.c"), field("top")),
+            ],
+            vec![("a", map(&[("c", s("t"))]))],
+        ),
+        (vec![(alias("`a.b`"), field("missing"))], vec![]),
+    ];
+    for (aliases, expected) in cases {
+        let nested = aliases.iter().any(|(a, _)| a.segments().len() > 1);
+        let out = execute_in(
+            vec![Stage::Select(aliases.clone())],
+            input.clone(),
+            Unrecorded::OfficialEmulator,
+        )
+        .unwrap();
+        let expected: BTreeMap<String, Value> = expected
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect();
+        assert_eq!(out, vec![expected], "{aliases:?}");
+        let strict = execute_in(
+            vec![Stage::Select(aliases.clone())],
+            input.clone(),
+            Unrecorded::Refuse,
+        );
+        if nested {
+            assert!(
+                matches!(
+                    strict,
+                    Err(EvalError::Unobserved {
+                        function: "select",
+                        ..
+                    })
+                ),
+                "{aliases:?} {strict:?}"
+            );
+        } else {
+            assert!(strict.is_ok(), "{aliases:?} {strict:?}");
+        }
+    }
 }
 
 #[test]
@@ -1082,5 +1146,43 @@ fn strict_answers_only_the_argument_and_key_types_production_recorded() {
                 Value::Integer(1)
             )])))
         );
+    }
+}
+
+proptest! {
+    /// A select whose fields fail (PX1d round 4, H9): with one failing field both profiles give
+    /// its error; with two, strict refuses as unobserved (production names one of them by the
+    /// request's field order, which the decoded stage no longer holds) and the emulator profile
+    /// gives the first one's.
+    #[test]
+    fn select_with_failing_fields_answers_one_error_only_when_one_fails(
+        failing in proptest::collection::vec(any::<bool>(), 1..5),
+    ) {
+        let aliases: Vec<(FieldPath, Expr)> = failing
+            .iter()
+            .enumerate()
+            .map(|(k, fails)| {
+                let arg = if *fails { field("top") } else { field("__name__") };
+                (alias(&format!("a{k}")), call("document_id", vec![arg]))
+            })
+            .collect();
+        let input = vec![row("c/x", &[("top", Value::Integer(1))])];
+        let count = failing.iter().filter(|f| **f).count();
+        let strict = execute_in(vec![Stage::Select(aliases.clone())], input.clone(), Unrecorded::Refuse);
+        let emulator = execute_in(vec![Stage::Select(aliases)], input, Unrecorded::OfficialEmulator);
+        match count {
+            0 => {
+                prop_assert!(strict.is_ok(), "{strict:?}");
+                prop_assert!(emulator.is_ok(), "{emulator:?}");
+            }
+            1 => {
+                prop_assert!(matches!(strict, Err(EvalError::WrongType { .. })), "{strict:?}");
+                prop_assert_eq!(&strict, &emulator);
+            }
+            _ => {
+                prop_assert!(matches!(strict, Err(EvalError::Unobserved { function: "select", .. })), "{strict:?}");
+                prop_assert!(matches!(emulator, Err(EvalError::WrongType { .. })), "{emulator:?}");
+            }
+        }
     }
 }

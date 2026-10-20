@@ -143,6 +143,31 @@ pub fn validate_pipeline(
                     "FS_PIPE_UNSUPPORTED_STAGE",
                 )
             }
+            // A stage fireemu does not run: its own argument texts would refuse what the
+            // official emulator may answer (a `sort` ordering written as a map), so the stage is
+            // refused as unsupported instead.
+            PipelineError::Arity { stage, .. }
+            | PipelineError::Argument { stage, .. }
+            | PipelineError::Option { stage, .. }
+                if !matches!(
+                    stage.as_str(),
+                    "collection"
+                        | "where"
+                        | "select"
+                        | "limit"
+                        | "offset"
+                        | "add_fields"
+                        | "distinct"
+                        | "aggregate"
+                ) =>
+            {
+                (
+                    Status::unimplemented(format!(
+                        "pipeline stage {stage:?} is unsupported locally"
+                    )),
+                    "FS_PIPE_UNSUPPORTED_STAGE",
+                )
+            }
             PipelineError::Empty
             | PipelineError::InputPosition(_)
             | PipelineError::Arity { .. }
@@ -564,7 +589,7 @@ pub fn compile_pipeline(
         if unrecorded == Unrecorded::Refuse
             && error.code() == tonic::Code::InvalidArgument
             && (holds_unobserved_part(&pipeline.stages)
-                || !refusals_recorded(&refusals(&pipeline.stages)))
+                || !refusals_recorded(&refusals(&pipeline.stages), &pipeline.stages))
         {
             return Err(Status::unimplemented(
                 "a refusal beside a part whose order production has not answered is not observed locally",
@@ -1007,9 +1032,12 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
 /// emulator answered it).
 fn literal_shape_recorded(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
-    fn walk(value: &pb::Value, refusable: &mut usize) -> bool {
+    // `in_array`: production read vectors alone and as a map value, never inside an array
+    // (O-4 `literals#vector`, `#map-holding-vector`).
+    fn walk(value: &pb::Value, refusable: &mut usize, in_array: bool) -> bool {
         match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, refusable)),
+            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, refusable, true)),
+            Some(V::MapValue(_)) if is_vector_literal(value) && in_array => false,
             Some(V::MapValue(map)) if is_vector_literal(value) => {
                 map.fields.len() == 2
                     && matches!(
@@ -1026,16 +1054,18 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
                 if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
                     *refusable += 1;
                 }
-                // Production answered a string `__type__` only (O-4 `literals#key-type`).
-                let typed =
-                    key != "__type__" || matches!(inner.value_type, Some(V::StringValue(_)));
-                typed && key != "__name__" && walk(inner, refusable)
+                // Production answered a string `__type__` alone in its map only (O-4
+                // `literals#key-type`).
+                let typed = key != "__type__"
+                    || (matches!(inner.value_type, Some(V::StringValue(_)))
+                        && map.fields.len() == 1);
+                typed && key != "__name__" && walk(inner, refusable, false)
             }),
             _ => true,
         }
     }
     let mut refusable = 0;
-    walk(value, &mut refusable) && refusable <= 1
+    walk(value, &mut refusable, false) && refusable <= 1
 }
 
 /// Whether every map key a literal holds, at any depth, is plain.
@@ -1289,8 +1319,13 @@ fn count_argument(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result
     use pb::value::ValueType as V;
     let name = stage.name.as_str();
     let argument = stage.args.first().and_then(|v| v.value_type.as_ref());
+    // The values production answered: a limit of 1, 2, 2147483648 and 5000000000 and -1, an
+    // offset of 5000000000, a string for both (O-1 `results/metadata#limit`, O-4
+    // `o4/stages#limit-*`, `#offset-*`); zero is a boundary it never answered, and an offset
+    // within 32 bits is another value range.
     let recorded = match argument {
-        Some(V::IntegerValue(n)) => *n >= 0 || name == "limit",
+        Some(V::IntegerValue(n)) if name == "limit" => *n != 0,
+        Some(V::IntegerValue(n)) => *n > i64::from(i32::MAX),
         Some(V::StringValue(_)) => true,
         _ => false,
     };
@@ -1446,8 +1481,7 @@ struct Refusal {
 /// The refusals production recorded, each alone in its pipeline, by stage and check (a trace
 /// generalizes only within the same check and stage; coordinator ruling of 2026-10-21):
 /// - `select`: the alias checks (O-1 `px0/aliases#*`, O-3 `o3/aliases#*`, O-4
-///   `o4/aliases#*`), more than 64 fields (O-2 `o2/select-width#select-65`), an alias inside
-///   another (O-1 `px0/aliases#overlap`), the empty map (O-4 `o4/stages#select-empty-map`), a
+///   `o4/aliases#*`), more than 64 fields (O-2 `o2/select-width#select-65`), the empty map (O-4 `o4/stages#select-empty-map`), a
 ///   field or function inside a literal and a literal's empty or reserved key (O-1, O-3, O-4
 ///   `literals#*`, `functions#*-literal-*`), a `map(...)` key that is no literal (O-4
 ///   `functions#map-key-*-field`);
@@ -1458,12 +1492,16 @@ struct Refusal {
 ///   `results/metadata#aggregate`, O-4 `o4/stages#aggregate-*`);
 /// - `limit`: a string and a negative value; `offset`: a string (O-4 `o4/stages#limit-*`,
 ///   `#offset-string`).
+///
+/// An alias inside another (O-1 `px0/aliases#overlap`) is not here: its text names the alias
+/// that comes later in the request's map, an order the decoded request no longer holds (the
+/// official emulator names `a` for `{a.b, a}` and `a.b` for `{a, a.b}`), so strict answers it
+/// with UNIMPLEMENTED.
 const RECORDED_REFUSALS: &[(&str, Check)] = &[
     ("select", Check::AliasEmpty),
     ("select", Check::AliasInvalid),
     ("select", Check::AliasLength),
     ("select", Check::AliasReserved),
-    ("select", Check::AliasOverlap),
     ("select", Check::Width),
     ("select", Check::EmptyMap),
     ("select", Check::LiteralExpression),
@@ -1641,18 +1679,34 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
 /// select map and, in a later stage, a string `limit` or an empty `add_fields` alias, which
 /// production answered before the empty map (O-4 `o4/stages#select-empty-then-limit-string`,
 /// `#select-empty-then-add-fields-empty-alias`).
-fn refusals_recorded(refusals: &[Refusal]) -> bool {
+fn refusals_recorded(refusals: &[Refusal], stages: &[pb::pipeline::Stage]) -> bool {
     let recorded = |r: &Refusal| {
         RECORDED_REFUSALS
             .iter()
             .any(|(stage, check)| r.stage == *stage && r.check == *check)
     };
+    // Production answered a refusal past a stage before it only where a recorded row shows the
+    // checks running past that kind of stage: a where, a select, a limit or offset, an
+    // add_fields (O-4 `o4/stages#add-fields-then-select-empty`, `#aggregate-one-after-limit`);
+    // past a distinct or an aggregate it is unrecorded.
+    let passable_before = |position: usize| {
+        stages[1..position].iter().all(|stage| {
+            matches!(
+                stage.name.as_str(),
+                "where" | "select" | "limit" | "offset" | "add_fields"
+            )
+        })
+    };
     match refusals {
         // No classified refusal (fireemu's own check refused) falls to the last arm.
-        [one] => recorded(one),
+        [one] => recorded(one) && passable_before(one.position),
+        // The two pairs recorded exactly: an empty select map as the first stage, then a
+        // string limit or an empty add_fields alias as the second and last (O-4
+        // `o4/stages#select-empty-then-limit-string`, `#select-empty-then-add-fields-empty-alias`).
         [first, second] => {
-            // The list is in stage order, so the second refusal is in a later stage.
-            first.stage == "select"
+            stages.len() == 3
+                && first.position == 1
+                && first.stage == "select"
                 && first.check == Check::EmptyMap
                 && ((second.stage == "limit" && second.check == Check::CountType)
                     || (second.stage == "add_fields" && second.check == Check::AliasEmpty))

@@ -48,284 +48,372 @@ const EMULATOR_STATUS_DIFFERENCES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Rows strict answers with a production text or result, and the production row each traces to:
-/// that row, or the kind-granular composition of it the reviews accepted (another function of
-/// the same argument type, another stage of the same check, a literal in another position).
-const TRACES: &[(&str, &str)] = &[
+/// Rows strict answers with a production text or result, the production row each traces to, and
+/// how: `exact` (the row sends the recorded request, the collection aside), or
+/// `composition:<kinds>` joined by `+`, each kind one of `COMPOSITION_KINDS`. A row that needs
+/// any other step from a recorded request is an inference, which strict answers with
+/// UNIMPLEMENTED until production answers it.
+/// The composition kinds the reviews accepted (round 4 of the `PX1d` review, M1):
+/// - `field-name`: another field or alias name of the same shape and runtime type;
+/// - `value-of-recorded-kind`: another value of a kind production answered at that place (another
+///   vector of doubles, another integer of the same sign, another empty array spelling);
+/// - `constant-for-field`: a constant in place of a field of the recorded runtime type, or the
+///   reverse;
+/// - `function-name`: another function whose refused argument production answered with a text
+///   that names no function;
+/// - `passable-stage-before`: a valid `where`, `select`, `limit`, `offset` or `add_fields` stage before the
+///   recorded one, or another valid value in such a stage, where a recorded row shows the check
+///   running past that stage;
+/// - `later-stage-added` / `later-stage-dropped`: a valid stage after the recorded one added or
+///   removed;
+/// - `unrun-argument`: another argument of a stage production refused for its argument count,
+///   which production does not evaluate.
+const COMPOSITION_KINDS: &[&str] = &[
+    "field-name",
+    "value-of-recorded-kind",
+    "constant-for-field",
+    "function-name",
+    "passable-stage-before",
+    "later-stage-added",
+    "later-stage-dropped",
+    "unrun-argument",
+];
+
+const TRACES: &[(&str, &str, &str)] = &[
     (
         "sweep-2026-12",
         "fs-ent-pipeline/o4/stages#add-fields-empty-map",
+        "exact",
     ),
-    ("sweep-2026-22", "fs-ent-pipeline/o4/stages#offset-string"),
-    ("sweep-2026-25", "fs-ent-pipeline/o4/stages#limit-negative"),
-    ("sweep-2026-150", "fs-ent-pipeline/o4/stages#limit-negative"),
-    ("sweep-2026-83", "fs-ent-pipeline/px0/aliases#reserved"),
+    (
+        "sweep-2026-22",
+        "fs-ent-pipeline/o4/stages#offset-string",
+        "exact",
+    ),
+    (
+        "sweep-2026-25",
+        "fs-ent-pipeline/o4/stages#limit-negative",
+        "exact",
+    ),
+    (
+        "sweep-2026-150",
+        "fs-ent-pipeline/o4/stages#limit-negative",
+        "composition:passable-stage-before",
+    ),
+    (
+        "sweep-2026-83",
+        "fs-ent-pipeline/px0/aliases#reserved",
+        "composition:field-name",
+    ),
     (
         "sweep-2026-121",
         "fs-ent-pipeline/o4/stages#select-empty-map",
+        "exact",
     ),
     (
         "sweep-2026-21",
         "fs-ent-pipeline/o3/comparisons#where-constant-string",
+        "composition:constant-for-field+later-stage-dropped",
     ),
     (
         "sweep-2026-34",
         "fs-ent-pipeline/o4/conditions#where-integer",
+        "composition:value-of-recorded-kind+later-stage-dropped",
     ),
     (
         "sweep-2026-73",
         "fs-ent-pipeline/o4/conditions#where-reference",
+        "composition:value-of-recorded-kind+later-stage-dropped",
     ),
-    ("sweep-2026-128", "fs-ent-pipeline/o3/literals#empty-array"),
     (
-        "sweep-2026-159",
-        "fs-ent-pipeline/o4/stages#offset-5000000000",
+        "sweep-2026-128",
+        "fs-ent-pipeline/o3/literals#empty-array",
+        "composition:value-of-recorded-kind",
     ),
     (
         "r3 Q2 select{v: document_id(parent(__name__))} alone",
         "fs-ent-pipeline/px1/select#document-id-parent-name",
+        "exact",
     ),
     (
         "r3 Q3 select{v: document_id(parent(parent(__name__)))} then limit(\"x\")",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
     (
         "r3 Q4 select{v: map(\"k\", i, \"k\", n)} then limit(\"x\") (dup only with present fields)",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
     (
         "r3 Q6 select{v: map(\"k\", 1, \"k\", 2)} alone",
         "fs-ent-pipeline/o3/functions#map-repeated-key",
+        "composition:constant-for-field",
     ),
     (
         "r3 Q7 select{v: document_id(i)} then limit(\"x\") (field arg)",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
     (
         "r3 Q8 select{v: equal(i, 1)} then limit(\"x\") (no failing call)",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
     (
         "r3 Q13 select{v: equal(vec[1.0], 1.5)} then limit(\"x\") (strict-unobserved compare)",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
     (
         "r3 Q20 select{v: collection_id(__name__)} then limit(\"x\")",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
     (
         "r3 T2 wide+deep array chains, leaf field i, then limit(\"x\")",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
-    ("r3 V1 vec [1.0]", "fs-ent-pipeline/o4/literals#vector"),
     (
-        "r3 R11 {__type__: \"__vector__\", value: [1.0], ...} under __type__ string x + value int",
-        "fs-ent-pipeline/o4/literals#key-type",
+        "r3 V1 vec [1.0]",
+        "fs-ent-pipeline/o4/literals#vector",
+        "composition:value-of-recorded-kind",
     ),
     (
         "r3 S6 select{\"\": vec[1.0]}",
         "fs-ent-pipeline/o3/aliases#empty",
+        "composition:value-of-recorded-kind",
     ),
     (
         "P28 document_id(ref c) literal index",
         "fs-ent-pipeline/o4/functions#collection-id-collection",
+        "composition:function-name",
     ),
     (
         "P33 aggregate{c: count(n)} after where(true)",
         "fs-ent-pipeline/results/metadata#aggregate",
+        "composition:passable-stage-before+unrun-argument",
     ),
     (
         "P35 alias quoted あ x500",
         "fs-ent-pipeline/o4/aliases#multibyte-1500",
+        "composition:field-name",
     ),
     (
         "P36 alias `a`.あ x499 + a (1500 bytes joined?)",
         "fs-ent-pipeline/o4/aliases#multibyte-dotted-1499",
+        "composition:field-name",
     ),
     (
         "N1 limit(\"x\") [recorded limit-string]",
         "fs-ent-pipeline/o4/stages#limit-string",
+        "exact",
     ),
     (
         "N2 offset(\"x\") [recorded offset-string]",
         "fs-ent-pipeline/o4/stages#offset-string",
-    ),
-    (
-        "N3 offset(0)",
-        "fs-ent-pipeline/o4/stages#offset-5000000000",
-    ),
-    (
-        "N4 offset(1)",
-        "fs-ent-pipeline/o4/stages#offset-5000000000",
+        "exact",
     ),
     (
         "N5 limit(-1) [recorded]",
         "fs-ent-pipeline/o4/stages#limit-negative",
+        "exact",
     ),
-    ("N11 limit(0)", "fs-ent-pipeline/o4/stages#limit-5000000000"),
     (
         "N13 select{} then limit(5)",
         "fs-ent-pipeline/o4/stages#select-empty-map",
-    ),
-    (
-        "N19 aggregate{c: count(n)} by {} then select{}",
-        "fs-ent-pipeline/o4/stages#add-fields-then-select-empty",
-    ),
-    (
-        "N21 aggregate{c: count()} by {} then select{}",
-        "fs-ent-pipeline/o4/stages#add-fields-then-select-empty",
+        "composition:later-stage-added",
     ),
     (
         "N24 add_fields{a: top} then distinct{}",
         "fs-ent-pipeline/o4/stages#distinct-empty-map",
+        "composition:passable-stage-before",
     ),
     (
         "N28 select{a: top} then add_fields{}",
         "fs-ent-pipeline/o4/stages#add-fields-empty-map",
+        "composition:passable-stage-before",
     ),
     (
         "N31 where(true) then select{}",
         "fs-ent-pipeline/o4/stages#select-empty-map",
+        "composition:passable-stage-before",
     ),
     (
         "N32 add_fields{a: top} then limit(-1)",
         "fs-ent-pipeline/o4/stages#limit-negative",
+        "composition:passable-stage-before",
     ),
-    ("N37 vector doubles", "fs-ent-pipeline/o4/literals#vector"),
+    (
+        "N37 vector doubles",
+        "fs-ent-pipeline/o4/literals#vector",
+        "composition:value-of-recorded-kind",
+    ),
     (
         "N40 vector 0.0 (the corpus JSON keeps no -0.0 sign)",
         "fs-ent-pipeline/o4/literals#vector",
-    ),
-    (
-        "N41 __type__ string not __vector__ {__type__: \"x\", value:[1.0]}",
-        "fs-ent-pipeline/o4/literals#key-type",
+        "composition:value-of-recorded-kind",
     ),
     (
         "N42 document_id(\"s\") [recorded STRING]",
         "fs-ent-pipeline/o3/functions#document-id-string",
+        "composition:constant-for-field",
     ),
     (
         "N43 document_id(1) [recorded LONG]",
         "fs-ent-pipeline/o4/functions#document-id-integer",
+        "composition:constant-for-field",
     ),
     (
         "N44 parent(true) [recorded BOOLEAN]",
         "fs-ent-pipeline/o4/functions#parent-boolean",
+        "composition:constant-for-field",
     ),
     (
         "N45 collection_id({}) [recorded MAP]",
         "fs-ent-pipeline/o4/functions#collection-id-map",
+        "composition:constant-for-field",
     ),
     (
         "N48 document_id(field i) (runtime LONG)",
         "fs-ent-pipeline/o4/functions#document-id-integer",
+        "exact",
     ),
     (
         "N49 document_id(field top) (runtime STRING)",
         "fs-ent-pipeline/o3/functions#document-id-string",
+        "composition:field-name",
     ),
     (
         "N51 map(field dbl, i) (runtime DOUBLE key)",
         "fs-ent-pipeline/o4/functions#map-key-string-field",
+        "composition:field-name",
     ),
     (
         "N52 map(1, i) [recorded LONG key]",
         "fs-ent-pipeline/o3/functions#map-integer-key",
+        "exact",
     ),
     (
         "N53 map(true, i) [recorded BOOLEAN key]",
         "fs-ent-pipeline/o4/functions#map-key-boolean",
+        "exact",
     ),
     (
         "N57 {\"\": 1} single empty key [recorded]",
         "fs-ent-pipeline/o4/literals#key-empty",
+        "exact",
     ),
     (
         "N59 where(vector doubles) [recorded where-vector]",
         "fs-ent-pipeline/o4/conditions#where-vector",
-    ),
-    (
-        "N60 [vector doubles] array of vector",
-        "fs-ent-pipeline/o4/literals#map-holding-vector",
+        "composition:value-of-recorded-kind+later-stage-dropped",
     ),
     (
         "N63 add_fields{a: top} then select{} [recorded add-fields-then-select-empty]",
         "fs-ent-pipeline/o4/stages#add-fields-then-select-empty",
+        "exact",
     ),
     (
         "N64 select{} then add_fields{\"\": top} [recorded]",
         "fs-ent-pipeline/o4/stages#select-empty-then-add-fields-empty-alias",
+        "exact",
     ),
     (
         "N65 aggregate{\"\": count(n)} by {} [recorded]",
         "fs-ent-pipeline/o4/stages#aggregate-empty-accumulator-alias",
+        "exact",
     ),
     (
         "N66 aggregate{\"\": count()} by {}",
         "fs-ent-pipeline/o4/stages#aggregate-empty-accumulator-alias",
-    ),
-    (
-        "N69 distinct{a: top} then limit(\"x\")",
-        "fs-ent-pipeline/o4/stages#select-empty-then-limit-string",
+        "composition:unrun-argument",
     ),
     (
         "N70 aggregate one-arg {c: sum(n)} [arity]",
         "fs-ent-pipeline/o4/stages#aggregate-one-field",
+        "composition:unrun-argument",
     ),
     (
         "N71 add_fields{a: top} then aggregate one-arg {c: nope_fn()}",
         "fs-ent-pipeline/o4/stages#aggregate-one-unknown-function",
+        "composition:passable-stage-before",
     ),
     (
         "N77 add_fields{a: document_id(i)} then select{} (runtime type)",
         "fs-ent-pipeline/o4/stages#add-fields-then-select-empty",
+        "composition:passable-stage-before",
     ),
-    ("select {\"\": i} alone", "fs-ent-pipeline/o3/aliases#empty"),
+    (
+        "select {\"\": i} alone",
+        "fs-ent-pipeline/o3/aliases#empty",
+        "composition:field-name",
+    ),
     (
         "select {} then limit(\"x\")",
         "fs-ent-pipeline/o4/stages#select-empty-then-limit-string",
+        "exact",
     ),
     (
         "limit 1 then a one-argument aggregate",
         "fs-ent-pipeline/o4/stages#aggregate-one-after-limit",
+        "composition:unrun-argument",
     ),
     (
         "select {v: [i]} alone",
         "fs-ent-pipeline/o4/literals#array-of-two-fields",
+        "composition:value-of-recorded-kind",
     ),
     (
         "add_fields {t: top} then limit(\"x\")",
-        "fs-ent-pipeline/o4/stages#select-empty-then-limit-string",
+        "fs-ent-pipeline/o4/stages#limit-string",
+        "composition:passable-stage-before",
     ),
-    ("vector of doubles", "fs-ent-pipeline/o4/literals#vector"),
+    (
+        "vector of doubles",
+        "fs-ent-pipeline/o4/literals#vector",
+        "exact",
+    ),
     (
         "map holding a vector of doubles",
         "fs-ent-pipeline/o4/literals#map-holding-vector",
+        "composition:value-of-recorded-kind",
     ),
-    ("{__x__: 1}", "fs-ent-pipeline/o4/literals#key-reserved"),
+    (
+        "{__x__: 1}",
+        "fs-ent-pipeline/o4/literals#key-reserved",
+        "exact",
+    ),
     (
         "select {v: [document_id(__name__)]}",
         "fs-ent-pipeline/o4/literals#array-of-function",
+        "exact",
     ),
     (
         "add_fields {a: map(\"k\", 1)} then select {}",
         "fs-ent-pipeline/o4/stages#add-fields-then-select-empty",
+        "composition:passable-stage-before",
     ),
     (
         "add_fields {t: document_id(__name__)} then select {}",
         "fs-ent-pipeline/o4/stages#add-fields-then-select-empty",
+        "composition:passable-stage-before",
     ),
     (
         "a one-argument aggregate of an unknown function",
         "fs-ent-pipeline/o4/stages#aggregate-one-unknown-function",
+        "exact",
     ),
     (
         "map(\"k\", i, \"k\", i)",
         "fs-ent-pipeline/o3/functions#map-repeated-key",
+        "composition:field-name",
     ),
     (
         "map(i, i)",
         "fs-ent-pipeline/o4/functions#map-key-string-field",
+        "composition:field-name",
     ),
 ];
 
@@ -458,12 +546,76 @@ fn same_as_production(got: &Value, production: &Value) -> bool {
     }
 }
 
+/// A pipeline's stages without their options and with the collection stage's argument put aside
+/// (the corpus and the recorded programs read different collections).
+fn comparable_stages(stages: &Value) -> Value {
+    let mut stages = stages.clone();
+    for stage in stages.as_array_mut().into_iter().flatten() {
+        let stage = stage.as_object_mut().unwrap();
+        stage.remove("options");
+        if stage["name"] == "collection" {
+            stage.insert("args".to_owned(), json!([]));
+        }
+    }
+    stages
+}
+
 fn official(row: &Value) -> Value {
     let o = &row["official"];
     if o["status"] == 200 {
         json!({"status": 200, "results": answer(200, &json!([{"results": o["results"]}]))["results"]})
     } else {
         json!({"status": o["status"], "message": o["message"]})
+    }
+}
+
+/// Each trace names a recorded production row and a corpus row, and its tag holds: an `exact`
+/// row sends the recorded request, and a composition names only accepted kinds.
+fn check_traces(rows: &[Value], recorded: &BTreeMap<String, Value>) {
+    let requests: BTreeMap<String, Value> = read("fs-ent-pipeline-requests.json")["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| {
+            let program = p["id"].as_str().unwrap().to_owned();
+            p["steps"].as_array().unwrap().iter().map(move |step| {
+                (
+                    format!("{program}#{}", step["id"].as_str().unwrap()),
+                    step["body"]["structuredPipeline"]["pipeline"]["stages"].clone(),
+                )
+            })
+        })
+        .collect();
+    for (row, trace, how) in TRACES {
+        assert!(
+            recorded.contains_key(*trace),
+            "{row}: no production row {trace}"
+        );
+        let Some(corpus_row) = rows.iter().find(|r| r["id"] == *row) else {
+            panic!("{row}: not in the corpus");
+        };
+        if *how == "exact" {
+            assert_eq!(
+                comparable_stages(&corpus_row["stages"]),
+                comparable_stages(&requests[*trace]),
+                "{row}: tagged exact but sends another request than {trace}"
+            );
+        } else {
+            let kinds = how
+                .strip_prefix("composition:")
+                .unwrap_or_else(|| panic!("{row}: {how} is neither exact nor a composition"));
+            for kind in kinds.split('+') {
+                assert!(
+                    COMPOSITION_KINDS.contains(&kind),
+                    "{row}: {kind} is not an accepted composition kind"
+                );
+            }
+            assert_ne!(
+                comparable_stages(&corpus_row["stages"]),
+                comparable_stages(&requests[*trace]),
+                "{row}: sends {trace}'s request; tag it exact"
+            );
+        }
     }
 }
 
@@ -485,23 +637,17 @@ fn the_differential_corpus_holds_both_profiles_to_their_rules() {
                 .map(move |(step, row)| (format!("{program}#{step}"), row.clone()))
         })
         .collect();
-    for (row, trace) in TRACES {
-        assert!(
-            recorded.contains_key(*trace),
-            "{row}: no production row {trace}"
-        );
-        assert!(
-            rows.iter().any(|r| r["id"] == *row),
-            "{row}: not in the corpus"
-        );
-    }
+    check_traces(rows, &recorded);
     for (row, _) in EMULATOR_STATUS_DIFFERENCES {
         assert!(
             rows.iter().any(|r| r["id"] == *row),
             "{row}: not in the corpus"
         );
     }
-    let traces: BTreeMap<&str, &str> = TRACES.iter().copied().collect();
+    let traces: BTreeMap<&str, &str> = TRACES
+        .iter()
+        .map(|(row, trace, _)| (*row, *trace))
+        .collect();
     let known: BTreeMap<&str, &str> = EMULATOR_STATUS_DIFFERENCES.iter().copied().collect();
     let mut wrong = Vec::new();
     for strict in [true, false] {
@@ -554,4 +700,51 @@ fn the_differential_corpus_holds_both_profiles_to_their_rules() {
         wrong.len(),
         wrong.join("\n")
     );
+}
+
+/// Repeated requests get one answer (`PX1d` round 4, M4): the review's rows `H1`-`H9` each hold two
+/// parts that fail on their own, where an answer that followed the decoded map's iteration
+/// order would change from request to request. Strict answers each with UNIMPLEMENTED, and the
+/// emulator profile answers each as the official emulator did or with UNIMPLEMENTED, every time.
+#[test]
+fn repeated_requests_get_one_answer_under_both_profiles() {
+    let corpus = read("fs-ent-pipeline-differential.json");
+    let rows: Vec<&Value> = corpus["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["id"].as_str().unwrap().starts_with("r4 H"))
+        .collect();
+    assert_eq!(rows.len(), 9);
+    for strict in [true, false] {
+        let s = state(strict);
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/c/d"),
+            &json!({"fields": corpus["seed"]["fields"]}),
+        );
+        assert_eq!(status, 200, "{body}");
+        for row in &rows {
+            let id = row["id"].as_str().unwrap();
+            let request = json!({"structuredPipeline": {"pipeline": {"stages": row["stages"]}}});
+            let answers: Vec<Value> = (0..25)
+                .map(|_| {
+                    let (status, body) =
+                        call(&s, "POST", &format!("{DOCS}:executePipeline"), &request);
+                    answer(status, &body)
+                })
+                .collect();
+            assert!(
+                answers.iter().all(|a| *a == answers[0]),
+                "strict={strict} {id}: {answers:?}"
+            );
+            if strict {
+                assert_eq!(answers[0]["status"], 501, "{id}: {}", answers[0]);
+            } else if answers[0]["status"] != 501 {
+                // (An unknown function is UNIMPLEMENTED under the emulator profile.)
+                assert_eq!(answers[0], official(row), "{id}");
+            }
+        }
+    }
 }

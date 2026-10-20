@@ -7022,12 +7022,17 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
             {"name": "offset", "args": [{"integerValue": "1"}]},
             {"name": "limit", "args": [{"integerValue": "5"}]},
         ]));
-        assert_eq!(status, 200, "strict={strict} {body}");
-        assert_eq!(
-            body,
-            json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
-            "strict={strict}"
-        );
+        if strict {
+            // Production recorded no offset of 1; strict does not infer its acceptance.
+            assert_eq!(status, 501, "{body}");
+        } else {
+            assert_eq!(status, 200, "strict={strict} {body}");
+            assert_eq!(
+                body,
+                json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
+                "strict={strict}"
+            );
+        }
         let (status, body) = run(json!([
             {"name": "collection", "args": [{"referenceValue": "/nest/a/sub"}]},
             {"name": "select", "args": [{"mapValue": {"fields": {
@@ -7165,22 +7170,27 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
             &format!("{DOCS}:executePipeline"),
             select(json!({"m": field, "m.r": field})),
         );
-        assert_eq!(status, 400, "{body}");
-        assert_eq!(
-            body,
-            json!([{"error": {
-                "code": 400,
-                "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
-                "status": "INVALID_ARGUMENT",
-                "details": [{
-                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                    "domain": "firestore.googleapis.com",
-                    "metadata": {"field": "m.r"},
-                    "reason": "OVERLAPPING_PROPERTY_PATHS",
-                }],
-            }}]),
-            "strict={strict}"
-        );
+        // The text names the later alias of the request's map, an order strict cannot see.
+        if strict {
+            assert_eq!(status, 501, "{body}");
+        } else {
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(
+                body,
+                json!([{"error": {
+                    "code": 400,
+                    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
+                    "status": "INVALID_ARGUMENT",
+                    "details": [{
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "domain": "firestore.googleapis.com",
+                        "metadata": {"field": "m.r"},
+                        "reason": "OVERLAPPING_PROPERTY_PATHS",
+                    }],
+                }}]),
+                "strict={strict}"
+            );
+        }
         let wide: serde_json::Map<String, Value> = (0..65)
             .map(|k| (format!("a{k:02}"), field.clone()))
             .collect();
@@ -7639,8 +7649,11 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
                 {"name": "offset", "args": [{"integerValue": "1"}]},
             ])),
         );
-        assert_eq!(status, 200, "{body}");
-        assert_eq!(body[0]["results"], json!([empty]), "strict={strict}");
+        // Production recorded no offset of 1; strict does not infer its acceptance.
+        assert_eq!(status, if strict { 501 } else { 200 }, "{body}");
+        if !strict {
+            assert_eq!(body[0]["results"], json!([empty]));
+        }
         assert!(empty.get("fields").is_none(), "{empty}");
     }
 }

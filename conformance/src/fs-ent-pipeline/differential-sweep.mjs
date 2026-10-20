@@ -7,6 +7,8 @@
 //
 //   FIRESTORE_EMULATOR_HOST=127.0.0.1:<port> node src/fs-ent-pipeline/differential-sweep.mjs \
 //     collect <seed> <count> <answers.json>
+//   FIRESTORE_EMULATOR_HOST=127.0.0.1:<port> node src/fs-ent-pipeline/differential-sweep.mjs \
+//     replay <rows.json> <answers.json>
 //   node src/fs-ent-pipeline/differential-sweep.mjs compare <official.json> <emulator.json> \
 //     <strict.json> <report.json> [rows.jsonl]
 //
@@ -238,23 +240,43 @@ function answer({ status, body }) {
   };
 }
 
-async function collect(host, seed, count, out) {
+/** Sends each pipeline to the loopback target over the seeded document and keeps the answers. */
+async function send(host, pipelines) {
   if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host ?? "")) throw new Error("loopback only");
-  const next = grammar(generator(Number(seed)));
   const seeded = await call(host, "PATCH", `${DOCS}/c/d`, { fields: SEED });
   if (seeded.status !== 200) throw new Error(`seed: ${JSON.stringify(seeded)}`);
   const rows = [];
-  for (let i = 0; i < Number(count); i += 1) {
-    const stages = next();
+  for (const { id, stages } of pipelines) {
     const body = { structuredPipeline: { pipeline: { stages } } };
     rows.push({
-      id: `sweep-${seed}-${i}`,
+      id,
       stages,
       answer: answer(await call(host, "POST", `${DOCS}:executePipeline`, body)),
     });
   }
+  return rows;
+}
+
+async function collect(host, seed, count, out) {
+  const next = grammar(generator(Number(seed)));
+  const pipelines = Array.from({ length: Number(count) }, (_, i) => ({
+    id: `sweep-${seed}-${i}`,
+    stages: next(),
+  }));
+  const rows = await send(host, pipelines);
   await writeFile(out, JSON.stringify({ seed: Number(seed), count: Number(count), rows }));
   console.log(JSON.stringify({ seed: Number(seed), count: rows.length }));
+}
+
+/** Replays fixed pipelines, a JSON array of {id, stages} (a review's generated rows). */
+async function replay(host, input, out) {
+  const pipelines = JSON.parse(await readFile(input, "utf8")).map(({ id, stages }) => ({
+    id,
+    stages,
+  }));
+  const rows = await send(host, pipelines);
+  await writeFile(out, JSON.stringify({ input, count: rows.length, rows }));
+  console.log(JSON.stringify({ input, count: rows.length }));
 }
 
 /** JSON with sorted keys, so that two answers compare whatever order their maps were written in. */
@@ -357,10 +379,12 @@ if (import.meta.main) {
   const [mode, ...args] = process.argv.slice(2);
   if (mode === "collect" && args.length === 3)
     await collect(process.env.FIRESTORE_EMULATOR_HOST, ...args);
+  else if (mode === "replay" && args.length === 2)
+    await replay(process.env.FIRESTORE_EMULATOR_HOST, ...args);
   else if (mode === "compare" && args.length >= 4) await compare(...args);
   else {
     console.error(
-      "usage: differential-sweep.mjs collect <seed> <count> <out> | compare <official> <emulator> <strict> <report> [rows.jsonl]",
+      "usage: differential-sweep.mjs collect <seed> <count> <out> | replay <rows.json> <out> | compare <official> <emulator> <strict> <report> [rows.jsonl]",
     );
     process.exitCode = 2;
   }

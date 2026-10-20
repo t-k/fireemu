@@ -22,6 +22,14 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
+/// Recorded rows strict answers with UNIMPLEMENTED although production answered them, because
+/// production's answer depends on a part of the request the decoded request no longer holds
+/// (the emulator profile still answers them as production did).
+const STRICT_UNIMPLEMENTED: &[(&str, &str)] = &[(
+    "fs-ent-pipeline/px0/aliases#overlap",
+    "the text names the later of the two aliases in the request's map, whose order is not kept",
+)];
+
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("fs-ent-pipeline/px1/select#and-false-null", "and is outside the subset"),
     ("fs-ent-pipeline/px1/select#and-false-x", "and is outside the subset"),
@@ -348,7 +356,10 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             }
         }
         assert!(compared > 200, "{compared}");
-        let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
+        let known = |row: &str| {
+            KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known)
+                || (strict && STRICT_UNIMPLEMENTED.iter().any(|(known, _)| row == *known))
+        };
         let unexpected: Vec<_> = differing.iter().filter(|(row, _, _)| !known(row)).collect();
         assert!(
             unexpected.is_empty(),
@@ -363,6 +374,12 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         // order row with two of the three documents, the unknown function after an empty
         // select with the empty select's text under the emulator profile, every other row
         // (that one under strict too) with UNIMPLEMENTED.
+        for (known, reason) in STRICT_UNIMPLEMENTED.iter().filter(|_| strict) {
+            let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
+                panic!("{known} ({reason}) matches production under strict now; remove it");
+            };
+            assert_eq!(got["status"], 501, "{known}: {got}");
+        }
         for (known, reason) in KNOWN_DIFFERENCES {
             let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
                 panic!("strict={strict}: {known} ({reason}) matches production now; remove it");

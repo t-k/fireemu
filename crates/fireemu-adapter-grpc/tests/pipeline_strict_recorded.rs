@@ -320,7 +320,8 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                 ),
                 empty(),
             ],
-            strict: Some((400, EMPTY_SELECT)),
+            // A refusal after an aggregate stage is outside the recorded composition.
+            strict: None,
             emulator: (400, EMPTY_SELECT),
         },
         Case {
@@ -331,6 +332,20 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
             )],
             strict: Some((400, "Invalid empty property path string.")),
             emulator: (400, "Invalid empty property path string."),
+        },
+        Case {
+            // PX1d r4 S3: the official emulator accepts an ordering written as a map, where
+            // fireemu's stage registry would refuse its shape.
+            label: "sort with an {expression, direction} map",
+            stages: vec![stage(
+                "sort",
+                vec![map(vec![
+                    ("expression", field("i")),
+                    ("direction", json!({"stringValue": "ascending"})),
+                ])],
+            )],
+            strict: None,
+            emulator: (501, "pipeline stage \"sort\" is unsupported locally"),
         },
         Case {
             label: "add_fields {a: nope_fn()} only",
@@ -1189,7 +1204,8 @@ fn strict_answers_a_refusal_only_when_no_other_part_is_unobserved() {
                 stage("offset", vec![int(1)]),
                 stage("limit", vec![int(1)]),
             ],
-            strict: Some((400, empty_alias)),
+            // Production recorded no offset of 1, so the pipeline holds an unobserved value.
+            strict: None,
             emulator: (400, empty_alias),
         },
         Case {

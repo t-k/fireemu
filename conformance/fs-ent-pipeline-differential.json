@@ -1529,8 +1529,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-20T15:13:26.774870Z",
-      "updateTime": "2026-10-20T15:13:26.774870Z"
+      "createTime": "2026-10-20T19:02:06.430549Z",
+      "updateTime": "2026-10-20T19:02:06.430549Z"
      }
     ]
    }
@@ -7080,8 +7080,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-20T15:13:26.774870Z",
-      "updateTime": "2026-10-20T15:13:26.774870Z"
+      "createTime": "2026-10-20T19:02:06.430549Z",
+      "updateTime": "2026-10-20T19:02:06.430549Z"
      }
     ]
    }
@@ -12472,10 +12472,10 @@
            "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
           },
           "__create_time__": {
-           "timestampValue": "2026-10-20T15:13:26.774870Z"
+           "timestampValue": "2026-10-20T19:02:06.430549Z"
           },
           "__update_time__": {
-           "timestampValue": "2026-10-20T15:13:26.774870Z"
+           "timestampValue": "2026-10-20T19:02:06.430549Z"
           },
           "i": {
            "integerValue": "1"
@@ -400953,8 +400953,4399 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-20T15:13:26.774870Z",
-      "updateTime": "2026-10-20T15:13:26.774870Z"
+      "createTime": "2026-10-20T19:02:06.430549Z",
+      "updateTime": "2026-10-20T19:02:06.430549Z"
+     }
+    ]
+   }
+  },
+  {
+   "id": "r4 g20261021-00054",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "stringValue": "__vector__"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Vector map is missing key 'value'."
+   }
+  },
+  {
+   "id": "r4 g20261021-00069",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "integerValue": "1"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds LONG."
+   }
+  },
+  {
+   "id": "r4 g20261021-00123",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "stringValue": "x"
+         },
+         "__name__": {
+          "geoPointValue": {
+           "latitude": 1,
+           "longitude": 2
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1."
+   }
+  },
+  {
+   "id": "r4 g20261021-00131",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "doubleValue": 2.5
+            },
+            {
+             "fieldReferenceValue": "top"
+            },
+            {
+             "integerValue": "1"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      },
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r4 g20261021-00132",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "fieldReferenceValue": "missing"
+            }
+           ]
+          }
+         },
+         "`q`": {
+          "mapValue": {
+           "fields": {
+            "1a": {
+             "nullValue": null
+            },
+            "__type__": {
+             "fieldReferenceValue": "n"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FIELD_REFERENCE_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-00137",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "fieldReferenceValue": "__name__"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The 'select(...)' stage requires at least one field."
+   }
+  },
+  {
+   "id": "r4 g20261021-00146",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "mapValue": {
+           "fields": {
+            "a-b": {
+             "functionValue": {
+              "name": "current_document",
+              "args": [
+               {
+                "fieldReferenceValue": "top"
+               },
+               {
+                "booleanValue": true
+               },
+               {
+                "integerValue": "1"
+               }
+              ]
+             }
+            },
+            "b": {
+             "fieldReferenceValue": "n"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FUNCTION_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-00231",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "c": {
+          "booleanValue": true
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r4 g20261021-00250",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "stringValue": "__vector__"
+            },
+            "value": {
+             "arrayValue": {
+              "values": [
+               {
+                "doubleValue": 1
+               }
+              ]
+             }
+            },
+            "x": {
+             "integerValue": "1"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Vector value map has extraneous entries."
+   }
+  },
+  {
+   "id": "r4 g20261021-00530",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/s"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c/d/s\" lacks \"/\" at index 53."
+   }
+  },
+  {
+   "id": "r4 g20261021-00553",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "fieldReferenceValue": "__name__"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "integerValue": "1"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'add_fields': field name '__x__' is reserved."
+   }
+  },
+  {
+   "id": "r4 g20261021-00557",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "c": {
+          "functionValue": {
+           "name": "sqrt",
+           "args": [
+            {
+             "geoPointValue": {
+              "latitude": 1,
+              "longitude": 2
+             }
+            }
+           ]
+          }
+         },
+         "__name__": {
+          "mapValue": {
+           "fields": {
+            "__x__": {
+             "functionValue": {
+              "name": "document_id",
+              "args": [
+               {
+                "fieldReferenceValue": "__name__"
+               },
+               {
+                "mapValue": {
+                 "fields": {
+                  "__type__": {
+                   "booleanValue": true
+                  }
+                 }
+                }
+               }
+              ]
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "field name '__x__' is reserved."
+   }
+  },
+  {
+   "id": "r4 g20261021-00565",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "`q`": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            },
+            {
+             "doubleValue": 1.5
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "integerValue": "1"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid empty property path string."
+   }
+  },
+  {
+   "id": "r4 g20261021-00616",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "-1"
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1."
+   }
+  },
+  {
+   "id": "r4 g20261021-00623",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "integerValue": "1"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "c": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "integerValue": "1"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds LONG."
+   }
+  },
+  {
+   "id": "r4 g20261021-00627",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "nullValue": null
+            }
+           }
+          }
+         },
+         "": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "stringValue": "x"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "count",
+           "args": [
+            {
+             "fieldReferenceValue": "n"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds NULL."
+   }
+  },
+  {
+   "id": "r4 g20261021-00642",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "mapValue": {
+           "fields": {
+            "a-b": {
+             "functionValue": {
+              "name": "count",
+              "args": [
+               {
+                "fieldReferenceValue": "a.b"
+               }
+              ]
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FUNCTION_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-00705",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "collection_id",
+        "args": [
+         {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "nullValue": null
+         },
+         "__x__.a": {
+          "functionValue": {
+           "name": "and",
+           "args": [
+            {
+             "integerValue": "1"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'and(x: boolean?*): boolean?' takes [2..+∞) argument(s), but 1 was provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-00805",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "b": {
+          "arrayValue": {
+           "values": [
+            {
+             "fieldReferenceValue": "a.b"
+            }
+           ]
+          }
+         },
+         "": {
+          "arrayValue": {
+           "values": [
+            {
+             "integerValue": "1"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FIELD_REFERENCE_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-00898",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "1"
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "1a": {
+          "arrayValue": {
+           "values": []
+          }
+         },
+         "a..b": {
+          "mapValue": {
+           "fields": {}
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"1a\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-00946",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "greater_than",
+           "args": []
+          }
+         },
+         "c": {
+          "mapValue": {
+           "fields": {}
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'greater_than(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-01021",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "timestampValue": "2020-01-01T00:00:00Z"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "offset",
+     "args": [
+      {
+       "stringValue": "x"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Expected offset to be INTEGER_VALUE, but was STRING_VALUE."
+   }
+  },
+  {
+   "id": "r4 g20261021-01025",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "arrayValue": {
+           "values": [
+            {
+             "functionValue": {
+              "name": "sqrt",
+              "args": [
+               {
+                "fieldReferenceValue": "a.b"
+               },
+               {
+                "fieldReferenceValue": "n"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FUNCTION_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-01038",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/s"
+         },
+         "": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+            },
+            {
+             "stringValue": "x"
+            },
+            {
+             "geoPointValue": {
+              "latitude": 1,
+              "longitude": 2
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c/d/s\" lacks \"/\" at index 53."
+   }
+  },
+  {
+   "id": "r4 g20261021-01063",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "-1"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The 'select(...)' stage requires at least one field."
+   }
+  },
+  {
+   "id": "r4 g20261021-01076",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "fieldReferenceValue": "i"
+         },
+         "__x__.a": {
+          "mapValue": {
+           "fields": {
+            "": {
+             "mapValue": {
+              "fields": {
+               "a": {
+                "stringValue": ""
+               },
+               "__type__": {
+                "fieldReferenceValue": "__name__"
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FIELD_REFERENCE_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-01144",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "integerValue": "1"
+            }
+           }
+          }
+         },
+         "c": {
+          "nullValue": null
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds LONG."
+   }
+  },
+  {
+   "id": "r4 g20261021-01146",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "mapValue": {
+           "fields": {}
+          }
+         },
+         "__x__.a": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r4 g20261021-01185",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "fieldReferenceValue": "dbl"
+         },
+         "__x__": {
+          "integerValue": "1"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'select': field name '__name__' is reserved and can not be overwritten."
+   }
+  },
+  {
+   "id": "r4 g20261021-01216",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "booleanValue": true
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds BOOLEAN."
+   }
+  },
+  {
+   "id": "r4 g20261021-01226",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "mapValue": {
+           "fields": {
+            "__x__": {
+             "functionValue": {
+              "name": "document_id",
+              "args": [
+               {
+                "mapValue": {
+                 "fields": {
+                  "__type__": {
+                   "stringValue": "__vector__"
+                  }
+                 }
+                }
+               }
+              ]
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "field name '__x__' is reserved."
+   }
+  },
+  {
+   "id": "r4 g20261021-01264",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The nested field reference '__x__.a' is not supported in its current use case.\n\nCertain stages like `aggregate(...)` or `unnest(...)` only support assigning to top-level fields. This means you cannot use an alias like 'foo.bar' to assign the result to a nested field. If you want to use an alias that has a dot in it, escape the path with backticks, like `foo.bar`.\n\nDepending on the SDK, this can be done like so:`.distinct(field(\"address.city\").as(\"`address.city`\"))`"
+   }
+  },
+  {
+   "id": "r4 g20261021-01276",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a..b": {
+          "functionValue": {
+           "name": "count",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         },
+         "": {
+          "mapValue": {
+           "fields": {}
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "c": {
+          "integerValue": "0"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-01334",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "arrayValue": {
+           "values": [
+            {
+             "functionValue": {
+              "name": "and",
+              "args": [
+               {
+                "integerValue": "1"
+               },
+               {
+                "geoPointValue": {
+                 "latitude": 1,
+                 "longitude": 2
+                }
+               },
+               {
+                "doubleValue": 2.5
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FUNCTION_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-01380",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "mapValue": {
+           "fields": {}
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "stringValue": "x"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE."
+   }
+  },
+  {
+   "id": "r4 g20261021-01424",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "mapValue": {
+           "fields": {}
+          }
+         },
+         "a": {
+          "mapValue": {
+           "fields": {}
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 g20261021-01487",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "and",
+           "args": [
+            {
+             "geoPointValue": {
+              "latitude": 1,
+              "longitude": 2
+             }
+            },
+            {
+             "fieldReferenceValue": "n"
+            }
+           ]
+          }
+         },
+         "c": {
+          "integerValue": "-1"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "offset",
+     "args": [
+      {
+       "stringValue": "x"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Expected offset to be INTEGER_VALUE, but was STRING_VALUE."
+   }
+  },
+  {
+   "id": "r4 g20261021-01490",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "exists",
+           "args": []
+          }
+         },
+         "__name__": {
+          "mapValue": {
+           "fields": {}
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'exists(value: any?): boolean' takes [1..1] argument(s), but 0 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-01547",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "functionValue": {
+           "name": "parent",
+           "args": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'parent(ref: document_reference): document_reference?' takes [1..1] argument(s), but 0 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-01554",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "fieldReferenceValue": "a.b"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "nullValue": null
+            }
+           ]
+          }
+         },
+         "__name__": {
+          "mapValue": {
+           "fields": {
+            "__name__": {
+             "fieldReferenceValue": "dbl"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "field name '__name__' is reserved."
+   }
+  },
+  {
+   "id": "r4 g20261021-01562",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__type__": {
+          "timestampValue": "2020-01-01T00:00:00Z"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "0"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds TIMESTAMP."
+   }
+  },
+  {
+   "id": "r4 g20261021-01599",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "fieldReferenceValue": "__name__"
+         },
+         "a..b": {
+          "arrayValue": {
+           "values": [
+            {
+             "fieldReferenceValue": "a.b"
+            },
+            {
+             "integerValue": "1"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "`q`": {
+          "stringValue": "x"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-01604",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "functionValue": {
+           "name": "count",
+           "args": [
+            {
+             "fieldReferenceValue": "a.b"
+            },
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'count' does not exist."
+   }
+  },
+  {
+   "id": "r4 g20261021-01605",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "fieldReferenceValue": "__name__"
+         },
+         "a": {
+          "arrayValue": {
+           "values": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "arrayValue": {
+           "values": [
+            {
+             "mapValue": {
+              "fields": {
+               "__type__": {
+                "booleanValue": true
+               }
+              }
+             }
+            }
+           ]
+          }
+         },
+         "c": {
+          "integerValue": "1"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "functionValue": {
+           "name": "count",
+           "args": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds BOOLEAN."
+   }
+  },
+  {
+   "id": "r4 g20261021-01608",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "nullValue": null
+            },
+            {
+             "fieldReferenceValue": "dbl"
+            },
+            {
+             "fieldReferenceValue": "n"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'parent(ref: document_reference): document_reference?' takes [1..1] argument(s), but 3 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-01610",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "map",
+        "args": [
+         {
+          "functionValue": {
+           "name": "nope_fn",
+           "args": [
+            {
+             "doubleValue": 2.5
+            },
+            {
+             "fieldReferenceValue": "top"
+            },
+            {
+             "timestampValue": "2020-01-01T00:00:00Z"
+            }
+           ]
+          }
+         },
+         {
+          "fieldReferenceValue": "i"
+         },
+         {
+          "mapValue": {
+           "fields": {
+            "a.b": {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+            },
+            "1a": {
+             "integerValue": "1"
+            }
+           }
+          }
+         }
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'nope_fn' does not exist."
+   }
+  },
+  {
+   "id": "r4 g20261021-01685",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "current_document",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "nullValue": null
+            }
+           ]
+          }
+         },
+         "a..b": {
+          "mapValue": {
+           "fields": {
+            "a-b": {
+             "fieldReferenceValue": "top"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'current_document(): map[string, any]' takes [0..0] argument(s), but 2 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-01699",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "fieldReferenceValue": "n"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'distinct': field name '__name__' is reserved and can not be overwritten."
+   }
+  },
+  {
+   "id": "r4 g20261021-01961",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "1a": {
+          "nullValue": null
+         },
+         "": {
+          "arrayValue": {
+           "values": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"1a\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-01994",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "b": {
+          "functionValue": {
+           "name": "count",
+           "args": [
+            {
+             "timestampValue": "2020-01-01T00:00:00Z"
+            },
+            {
+             "fieldReferenceValue": "__name__"
+            }
+           ]
+          }
+         },
+         "__x__": {
+          "fieldReferenceValue": "a.b"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'count' does not exist."
+   }
+  },
+  {
+   "id": "r4 g20261021-02074",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "mapValue": {
+           "fields": {}
+          }
+         },
+         "a..b": {
+          "mapValue": {
+           "fields": {
+            "__x__": {
+             "mapValue": {
+              "fields": {
+               "b": {
+                "fieldReferenceValue": "n"
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-02106",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a..b": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "nullValue": null
+            }
+           }
+          }
+         },
+         "__name__": {
+          "fieldReferenceValue": "n"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-02150",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "functionValue": {
+           "name": "exists",
+           "args": [
+            {
+             "fieldReferenceValue": "top"
+            },
+            {
+             "integerValue": "0"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "5000000000"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'exists(value: any?): boolean' takes [1..1] argument(s), but 2 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-02170",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "mapValue": {
+           "fields": {
+            "": {
+             "mapValue": {
+              "fields": {}
+             }
+            }
+           }
+          }
+         },
+         "a.b": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "booleanValue": true
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds BOOLEAN."
+   }
+  },
+  {
+   "id": "r4 g20261021-02271",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "functionValue": {
+              "name": "and",
+              "args": [
+               {
+                "integerValue": "0"
+               },
+               {
+                "mapValue": {
+                 "fields": {
+                  "__type__": {
+                   "mapValue": {
+                    "fields": {}
+                   }
+                  }
+                 }
+                }
+               }
+              ]
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FUNCTION_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-02326",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "fieldReferenceValue": "n"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "0"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "'map' function must have an even number of arguments"
+   }
+  },
+  {
+   "id": "r4 g20261021-02328",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/s"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c/d/s\" lacks \"/\" at index 53."
+   }
+  },
+  {
+   "id": "r4 g20261021-02332",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/s"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a..b": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "fieldReferenceValue": "dbl"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c/d/s\" lacks \"/\" at index 53."
+   }
+  },
+  {
+   "id": "r4 g20261021-02493",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__type__": {
+          "mapValue": {
+           "fields": {
+            "": {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds MAP."
+   }
+  },
+  {
+   "id": "r4 g20261021-02503",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "fieldReferenceValue": "missing"
+         },
+         "1a": {
+          "fieldReferenceValue": "missing"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"1a\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-02689",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "mapValue": {
+           "fields": {
+            "a-b": {
+             "functionValue": {
+              "name": "exists",
+              "args": []
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "1"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FUNCTION_VALUE"
+   }
+  },
+  {
+   "id": "r4 g20261021-02750",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "collection_id",
+        "args": [
+         {
+          "arrayValue": {
+           "values": [
+            {
+             "fieldReferenceValue": "n"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         },
+         {
+          "fieldReferenceValue": "__name__"
+         },
+         {
+          "stringValue": "x"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'collection_id(ref: document_reference): string' takes [1..1] argument(s), but 3 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-02804",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__type__": {
+          "arrayValue": {
+           "values": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds ARRAY."
+   }
+  },
+  {
+   "id": "r4 g20261021-02830",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "booleanValue": false
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "functionValue": {
+           "name": "sqrt",
+           "args": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'sqrt(number: number): float64' takes [1..1] argument(s), but 0 were provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-02848",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "integerValue": "5000000000"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'add_fields': field name '__x__' is reserved."
+   }
+  },
+  {
+   "id": "r4 g20261021-02857",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "nullValue": null
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "functionValue": {
+           "name": "add",
+           "args": [
+            {
+             "mapValue": {
+              "fields": {
+               "__type__": {
+                "mapValue": {
+                 "fields": {}
+                }
+               }
+              }
+             }
+            },
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field __type__ must be a string; founds MAP."
+   }
+  },
+  {
+   "id": "r4 g20261021-02875",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "mapValue": {
+           "fields": {}
+          }
+         },
+         "c": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r4 g20261021-02914",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "1a": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            },
+            {
+             "geoPointValue": {
+              "latitude": 1,
+              "longitude": 2
+             }
+            }
+           ]
+          }
+         },
+         "__x__.a": {
+          "mapValue": {
+           "fields": {
+            "1a": {
+             "doubleValue": 1.5
+            },
+            "": {
+             "functionValue": {
+              "name": "count",
+              "args": []
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"1a\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 g20261021-02946",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "map",
+        "args": [
+         {
+          "functionValue": {
+           "name": "and",
+           "args": [
+            {
+             "fieldReferenceValue": "a.b"
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'and(x: boolean?*): boolean?' takes [2..+∞) argument(s), but 1 was provided."
+   }
+  },
+  {
+   "id": "r4 g20261021-02992",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "fieldReferenceValue": "dbl"
+            },
+            {
+             "fieldReferenceValue": "dbl"
+            }
+           ]
+          }
+         },
+         "": {
+          "integerValue": "1"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__.a": {
+          "functionValue": {
+           "name": "count",
+           "args": [
+            {
+             "fieldReferenceValue": "n"
+            }
+           ]
+          }
+         }
+        }
+       }
+      },
+      {
+       "mapValue": {
+        "fields": {
+         "1a": {
+          "fieldReferenceValue": "top"
+         },
+         "a": {
+          "fieldReferenceValue": "i"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'parent(ref: document_reference): document_reference?' takes [1..1] argument(s), but 2 were provided."
+   }
+  },
+  {
+   "id": "r4 m4242-00187",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "functionValue": {
+              "name": "map",
+              "args": [
+               {
+                "stringValue": "k"
+               },
+               {
+                "fieldReferenceValue": "__name__"
+               },
+               {
+                "stringValue": "k2"
+               },
+               {
+                "fieldReferenceValue": "__name__"
+               }
+              ]
+             }
+            },
+            {
+             "functionValue": {
+              "name": "document_id",
+              "args": [
+               {
+                "fieldReferenceValue": "__name__"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         },
+         "a": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         },
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "mapValue": {
+              "fields": {
+               "__type__": {
+                "stringValue": "x"
+               }
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 m4242-00256",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "fieldReferenceValue": "n"
+         },
+         "a": {
+          "fieldReferenceValue": "n"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "offset",
+     "args": [
+      {
+       "integerValue": "1"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 m4242-00259",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "functionValue": {
+              "name": "collection_id",
+              "args": [
+               {
+                "fieldReferenceValue": "__name__"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         },
+         "b": {
+          "fieldReferenceValue": "top"
+         },
+         "a": {
+          "fieldReferenceValue": "__name__"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 m4242-00731",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         },
+         "`x y`": {
+          "integerValue": "0"
+         },
+         "a.b": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "functionValue": {
+              "name": "equal",
+              "args": [
+               {
+                "fieldReferenceValue": "n"
+               },
+               {
+                "fieldReferenceValue": "top"
+               }
+              ]
+             }
+            },
+            {
+             "stringValue": "k"
+            },
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function collection_id(...) requires `Reference` but got `STRING`."
+   }
+  },
+  {
+   "id": "r4 m4242-00753",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "booleanValue": true
+         },
+         "a": {
+          "fieldReferenceValue": "n"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 m4242-00893",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+         },
+         "b": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "functionValue": {
+              "name": "document_id",
+              "args": [
+               {
+                "fieldReferenceValue": "i"
+               }
+              ]
+             }
+            },
+            {
+             "mapValue": {
+              "fields": {
+               "__type__": {
+                "stringValue": "__vector__"
+               },
+               "value": {
+                "arrayValue": {
+                 "values": [
+                  {
+                   "doubleValue": 1
+                  }
+                 ]
+                }
+               }
+              }
+             }
+            }
+           ]
+          }
+         },
+         "a": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "functionValue": {
+              "name": "equal",
+              "args": [
+               {
+                "fieldReferenceValue": "missing"
+               },
+               {
+                "mapValue": {
+                 "fields": {
+                  "__type__": {
+                   "stringValue": "x"
+                  }
+                 }
+                }
+               }
+              ]
+             }
+            },
+            {
+             "functionValue": {
+              "name": "document_id",
+              "args": [
+               {
+                "fieldReferenceValue": "__name__"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 m4242-01001",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "stringValue": "t"
+         },
+         "a": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "timestampValue": "2020-01-01T00:00:00Z"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "name": "offset",
+     "args": [
+      {
+       "integerValue": "2"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 m4242-01060",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "arrayValue": {
+           "values": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "stringValue": "x"
+            }
+           ]
+          }
+         },
+         "a": {
+          "fieldReferenceValue": "dbl"
+         },
+         "v": {
+          "doubleValue": 1.5
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'a' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+   }
+  },
+  {
+   "id": "r4 H1 select {'': i, a: nope_fn()}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "fieldReferenceValue": "i"
+         },
+         "a": {
+          "functionValue": {
+           "name": "nope_fn",
+           "args": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid empty property path string."
+   }
+  },
+  {
+   "id": "r4 H2 select {'': i, a: equal(i)}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "fieldReferenceValue": "i"
+         },
+         "a": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid empty property path string."
+   }
+  },
+  {
+   "id": "r4 H3 select {a..b: i, a: {__name__: 1}}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a..b": {
+          "fieldReferenceValue": "i"
+         },
+         "a": {
+          "mapValue": {
+           "fields": {
+            "__name__": {
+             "integerValue": "1"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r4 H4 select {'': i, a: document_id(1.5)}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "fieldReferenceValue": "i"
+         },
+         "a": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "doubleValue": 1.5
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid empty property path string."
+   }
+  },
+  {
+   "id": "r4 H5 select {a: nope_fn(), b: document_id(\"s\")}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "functionValue": {
+           "name": "nope_fn",
+           "args": []
+          }
+         },
+         "b": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "stringValue": "s"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function 'nope_fn' does not exist."
+   }
+  },
+  {
+   "id": "r4 H6 select {a: [i], b: nope_fn()}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "arrayValue": {
+           "values": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         },
+         "b": {
+          "functionValue": {
+           "name": "nope_fn",
+           "args": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FIELD_REFERENCE_VALUE"
+   }
+  },
+  {
+   "id": "r4 H7 select {'': i, a..b: i}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "fieldReferenceValue": "i"
+         },
+         "a..b": {
+          "fieldReferenceValue": "i"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid empty property path string."
+   }
+  },
+  {
+   "id": "r4 H8 select {a: map(1, i), b: [i]}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         },
+         "b": {
+          "arrayValue": {
+           "values": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FIELD_REFERENCE_VALUE"
+   }
+  },
+  {
+   "id": "r4 H9 select {a: document_id(\"s\"), b: parent(true)}",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "stringValue": "s"
+            }
+           ]
+          }
+         },
+         "b": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "booleanValue": true
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function document_id(...) requires `Reference` but got `STRING`."
+   }
+  },
+  {
+   "id": "r5 g20261021-02669 nested alias of a missing value",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a.b": {
+          "fieldReferenceValue": "a.b"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "a": {
+        "mapValue": {}
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "r5 m4242-00306 nested alias of a missing value",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "b": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "fieldReferenceValue": "n"
+            }
+           ]
+          }
+         },
+         "a.b": {
+          "fieldReferenceValue": "missing"
+         },
+         "_z": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "doubleValue": 1.5
+            },
+            {
+             "arrayValue": {
+              "values": [
+               {
+                "integerValue": "1"
+               },
+               {
+                "stringValue": "x"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "a": {
+        "mapValue": {}
+       },
+       "b": {
+        "mapValue": {
+         "fields": {
+          "k": {
+           "integerValue": "1"
+          }
+         }
+        }
+       },
+       "_z": {
+        "booleanValue": false
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "r5 m4242-00366 nested alias of a missing value",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "booleanValue": true
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "fieldReferenceValue": "__name__"
+            },
+            {
+             "functionValue": {
+              "name": "equal",
+              "args": [
+               {
+                "fieldReferenceValue": "__name__"
+               },
+               {
+                "fieldReferenceValue": "__name__"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         },
+         "a.b": {
+          "fieldReferenceValue": "missing"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "a": {
+        "mapValue": {}
+       },
+       "v": {
+        "booleanValue": false
+       }
+      }
      }
     ]
    }

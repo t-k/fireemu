@@ -316,6 +316,9 @@ fn service_for(case: &Case) -> GatewayService {
     seed(&backend, case);
     let mut gateway = test_gateway();
     gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    // The executor against the lowering is the same in both profiles; the emulator profile
+    // answers every offset and limit the cases draw (strict answers only the recorded ones).
+    gateway.ctx.policy = fireemu_core_firestore::index::IndexValidationPolicy::Emulator;
     GatewayService::local(gateway, backend)
 }
 

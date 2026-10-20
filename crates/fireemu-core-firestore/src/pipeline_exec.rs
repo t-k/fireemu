@@ -734,12 +734,41 @@ impl Cursor {
                 }
                 Stage::Select(aliases) => {
                     let mut fields = BTreeMap::new();
+                    let mut refused = None;
                     for (alias, expr) in aliases {
                         match expr.eval_in(&row, self.unrecorded) {
                             Eval::Value(value) => set_path(&mut fields, alias, value),
+                            Eval::Absent if alias.segments().len() > 1 => {
+                                // The official emulator keeps the parents of a nested alias
+                                // whose value is missing as empty maps; production has not
+                                // answered one (PX1d round 5 sweep, g20261021-02669).
+                                if self.unrecorded == Unrecorded::Refuse {
+                                    return Err(EvalError::Unobserved {
+                                        function: "select",
+                                        reason: "a nested alias of a missing value",
+                                    });
+                                }
+                                set_parents(&mut fields, alias);
+                            }
                             Eval::Absent => {}
+                            Eval::Error(error @ EvalError::Unobserved { .. }) => return Err(error),
+                            Eval::Error(error) if self.unrecorded == Unrecorded::Refuse => {
+                                // Which of two refused fields production names depends on the
+                                // request's field order, which the decoded map no longer
+                                // holds, so strict answers neither (PX1d round 4, H9).
+                                if refused.is_some() {
+                                    return Err(EvalError::Unobserved {
+                                        function: "select",
+                                        reason: "a second refused field in one select",
+                                    });
+                                }
+                                refused = Some(error);
+                            }
                             Eval::Error(error) => return Err(error),
                         }
+                    }
+                    if let Some(error) = refused {
+                        return Err(error);
                     }
                     row.fields = fields;
                 }
@@ -766,6 +795,22 @@ fn set_path(fields: &mut BTreeMap<String, Value>, path: &FieldPath, value: Value
     let Some((last, parents)) = path.segments().split_last() else {
         return;
     };
+    parent_map(fields, parents).insert(last.clone(), value);
+}
+
+/// Creates the maps on the way to `path` without setting it, as the official emulator does for a
+/// nested alias whose value is missing.
+fn set_parents(fields: &mut BTreeMap<String, Value>, path: &FieldPath) {
+    if let Some((_, parents)) = path.segments().split_last() {
+        parent_map(fields, parents);
+    }
+}
+
+/// The map at `parents`, created on the way (a non-map on the way is replaced).
+fn parent_map<'a>(
+    fields: &'a mut BTreeMap<String, Value>,
+    parents: &[String],
+) -> &'a mut BTreeMap<String, Value> {
     let mut map = fields;
     for segment in parents {
         let entry = map
@@ -779,7 +824,7 @@ fn set_path(fields: &mut BTreeMap<String, Value>, path: &FieldPath, value: Value
         };
         map = inner;
     }
-    map.insert(last.clone(), value);
+    map
 }
 
 /// The field paths a scan must read for these stages, or `None` when every field can reach

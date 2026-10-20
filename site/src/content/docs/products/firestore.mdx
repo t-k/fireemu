@@ -70,11 +70,16 @@ The answers follow production as recorded by fireemu's production observations (
 | A vector literal with a negative-zero element | `UNIMPLEMENTED` | The vector |
 | A literal with more than one empty or reserved key, or the key `__name__` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
 | A `limit` of another type than an integer or string; an `offset` that is negative or of another type than an integer or string | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| A `limit` of 0, or an `offset` of 0 up to 2147483647 (production answered only larger offsets) | `UNIMPLEMENTED` | The rows |
+| A refusal after a stage `strict` does not run past, such as an empty `select` after an `aggregate` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| A `select` alias inside another, such as `{a, a.b}` (production names the alias that comes later in the request) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the child alias |
+| Two `select` fields that both fail when evaluated, such as `{a: documentId("s"), b: parent(true)}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the first in key order |
+| A vector inside an array, or a `__type__` key beside other keys in a literal | `UNIMPLEMENTED` | The official answer |
 | The wrong number of arguments for a supported function | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |
 | Function options | `UNIMPLEMENTED` | Ignored, as the official emulator ignores them |
 | An empty `select` map or a later stage's check after a function or stage value fireemu does not check (production names an unknown function first) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the later check |
 | An empty map or another refusal beside a function call that fails on its constants, such as `map(1.5, i)`, or beside any other part `strict` does not answer | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the other refusal |
-| A stage's own argument count or options, such as `limit()` or `where(a, b)` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |
+| A stage's own argument count or options, such as `limit()` or `where(a, b)` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text, for `collection`, `where`, `select`, `limit`, `offset`, `add_fields`, `distinct` and `aggregate`; `UNIMPLEMENTED` for every other stage |
 | An empty `array()` or `map()` | `UNIMPLEMENTED` | An empty array or map |
 
 Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.

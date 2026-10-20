@@ -34,38 +34,54 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { scanFixture } from "./fixture-scan.mjs";
-import {
+import { LANES, selectLane } from "./lanes.mjs";
+
+const execFileAsync = promisify(execFile);
+const LANE = selectLane();
+/** Each lane's request layer (harness.mjs); its harness digest binds that directory's two files. */
+const HARNESSES = Object.fromEntries(
+  await Promise.all(
+    [...new Set(Object.values(LANES).map((lane) => lane.harness))].map(async (dir) => [
+      dir,
+      await import(pathToFileURL(join(CONFORMANCE_DIR, dir, "harness.mjs")).href),
+    ]),
+  ),
+);
+const HARNESS_DIR = join(CONFORMANCE_DIR, LANE.harness);
+const {
   DATABASE,
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
   createContext,
+  databaseName,
   diffRecordings,
   isTransient,
   normalizeStep,
   sameRecording,
   validateCorpus,
-} from "./harness.mjs";
-import { selectLane } from "./lanes.mjs";
-import { runCorpus } from "./session.mjs";
-
-const execFileAsync = promisify(execFile);
-const LANE = selectLane();
+} = HARNESSES[LANE.harness];
+const { runCorpus } = await import(pathToFileURL(join(HARNESS_DIR, "session.mjs")).href);
 const { PROGRAMS } = await import(LANE.corpus);
 // A lane without approved divergences compares every row strictly.
 const { approvedDivergence, crossRowChecks } = LANE.divergences
   ? await import(LANE.divergences)
   : { approvedDivergence: () => undefined, crossRowChecks: () => ({ demote: new Set() }) };
 const FIXTURE = join(CONFORMANCE_DIR, LANE.fixture);
-const INDEXES = join(CONFORMANCE_DIR, LANE.indexes);
+// A lane without an index file (the Enterprise pipeline lane) records without index checks.
+const INDEXES = LANE.indexes ? join(CONFORMANCE_DIR, LANE.indexes) : null;
+const DATABASE_ID = LANE.database ?? DATABASE;
 const LOCAL_CONFIG = join(CONFORMANCE_DIR, LANE.localConfig);
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", LANE.id);
 const TASK_ID = LANE.taskId;
 const ADMIN_ORIGIN = "https://firestore.googleapis.com/v1";
+/** Every preflight read gives up after this long, so a hung read never holds the locks. */
+const PREFLIGHT_TIMEOUT_MS = 30_000;
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 export function selectPrograms(
@@ -88,16 +104,14 @@ export const programDigest = (program) => sha256(JSON.stringify(program));
 /** Normalization and request semantics a saved row depends on; a change makes it stale. */
 export async function harnessDigest() {
   const sources = await Promise.all(
-    ["harness.mjs", "session.mjs"].map((file) =>
-      readFile(join(CONFORMANCE_DIR, "src/fs-query-index", file), "utf8"),
-    ),
+    ["harness.mjs", "session.mjs"].map((file) => readFile(join(HARNESS_DIR, file), "utf8")),
   );
-  const indexes = await readFile(INDEXES, "utf8");
+  const indexes = INDEXES ? await readFile(INDEXES, "utf8") : "";
   return sha256(`${sources.join("\n")}\n${indexes}`);
 }
 
 /** Per recording: every step once; the harness gets its own budget for wipes and seeds. */
-const ceilings = (programs) => ({
+export const ceilings = (programs) => ({
   maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
   maxHarnessRequests: programs.reduce(
     (total, p) => total + 8 + 2 * Math.ceil((p.seed?.length ?? 0) / 500),
@@ -125,7 +139,16 @@ async function assertIgnored(path) {
 async function assertCleanTree() {
   const { stdout } = await execFileAsync(
     "git",
-    ["status", "--porcelain", "--", ...LANE.sources, LANE.fixture, LANE.localConfig, LANE.indexes],
+    [
+      "status",
+      "--porcelain",
+      "--",
+      ...LANE.sources,
+      LANE.fixture,
+      LANE.localConfig,
+      ...(LANE.firebaseJson ? [LANE.firebaseJson] : []),
+      ...(LANE.indexes ? [LANE.indexes] : []),
+    ],
     { cwd: CONFORMANCE_DIR },
   );
   if (stdout.trim()) throw new Error(`record-production needs a clean tree:\n${stdout}`);
@@ -179,12 +202,13 @@ async function accessToken() {
   return stdout.trim();
 }
 
-async function adminGet(path, token) {
-  const response = await fetch(`${ADMIN_ORIGIN}/${path}`, {
+async function adminGet(path, token, fetchImpl = fetch) {
+  const response = await fetchImpl(`${ADMIN_ORIGIN}/${path}`, {
     headers: {
       authorization: `Bearer ${token}`,
       "x-goog-user-project": SANDBOX_PROJECT,
     },
+    signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(`GET ${path}: HTTP ${response.status}`);
@@ -236,6 +260,7 @@ export function indexKey(groupId, queryScope, fields) {
 }
 
 async function verifyIndexes() {
+  if (!INDEXES) throw new Error(`lane ${LANE.id} has no index file`);
   const token = await accessToken();
   const expected = JSON.parse(await readFile(INDEXES, "utf8"));
   const { composites, overrides } = await productionIndexes(token);
@@ -298,11 +323,12 @@ async function verifyIndexes() {
  * database around every program, so it records only into an empty one: a document there is
  * another lane's, or a failed run's, and must not be deleted unseen.
  */
-async function databaseDocuments(token) {
-  const response = await fetch(
-    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/${DATABASE}/documents:runQuery`,
+export async function databaseDocuments(token, database = DATABASE_ID, fetchImpl = fetch) {
+  const response = await fetchImpl(
+    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/${database}/documents:runQuery`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
       headers: {
         authorization: `Bearer ${token}`,
         "x-goog-user-project": SANDBOX_PROJECT,
@@ -329,6 +355,7 @@ async function databaseDocuments(token) {
  * Read-only.
  */
 async function preflight(token) {
+  if (!INDEXES) return preflightNamedDatabase(token);
   const shared = JSON.parse(
     await readFile(join(CONFORMANCE_DIR, "firestore.indexes.json"), "utf8"),
   );
@@ -346,12 +373,64 @@ async function preflight(token) {
       `the sandbox (default) database is not empty (${documents[0]}); record only into an empty database`,
     );
   }
-  console.log(JSON.stringify({ preflight: "ok", database: DATABASE }, null, 2));
+  console.log(JSON.stringify({ preflight: "ok", database: DATABASE_ID }, null, 2));
 }
 
-async function recordOnce(programs, run, token, projectNumber) {
+/**
+ * The configuration a lane's named database must have: its edition, Firestore API data
+ * access (off by default on Enterprise, which would refuse every request of the corpus) and
+ * the native type.
+ */
+export function checkNamedDatabase(database, lane = LANE) {
+  const wanted = {
+    databaseEdition: lane.edition,
+    firestoreDataAccessMode: "DATA_ACCESS_MODE_ENABLED",
+    type: "FIRESTORE_NATIVE",
+  };
+  for (const [key, value] of Object.entries(wanted)) {
+    if (database[key] !== value)
+      throw new Error(
+        `database ${lane.database}: ${key} is ${database[key]}, the lane needs ${value}`,
+      );
+  }
+}
+
+/**
+ * The checks before a recording into a lane's named database (read-only): it exists with the
+ * lane's configuration and is empty. The lane creates and deletes it in its own packet steps.
+ */
+export async function preflightNamedDatabase(
+  token,
+  { lane = LANE, get = adminGet, documents = databaseDocuments } = {},
+) {
+  const database = await get(`projects/${SANDBOX_PROJECT}/databases/${lane.database}`, token);
+  checkNamedDatabase(database, lane);
+  const found = await documents(token, lane.database);
+  if (found.length) {
+    throw new Error(
+      `the sandbox ${lane.database} database is not empty (${found[0]}); record only into an empty database`,
+    );
+  }
+  console.log(
+    JSON.stringify(
+      { preflight: "ok", database: lane.database, edition: database.databaseEdition },
+      null,
+      2,
+    ),
+  );
+}
+
+/**
+ * The context of a production recording (or of renormalizing one) for a lane: its database is
+ * the lane's, which the guards then enforce on every request, wipes and seeds included.
+ */
+export function productionContext({ lane = LANE, run, startedMs, token, projectNumber }) {
+  const { DATABASE, SANDBOX_PROJECT, createContext, databaseName } = HARNESSES[lane.harness];
+  const database = lane.database ?? DATABASE;
   const ctx = createContext({
+    database,
     run,
+    ...(startedMs === undefined ? {} : { startedMs }),
     target: {
       kind: "production",
       token,
@@ -359,6 +438,13 @@ async function recordOnce(programs, run, token, projectNumber) {
       projectNumber,
     },
   });
+  if (!databaseName(ctx).endsWith(`/databases/${database}`))
+    throw new Error(`a ${lane.id} recording must address ${database}`);
+  return ctx;
+}
+
+async function recordOnce(programs, run, token, projectNumber) {
+  const ctx = productionContext({ run, token, projectNumber });
   return runCorpus(programs, ctx, {
     ...ceilings(programs),
     log: (line) => console.log(line),
@@ -370,16 +456,24 @@ async function recordOnce(programs, run, token, projectNumber) {
  * refusal here (for example by the secret scan) never loses a production run: the recordings
  * are saved privately first and `rebuild-fixture` can retry from them.
  */
-async function writeFixture({ programs, recordings, meta, secrets }) {
+export async function writeFixture({
+  programs,
+  recordings,
+  meta,
+  secrets,
+  lane = LANE,
+  fixturePath = FIXTURE,
+}) {
   const [first, second] = recordings;
-  const fixture = existsSync(FIXTURE)
-    ? JSON.parse(await readFile(FIXTURE, "utf8"))
+  const fixture = existsSync(fixturePath)
+    ? JSON.parse(await readFile(fixturePath, "utf8"))
     : { version: 1, recordedAgainst: {}, programs: {} };
   fixture.recordedAgainst = {
     target:
+      lane.target ??
       "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
     project: RECORDED_PROJECT,
-    indexes: `conformance/${LANE.indexes}`,
+    ...(lane.indexes ? { indexes: `conformance/${lane.indexes}` } : {}),
     note: `Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as ${RECORDED_PROJECT} in every lane. Missing-index links keep their encoded index with the project id replaced. \`second\` holds the other recording of rows that differed.`,
   };
   for (const program of programs) {
@@ -403,7 +497,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   );
   const text = `${JSON.stringify(fixture, null, 2)}\n`;
   scanFixture(text, secrets);
-  await writeFile(FIXTURE, text);
+  await writeFile(fixturePath, text);
   return diffRecordings(first.results, second.results);
 }
 
@@ -523,7 +617,7 @@ async function recordProductionLocked() {
       `${JSON.stringify({
         ts: new Date().toISOString(),
         project: SANDBOX_PROJECT,
-        database: DATABASE,
+        database: DATABASE_ID,
         gitSha: meta.sha,
         corpusDigest: sha256(JSON.stringify(programs)),
         requests,
@@ -558,15 +652,11 @@ export function estimatedUsd(programs, recordings) {
  * production observation. Steps without a raw answer (an unresolved dependency) keep their row.
  */
 export function renormalize(recording, programs) {
-  const ctx = createContext({
+  const ctx = productionContext({
     run: recording.context.run,
     startedMs: recording.context.startedMs,
-    target: {
-      kind: "production",
-      token: "renormalize",
-      quotaProject: SANDBOX_PROJECT,
-      projectNumber: process.env.FIREEMU_SANDBOX_PROJECT_NUMBER,
-    },
+    token: "renormalize",
+    projectNumber: process.env.FIREEMU_SANDBOX_PROJECT_NUMBER,
   });
   const results = {};
   for (const program of programs) {
@@ -628,6 +718,7 @@ async function sessionLocal() {
   if (!host) throw new Error("FIRESTORE_EMULATOR_HOST is not set");
   const url = new URL(`http://${host}`);
   const ctx = createContext({
+    database: DATABASE_ID,
     run: process.env.FS_QUERY_INDEX_RUN,
     target: {
       kind: "local",
@@ -668,6 +759,8 @@ async function runLocal(programs) {
       "0",
       "--logging-port",
       "0",
+      // A lane that records into a named database declares it, as firebase.json does.
+      ...(LANE.firebaseJson ? ["--firebase-json", join(CONFORMANCE_DIR, LANE.firebaseJson)] : []),
       "--",
       process.execPath,
       join(CONFORMANCE_DIR, "src/fs-query-index/run.mjs"),

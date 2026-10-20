@@ -1,0 +1,3 @@
+{
+  "firestore": [{ "database": "entpipe1", "rules": "firestore-probe.rules" }]
+}

@@ -454,6 +454,30 @@ async fn a_message_the_server_cannot_handle_ends_the_connection() {
 }
 
 #[tokio::test]
+async fn a_listen_with_a_null_tag_answers_an_internal_error_and_the_next_request_a_reset() {
+    // The official emulator over long polling: the request answers the internal error, the
+    // connection is gone, and the next request gets the reset of an unknown connection.
+    let (address, database) = start(ServerConfig::default()).await;
+    let (mut lp, _) = Lp::start(&address, "lp9").await;
+    assert_eq!(
+        lp.poll(&[&request(
+            1,
+            "q",
+            r#"{"p":"/a","h":"","t":null,"q":{"l":2,"vf":"l"}}"#
+        )])
+        .await,
+        "pRTLPCB(1,[{\"t\":\"d\",\"d\":{\"r\":1,\"b\":{\"s\":\"internal_error\",\"d\":\"An internal error occurred\"}}}]);\n"
+    );
+    assert_eq!(database.lock().unwrap().listen_count(), 0);
+    assert_eq!(
+        lp.poll(&[]).await,
+        format!(
+            "pRTLPCB(0,[{{\"t\":\"c\",\"d\":{{\"t\":\"r\",\"d\":\"{address}\"}}}}]);\npLPCommand('close');\n"
+        )
+    );
+}
+
+#[tokio::test]
 async fn pushes_waiting_for_a_request_go_before_the_connections_own() {
     let (address, _) = start(ServerConfig::default()).await;
     let (mut lp, _) = Lp::start(&address, "lp6").await;

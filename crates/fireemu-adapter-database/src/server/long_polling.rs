@@ -282,8 +282,15 @@ async fn poll(
         state.release();
         for message in messages {
             if !answer_message(shared, &mut database, &mut state, &message) {
+                // What the session answered before it ended goes out; the reset reaches
+                // the client as the answer to its next request, from an unknown connection.
+                let body = if state.outbox.is_empty() {
+                    NOTHING.to_owned()
+                } else {
+                    state.take_packet()
+                };
                 close(shared, &mut database, connection, &mut state);
-                return script(NOTHING.to_owned());
+                return script(body);
             }
         }
         if !state.outbox.is_empty() {
@@ -336,9 +343,16 @@ fn answer_message(
     let now = (shared.config.clock)();
     let mut received = state.session.dispatch_prepared(database, prepared, now);
     deliver_events(shared, database, std::mem::take(&mut received.events));
+    let ends = received.close.is_some() || received.drop_connection;
+    if ends {
+        // The official emulator sends no reset in the request that ends the connection
+        // (over a WebSocket the reset goes before the drop).
+        let reset = state.session.reset_control();
+        received.replies.retain(|reply| *reply != reset);
+    }
     // The request answers these at once, so they do not count against the bounds.
     state.outbox.extend(received.replies);
-    received.close.is_none() && !received.drop_connection
+    !ends
 }
 
 /// Ends a connection, with the database lock and its state held: its held request gets an

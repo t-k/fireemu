@@ -233,6 +233,11 @@ impl Session {
         self.client
     }
 
+    /// The control that sends the client back to this host to reconnect.
+    pub(crate) fn reset_control(&self) -> String {
+        control("r", &Json::String(self.host.clone()))
+    }
+
     /// Takes one received text frame.
     pub fn receive(&mut self, db: &mut Database, frame: &str, now_millis: i64) -> Received {
         match self.prepare(frame) {
@@ -394,7 +399,7 @@ impl Session {
                             "internal_error",
                             &Json::string("An internal error occurred"),
                         ),
-                        control("r", &Json::String(self.host.clone())),
+                        self.reset_control(),
                     ])),
                     Err(other) => Err(other),
                 }

@@ -13,11 +13,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 jar_port=${JAR_PORT:-19600}
 : "${JAR:?JAR names the official database emulator jar}" "${FIREEMU:?FIREEMU is host:port}"
 mkdir -p "$out"
+# The previous round's emulator may still be stopping: wait until the port is free.
+while curl -s -o /dev/null "http://127.0.0.1:$jar_port/.json?ns=x"; do sleep 1; done
 java -Xmx2g -Duser.language=en -jar "$JAR" --port "$jar_port" --host 127.0.0.1 > "$out/jar-$seed.log" 2>&1 &
 jar_pid=$!
-trap 'kill "$jar_pid" 2>/dev/null || true' EXIT
+trap 'kill "$jar_pid" 2>/dev/null || true; wait "$jar_pid" 2>/dev/null || true' EXIT
 until curl -s -o /dev/null "http://127.0.0.1:$jar_port/.json?ns=x"; do sleep 1; done
 python3 "$here/gen.py" "$seed" "$count" "$out/corpus-$seed.json" $edges > /dev/null
+python3 "$here/check_coverage.py" "$out/corpus-$seed.coverage.json" "${MIN_COVERAGE:-5}" $edges
 node "$here/probe.mjs" "127.0.0.1:$jar_port" "$out/corpus-$seed.json" "$out/jar-$seed.json" &
 probe=$!
 node "$here/probe.mjs" "$FIREEMU" "$out/corpus-$seed.json" "$out/emu-$seed.json"

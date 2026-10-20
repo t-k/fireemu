@@ -229,6 +229,31 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
             "projects/p/databases/(default)/documents".into()
         ))
     );
+    // Only the exact documents root answers production's INVALID_ARGUMENT; a collection that
+    // happens to be named `documents` is no root, and its answer is unrecorded.
+    let reference = |name: &str| Expr::Constant(Value::Reference(name.to_owned()));
+    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call(
+                "document_id",
+                vec![reference("projects/p/databases/(default)/documents")]
+            )
+            .eval_in(&r, unrecorded),
+            Eval::Error(EvalError::Invalid(
+                "document_id(...) requires a non-empty path.".into()
+            ))
+        );
+        for name in [
+            "projects/p/databases/(default)/documents/documents",
+            "projects/p/databases/(default)/documents/a/b/documents",
+            "projects//databases/(default)/documents",
+        ] {
+            assert!(
+                unobserved(&call("document_id", vec![reference(name)]).eval_in(&r, unrecorded)),
+                "{name} {unrecorded:?}"
+            );
+        }
+    }
     // An error argument propagates unchanged.
     let inner = call("parent", vec![field("str")]).eval(&r);
     assert!(unobserved(&inner));
@@ -249,7 +274,10 @@ fn equal_is_three_valued() {
     );
     let k = |v: Value| Expr::Constant(v);
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
-        let eq = |a: Expr, b: Expr| condition("equal", vec![a, b]).eval_in(&r, unrecorded);
+        // As the whole where condition (strict answers a field against any literal there, as
+        // classic `==`, `IS_NULL` and `IS_NAN` do, and two missing fields as O-1 recorded).
+        let eq =
+            |a: Expr, b: Expr| condition("equal", vec![a, b]).eval_condition_in(&r, unrecorded);
         let yes = Eval::Value(Value::Boolean(true));
         let no = Eval::Value(Value::Boolean(false));
         assert_eq!(eq(field("n"), k(Value::Integer(7))), yes);
@@ -326,11 +354,11 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
         })
     ));
     // A condition that is not a boolean drops the row, as production drops a row whose
-    // condition is an integer, null or a missing field.
+    // condition is an integer, null or a missing field; strict refuses the other kinds, which
+    // are unrecorded, and the emulator profile drops them as the official emulator does.
     for value in [
         Expr::Constant(Value::Integer(1)),
         Expr::Constant(Value::Null),
-        field("k"),
         field("missing"),
     ] {
         assert_eq!(
@@ -338,6 +366,19 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
             Vec::<BTreeMap<String, Value>>::new()
         );
     }
+    let string = vec![Stage::Where(field("k"))];
+    assert!(matches!(
+        execute(string.clone(), input.clone()),
+        Err(EvalError::Unobserved {
+            function: "where",
+            ..
+        })
+    ));
+    assert!(
+        execute_in(string, input.clone(), Unrecorded::OfficialEmulator)
+            .unwrap()
+            .is_empty()
+    );
     let flag = vec![row("c/a", &[("f", Value::Boolean(true))]), row("c/b", &[])];
     assert_eq!(
         execute(vec![Stage::Where(field("f"))], flag.clone()).unwrap(),
@@ -494,7 +535,7 @@ proptest! {
         let r = row("c/x", &fields);
         let got = Expr::call("equal", vec![field("f"), Expr::Constant(literal.clone())], Placement::Condition)
             .unwrap()
-            .eval(&r);
+            .eval_condition_in(&r, Unrecorded::Refuse);
         // A missing field is unequal to every literal.
         let expected = stored.is_some_and(|v| values_equal(&v, &literal));
         prop_assert_eq!(got, Eval::Value(Value::Boolean(expected)));

@@ -572,12 +572,33 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
     }
 }
 
+/// The literal shape production refused with "Value type is not supported:
+/// FIELD_REFERENCE_VALUE" (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px1/select#map-literal`): a map
+/// literal whose entries are all field references, as a select value.
+fn is_recorded_map_literal(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    matches!(
+        value.value_type.as_ref(),
+        Some(V::MapValue(map))
+            if !map.fields.is_empty()
+                && map
+                    .fields
+                    .values()
+                    .all(|entry| matches!(entry.value_type, Some(V::FieldReferenceValue(_))))
+    )
+}
+
 /// Decodes an operand expression: a field reference (`__name__` is the document reference),
 /// a call of a table function or a literal. An array or map literal that holds an
-/// expression is refused with `INVALID_ARGUMENT`, as production refuses a map literal holding
-/// a field reference and the official emulator refuses every such literal; under strict the
-/// shapes production has not answered are refused with `UNIMPLEMENTED` instead.
-fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
+/// expression is refused with `INVALID_ARGUMENT`, as the official emulator refuses every such
+/// literal; under strict only the shape production refused (a select value that is a map of
+/// fields) is, and the others are `UNIMPLEMENTED`. `select_value` says whether the operand is
+/// a select value itself (not an argument).
+fn decode_operand(
+    value: &pb::Value,
+    unrecorded: Unrecorded,
+    select_value: bool,
+) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         None => Err(Status::invalid_argument("expression argument is missing")),
@@ -600,7 +621,7 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
             let args = function
                 .args
                 .iter()
-                .map(|arg| decode_operand(arg, unrecorded))
+                .map(|arg| decode_operand(arg, unrecorded, false))
                 .collect::<Result<Vec<_>, _>>()?;
             Expr::call(&function.name, args, Placement::Value).map_err(expr_status)
         }
@@ -614,8 +635,7 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
             )),
             Some(kind)
                 if unrecorded == Unrecorded::OfficialEmulator
-                    || (matches!(value.value_type, Some(V::MapValue(_)))
-                        && kind == "FIELD_REFERENCE_VALUE") =>
+                    || (select_value && is_recorded_map_literal(value)) =>
             {
                 Err(Status::invalid_argument(format!(
                     "Value type is not supported: {kind}"
@@ -644,10 +664,10 @@ fn decode_condition(
     let function = match condition.value_type.as_ref() {
         Some(V::FunctionValue(function)) => function,
         Some(V::FieldReferenceValue(_)) => {
-            return Ok((decode_operand(condition, unrecorded)?, None))
+            return Ok((decode_operand(condition, unrecorded, false)?, None))
         }
         _ if is_literal(condition) && unrecorded == Unrecorded::OfficialEmulator => {
-            return Ok((decode_operand(condition, unrecorded)?, None))
+            return Ok((decode_operand(condition, unrecorded, false)?, None))
         }
         _ => {
             return Err(Status::unimplemented(
@@ -672,7 +692,7 @@ fn decode_condition(
     let args = function
         .args
         .iter()
-        .map(|arg| decode_operand(arg, unrecorded))
+        .map(|arg| decode_operand(arg, unrecorded, false))
         .collect::<Result<Vec<_>, _>>()?;
     let scalar_literal = |value: &pb::Value| {
         is_literal(value)
@@ -713,19 +733,34 @@ fn decode_select(
                 "select expressions are unsupported locally",
             ));
         }
-        let path = FieldPath::parse(alias).map_err(|e| {
-            Status::invalid_argument(format!("select alias {alias:?} is not a field path: {e}"))
-        })?;
-        if path
-            .segments()
-            .iter()
-            .any(|segment| is_reserved_name(segment))
-        {
+        // Production's texts (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`), which the
+        // official emulator answers too: a reserved name is named before the path is read.
+        if alias == "__name__" {
             return Err(Status::invalid_argument(format!(
-                "select alias {alias:?} uses a reserved field name"
+                "Stage 'select': field name '{alias}' is reserved and can not be overwritten."
             )));
         }
-        aliases.push((alias, path, decode_operand(value, unrecorded)?));
+        if alias.split('.').any(is_reserved_name) {
+            return Err(Status::invalid_argument(format!(
+                "Stage 'select': field name '{alias}' is reserved."
+            )));
+        }
+        let path = FieldPath::parse(alias).map_err(|_| {
+            Status::invalid_argument(format!(
+                r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+            ))
+        })?;
+        if path.is_document_name()
+            || path
+                .segments()
+                .iter()
+                .any(|segment| is_reserved_name(segment))
+        {
+            return Err(Status::invalid_argument(format!(
+                "Stage 'select': field name '{alias}' is reserved."
+            )));
+        }
+        aliases.push((alias, path, decode_operand(value, unrecorded, true)?));
     }
     if aliases.is_empty() {
         return Err(Status::invalid_argument(
@@ -734,11 +769,16 @@ fn decode_select(
     }
     aliases.sort_by(|a, b| a.1.cmp(&b.1));
     for pair in aliases.windows(2) {
-        if pair[0].1.is_prefix_of(&pair[1].1) {
+        if pair[0].1 == pair[1].1 {
             return Err(Status::invalid_argument(format!(
-                "select aliases {:?} and {:?} set a field and itself or one of its children",
+                "select aliases {:?} and {:?} set the same field",
                 pair[0].0, pair[1].0
             )));
+        }
+        if pair[0].1.is_prefix_of(&pair[1].1) {
+            return Err(crate::production_status::select_overlapping_paths(
+                pair[1].0,
+            ));
         }
     }
     Ok(aliases

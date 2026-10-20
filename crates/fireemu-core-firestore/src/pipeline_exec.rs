@@ -12,10 +12,11 @@
 //! Production answers recorded by FS-ENT-ORACLE O-1 (2026-10-19, an Enterprise database)
 //! are answered under both profiles; they agree with the official emulator (firebase-tools
 //! 15.28.2) everywhere O-1 looked. Under the strict profile anything whose production
-//! behavior is still unrecorded (a document function of an unrecorded input, a repeated map
-//! key) evaluates to [`EvalError::Unobserved`], and the caller refuses the pipeline; the
-//! emulator profile answers what the official emulator answers instead. An input both refuse
-//! evaluates to [`EvalError::Invalid`].
+//! behavior is still unrecorded (a comparison cell O-1 did not record and no classic query
+//! decides, a document function of an unrecorded input, a repeated map key) evaluates to
+//! [`EvalError::Unobserved`], and the caller refuses the pipeline; the emulator profile answers
+//! what the official emulator answers instead. An input both refuse evaluates to
+//! [`EvalError::Invalid`].
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -112,6 +113,11 @@ pub enum Arity {
 pub struct Context {
     /// What inputs with unrecorded production behavior give.
     pub unrecorded: Unrecorded,
+    /// Whether the call is the whole condition of a `where` stage (its arguments are not).
+    pub condition: bool,
+    /// Whether the call's arguments are a field (or a document function of one) and a scalar
+    /// literal, in either order: the shape a classic query filter expresses.
+    pub field_literal: bool,
 }
 
 /// One entry of the static function table.
@@ -272,6 +278,22 @@ impl Expr {
         Ok(Self::Call { function, args })
     }
 
+    /// A field, or a document function of an operand or a literal: the operands the finite
+    /// subset compared with a literal before PX1a, whose classic-shaped comparisons strict
+    /// keeps answering.
+    fn is_operand(&self) -> bool {
+        match self {
+            Self::Field(_) => true,
+            Self::Call { function, args } => {
+                matches!(function.name, "document_id" | "collection_id" | "parent")
+                    && args
+                        .iter()
+                        .all(|arg| matches!(arg, Self::Constant(_)) || arg.is_operand())
+            }
+            Self::Constant(_) => false,
+        }
+    }
+
     /// Adds every field path the expression reads.
     fn collect_fields(&self, out: &mut Vec<FieldPath>) {
         match self {
@@ -291,6 +313,16 @@ impl Expr {
     /// unrecorded production behavior give.
     #[must_use]
     pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
+        self.eval_at(row, unrecorded, false)
+    }
+
+    /// Evaluates the expression as the whole condition of a `where` stage.
+    #[must_use]
+    pub fn eval_condition_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
+        self.eval_at(row, unrecorded, true)
+    }
+
+    fn eval_at(&self, row: &Row, unrecorded: Unrecorded, condition: bool) -> Eval {
         match self {
             Self::Field(path) if path.is_document_name() => {
                 Eval::Value(Value::Reference(row.path.resource_name()))
@@ -300,11 +332,23 @@ impl Expr {
                 .map_or(Eval::Absent, Eval::Value),
             Self::Constant(value) => Eval::Value(value.clone()),
             Self::Call { function, args } => {
+                let field_literal = matches!(
+                    args.as_slice(),
+                    [operand, Self::Constant(literal)] | [Self::Constant(literal), operand]
+                        if operand.is_operand()
+                            && (Class::of_value(literal).is_ordered_scalar()
+                                || matches!(literal, Value::Null | Value::Double(_)))
+                );
                 let args: Vec<Eval> = args
                     .iter()
                     .map(|arg| arg.eval_in(row, unrecorded))
                     .collect();
-                (function.eval)(&args, Context { unrecorded })
+                let cx = Context {
+                    unrecorded,
+                    condition,
+                    field_literal,
+                };
+                (function.eval)(&args, cx)
             }
         }
     }
@@ -329,6 +373,17 @@ enum Comparison {
 }
 
 impl Comparison {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Equal => "equal",
+            Self::NotEqual => "not_equal",
+            Self::Less => "less_than",
+            Self::LessOrEqual => "less_than_or_equal",
+            Self::Greater => "greater_than",
+            Self::GreaterOrEqual => "greater_than_or_equal",
+        }
+    }
+
     /// The answer for two operands whose order is `order` (`None`: incomparable).
     fn holds(self, order: Option<Ordering>) -> bool {
         match self {
@@ -354,16 +409,138 @@ fn official_order(a: &Eval, b: &Eval) -> Option<Ordering> {
     }
 }
 
-/// A comparison, as production answers it (FS-ENT-ORACLE O-1 recorded every class of
-/// operand: absent, null, NaN, numbers across integer and double, other kinds, arrays and
-/// maps, field to field and literal to literal) and the official emulator answers it.
-fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context) -> Eval {
+/// The class of a comparison operand: absent, null, NaN, or the kind of a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Absent,
+    Null,
+    Nan,
+    Boolean,
+    Number,
+    Timestamp,
+    String,
+    Bytes,
+    Reference,
+    GeoPoint,
+    Array,
+    Vector,
+    Map,
+}
+
+impl Class {
+    fn of(operand: &Eval) -> Self {
+        match operand {
+            Eval::Value(value) => Self::of_value(value),
+            _ => Self::Absent,
+        }
+    }
+
+    fn of_value(value: &Value) -> Self {
+        match value {
+            Value::Null => Self::Null,
+            Value::Double(d) if d.is_nan() => Self::Nan,
+            Value::Boolean(_) => Self::Boolean,
+            Value::Integer(_) | Value::Double(_) => Self::Number,
+            Value::Timestamp(_) => Self::Timestamp,
+            Value::String(_) => Self::String,
+            Value::Bytes(_) => Self::Bytes,
+            Value::Reference(_) => Self::Reference,
+            Value::GeoPoint(_) => Self::GeoPoint,
+            Value::Array(_) => Self::Array,
+            Value::Vector(_) => Self::Vector,
+            Value::Map(_) => Self::Map,
+        }
+    }
+
+    /// A kind classic queries order a field by against a literal of the same kind.
+    const fn is_ordered_scalar(self) -> bool {
+        matches!(
+            self,
+            Self::Boolean
+                | Self::Number
+                | Self::Timestamp
+                | Self::String
+                | Self::Bytes
+                | Self::Reference
+                | Self::GeoPoint
+        )
+    }
+}
+
+/// The comparison cells FS-ENT-ORACLE O-1 (2026-10-19) recorded from production, as the
+/// comparison and the classes of its left and right operands (`fs-ent-pipeline/px1/select`
+/// and `/where`). Strict answers a recorded cell wherever it stands.
+const RECORDED_CELLS: &[(Comparison, Class, Class)] = {
+    use Class::{
+        Absent, Array, Boolean, Bytes, Map, Nan, Null, Number, Reference, String, Timestamp,
+    };
+    use Comparison::{Equal, Greater, GreaterOrEqual, Less, LessOrEqual, NotEqual};
+    &[
+        (Equal, Number, Number),
+        (Equal, Number, String),
+        (Equal, Null, Null),
+        (Equal, Nan, Nan),
+        (Equal, Absent, Number),
+        (Equal, Absent, Absent),
+        (Equal, Absent, Null),
+        (Equal, Array, Array),
+        (Equal, Map, Map),
+        (Equal, Reference, Reference),
+        (Equal, Null, String),
+        (NotEqual, Absent, Number),
+        (NotEqual, Null, Number),
+        (NotEqual, Number, String),
+        (NotEqual, Nan, Nan),
+        (Less, Number, Number),
+        (Less, Number, String),
+        (Less, String, Number),
+        (Less, Null, Number),
+        (Less, Nan, Number),
+        (Less, Absent, Number),
+        (Less, Null, Boolean),
+        (Less, Boolean, Number),
+        (LessOrEqual, Null, Null),
+        (Greater, Array, Array),
+        (Greater, String, Bytes),
+        (GreaterOrEqual, Timestamp, Timestamp),
+    ]
+};
+
+/// Whether a classic query filter decides the comparison the same way (PX1 plan, ruling of
+/// 2026-10-19 (2)): a field against a scalar literal of the same orderable kind, anywhere; as
+/// the whole `where` condition also an equality of any two values (classic `==`, `IS_NULL`,
+/// `IS_NAN`) and a missing field under every comparison but `not_equal` (the row is dropped).
+fn classic_cell(op: Comparison, a: &Eval, b: &Eval, cx: Context) -> bool {
+    if !cx.field_literal {
+        return false;
+    }
+    match (Class::of(a), Class::of(b)) {
+        (Class::Absent, Class::Absent) => false,
+        (Class::Absent, _) | (_, Class::Absent) => cx.condition && op != Comparison::NotEqual,
+        (left, right) => {
+            (cx.condition && op == Comparison::Equal) || (left == right && left.is_ordered_scalar())
+        }
+    }
+}
+
+/// A comparison. The emulator profile answers the official emulator's order everywhere.
+/// Strict answers the cells production recorded ([`RECORDED_CELLS`]) and the shapes a classic
+/// query decides the same way ([`classic_cell`]); every other cell is unobserved until a
+/// production recording answers it.
+fn eval_comparison(op: Comparison, args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
     let [a, b] = args else {
         unreachable!("the table checks the arity");
     };
+    let recorded = RECORDED_CELLS.contains(&(op, Class::of(a), Class::of(b)));
+    if cx.unrecorded == Unrecorded::Refuse && !recorded && !classic_cell(op, a, b, cx) {
+        return Eval::Error(EvalError::Unobserved {
+            function: op.name(),
+            reason: "production has not answered this comparison of these operand kinds",
+        });
+    }
     Eval::Value(Value::Boolean(op.holds(official_order(a, b))))
 }
 
@@ -476,7 +653,7 @@ fn document_argument(
     match args {
         [Eval::Value(Value::Reference(name))] => match DocumentPath::from_resource_name(name) {
             Some(path) => Ok(path),
-            None if name.ends_with("/documents") && function != "parent" && recorded => {
+            None if is_documents_root(name) && function != "parent" && recorded => {
                 invalid(format!("{function}(...) requires a non-empty path."))
             }
             None => unobserved("the reference does not name a document"),
@@ -489,6 +666,16 @@ fn document_argument(
         )),
         _ => unobserved("the argument is not a document reference"),
     }
+}
+
+/// Whether `name` is a database's documents root (`projects/{p}/databases/{d}/documents`), the
+/// parent production answers for a top-level document.
+fn is_documents_root(name: &str) -> bool {
+    matches!(
+        name.split('/').collect::<Vec<_>>().as_slice(),
+        ["projects", project, "databases", database, "documents"]
+            if !project.is_empty() && !database.is_empty()
+    )
 }
 
 fn eval_document_id(args: &[Eval], cx: Context) -> Eval {
@@ -540,7 +727,8 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage {
     /// Keeps rows whose condition is `true`; any other value, and an absent one, drops the row
-    /// (production drops a row whose condition is an integer, null or a missing field).
+    /// (production drops a row whose condition is an integer, null or a missing field; strict
+    /// refuses the other kinds, which are unrecorded).
     Where(Expr),
     /// Replaces the fields by the aliases' values. An alias is a field path, so a dotted
     /// alias nests its value; an absent value leaves its alias out. The aliases must not
@@ -599,11 +787,23 @@ impl Cursor {
     pub fn push(&mut self, mut row: Row) -> Result<Option<BTreeMap<String, Value>>, EvalError> {
         for (stage, remaining) in self.stages.iter().zip(self.counters.iter_mut()) {
             match stage {
-                Stage::Where(condition) => match condition.eval_in(&row, self.unrecorded) {
-                    Eval::Value(Value::Boolean(true)) => {}
-                    Eval::Value(_) | Eval::Absent => return Ok(None),
-                    Eval::Error(error) => return Err(error),
-                },
+                Stage::Where(condition) => {
+                    match condition.eval_condition_in(&row, self.unrecorded) {
+                        Eval::Value(Value::Boolean(true)) => {}
+                        Eval::Value(Value::Boolean(false) | Value::Null | Value::Integer(_))
+                        | Eval::Absent => return Ok(None),
+                        // Production dropped the row for an integer, null and missing
+                        // condition; other kinds are unrecorded.
+                        Eval::Value(_) if self.unrecorded == Unrecorded::Refuse => {
+                            return Err(EvalError::Unobserved {
+                                function: "where",
+                                reason: "the condition is neither a boolean, an integer nor null",
+                            })
+                        }
+                        Eval::Value(_) => return Ok(None),
+                        Eval::Error(error) => return Err(error),
+                    }
+                }
                 Stage::Select(aliases) => {
                     let mut fields = BTreeMap::new();
                     for (alias, expr) in aliases {

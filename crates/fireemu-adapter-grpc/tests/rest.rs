@@ -7100,6 +7100,62 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
     }
 }
 
+/// Over REST, the recorded select refusals answer production's bodies: the one-element error
+/// array, the text, and the overlap's `ErrorInfo` (FS-ENT-ORACLE O-1,
+/// `fs-ent-pipeline/px0/aliases#overlap`).
+#[test]
+fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        let select = |fields: Value| {
+            pipeline_body(&json!([
+                {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+                {"name": "select", "args": [{"mapValue": {"fields": fields}}]},
+            ]))
+        };
+        let field = json!({"fieldReferenceValue": "name"});
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            select(json!({"m": field, "m.r": field})),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {"field": "m.r"},
+                    "reason": "OVERLAPPING_PROPERTY_PATHS",
+                }],
+            }}]),
+            "strict={strict}"
+        );
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            select(json!({"__x__": field})),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT",
+            }}]),
+            "strict={strict}"
+        );
+    }
+}
+
 /// Owner first, as over gRPC, also on Enterprise; and a body field the request does not have
 /// is refused by the strict transcoder only.
 #[test]

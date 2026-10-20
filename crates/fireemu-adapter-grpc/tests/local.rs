@@ -6126,10 +6126,6 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
     };
     for (what, bad) in [
         (
-            "limit(text)",
-            request(vec![stage("collection", 1), typed("limit", s("text"))]),
-        ),
-        (
             "collection(null)",
             request(vec![typed("collection", pb::Value { value_type: None })]),
         ),
@@ -7693,6 +7689,235 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
     }
 }
 
+/// Inputs production has not answered, where the emulator profile answers as the official
+/// emulator (1.22.0, probed locally) answers them and strict refuses them as unobserved: a
+/// repeated `map(...)` key with a missing value (only two present values repeat), a key that
+/// is no literal, `limit` and `offset` beyond int32, of another type or negative, and a
+/// document function of a collection reference.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks() {
+    let f = pipeline_field;
+    let collection = || pipeline_stage("collection", s("args"));
+    let select = |value: pb::Value| vec![collection(), pipeline_select_map(vec![("v", value)])];
+    let map_of = |args: Vec<pb::Value>| pipeline_function("map", args);
+    let reference = |relative: &str| pb::Value {
+        value_type: Some(pb::value::ValueType::ReferenceValue(format!(
+            "{DOCS}/{relative}"
+        ))),
+    };
+    let null = || pb::Value {
+        value_type: Some(pb::value::ValueType::NullValue(0)),
+    };
+    let double = |d: f64| pb::Value {
+        value_type: Some(pb::value::ValueType::DoubleValue(d)),
+    };
+    let missing = || f("missing");
+    let lacks = |relative: &str| {
+        let name = format!("{DOCS}/{relative}");
+        format!(
+            "Document parent name \"{name}\" lacks \"/\" at index {}.",
+            name.len()
+        )
+    };
+    let map_value = |entries: &[(&str, pb::Value)]| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: entries
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        })),
+    };
+    // Answered by the official emulator: (label, stages, the emulator profile's result fields).
+    let answered: Vec<(&str, Vec<pb::pipeline::Stage>, Vec<(String, pb::Value)>)> = vec![
+        (
+            "repeated key, first value missing",
+            select(map_of(vec![s("k"), missing(), s("k"), f("i")])),
+            vec![("v".to_owned(), map_value(&[("k", i(1))]))],
+        ),
+        (
+            "repeated key, second value missing",
+            select(map_of(vec![s("k"), f("i"), s("k"), missing()])),
+            vec![("v".to_owned(), map_value(&[("k", i(1))]))],
+        ),
+        (
+            "repeated key, both values missing",
+            select(map_of(vec![s("k"), missing(), s("k"), missing()])),
+            vec![("v".to_owned(), map_value(&[]))],
+        ),
+        (
+            "limit beyond int32",
+            vec![
+                collection(),
+                pipeline_select_map(vec![("i", f("i"))]),
+                pipeline_stage("limit", i(5_000_000_000)),
+            ],
+            vec![("i".to_owned(), i(1))],
+        ),
+        (
+            "limit at int64 max",
+            vec![
+                collection(),
+                pipeline_select_map(vec![("i", f("i"))]),
+                pipeline_stage("limit", i(i64::MAX)),
+            ],
+            vec![("i".to_owned(), i(1))],
+        ),
+    ];
+    // Refused by the official emulator: (label, stages, its text).
+    let refused: Vec<(&str, Vec<pb::pipeline::Stage>, String)> = vec![
+        (
+            "repeated key with two present values among a missing one",
+            select(map_of(vec![
+                s("k"),
+                f("i"),
+                s("k"),
+                missing(),
+                s("k"),
+                f("s"),
+            ])),
+            "map(...) constructor given duplicate key: k".to_owned(),
+        ),
+        (
+            "map key from a field",
+            select(map_of(vec![f("s"), f("i")])),
+            "map keys must be constants/literals".to_owned(),
+        ),
+        (
+            "map key from a function",
+            select(map_of(vec![
+                pipeline_function("document_id", vec![f("__name__")]),
+                f("i"),
+            ])),
+            "map keys must be constants/literals".to_owned(),
+        ),
+        (
+            "limit of a string",
+            vec![collection(), pipeline_stage("limit", s("x"))],
+            "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.".to_owned(),
+        ),
+        (
+            "limit of a double",
+            vec![collection(), pipeline_stage("limit", double(1.5))],
+            "Expected limit to be INTEGER_VALUE, but was DOUBLE_VALUE.".to_owned(),
+        ),
+        (
+            "limit of null",
+            vec![collection(), pipeline_stage("limit", null())],
+            "Expected limit to be INTEGER_VALUE, but was NULL_VALUE.".to_owned(),
+        ),
+        (
+            "limit of a field",
+            vec![collection(), pipeline_stage("limit", f("i"))],
+            "Expected limit to be INTEGER_VALUE, but was FIELD_REFERENCE_VALUE.".to_owned(),
+        ),
+        (
+            "offset of a string",
+            vec![collection(), pipeline_stage("offset", s("x"))],
+            "Expected offset to be INTEGER_VALUE, but was STRING_VALUE.".to_owned(),
+        ),
+        (
+            "negative limit",
+            vec![collection(), pipeline_stage("limit", i(-1))],
+            "The 'limit(...)' cannot have a negative value: -1".to_owned(),
+        ),
+        (
+            "negative offset",
+            vec![collection(), pipeline_stage("offset", i(-1))],
+            "The 'offset(...)' cannot have a negative value: -1".to_owned(),
+        ),
+        (
+            "a limit check after an unrun stage",
+            vec![
+                collection(),
+                pipeline_stage("add_fields", map_value(&[("t", f("i"))])),
+                pipeline_stage("limit", s("x")),
+            ],
+            "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.".to_owned(),
+        ),
+        (
+            "collection_id of a collection",
+            select(pipeline_function("collection_id", vec![reference("c")])),
+            lacks("c"),
+        ),
+        (
+            "parent of a collection",
+            select(pipeline_function("parent", vec![reference("c")])),
+            lacks("c"),
+        ),
+        (
+            "document_id of a subcollection",
+            select(pipeline_function("document_id", vec![reference("c/x/s")])),
+            lacks("c/x/s"),
+        ),
+        (
+            "collection_id of a subcollection",
+            select(pipeline_function("collection_id", vec![reference("c/x/s")])),
+            lacks("c/x/s"),
+        ),
+    ];
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let strict = policy == IndexValidationPolicy::Production;
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("args/a", &[("i", i(1)), ("s", s("a"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for (label, stages, fields) in &answered {
+            if strict {
+                let err = pipeline_error(&mut client, stages.clone()).await;
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+            } else {
+                let docs = drain_pipeline(
+                    client
+                        .execute_pipeline(pipeline_request(stages.clone()))
+                        .await
+                        .unwrap()
+                        .into_inner(),
+                    1,
+                )
+                .await;
+                assert_eq!(docs[0].fields, fields.iter().cloned().collect(), "{label}");
+            }
+        }
+        // An offset beyond int32 skips every row in the emulator profile.
+        let offset = vec![collection(), pipeline_stage("offset", i(5_000_000_000))];
+        if strict {
+            let err = pipeline_error(&mut client, offset).await;
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+        } else {
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(offset))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert!(docs.is_empty());
+        }
+        for (label, stages, text) in &refused {
+            let err = pipeline_error(&mut client, stages.clone()).await;
+            if strict {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+            } else {
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
+                assert_eq!(err.message(), text, "{label}");
+            }
+        }
+        handle.abort();
+    }
+}
+
 /// Alias maps of the stages the local executor does not run (`add_fields`, `distinct`,
 /// `aggregate`) and empty alias maps. Production has not answered these shapes, so strict
 /// refuses them as unobserved; the emulator profile answers the official emulator's texts
@@ -8691,6 +8916,9 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         ),
         ("unset", pb::Value::default()),
     ] {
+        // Production has not answered these offsets: strict refuses them as unobserved (the
+        // emulator profile answers the official texts, pinned in
+        // execute_pipeline_emulator_profile_answers_the_official_argument_checks).
         let error = client
             .execute_pipeline(execute(vec![
                 collection_stage(),
@@ -8698,17 +8926,12 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
             ]))
             .await
             .unwrap_err();
-        assert_eq!(
-            error.code(),
-            tonic::Code::InvalidArgument,
-            "{label}: {error}"
-        );
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
         assert_eq!(
             error.metadata().get("fireemu-code").unwrap(),
-            "FS_PIPE_INVALID",
+            "FS_PIPE_UNSUPPORTED_STAGE",
             "{label}: {error}"
         );
-        assert!(error.metadata().get("fireemu-pipeline").is_none());
     }
     for (label, offset) in [
         (

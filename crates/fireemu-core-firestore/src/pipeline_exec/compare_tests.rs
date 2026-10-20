@@ -482,16 +482,37 @@ fn array_and_map_literals() {
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
         assert_eq!(both.eval_in(&r, unrecorded), duplicate);
     }
-    for repeated in [
-        call("map", vec![k("k"), field("x"), k("k"), field("s")]),
-        call("map", vec![k("k"), field("i"), k("k"), field("x")]),
+    // A repeat with a missing value: the official emulator counts only present values, so it
+    // keeps the present one; production has not answered it.
+    for (repeated, kept) in [
+        (
+            call("map", vec![k("k"), field("x"), k("k"), field("s")]),
+            Some(s("a")),
+        ),
+        (
+            call("map", vec![k("k"), field("i"), k("k"), field("x")]),
+            Some(Value::Integer(1)),
+        ),
+        (
+            call("map", vec![k("k"), field("x"), k("k"), field("y")]),
+            None,
+        ),
     ] {
         assert!(unobserved(&repeated.eval_in(&r, Unrecorded::Refuse)));
         assert_eq!(
             repeated.eval_in(&r, Unrecorded::OfficialEmulator),
-            duplicate
+            Eval::Value(Value::Map(
+                kept.into_iter().map(|v| ("k".to_owned(), v)).collect()
+            ))
         );
     }
+    // Two present values repeat even with a missing one between them.
+    let around = call(
+        "map",
+        vec![k("k"), field("i"), k("k"), field("x"), k("k"), field("s")],
+    );
+    assert!(unobserved(&around.eval_in(&r, Unrecorded::Refuse)));
+    assert_eq!(around.eval_in(&r, Unrecorded::OfficialEmulator), duplicate);
     // Errors propagate.
     let error = call("document_id", vec![field("i")]);
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {

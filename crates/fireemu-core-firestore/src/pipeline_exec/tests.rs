@@ -268,15 +268,34 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                 "{name}"
             );
         }
-        for name in [
-            "projects/p/databases/(default)/documents/a/b/documents",
-            "projects//databases/(default)/documents",
-        ] {
-            assert!(
-                unobserved(&call("document_id", vec![reference(name)]).eval_in(&r, unrecorded)),
-                "{name} {unrecorded:?}"
-            );
+        // A deeper collection is unrecorded: the official emulator answers it like a top-level
+        // one, for every document function. A malformed root is unrecorded in both.
+        let deep = "projects/p/databases/(default)/documents/a/b/documents";
+        for function in ["document_id", "collection_id", "parent"] {
+            let got = call(function, vec![reference(deep)]).eval_in(&r, unrecorded);
+            if unrecorded == Unrecorded::Refuse {
+                assert!(unobserved(&got), "{function}");
+            } else {
+                assert_eq!(
+                    got,
+                    Eval::Error(EvalError::Invalid(format!(
+                        "Document parent name \"{deep}\" lacks \"/\" at index {}.",
+                        deep.len()
+                    ))),
+                    "{function}"
+                );
+            }
         }
+        assert!(
+            unobserved(
+                &call(
+                    "document_id",
+                    vec![reference("projects//databases/(default)/documents")]
+                )
+                .eval_in(&r, unrecorded)
+            ),
+            "{unrecorded:?}"
+        );
     }
     // An error argument propagates unchanged.
     let inner = call("parent", vec![field("num")]).eval(&r);

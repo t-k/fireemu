@@ -457,6 +457,7 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
         })
     };
     let mut keys = std::collections::BTreeSet::new();
+    let mut absent = std::collections::BTreeSet::new();
     let mut fields = BTreeMap::new();
     for pair in args.chunks(2) {
         let [key, value] = pair else {
@@ -481,15 +482,26 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
                 })
             }
         };
-        if !keys.insert(key.clone()) {
+        // The official emulator counts a key only where its value is present: a repeat is two
+        // present values. Production answered a key repeated with both values present; a
+        // repeat that involves a missing value is unrecorded.
+        let repeated = !keys.insert(key.clone());
+        let present = matches!(value, Eval::Value(_));
+        let twice_present = present && fields.contains_key(key);
+        if repeated && (twice_present || cx.unrecorded == Unrecorded::Refuse) {
             return refuse(
-                fields.contains_key(key) && matches!(value, Eval::Value(_)),
+                twice_present && !absent.contains(key),
                 "a key repeats",
                 format!("map(...) constructor given duplicate key: {key}"),
             );
         }
-        if let Eval::Value(value) = value {
-            fields.insert(key.clone(), value.clone());
+        match value {
+            Eval::Value(value) => {
+                fields.insert(key.clone(), value.clone());
+            }
+            _ => {
+                absent.insert(key.clone());
+            }
         }
     }
     Eval::Value(Value::Map(fields))
@@ -527,10 +539,16 @@ fn document_argument(
             None if is_documents_root(name) => {
                 invalid(format!("{function}(...) requires a non-empty path."))
             }
-            None if function == "document_id" && is_top_level_collection(name) => invalid(format!(
-                "Document parent name \"{name}\" lacks \"/\" at index {}.",
-                name.len()
-            )),
+            // Production answered `document_id` of a top-level collection; the official emulator
+            // answers every document function of any collection alike.
+            None if (function == "document_id" && is_top_level_collection(name))
+                || (unrecorded == Unrecorded::OfficialEmulator && is_collection(name)) =>
+            {
+                invalid(format!(
+                    "Document parent name \"{name}\" lacks \"/\" at index {}.",
+                    name.len()
+                ))
+            }
             None => unobserved("the reference does not name a document"),
         },
         [Eval::Absent | Eval::Value(Value::Null)] => Err(Eval::Value(Value::Null)),
@@ -544,6 +562,20 @@ fn document_argument(
             }))
         }
         _ => unobserved("the argument is not a document reference"),
+    }
+}
+
+/// Whether `name` is a collection of a database, at any depth
+/// (`projects/{p}/databases/{d}/documents/{collection}[/{document}/{collection}...]`).
+fn is_collection(name: &str) -> bool {
+    match name.split('/').collect::<Vec<_>>().as_slice() {
+        ["projects", project, "databases", database, "documents", rest @ ..] => {
+            !project.is_empty()
+                && !database.is_empty()
+                && rest.len() % 2 == 1
+                && rest.iter().all(|segment| !segment.is_empty())
+        }
+        _ => false,
     }
 }
 

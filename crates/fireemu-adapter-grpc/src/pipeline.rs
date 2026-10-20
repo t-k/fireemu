@@ -494,16 +494,7 @@ pub fn compile_pipeline(
                         ));
                     }
                     seen_offset = true;
-                    let Some(pb::value::ValueType::IntegerValue(n)) =
-                        stage.args.first().and_then(|v| v.value_type.as_ref())
-                    else {
-                        return Err(Status::invalid_argument("offset must be an integer"));
-                    };
-                    let offset = i32::try_from(*n).map_err(|_| {
-                        Status::unimplemented("offset exceeds the finite local execution range")
-                    })?;
-                    let offset = u64::try_from(offset)
-                        .map_err(|_| Status::invalid_argument("offset must not be negative"))?;
+                    let offset = count_argument(stage, i64::from(i32::MAX), unrecorded)?;
                     stages.push(Stage::Offset(offset));
                 }
                 "limit" => {
@@ -513,14 +504,8 @@ pub fn compile_pipeline(
                         ));
                     }
                     seen_limit = true;
-                    let Some(pb::value::ValueType::IntegerValue(n)) =
-                        stage.args.first().and_then(|v| v.value_type.as_ref())
-                    else {
-                        return Err(Status::invalid_argument("limit must be an integer"));
-                    };
-                    let limit = u32::try_from(*n)
-                        .map_err(|_| Status::invalid_argument("limit is out of range"))?;
-                    stages.push(Stage::Limit(u64::from(limit)));
+                    let limit = count_argument(stage, i64::from(u32::MAX), unrecorded)?;
+                    stages.push(Stage::Limit(limit));
                 }
                 other => {
                     // The official emulator checks every stage's arguments before running any.
@@ -652,6 +637,16 @@ fn decode_operand(
                     "function {:?} is unsupported locally",
                     function.name
                 )));
+            }
+            // The official emulator refuses a `map(...)` key that is no literal before it
+            // evaluates anything; production has not answered it.
+            if function.name == "map" && function.args.iter().step_by(2).any(|key| !is_literal(key))
+            {
+                return Err(if unrecorded == Unrecorded::Refuse {
+                    Status::unimplemented("a map key that is no literal is not observed locally")
+                } else {
+                    Status::invalid_argument("map keys must be constants/literals")
+                });
             }
             if !function.options.is_empty() {
                 return Err(Status::invalid_argument(format!(
@@ -917,6 +912,61 @@ fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status>
     Ok(path)
 }
 
+/// The count a `limit` or `offset` stage takes. An integer from 0 to `recorded` is answered in
+/// both profiles. The official emulator also takes any larger integer, and refuses another
+/// type and a negative value with its own texts; production has not answered those, so strict
+/// refuses them as unobserved.
+fn count_argument(
+    stage: &pb::pipeline::Stage,
+    recorded: i64,
+    unrecorded: Unrecorded,
+) -> Result<u64, Status> {
+    use pb::value::ValueType as V;
+    let name = stage.name.as_str();
+    let answer = match stage.args.first().and_then(|v| v.value_type.as_ref()) {
+        Some(V::IntegerValue(n)) if (0..=recorded).contains(n) => {
+            return Ok(u64::try_from(*n).unwrap_or(u64::MAX))
+        }
+        Some(V::IntegerValue(n)) if *n > recorded => Ok(u64::try_from(*n).unwrap_or(u64::MAX)),
+        Some(V::IntegerValue(n)) => Err(Status::invalid_argument(format!(
+            "The '{name}(...)' cannot have a negative value: {n}"
+        ))),
+        other => Err(Status::invalid_argument(format!(
+            "Expected {name} to be INTEGER_VALUE, but was {}.",
+            value_type_name(other)
+        ))),
+    };
+    if unrecorded == Unrecorded::Refuse {
+        return Err(Status::unimplemented(format!(
+            "this {name} argument is not observed locally"
+        )));
+    }
+    answer
+}
+
+/// The proto name of a wire value's type, as the official emulator's messages give it.
+fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
+    use pb::value::ValueType as V;
+    match value {
+        Some(V::NullValue(_)) => "NULL_VALUE",
+        Some(V::BooleanValue(_)) => "BOOLEAN_VALUE",
+        Some(V::IntegerValue(_)) => "INTEGER_VALUE",
+        Some(V::DoubleValue(_)) => "DOUBLE_VALUE",
+        Some(V::TimestampValue(_)) => "TIMESTAMP_VALUE",
+        Some(V::StringValue(_)) => "STRING_VALUE",
+        Some(V::BytesValue(_)) => "BYTES_VALUE",
+        Some(V::ReferenceValue(_)) => "REFERENCE_VALUE",
+        Some(V::GeoPointValue(_)) => "GEO_POINT_VALUE",
+        Some(V::ArrayValue(_)) => "ARRAY_VALUE",
+        Some(V::MapValue(_)) => "MAP_VALUE",
+        Some(V::FieldReferenceValue(_)) => "FIELD_REFERENCE_VALUE",
+        Some(V::VariableReferenceValue(_)) => "VARIABLE_REFERENCE_VALUE",
+        Some(V::FunctionValue(_)) => "FUNCTION_VALUE",
+        Some(V::PipelineValue(_)) => "PIPELINE_VALUE",
+        None => "VALUE_TYPE_NOT_SET",
+    }
+}
+
 /// The official emulator's argument checks on a stage the local executor does not run
 /// (`add_fields`, `distinct`, `aggregate`), answered before the stage is refused as
 /// unsupported, in the official order: the stage's arity, each alias, then an empty map, which
@@ -955,7 +1005,15 @@ fn check_unrun_alias_stage(
         }
     }
     let name = stage.name.as_str();
-    if strict || !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
+    if strict {
+        return Ok(());
+    }
+    // A limit or offset after an unrun stage: its argument checks come first, as above.
+    if matches!(name, "limit" | "offset") {
+        count_argument(stage, i64::MAX, unrecorded)?;
+        return Ok(());
+    }
+    if !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
         return Ok(());
     }
     // A select after an unrun stage: the official emulator checks its aliases too, with the

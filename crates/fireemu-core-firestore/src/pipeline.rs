@@ -345,10 +345,9 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 other,
             )),
         }),
-        "limit" | "offset" => match &args[0] {
-            Arg::Integer(n) if *n >= 0 => Ok(()),
-            other => Err(argument(name, 0, "a non-negative integer", other)),
-        },
+        // The argument's type and sign are the adapter's to answer per profile, in stage order
+        // (the official emulator names the type it got, or the negative value).
+        "limit" | "offset" => Ok(()),
         "distinct" => args.iter().enumerate().try_for_each(|(i, a)| match a {
             Arg::Field(_) | Arg::Function { .. } => Ok(()),
             Arg::Map(_) => alias_map(name, i, a, "a map of aliases to expressions"),
@@ -528,12 +527,10 @@ mod tests {
             stage("limit", vec![Arg::Integer(5)])
         ])
         .is_ok());
-        let bad_limit =
-            canonicalize(&[users(), stage("limit", vec![Arg::String("text".into())])]).unwrap_err();
-        assert!(
-            matches!(bad_limit, PipelineError::Argument { index: 0, .. }),
-            "{bad_limit}"
-        );
+        // A limit's argument is the adapter's to answer per profile.
+        assert!(canonicalize(&[users(), stage("limit", vec![Arg::String("text".into())])]).is_ok());
+        let bad_skip = canonicalize(&[users(), stage("sample", vec![Arg::String("x".into())])]);
+        assert!(bad_skip.is_err(), "{bad_skip:?}");
         assert!(canonicalize(&[stage("collection", vec![Arg::Null])]).is_err());
         assert!(
             canonicalize(&[stage("collection", vec![Arg::String("/users/u1".into())])]).is_err()

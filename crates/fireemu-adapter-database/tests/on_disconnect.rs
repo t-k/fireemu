@@ -328,6 +328,35 @@ fn an_update_that_fails_writes_nothing_at_all() {
 }
 
 #[test]
+fn a_priority_is_checked_only_when_the_connection_ends() {
+    // An object is no priority: registering it is answered ok, and the update it joins
+    // fails whole when the connection ends.
+    let (replies, pushes, value) = run(
+        "bp",
+        &[("/c40", "1")],
+        &[
+            ("o", r#"{"p":"/c40/.priority","d":{"a":1}}"#),
+            ("o", r#"{"p":"/c22","d":1}"#),
+        ],
+    );
+    assert_eq!(replies, vec![ok(1), ok(2)]);
+    assert!(pushes.is_empty());
+    assert_eq!(value, r#"{"c40":1}"#);
+}
+
+#[test]
+fn a_request_without_a_path_keeps_the_connection() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let mut session = open(&mut db, "np");
+    for frame in [request(1, "o", r#"{"d":1}"#), request(2, "oc", "{}")] {
+        let received = session.receive(&mut db, &frame, NOW);
+        assert!(received.replies.is_empty());
+        assert!(!received.drop_connection, "{frame}");
+        assert!(received.close.is_none(), "{frame}");
+    }
+}
+
+#[test]
 fn operations_run_once_and_the_ending_connection_receives_nothing() {
     let mut db = Database::new(RestOptions::default(), 1);
     let mut session = open(&mut db, "once");

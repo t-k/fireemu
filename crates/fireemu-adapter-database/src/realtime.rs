@@ -17,8 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use fireemu_core_database::hash::node_hash;
 use fireemu_core_database::server_value::resolve;
 use fireemu_core_database::{
-    Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, Priority, QueryParams,
-    ServerValueContext,
+    Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, QueryParams, ServerValueContext,
 };
 
 use crate::json_parse::parse_with_keys;
@@ -881,20 +880,21 @@ fn refuse_overlap(relative: &[(String, Path)]) -> Result<(), Failure> {
 }
 
 /// Checks a write registered for a connection's end as the tree would check it now: keys,
-/// depth, sizes, priorities and server-value placeholders. The official emulator answers a
-/// value it cannot read with a connection error, as it does for a write.
+/// depth, sizes and server-value placeholders. The official emulator answers a value it
+/// cannot read with a connection error, as it does for a write. A priority is not checked
+/// here: the official emulator accepts any, and an unusable one fails the whole update when
+/// the connection ends.
 fn check_registered(
     path: &Path,
     value: &Json,
     limits: &fireemu_core_database::Limits,
     context: ServerValueContext,
 ) -> Result<(), Failure> {
-    let resolved = resolve(value, None, context).map_err(|_| Failure::Malformed)?;
     if path.is_priority() {
-        Priority::from_json(&resolved).map_err(|_| Failure::Malformed)?;
-    } else {
-        Node::from_json(&resolved, path, limits).map_err(|_| Failure::Malformed)?;
+        return Ok(());
     }
+    let resolved = resolve(value, None, context).map_err(|_| Failure::Malformed)?;
+    Node::from_json(&resolved, path, limits).map_err(|_| Failure::Malformed)?;
     Ok(())
 }
 

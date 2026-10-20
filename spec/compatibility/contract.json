@@ -2346,7 +2346,7 @@
               "an_empty_import_directory_starts_with_no_data",
               "a_missing_import_directory_is_refused_unless_it_is_the_export_target",
               "a_corrupt_firestore_section_refuses_the_whole_import",
-              "a_realtime_database_section_is_refused_with_the_deferred_status",
+              "a_data_connect_section_is_refused_with_the_deferred_status",
               "the_export_runs_when_the_daemon_is_interrupted",
               "every_exported_directory_and_file_is_owner_only"
             ],

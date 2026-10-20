@@ -257,7 +257,8 @@ impl Client {
                     }
                 }
                 let mut chunk = [0u8; 4096];
-                let n = self.stream.read(&mut chunk).await.unwrap();
+                // A reset connection (Linux answers unread data with RST) ends it like EOF.
+                let n = self.stream.read(&mut chunk).await.unwrap_or(0);
                 if n == 0 {
                     return (0xFF, Vec::new());
                 }

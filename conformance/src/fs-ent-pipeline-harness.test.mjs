@@ -735,3 +735,66 @@ test("the pipeline lane's fixture names its target, has no index file and passes
     await remove(dir, { recursive: true, force: true });
   }
 });
+
+// --- seeds that production may refuse go through recorded steps ---
+
+test("a vector reaches the harness seed only in the programs recorded before seed commits", async () => {
+  const { HARNESS_VECTOR_SEEDS, seedHoldsVector } = await import("./fs-ent-pipeline/corpus.mjs");
+  // A refused harness seed is fatal and ends the recording, so a new program writes a vector
+  // with a recorded commit step (seedCommit), whose refusal is that step's row.
+  assert.deepEqual(
+    PROGRAMS.filter(seedHoldsVector).map((p) => p.id),
+    HARNESS_VECTOR_SEEDS,
+  );
+  assert.deepEqual(HARNESS_VECTOR_SEEDS, [
+    "fs-ent-pipeline/o3/comparisons",
+    "fs-ent-pipeline/o4/comparisons",
+  ]);
+  const { vec, map: mapValue, arr, int } = await import("./fs-query-index/values.mjs");
+  const program = (fields) => ({ id: "fs-ent-pipeline/o5/x", seed: [["x5/d", fields]], steps: [] });
+  for (const fields of [
+    { v: vec(1) },
+    { m: mapValue({ deep: mapValue({ v: vec(1, 2) }) }) },
+    { a: arr(int(1), vec(3)) },
+  ]) {
+    assert.equal(seedHoldsVector(program(fields)), true, JSON.stringify(fields));
+  }
+  for (const fields of [
+    { i: int(1) },
+    // A map with a `__type__` key that is not the vector marker is not a vector.
+    { m: mapValue({ __type__: { stringValue: "x" }, value: arr(int(1)) }) },
+    { m: mapValue({ type: { stringValue: "__vector__" } }) },
+  ]) {
+    assert.equal(seedHoldsVector(program(fields)), false, JSON.stringify(fields));
+  }
+  assert.equal(seedHoldsVector({ id: "p", steps: [] }), false);
+});
+
+test("a seed commit is a reviewed single-document write into the named database", async () => {
+  const { seedCommit } = await import("./fs-ent-pipeline/corpus.mjs");
+  const { vec } = await import("./fs-query-index/values.mjs");
+  const fields = { v: vec(1, 2), w: vec(3) };
+  const step = seedCommit("seed-d", "cm5/d", fields);
+  assert.deepEqual(step, {
+    id: "seed-d",
+    rpc: "commit",
+    body: { writes: [{ update: { name: "{docs}/cm5/d", fields } }] },
+  });
+  const program = { id: "fs-ent-pipeline/o5/seeded", seed: [], steps: [step] };
+  assert.equal(validateCorpus([program], "fs-ent-pipeline"), 1);
+  const ctx = production();
+  const request = buildRestRequest(step, ctx, new Map());
+  assert.equal(
+    request.url,
+    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/entpipe1/documents:commit`,
+  );
+  const sent = JSON.parse(request.init.body);
+  assert.equal(
+    sent.writes[0].update.name,
+    `projects/${SANDBOX_PROJECT}/databases/entpipe1/documents/cm5/d`,
+  );
+  assert.deepEqual(sent.writes[0].update.fields, fields);
+  guardRestRequest(request, ctx);
+  assert.throws(() => seedCommit("seed-x", "/abs/d", fields), /relative/);
+  assert.throws(() => seedCommit("seed-x", "odd", fields), /document path/);
+});

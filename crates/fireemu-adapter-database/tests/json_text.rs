@@ -233,16 +233,17 @@ fn the_parser_follows_the_json_grammar() {
     assert!(parse(&fine).is_ok());
 
     let (_, keys) = parse_with_keys("{\"a\":{\n  \"bé\" : [ {\"c\":1} ] }}").unwrap();
-    let found: Vec<(String, usize, usize)> = keys
+    let found: Vec<(String, usize, usize, usize)> = keys
         .into_iter()
-        .map(|k| (k.key, k.line, k.column))
+        .map(|k| (k.key, k.line, k.column, k.depth))
         .collect();
+    // The depth counts the objects and arrays around the key's object.
     assert_eq!(
         found,
         vec![
-            ("a".to_owned(), 1, 2),
-            ("bé".to_owned(), 2, 3),
-            ("c".to_owned(), 2, 13)
+            ("a".to_owned(), 1, 2, 0),
+            ("bé".to_owned(), 2, 3, 1),
+            ("c".to_owned(), 2, 13, 3)
         ]
     );
 }

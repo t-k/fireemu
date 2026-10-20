@@ -967,3 +967,43 @@ fn large_messages_parse_in_linear_time() {
         started.elapsed()
     );
 }
+
+#[test]
+fn stats_need_counters_as_the_official_emulator_reads_them() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut s, _) = open(&mut db, "/.ws?v=5&ns=st");
+    // Counters are integers or null.
+    for counters in [r#"{"c":{}}"#, r#"{"c":{"x":1}}"#, r#"{"c":{"a":null}}"#] {
+        assert_eq!(
+            send(&mut db, &mut s, &request(1, "s", counters)),
+            vec![reply(1, "ok", r#""""#)],
+            "{counters}"
+        );
+    }
+    // Other counter values, or no counters at all, are not answered.
+    for counters in [
+        r#"{"c":null}"#,
+        r#"{"c":{"a":1.5}}"#,
+        r#"{"c":{"a":true}}"#,
+        r#"{"c":{"a":"y"}}"#,
+        r#"{"c":{"a":{"b":1}}}"#,
+    ] {
+        assert!(
+            send(&mut db, &mut s, &request(1, "s", counters)).is_empty(),
+            "{counters}"
+        );
+    }
+    // Counters that are not an object are a connection error.
+    for counters in [r#"{"c":5}"#, r#"{"c":"x"}"#, r#"{"c":[1]}"#] {
+        let replies = send(&mut db, &mut s, &request(1, "s", counters));
+        assert_eq!(replies.len(), 1, "{counters}");
+        assert!(
+            replies[0].contains("Error on incoming message"),
+            "{counters}"
+        );
+    }
+    // Stats without counters drop the connection.
+    let received = s.receive(&mut db, &request(1, "s", "{}"), NOW);
+    assert!(received.drop_connection);
+    assert!(received.replies.is_empty());
+}

@@ -7,11 +7,12 @@
 //! `{"t":"d","d":{"r":<request>,"b":{"s":<status>,"d":<data>}}}`.
 //!
 //! This module serves the handshake, keepalive, pings, `s` (stats), `echo`, `auth`, `gauth`,
-//! `unauth`, `appcheck`, `g` (get), `p` (put, with `h` as a transaction's compare-and-set)
-//! and `m` (merge). Listening (`q`, `n`) and `onDisconnect` come with RTDB-LISTEN-ORDER and
-//! RTDB-02. Every answer follows the official emulator (firebase-database-emulator v4.11.2).
+//! `unauth`, `appcheck`, `g` (get), `p` (put, with `h` as a transaction's compare-and-set),
+//! `m` (merge), `q` (listen) and `n` (unlisten); the data a listen receives is computed in
+//! the private `listen` module. `onDisconnect` comes with RTDB-02. Every answer follows the official
+//! emulator (firebase-database-emulator v4.11.2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_database::hash::node_hash;
 use fireemu_core_database::{
@@ -19,10 +20,11 @@ use fireemu_core_database::{
 };
 
 use crate::json_parse::parse_with_keys;
-use crate::json_text::{render, wire_json, Style};
+use crate::json_text::{priority_at, render, wire_json, Style};
+use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Refusal};
-use crate::rest::{Change, Database, RulesMode, SseEvent};
+use crate::rest::{Change, Database, Patched, RulesMode, SseEvent};
 use crate::websocket::CloseCode;
 
 /// The protocol version this server speaks.
@@ -64,6 +66,12 @@ pub struct Session {
     pending: Option<(usize, String)>,
     /// The longest message, split frames joined.
     limit: usize,
+    /// The members of the merge being answered, in the order they were sent.
+    merge_order: Vec<String>,
+    /// Whether answers are split into WebSocket frames (not over long polling).
+    split: bool,
+    /// The host the client connected to, named in a reset.
+    host: String,
 }
 
 /// A received frame, reassembled and parsed without the database.
@@ -72,8 +80,8 @@ pub struct Prepared(Ready);
 
 #[derive(Debug)]
 enum Ready {
-    /// A whole message, parsed (or not JSON).
-    Message(Result<Json, crate::json_parse::ParseError>),
+    /// A whole message, parsed (or not JSON), and for a merge its members in sent order.
+    Message(Result<Json, crate::json_parse::ParseError>, Vec<String>),
     /// The connection must close with this code.
     Close(CloseCode),
 }
@@ -136,6 +144,9 @@ impl Database {
             identity: Identity::Anonymous,
             pending: None,
             limit: self.options().realtime_message_bytes,
+            merge_order: Vec::new(),
+            split: true,
+            host: host.unwrap_or_default().to_owned(),
         };
         Ok(Opened::Session(
             session,
@@ -197,6 +208,10 @@ enum Failure {
     Silent,
     /// The connection is dropped.
     Drop,
+    /// An internal error answer and a reset to this host, then the connection is dropped.
+    InternalReset,
+    /// These frames, then the connection is dropped.
+    DropAfter(Vec<String>),
 }
 
 type Answer = Result<Json, Failure>;
@@ -206,6 +221,19 @@ fn invalid(message: impl Into<String>) -> Failure {
 }
 
 impl Session {
+    /// The session for a long-polling connection: answers stay whole messages, since the
+    /// transport carries them in packets rather than WebSocket frames.
+    #[must_use]
+    pub fn for_long_polling(mut self) -> Self {
+        self.split = false;
+        self
+    }
+
+    /// The connection's number, which the database's queued data messages are addressed to.
+    pub fn client(&self) -> u64 {
+        self.client
+    }
+
     /// Takes one received text frame.
     pub fn receive(&mut self, db: &mut Database, frame: &str, now_millis: i64) -> Received {
         match self.prepare(frame) {
@@ -220,7 +248,15 @@ impl Session {
         match self.reassemble(frame) {
             Err(code) => Some(Prepared(Ready::Close(code))),
             Ok(None) => None,
-            Ok(Some(message)) => Some(Prepared(Ready::Message(crate::json_parse::parse(&message)))),
+            Ok(Some(message)) => {
+                let parsed = crate::json_parse::parse(&message);
+                let order = if is_merge(&parsed) {
+                    merge_order(&message)
+                } else {
+                    Vec::new()
+                };
+                Some(Prepared(Ready::Message(parsed, order)))
+            }
         }
     }
 
@@ -237,7 +273,10 @@ impl Session {
                 received.close = Some(code);
                 return received;
             }
-            Ready::Message(parsed) => parsed,
+            Ready::Message(parsed, order) => {
+                self.merge_order = order;
+                parsed
+            }
         };
         let replies = match parsed {
             Ok(Json::Object(envelope)) => {
@@ -248,13 +287,25 @@ impl Session {
         let replies = match replies {
             Ok(replies) => replies,
             Err(Failure::Silent | Failure::Status(..)) => Vec::new(),
-            Err(Failure::Drop) => {
+            Err(Failure::Drop | Failure::InternalReset) => {
                 received.drop_connection = true;
                 Vec::new()
             }
+            Err(Failure::DropAfter(frames)) => {
+                received.drop_connection = true;
+                frames
+            }
             Err(Failure::Malformed) => vec![self.connection_error(db)],
         };
-        received.replies = replies.into_iter().flat_map(split_frames).collect();
+        // The connection's own data messages go before the answer, as the official
+        // emulator sends a listen's value, and a write's change, before acknowledging.
+        let own = db.take_pushes(self.client);
+        let messages = own.into_iter().chain(replies);
+        received.replies = if self.split {
+            messages.flat_map(split_frames).collect()
+        } else {
+            messages.collect()
+        };
         received
     }
 
@@ -338,6 +389,14 @@ impl Session {
                     Err(Failure::Status(status, message)) => {
                         Ok(vec![response(r, status, &Json::String(message))])
                     }
+                    Err(Failure::InternalReset) => Err(Failure::DropAfter(vec![
+                        response(
+                            r,
+                            "internal_error",
+                            &Json::string("An internal error occurred"),
+                        ),
+                        control("r", &Json::String(self.host.clone())),
+                    ])),
                     Err(other) => Err(other),
                 }
             }
@@ -354,7 +413,7 @@ impl Session {
         events: &mut Vec<(u64, SseEvent)>,
     ) -> Answer {
         match action {
-            "s" => Ok(Json::string("")),
+            "s" => stats(arguments),
             // The official emulator echoes the data as text.
             "echo" => Ok(match arguments.get("d") {
                 Some(Json::String(text)) => Json::String(text.clone()),
@@ -391,6 +450,15 @@ impl Session {
             "m" => {
                 self.authorize(db)?;
                 self.merge(db, arguments, context, events)
+            }
+            "q" => {
+                self.authorize(db)?;
+                self.listen(db, arguments)
+            }
+            "n" => {
+                let path = location(arguments, false, db)?;
+                db.remove_listen(self.client, &path, listen_tag(arguments)?);
+                Ok(Json::string(""))
             }
             _ => Err(Failure::Malformed),
         }
@@ -467,6 +535,9 @@ impl Session {
             }
         }
         let tree = db.tree_mut(&self.namespace);
+        if path.is_priority() {
+            return Ok(priority_at(tree, &path));
+        }
         let node = tree.get(&path);
         let selected = match (&query, node) {
             // The official emulator answers a query on a leaf with null.
@@ -488,6 +559,48 @@ impl Session {
         Ok(selected)
     }
 
+    /// `q`: a plain listen, or a tagged query listen following its window. A query whose
+    /// order needs an undeclared index is followed whole, untagged, with a warning.
+    fn listen(&mut self, db: &mut Database, arguments: &BTreeMap<String, Json>) -> Answer {
+        let path = location(arguments, false, db)?;
+        let tag = listen_tag(arguments)?;
+        let query = match arguments.get("q") {
+            Some(Json::Object(q)) => wire_query(q)?,
+            _ => None,
+        };
+        let mut warnings = Vec::new();
+        let window = match (query, tag) {
+            (Some(query), Some(tag)) => {
+                if db.index_refusal(&self.namespace, &path, &query).is_some() {
+                    warnings.push(Json::string("no_index"));
+                    None
+                } else {
+                    Some((query, tag))
+                }
+            }
+            _ => None,
+        };
+        let hash = match arguments.get("h") {
+            Some(Json::String(hash)) => hash.clone(),
+            Some(other) => render(other, Style::Compact),
+            None => String::new(),
+        };
+        let listen = Listen {
+            client: self.client,
+            namespace: self.namespace.clone(),
+            path,
+            tag,
+            window,
+            last: Json::Null,
+        };
+        db.add_listen(listen, &hash);
+        Ok(if warnings.is_empty() {
+            Json::object::<&str>([])
+        } else {
+            Json::object([("w", Json::Array(warnings))])
+        })
+    }
+
     fn put(
         &mut self,
         db: &mut Database,
@@ -497,6 +610,9 @@ impl Session {
     ) -> Answer {
         let path = location(arguments, true, db)?;
         let value = arguments.get("d").cloned().unwrap_or(Json::Null);
+        let paths = [path];
+        let before = db.before_write(&self.namespace, &paths);
+        let [path] = paths;
         let tree = db.tree_mut(&self.namespace);
         // A hash that is not a string never matches, as the official emulator answers.
         let compare = arguments.get("h").map(|hash| match hash {
@@ -519,7 +635,8 @@ impl Session {
         } else {
             Json::string("")
         };
-        events.extend(db.notify(&self.namespace, &Change::Put(path)));
+        let effective = db.effective(&self.namespace, std::slice::from_ref(&path), before)[0];
+        events.extend(db.notify(&self.namespace, &Change::Put { path, effective }));
         Ok(data)
     }
 
@@ -535,8 +652,20 @@ impl Session {
             return Err(Failure::Malformed);
         };
         let limits = *db.tree_mut(&self.namespace).limits();
+        // The entries in the order they were sent; any the order missed follow in key order.
+        let sent: Vec<&String> = {
+            let mut seen = BTreeSet::new();
+            let order = std::mem::take(&mut self.merge_order);
+            let mut sent: Vec<&String> = order
+                .iter()
+                .filter_map(|key| entries.get_key_value(key).map(|(key, _)| key))
+                .filter(|key| seen.insert(*key))
+                .collect();
+            sent.extend(entries.keys().filter(|key| !seen.contains(key)));
+            sent
+        };
         let mut relative = Vec::with_capacity(entries.len());
-        for key in entries.keys() {
+        for key in sent {
             let parsed = Path::parse(key, &limits).map_err(|_| Failure::Malformed)?;
             relative.push((key.clone(), parsed));
         }
@@ -555,12 +684,93 @@ impl Session {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let absolute: Vec<Path> = relative.iter().map(|(_, p)| path.join(p)).collect();
+        let before = db.before_write(&self.namespace, &absolute);
         db.tree_mut(&self.namespace)
             .update(&path, &wire, context)
             .map_err(|err| write_failure(&err))?;
-        let change = Change::Patch(path, relative.into_iter().map(|(_, p)| p).collect());
+        let effective = db.effective(&self.namespace, &absolute, before);
+        let entries = relative
+            .into_iter()
+            .zip(effective)
+            .map(|((_, path), effective)| Patched { path, effective })
+            .collect();
+        let change = Change::Patch {
+            base: path,
+            entries,
+        };
         events.extend(db.notify(&self.namespace, &change));
         Ok(Json::string(""))
+    }
+}
+
+/// `s`: the client's counters (`c`). The official emulator answers integer or null
+/// counters, ignores other counter values, treats counters that are not an object as a bad
+/// message and drops the connection when there are none.
+fn stats(arguments: &BTreeMap<String, Json>) -> Answer {
+    match arguments.get("c") {
+        None => Err(Failure::Drop),
+        Some(Json::Object(counters)) => {
+            let counted = counters.values().all(|value| {
+                matches!(
+                    value,
+                    Json::Null | Json::Number(fireemu_core_database::Number::Int(_))
+                )
+            });
+            if counted {
+                Ok(Json::string(""))
+            } else {
+                Err(Failure::Silent)
+            }
+        }
+        Some(Json::Null) => Err(Failure::Silent),
+        Some(_) => Err(Failure::Malformed),
+    }
+}
+
+/// Whether a parsed message is a merge (`m`), whose member order is worth reading.
+fn is_merge(parsed: &Result<Json, crate::json_parse::ParseError>) -> bool {
+    let Ok(Json::Object(envelope)) = parsed else {
+        return false;
+    };
+    let Some(Json::Object(body)) = envelope.get("d") else {
+        return false;
+    };
+    matches!(body.get("a"), Some(Json::String(action)) if action == "m")
+}
+
+/// The members of a merge's data (`d.b.d`), in the order they were sent: the official
+/// emulator pushes a merge's entries in that order.
+fn merge_order(message: &str) -> Vec<String> {
+    let Ok((_, keys)) = parse_with_keys(message) else {
+        return Vec::new();
+    };
+    let mut order = Vec::new();
+    let mut inside = false;
+    for at in keys {
+        match at.depth {
+            0 | 1 => inside = false,
+            2 => inside = at.key == "d",
+            3 if inside => order.push(at.key),
+            _ => {}
+        }
+    }
+    order
+}
+
+/// The tag `t` of a query listen: a 32-bit integer, negative ones included. The official
+/// emulator stops answering the connection for any other tag, and answers a null one with
+/// an internal error and a reset.
+fn listen_tag(arguments: &BTreeMap<String, Json>) -> Result<Option<i64>, Failure> {
+    match arguments.get("t") {
+        None => Ok(None),
+        Some(Json::Number(fireemu_core_database::Number::Int(tag)))
+            if i32::try_from(*tag).is_ok() =>
+        {
+            Ok(Some(*tag))
+        }
+        Some(Json::Null) => Err(Failure::InternalReset),
+        Some(_) => Err(Failure::Drop),
     }
 }
 
@@ -632,8 +842,12 @@ fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure
     query.start = wire_bound(q, "sp", "sn", "sin", true)?;
     query.end = wire_bound(q, "ep", "en", "ein", false)?;
     if let Some(limit) = q.get("l") {
-        let Json::Number(fireemu_core_database::Number::Int(limit)) = limit else {
-            return Err(invalid("Invalid query limit"));
+        let limit = match limit {
+            Json::Number(fireemu_core_database::Number::Int(limit)) => limit,
+            // The official emulator answers a limit written as a double (even 2.0) with a
+            // connection error.
+            Json::Number(_) => return Err(Failure::Malformed),
+            _ => return Err(invalid("Invalid query limit")),
         };
         let limit = u32::try_from(*limit)
             .ok()

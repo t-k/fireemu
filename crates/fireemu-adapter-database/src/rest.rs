@@ -14,12 +14,15 @@ use fireemu_core_database::path::PRIORITY_KEY;
 use fireemu_core_database::push_id::PushIdGenerator;
 use fireemu_core_database::server_value::{resolve, stored_priority, SERVER_VALUE_KEY};
 use fireemu_core_database::{
-    Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, QueryParams,
+    Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, Priority, QueryParams,
     ServerValueContext, Tree,
 };
 
 use crate::json_parse::parse_with_keys;
-use crate::json_text::{output_json, parse, priority_at, render, ParseError, Style};
+use crate::json_text::{
+    output_json, parse, priority_at, render, value_at, written_priority_at, ParseError, Style,
+};
+use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Location, Output, Refusal};
 
@@ -185,12 +188,43 @@ struct PatchEntry {
     value: Json,
 }
 
-/// What a write changed, for the event streams.
+/// What a write changed, for the event streams and the realtime listens.
 pub(crate) enum Change {
     /// A value was replaced at a path.
-    Put(Path),
-    /// A multipath update at a base path, with the relative paths of its entries.
-    Patch(Path, Vec<Path>),
+    Put {
+        /// The written path.
+        path: Path,
+        /// Whether the write counts for the realtime listens (see [`Database::effective`]).
+        effective: bool,
+    },
+    /// A multipath update at a base path, its entries in the order they were sent.
+    Patch {
+        /// The base path.
+        base: Path,
+        /// The entries.
+        entries: Vec<Patched>,
+    },
+}
+
+impl Change {
+    /// Whether an effective part of the write lies at, above or below `location`.
+    pub(crate) fn touches(&self, location: &Path) -> bool {
+        let related = |path: &Path| location.contains(path) || path.contains(location);
+        match self {
+            Change::Put { path, effective } => *effective && related(path),
+            Change::Patch { base, entries } => entries
+                .iter()
+                .any(|entry| entry.effective && related(&base.join(&entry.path))),
+        }
+    }
+}
+
+/// One entry of a multipath update.
+pub(crate) struct Patched {
+    /// The entry's path, relative to the base.
+    pub path: Path,
+    /// Whether the entry counts for the realtime listens.
+    pub effective: bool,
 }
 
 /// Every namespace of one emulator.
@@ -203,6 +237,11 @@ pub struct Database {
     indexes: BTreeMap<String, BTreeMap<Path, BTreeSet<String>>>,
     subscriptions: BTreeMap<u64, Subscription>,
     next_subscription: u64,
+    /// The listens of realtime connections, in the order they were made.
+    listens: BTreeMap<u64, Listen>,
+    next_listen: u64,
+    /// Data messages for realtime connections, `(client, frame)`, not yet delivered.
+    pushes: Vec<(u64, String)>,
     /// Realtime connections opened so far.
     clients: u64,
     /// Connection errors reported so far.
@@ -221,6 +260,9 @@ impl Database {
             indexes: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             next_subscription: 1,
+            listens: BTreeMap::new(),
+            next_listen: 1,
+            pushes: Vec::new(),
             clients: 0,
             errors: 0,
             session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
@@ -369,6 +411,7 @@ impl Database {
                 Body {
                     text: "null",
                     json: Ok(Json::Null),
+                    order: Vec::new(),
                 },
             ),
             "POST" => self.post(&call, body(request, parsed)?),
@@ -377,6 +420,8 @@ impl Database {
     }
 
     fn put(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
+        let written_paths = [call.path.clone()];
+        let before = self.before_write(&call.namespace, &written_paths);
         let tree = &mut self.namespace(&call.namespace).tree;
         let current = tree.get(&call.path);
         let current_tag = tag_at(tree, &call.path);
@@ -392,8 +437,10 @@ impl Database {
         let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
         tree.set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
-        let response = written(tree, &call.path, &call.output, call.want_etag);
-        Ok(self.after_write(&call.namespace, response, &Change::Put(call.path.clone())))
+        let response = written(tree, &call.path, &value, &call.output, call.want_etag);
+        let [path] = written_paths;
+        let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
+        Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
     }
 
     fn post(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
@@ -408,11 +455,18 @@ impl Database {
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
         let name = Json::object([("name", Json::String(id))]);
         let response = json_response(&name, &call.output, None);
-        Ok(self.after_write(&call.namespace, response, &Change::Put(child)))
+        // A new child: the write always changes something.
+        let change = Change::Put {
+            path: child,
+            effective: true,
+        };
+        Ok(self.after_write(&call.namespace, response, &change))
     }
 
     fn patch(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
-        let entries = patch_entries(body.json, &self.options.limits)?;
+        let entries = patch_entries(body.json, &body.order, &self.options.limits)?;
+        let absolute: Vec<Path> = entries.iter().map(|e| call.path.join(&e.path)).collect();
+        let before = self.before_write(&call.namespace, &absolute);
         let wire: Vec<(String, Json)> = entries
             .iter()
             .map(|entry| (entry.key.clone(), entry.value.clone()))
@@ -423,13 +477,21 @@ impl Database {
         let echo = patch_echo(tree, &call.path, &entries, call.context);
         tree.update(&call.path, &wire, call.context)
             .map_err(|err| write_refusal(&err, || Refusal::bad(PATCH_ERROR)))?;
-        let relative: Vec<Path> = entries.into_iter().map(|entry| entry.path).collect();
+        let effective = self.effective(&call.namespace, &absolute, before);
+        let entries = entries
+            .into_iter()
+            .zip(effective)
+            .map(|(entry, effective)| Patched {
+                path: entry.path,
+                effective,
+            })
+            .collect();
         let response = json_response(&echo, &call.output, None);
-        Ok(self.after_write(
-            &call.namespace,
-            response,
-            &Change::Patch(call.path.clone(), relative),
-        ))
+        let change = Change::Patch {
+            base: call.path.clone(),
+            entries,
+        };
+        Ok(self.after_write(&call.namespace, response, &change))
     }
 
     fn namespace(&mut self, name: &str) -> &mut Namespace {
@@ -534,7 +596,114 @@ impl Database {
             subscription.last = fresh;
             events.push((*id, event));
         }
+        // Plain listens go first: an SDK holding the whole location (a query served without
+        // its index) then sees each write there before the windows built from it, as the
+        // official emulator's order gives it in the cases observed.
+        let (plain, windows): (Vec<&mut Listen>, Vec<&mut Listen>) = self
+            .listens
+            .values_mut()
+            .partition(|listen| listen.window.is_none());
+        for listen in plain.into_iter().chain(windows) {
+            // A write that touches neither the location nor anything above it sends nothing;
+            // its view is not rebuilt either.
+            if listen.namespace != namespace || !change.touches(&listen.path) {
+                continue;
+            }
+            let fresh = listen.view(&ns.tree);
+            let frames = listen.changes(&ns.tree, change, &fresh);
+            listen.last = fresh;
+            self.pushes
+                .extend(frames.into_iter().map(|frame| (listen.client, frame)));
+        }
         events
+    }
+
+    /// What `paths` hold before a write, so that [`Database::effective`] can tell afterwards
+    /// which of them the write changed; `None`, saving the copies, when no realtime
+    /// connection listens to `namespace`.
+    pub(crate) fn before_write(&self, namespace: &str, paths: &[Path]) -> Option<Vec<Json>> {
+        if !self
+            .listens
+            .values()
+            .any(|listen| listen.namespace == namespace)
+        {
+            return None;
+        }
+        let tree = self.namespaces.get(namespace).map(|ns| &ns.tree);
+        Some(
+            paths
+                .iter()
+                .map(|path| tree.map_or(Json::Null, |tree| value_at(tree, path)))
+                .collect(),
+        )
+    }
+
+    /// Which writes to `paths` count for the realtime listens: the official emulator
+    /// notifies a write of null always, and any other write only when it changed the value
+    /// (numbers compare by value, so 1.0 rewrites 1 without effect).
+    pub(crate) fn effective(
+        &self,
+        namespace: &str,
+        paths: &[Path],
+        before: Option<Vec<Json>>,
+    ) -> Vec<bool> {
+        let (Some(before), Some(ns)) = (before, self.namespaces.get(namespace)) else {
+            return vec![true; paths.len()];
+        };
+        paths
+            .iter()
+            .zip(before)
+            .map(|(path, old)| {
+                let new = value_at(&ns.tree, path);
+                new == Json::Null || new != old
+            })
+            .collect()
+    }
+
+    /// Adds a realtime listen, replacing the client's listen with the same location and
+    /// tag. The current value is queued for the client unless `hash` matches it.
+    pub(crate) fn add_listen(&mut self, mut listen: Listen, hash: &str) {
+        self.remove_listen(listen.client, &listen.path, listen.tag);
+        let tree = self.tree_mut(&listen.namespace.clone());
+        let view = listen.view(tree);
+        if listen.hash(tree) != hash {
+            self.pushes.push((listen.client, listen.snapshot(&view)));
+        }
+        listen.last = view;
+        self.listens.insert(self.next_listen, listen);
+        self.next_listen += 1;
+    }
+
+    /// Removes the client's listen at `path` registered under `tag`.
+    pub(crate) fn remove_listen(&mut self, client: u64, path: &Path, tag: Option<i64>) {
+        self.listens.retain(|_, listen| {
+            !(listen.client == client && listen.path == *path && listen.tag == tag)
+        });
+    }
+
+    /// Takes the queued data messages of every realtime connection, in order.
+    pub fn drain_pushes(&mut self) -> Vec<(u64, String)> {
+        std::mem::take(&mut self.pushes)
+    }
+
+    /// Takes the queued data messages of one realtime connection, in order.
+    pub(crate) fn take_pushes(&mut self, client: u64) -> Vec<String> {
+        let (own, others) = std::mem::take(&mut self.pushes)
+            .into_iter()
+            .partition(|(to, _)| *to == client);
+        self.pushes = others;
+        own.into_iter().map(|(_, frame)| frame).collect()
+    }
+
+    /// Ends a realtime connection: its listens and undelivered messages go.
+    pub fn close_realtime(&mut self, client: u64) {
+        self.listens.retain(|_, listen| listen.client != client);
+        self.pushes.retain(|(to, _)| *to != client);
+    }
+
+    /// The number of realtime listens.
+    pub fn listen_count(&self) -> usize {
+        self.listens.len()
     }
 
     /// The tree of `namespace`, created empty on first use.
@@ -566,9 +735,20 @@ impl Database {
 
     /// The next realtime client number and session id.
     pub(crate) fn next_client(&mut self) -> (u64, String) {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         self.clients += 1;
-        let id = (0..32)
+        (self.clients, self.token(32))
+    }
+
+    /// A long-polling connection's password: ten letters and digits, as the official
+    /// emulator's.
+    pub(crate) fn long_poll_password(&mut self) -> String {
+        self.token(10)
+    }
+
+    /// `length` letters and digits drawn from the session generator.
+    fn token(&mut self, length: usize) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        (0..length)
             .map(|_| {
                 self.session_rng = self.session_rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
                 let mut z = self.session_rng;
@@ -578,8 +758,7 @@ impl Database {
                 // 62 letters and digits; the modulo bias is irrelevant for a session id.
                 char::from(ALPHABET[usize::try_from(z % 62).unwrap_or(0)])
             })
-            .collect();
-        (self.clients, id)
+            .collect()
     }
 
     /// The next number of a connection error, counted across connections.
@@ -638,19 +817,47 @@ fn credential<'a>(
 #[derive(Debug)]
 pub struct ParsedBody {
     json: Result<Json, ParseError>,
+    /// The members of an object body in the order they were sent.
+    order: Vec<String>,
 }
 
 /// Parses the body of `request`, if it has a UTF-8 one. Call it before taking the database
 /// lock and pass the result to [`Database::handle_parsed`].
 pub fn parse_body(request: &HttpRequest) -> Option<ParsedBody> {
     let text = std::str::from_utf8(&request.body).ok()?;
-    (!text.is_empty()).then(|| ParsedBody { json: parse(text) })
+    (!text.is_empty()).then(|| parse_ordered(text))
+}
+
+/// Parses a body and, for an object, notes the order of its members: a `PATCH` notifies
+/// its entries in that order.
+fn parse_ordered(text: &str) -> ParsedBody {
+    if !text.trim_start().starts_with('{') {
+        return ParsedBody {
+            json: parse(text),
+            order: Vec::new(),
+        };
+    }
+    match parse_with_keys(text) {
+        Ok((json, keys)) => ParsedBody {
+            json: Ok(json),
+            order: keys
+                .into_iter()
+                .filter(|at| at.depth == 0)
+                .map(|at| at.key)
+                .collect(),
+        },
+        Err(err) => ParsedBody {
+            json: Err(err),
+            order: Vec::new(),
+        },
+    }
 }
 
 /// A write body: its text, for refusal positions, and its parsed value.
 struct Body<'a> {
     text: &'a str,
     json: Result<Json, ParseError>,
+    order: Vec<String>,
 }
 
 fn body(request: &HttpRequest, parsed: Option<ParsedBody>) -> Result<Body<'_>, Refusal> {
@@ -658,8 +865,12 @@ fn body(request: &HttpRequest, parsed: Option<ParsedBody>) -> Result<Body<'_>, R
         return Err(Refusal::bad("No data supplied."));
     }
     let text = std::str::from_utf8(&request.body).map_err(|_| Refusal::bad(PARSE_ERROR))?;
-    let json = parsed.map_or_else(|| parse(text), |parsed| parsed.json);
-    Ok(Body { text, json })
+    let parsed = parsed.unwrap_or_else(|| parse_ordered(text));
+    Ok(Body {
+        text,
+        json: parsed.json,
+        order: parsed.order,
+    })
 }
 
 fn header(name: &str, value: &str) -> (String, String) {
@@ -846,11 +1057,26 @@ fn not_modified() -> HttpResponse {
     }
 }
 
-fn written(tree: &Tree, path: &Path, output: &Output, want_etag: bool) -> HttpResponse {
+/// The answer to a `PUT`: what was written, in the form it was written (the official
+/// emulator answers `1.0` for 1.0 written over 1, which keeps 1); a value with server values
+/// answers what they resolved to.
+fn written(
+    tree: &Tree,
+    path: &Path,
+    value: &Json,
+    output: &Output,
+    want_etag: bool,
+) -> HttpResponse {
     let json = if path.is_priority() {
-        priority_at(tree, path)
+        match Priority::from_json(value) {
+            Ok(Some(priority)) => priority.to_json(),
+            _ => written_priority_at(tree, path),
+        }
     } else {
-        output_json(tree.get(path), Format::Export)
+        match Node::from_json(value, path, tree.limits()) {
+            Ok(node) => output_json(node.as_ref(), Format::Export),
+            Err(_) => output_json(tree.get(path), Format::Export),
+        }
     };
     let tag = want_etag.then(|| tag_at(tree, path));
     json_response(&json, output, tag)
@@ -888,13 +1114,22 @@ fn data_refusal(body: &str) -> Refusal {
 /// The entries of a `PATCH` body.
 fn patch_entries(
     body: Result<Json, ParseError>,
+    order: &[String],
     limits: &Limits,
 ) -> Result<Vec<PatchEntry>, Refusal> {
     let value = body.map_err(|_| Refusal::bad(PARSE_ERROR))?;
-    let Json::Object(map) = value else {
+    let Json::Object(mut map) = value else {
         return Err(Refusal::bad(PATCH_ERROR));
     };
-    map.into_iter()
+    // The members in the order they were sent (a repeated key at its first place).
+    let mut sent: Vec<(String, Json)> = Vec::with_capacity(map.len());
+    for key in order {
+        if let Some(value) = map.remove(key) {
+            sent.push((key.clone(), value));
+        }
+    }
+    sent.extend(map);
+    sent.into_iter()
         .map(|(key, value)| {
             let path = Path::parse(&key, limits).map_err(|_| Refusal::bad(PATCH_ERROR))?;
             if path.is_root() || path.is_info() {
@@ -977,7 +1212,7 @@ fn stream_event(
 ) -> SseEvent {
     let location = &subscription.path;
     match change {
-        Change::Put(path) if location.contains(path) && location != path => {
+        Change::Put { path, .. } if location.contains(path) && location != path => {
             let relative = relative_to(location, path);
             let inside_one_child = match (&subscription.query, &subscription.last, fresh) {
                 (None, _, _) => true,
@@ -991,7 +1226,7 @@ fn stream_event(
             };
             if inside_one_child {
                 let data = if path.is_priority() {
-                    priority_at(tree, path)
+                    written_priority_at(tree, path)
                 } else {
                     output_json(tree.get(path), subscription.format)
                 };
@@ -999,12 +1234,14 @@ fn stream_event(
             }
             put_event(&Path::root(), fresh)
         }
-        Change::Patch(base, entries) if subscription.query.is_none() && location.contains(base) => {
+        Change::Patch { base, entries }
+            if subscription.query.is_none() && location.contains(base) =>
+        {
             let mut data = BTreeMap::new();
-            for entry in entries {
+            for entry in entries.iter().map(|entry| &entry.path) {
                 let target = base.join(entry);
                 let value = if target.is_priority() {
-                    priority_at(tree, &target)
+                    written_priority_at(tree, &target)
                 } else {
                     output_json(tree.get(&target), subscription.format)
                 };
@@ -1016,5 +1253,66 @@ fn stream_event(
             }
         }
         _ => put_event(&Path::root(), fresh),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::realtime::Opened;
+
+    #[test]
+    fn unrelated_writes_rebuild_no_view() {
+        let mut db = Database::new(RestOptions::default(), 1);
+        let big: BTreeMap<String, Json> =
+            (0..50).map(|i| (format!("k{i}"), Json::int(i))).collect();
+        db.tree_mut("u")
+            .set(
+                &Path::from_keys(["big"]),
+                &Json::Object(big),
+                ServerValueContext { now_millis: 0 },
+            )
+            .unwrap();
+        let Ok(Opened::Session(mut session, _)) = db.open_realtime("/.ws?v=5&ns=u", Some("h"), 0)
+        else {
+            panic!("no session")
+        };
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/big","h":""}}}"#,
+            0,
+        );
+        let before = crate::listen::views_built();
+        for i in 0..10 {
+            session.receive(
+                &mut db,
+                &format!(
+                    r#"{{"t":"d","d":{{"r":{},"a":"p","b":{{"p":"/other","d":{i}}}}}}}"#,
+                    i + 2
+                ),
+                0,
+            );
+        }
+        assert_eq!(crate::listen::views_built(), before);
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":20,"a":"p","b":{"p":"/big/k1","d":7}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
+        // A write of what is stored changes nothing, so it rebuilds nothing either.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":21,"a":"p","b":{"p":"/big/k1","d":7.0}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
+        // Neither does a merge whose only entry there changes nothing.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":22,"a":"m","b":{"p":"/","d":{"other":99,"big/k1":7}}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
     }
 }

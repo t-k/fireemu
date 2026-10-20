@@ -397,6 +397,9 @@ test("a step line whose outcome is not a plain integer is unknown (fail-closed)"
     "p#s 503\u2028p#t 200",
     "p#s 503p#t 200",
     "p#s 200\r\r",
+    // A line break before a single step token (a CR-only rewrite of an earlier line).
+    "garbage\rp#s 200",
+    "\u0085p#s 200",
     // No sign but `-`, and no `-0`.
     "p#s grpc -0",
     "p#s -0",

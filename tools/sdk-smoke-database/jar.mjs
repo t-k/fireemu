@@ -10,6 +10,14 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+/** Every jar started here and not yet stopped, so a signal can stop one still starting. */
+const started = new Set();
+
+/** Stops every jar started here. */
+export async function stopStarted() {
+  await Promise.all([...started].map((stop) => stop()));
+}
+
 export const JAR_SHA256 = 'b70d99344caf17c98b6f910fa8f6edf32a7c016cb1035e8915f70d38901eb97f';
 export const DEFAULT_JAR = path.join(homedir(), '.cache', 'firebase', 'emulators', 'firebase-database-emulator-v4.11.2.jar');
 
@@ -50,10 +58,12 @@ export async function startJar(file = DEFAULT_JAR) {
   const child = spawn('java', ['-Duser.language=en', '-jar', file, '--port', String(port), '--host', '127.0.0.1'], { stdio: 'ignore' });
   const host = `127.0.0.1:${port}`;
   const stop = () => new Promise((resolve) => {
+    started.delete(stop);
     if (child.exitCode !== null) return resolve();
     child.once('exit', () => resolve());
     child.kill('SIGTERM');
   });
+  started.add(stop);
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (child.exitCode !== null) throw new Error(`the jar exited with ${child.exitCode}`);
     try {

@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crud, disconnect, listen, queries } from './smokes.mjs';
 import { firstDifference } from './compare.mjs';
-import { DEFAULT_JAR, startJar } from './jar.mjs';
+import { DEFAULT_JAR, startJar, stopStarted } from './jar.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -43,6 +43,14 @@ if (unknown.length) {
   console.error(`run.mjs: unknown smoke ${unknown.join(', ')}`);
   process.exit(2);
 }
+// The jar stops however the run ends: Ctrl-C or SIGTERM, even while it is starting (130 and
+// 143, as a shell reports those signals), or a smoke that throws (the finally below).
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.once(signal, async () => {
+    await stopStarted();
+    process.exit(code);
+  });
+}
 let jar;
 if (record) {
   try {
@@ -51,13 +59,6 @@ if (record) {
     console.error(`run.mjs: ${e.message}`);
     process.exit(2);
   }
-}
-// The jar stops however the run ends: a smoke that throws, or Ctrl-C.
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.once(signal, async () => {
-    await jar?.stop();
-    process.exit(130);
-  });
 }
 let failed = 0;
 try {

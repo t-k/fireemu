@@ -895,7 +895,9 @@ async fn a_websocket_dropped_for_falling_behind_writes_what_it_registered_once()
     }
     assert_eq!(database.lock().unwrap().listen_count(), 0, "never dropped");
     eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
-    // What the dropped socket still sends is not applied after it.
+    // What the dropped socket still sends does not land after the onDisconnect write. This
+    // shows the outcome only: whether the server read the frame and refused it, or never
+    // read it, is pinned by server::tests::a_connection_dropped_for_falling_behind_answers_nothing_more.
     reader
         .text(r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/presence","d":"online"}}}"#)
         .await;

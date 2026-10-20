@@ -21,6 +21,19 @@ def required(edges=False):
     names += ["space U+%04X" % c for c in [0x20, 0x09, 0x0B, 0x0C, 0xA0, 0x1680, 0x2003,
                                            0x202F, 0x3000, 0xFEFF, 0x180E, 0x200B, 0xAD,
                                            0x2060, 0x85, 0x0A, 0x0D, 0x2028]]
+    names += ["string " + e for e in ["esc_n", "esc_t", "esc_r", "esc_b", "esc_f", "esc_v",
+                                      "esc_0", "esc_octal", "esc_octal_long", "esc_x",
+                                      "esc_x_short", "esc_u", "esc_u_short", "esc_identity",
+                                      "esc_quote", "esc_dquote", "esc_backslash",
+                                      "quote single", "quote double", "length"]]
+    names += ["string continuation " + t for t in ["LF", "CR", "CRLF", "LS", "PS"]]
+    names += ["string raw_terminator " + t for t in ["LF", "CR", "CRLF", "LS", "PS"]]
+    names += ["num_int", "num_decimal", "num_leading_dot", "num_exp", "num_exp_signed",
+              "num_hex", "num_octal", "num_08", "num_zero"]
+    names += ["operator " + o for o in ["==", "!=", "===", "!==", "<=", ">=", "<", ">", "&&", "||"]]
+    names += ["format " + p for p in ["after_backslash", "in_escape", "in_string_body",
+                                      "in_number", "in_operator", "in_name", "in_regex",
+                                      "after_regex_backslash", "in_flags"]]
     if edges:
         names += ["edge " + e for e in ["|", ")", "*", "+", "?", "{", "{2}", "}", "()", "**",
                                         "\\\\", "{1,", "{,2}"]]

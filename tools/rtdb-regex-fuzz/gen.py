@@ -173,9 +173,111 @@ def spaced(expr):
     return expr
 
 
+# The rest of the lexer: string literals, numbers, operators, and format characters in
+# every place a character is read (review r7 S20).
+FORMATS = ["\u200b", "\u00ad", "\u180e", "\u2060", "\u206f", "\ufeff"]
+TERMINATORS = {"LF": "\n", "CR": "\r", "CRLF": "\r\n", "LS": "\u2028", "PS": "\u2029"}
+STRING_ESCAPES = {
+    "esc_n": "\\n", "esc_t": "\\t", "esc_r": "\\r", "esc_b": "\\b", "esc_f": "\\f",
+    "esc_v": "\\v", "esc_0": "\\0", "esc_octal": "\\101", "esc_octal_long": "\\3777",
+    "esc_x": "\\x41", "esc_x_short": "\\x4", "esc_u": "\\u0041", "esc_u_short": "\\u004",
+    "esc_identity": "\\q", "esc_quote": "\\'", "esc_dquote": '\\"', "esc_backslash": "\\\\",
+}
+NUMBERS = {"num_int": "10", "num_decimal": "1.5", "num_leading_dot": ".5", "num_exp": "1e3",
+           "num_exp_signed": "1E-2", "num_hex": "0x1F", "num_octal": "017", "num_08": "08",
+           "num_zero": "0"}
+OPERATORS = ["==", "!=", "===", "!==", "<=", ">=", "<", ">", "&&", "||"]
+
+
+def fmt():
+    return rng.choice(FORMATS)
+
+
+def string_piece():
+    roll = rng.random()
+    if roll < 0.4:
+        name = rng.choice(list(STRING_ESCAPES))
+        used["string " + name] += 1
+        piece = STRING_ESCAPES[name]
+        if rng.random() < 0.2:
+            # A format character after the backslash or inside the digits.
+            at = rng.randint(1, len(piece) - 1) if len(piece) > 1 else 1
+            used["format after_backslash" if at == 1 else "format in_escape"] += 1
+            piece = piece[:at] + fmt() + piece[at:]
+        return piece
+    if roll < 0.6:
+        name = rng.choice(list(TERMINATORS))
+        if rng.random() < 0.5:
+            used["string continuation " + name] += 1
+            return "\\" + TERMINATORS[name]
+        used["string raw_terminator " + name] += 1
+        return TERMINATORS[name]
+    if roll < 0.7:
+        used["format in_string_body"] += 1
+        return fmt()
+    return rng.choice(["a", "b", "A", " ", "\u00e9", "\u0085"])
+
+
+def string_literal():
+    quote = rng.choice(["'", '"'])
+    used["string quote " + ("single" if quote == "'" else "double")] += 1
+    body = "".join(string_piece() for _ in range(rng.randint(0, 3)))
+    return f"{quote}{body}{quote}"
+
+
+def number():
+    name = rng.choice(list(NUMBERS))
+    used[name] += 1
+    text = NUMBERS[name]
+    if len(text) > 1 and rng.random() < 0.2:
+        at = rng.randint(1, len(text) - 1)
+        used["format in_number"] += 1
+        text = text[:at] + fmt() + text[at:]
+    return text
+
+
+def operator():
+    op = rng.choice(OPERATORS)
+    used["operator " + op] += 1
+    if len(op) > 1 and rng.random() < 0.2:
+        at = rng.randint(1, len(op) - 1)
+        used["format in_operator"] += 1
+        op = op[:at] + fmt() + op[at:]
+    return op
+
+
+def lexer_expression():
+    roll = rng.random()
+    if roll < 0.35:
+        return f"{string_literal()} {operator()} {string_literal()}"
+    if roll < 0.55:
+        used["string length"] += 1
+        return f"{string_literal()}.length {operator()} {rng.randint(0, 4)}"
+    if roll < 0.8:
+        return f"{number()} {operator()} {number()}"
+    # A format character in a name, a regex body, after a regex backslash and in flags.
+    place = rng.choice(["in_name", "in_regex", "after_regex_backslash", "in_flags"])
+    used["format " + place] += 1
+    f = fmt()
+    return {
+        "in_name": f"tr{f}ue {operator()} true",
+        "in_regex": f"'ab'.matches(/a{f}b/)",
+        "after_regex_backslash": f"'a.'.matches(/^a\\{f}.$/)",
+        "in_flags": f"'A'.matches(/^a$/{f}i)",
+    }[place]
+
+
 rows = []
 seen = set()
 while len(rows) < 2 * count:
+    if rng.random() < 0.4:
+        expr = lexer_expression()
+        if expr in seen:
+            continue
+        seen.add(expr)
+        rows.append(expr)
+        rows.append(f"!({expr})")
+        continue
     flags = "i" if rng.random() < 0.5 else ""
     pat = pattern(flags == "i")
     if "/" in pat or "\n" in pat:

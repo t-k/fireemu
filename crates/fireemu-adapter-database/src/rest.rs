@@ -644,7 +644,12 @@ impl Database {
         );
         let [path] = written_paths;
         let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
-        Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
+        Ok(self.after_write(
+            &call.namespace,
+            response,
+            &Change::Put { path, effective },
+            call.context.now_millis,
+        ))
     }
 
     fn post(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
@@ -668,7 +673,7 @@ impl Database {
             path: child,
             effective: true,
         };
-        Ok(self.after_write(&call.namespace, response, &change))
+        Ok(self.after_write(&call.namespace, response, &change, call.context.now_millis))
     }
 
     fn patch(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
@@ -703,7 +708,7 @@ impl Database {
             base: call.path.clone(),
             entries,
         };
-        Ok(self.after_write(&call.namespace, response, &change))
+        Ok(self.after_write(&call.namespace, response, &change, call.context.now_millis))
     }
 
     fn namespace(&mut self, name: &str) -> &mut Namespace {
@@ -786,13 +791,37 @@ impl Database {
         }
     }
 
-    fn after_write(&mut self, namespace: &str, response: HttpResponse, change: &Change) -> Handled {
-        let events = self.notify(namespace, change);
+    fn after_write(
+        &mut self,
+        namespace: &str,
+        response: HttpResponse,
+        change: &Change,
+        now: i64,
+    ) -> Handled {
+        let events = self.notify(namespace, change, now);
         Handled::Response { response, events }
     }
 
+    /// The events a committed change in `namespace` causes: first the listens and event
+    /// streams whose read the rules no longer allow are cancelled (the official emulator
+    /// sends the cancellation instead of the change, review M2), then the others hear it.
+    pub(crate) fn notify(
+        &mut self,
+        namespace: &str,
+        change: &Change,
+        now: i64,
+    ) -> Vec<(u64, SseEvent)> {
+        let mut events = if self.loaded_rules(namespace).is_some() {
+            self.revoke(namespace, None, now)
+        } else {
+            Vec::new()
+        };
+        events.extend(self.notify_views(namespace, change));
+        events
+    }
+
     /// The events a change in `namespace` causes on the open streams.
-    pub(crate) fn notify(&mut self, namespace: &str, change: &Change) -> Vec<(u64, SseEvent)> {
+    fn notify_views(&mut self, namespace: &str, change: &Change) -> Vec<(u64, SseEvent)> {
         let Some(ns) = self.namespaces.get(namespace) else {
             return Vec::new();
         };
@@ -936,7 +965,8 @@ impl Database {
                 path: Path::root(),
                 effective: true,
             };
-            let events = self.notify(&name, &change);
+            // A reset leaves nothing to read; the next write looks at the rules again.
+            let events = self.notify_views(&name, &change);
             self.events.extend(events);
         }
         if let Some(waker) = &self.waker.0 {
@@ -1039,7 +1069,7 @@ impl Database {
                     .collect(),
             }
         };
-        let events = self.notify(&namespace, &change);
+        let events = self.notify(&namespace, &change, now_millis);
         self.events.extend(events);
         if let Some(waker) = &self.waker.0 {
             waker();

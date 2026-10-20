@@ -334,7 +334,12 @@ impl Database {
 
     /// Cancels the listens (of `client`, or of everyone) and the event streams of
     /// `namespace` that may no longer read what they follow.
-    fn revoke(&mut self, namespace: &str, client: Option<u64>, now: i64) -> Vec<(u64, SseEvent)> {
+    pub(crate) fn revoke(
+        &mut self,
+        namespace: &str,
+        client: Option<u64>,
+        now: i64,
+    ) -> Vec<(u64, SseEvent)> {
         let listens: Vec<(u64, u64, Path, Option<QueryParams>)> = self
             .listen_entries(namespace)
             .into_iter()

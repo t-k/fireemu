@@ -1322,3 +1322,79 @@ fn on_disconnect_writes_are_judged_one_by_one_when_made() {
         )
     );
 }
+
+#[test]
+fn a_write_that_makes_a_read_false_cancels_the_listens_instead_of_telling_them() {
+    // Recorded on the official emulator (docs.local datarevoke-probe): the write that turns
+    // the rule false reaches the listener as the cancellation, not as data.
+    let mut db = db();
+    load(
+        &mut db,
+        "dr",
+        r#"{"rules":{"x":{".read":"data.child('ok').val() === true"},
+            "y":{".read":"root.child('open').val() === true"},
+            "z":{".read":"root.child('zopen').val() === true"}}}"#,
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/.json?ns=dr",
+        OWNER,
+        r#"{"open":true,"zopen":true,"x":{"ok":true,"v":1},"y":{"v":1},"z":{"v":1}}"#,
+    );
+    let mut listener = open(&mut db, "dr");
+    let client = listener.client();
+    for (r, path) in [(1, "/x"), (2, "/y"), (3, "/z")] {
+        send(
+            &mut db,
+            &mut listener,
+            r,
+            "q",
+            &format!(r#"{{"p":"{path}","h":""}}"#),
+        );
+    }
+    let mut streams = Vec::new();
+    for path in ["/x", "/y"] {
+        match db.handle(
+            &request(
+                "GET",
+                &format!("{path}.json?ns=dr"),
+                &[("Accept", "text/event-stream")],
+                "",
+            ),
+            NOW,
+        ) {
+            Handled::Stream { id, .. } => streams.push(id),
+            Handled::Response { response, .. } => panic!("{response:?}"),
+        }
+    }
+    pushes_to(&mut db, client);
+    let cancel =
+        |path: &str| format!(r#"{{"t":"d","d":{{"b":{{"p":"{path}","q":null}},"a":"c"}}}}"#);
+    // A REST write inside the listened location.
+    let (_, events) = respond(&mut db, "PUT", "/x/ok.json?ns=dr", OWNER, "false");
+    assert_eq!(pushes_to(&mut db, client), vec![cancel("x")]);
+    assert_eq!(events, vec![(streams[0], SseEvent::cancel())]);
+    // A realtime write elsewhere.
+    let mut writer = open(&mut db, "dr");
+    send(&mut db, &mut writer, 1, "gauth", r#"{"cred":"owner"}"#);
+    let mut events = Vec::new();
+    let frame = r#"{"t":"d","d":{"r":2,"a":"p","b":{"p":"/open","d":false}}}"#;
+    events.extend(writer.receive(&mut db, frame, NOW).events);
+    assert_eq!(pushes_to(&mut db, client), vec![cancel("y")]);
+    assert_eq!(events, vec![(streams[1], SseEvent::cancel())]);
+    // An onDisconnect write.
+    send(&mut db, &mut writer, 3, "o", r#"{"p":"/zopen","d":false}"#);
+    db.close_realtime(writer.client(), LATER);
+    assert_eq!(pushes_to(&mut db, client), vec![cancel("z")]);
+    // Nothing more reaches the cancelled listens and streams.
+    let (_, events) = respond(
+        &mut db,
+        "PATCH",
+        "/.json?ns=dr",
+        OWNER,
+        r#"{"x/v":2,"y/v":2,"z/v":2}"#,
+    );
+    assert_eq!(pushes_to(&mut db, client), Vec::<String>::new());
+    assert!(events.is_empty(), "{events:?}");
+}

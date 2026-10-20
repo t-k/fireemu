@@ -700,7 +700,11 @@ impl Session {
             Json::string("")
         };
         let effective = db.effective(&self.namespace, std::slice::from_ref(&path), before)[0];
-        events.extend(db.notify(&self.namespace, &Change::Put { path, effective }));
+        events.extend(db.notify(
+            &self.namespace,
+            &Change::Put { path, effective },
+            context.now_millis,
+        ));
         Ok(data)
     }
 
@@ -761,7 +765,7 @@ impl Session {
             base: path,
             entries,
         };
-        events.extend(db.notify(&self.namespace, &change));
+        events.extend(db.notify(&self.namespace, &change, context.now_millis));
         Ok(Json::string(""))
     }
 }

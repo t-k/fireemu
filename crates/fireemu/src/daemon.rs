@@ -1179,6 +1179,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         products: import_export::Products::from(&only),
         blocking: auth.blocking.clone(),
         auth_operation_gate,
+        database_served: addrs.database.is_some(),
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.

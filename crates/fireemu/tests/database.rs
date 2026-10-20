@@ -448,3 +448,34 @@ fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_serve
     let stderr = run("auth");
     assert!(!stderr.contains("database.rules.json"), "{stderr}");
 }
+
+#[test]
+fn an_export_with_the_database_served_warns_that_its_data_is_not_exported() {
+    let dir = Scratch::new("database", "export-warning");
+    let run = |only: &str| {
+        let export = dir.join(format!("export-{only}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--no-config-discovery", "--project", PROJECT])
+            .args(["--only", only, "--database-port", "0", "--http-port", "0"])
+            .args(["--firestore-port", "0", "--hub-port", "0"])
+            .arg("--export-on-exit")
+            .arg(&export)
+            .args(["--", "true"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let stderr = run("database,firestore");
+    assert!(
+        stderr.contains("warning: Realtime Database data is not exported"),
+        "{stderr}"
+    );
+    let stderr = run("firestore");
+    assert!(!stderr.contains("Realtime Database"), "{stderr}");
+}

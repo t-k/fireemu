@@ -15,6 +15,7 @@ npx fireemu exec --only database -- npm test
 
 - The REST API (`.json` paths): reads, writes, updates, push ids, conditional requests with ETags, `shallow`, `print`, `format=export`, queries and event streams (`Accept: text/event-stream`).
 - The realtime protocol over WebSocket and over long polling (`forceLongPolling()`), with listens, queries, transactions and server values.
+- `onDisconnect` writes (`set`, `update`, `remove`, `cancel`): they run when the connection ends, however it ends (the app goes offline, the socket closes, or a long-polling client stops asking), as one update with their server values resolved at that moment. An update the database cannot apply, such as a priority for a node that is not there, writes none of them, as on the official emulator.
 - Namespaces, chosen by the `ns` query parameter or the first label of the host name, as on the official emulator. A session reset empties the namespaces of the project it resets (`<project>` and `<project>-default-rtdb`).
 
 `tools/sdk-smoke-database` in the repository drives these through the pinned `firebase` and `firebase-admin` SDKs and compares the results with a recording of the official emulator.
@@ -26,7 +27,6 @@ Rules are not evaluated yet. A `database` section in `firebase.json` is accepted
 ## Not supported yet
 
 - Security Rules evaluation.
-- `onDisconnect` operations.
 - Import and export: a `database_export` section is refused on import, and nothing is exported.
 - Realtime Database triggers for Cloud Functions, and a view in the Emulator UI.
 

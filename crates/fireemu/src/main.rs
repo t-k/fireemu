@@ -708,6 +708,19 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
             .unwrap_or(response);
         return Err(CliError::refused(format!("export failed: {message}")));
     }
+    for warning in serde_json::from_str::<serde_json::Value>(&response)
+        .ok()
+        .and_then(|v| {
+            v.get("warnings")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+    {
+        if let Some(warning) = warning.as_str() {
+            eprintln!("warning: {warning}");
+        }
+    }
     println!("exported {project} to {}", absolute.display());
     Ok(())
 }
@@ -3246,16 +3259,20 @@ impl Exporter {
 }
 
 impl hub::ExportRunner for Exporter {
-    fn export(&self, path: &Path, initiated_by: &str) -> Result<(), String> {
+    fn export(&self, path: &Path, initiated_by: &str) -> Result<Vec<String>, String> {
+        let mut warnings = Vec::new();
         if self.database_served {
-            eprintln!(
-                "warning: Realtime Database data is not exported (an open gap): the export to {} carries Firestore, Auth and Storage only",
+            let warning = format!(
+                "Realtime Database data is not exported (an open gap): the export to {} leaves it out",
                 path.display()
             );
+            eprintln!("warning: {warning}");
+            warnings.push(warning);
         }
         import_export::may_overwrite(path)?;
         import_export::export(path, self.products, &self.endpoints(), initiated_by)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(warnings)
     }
 }
 

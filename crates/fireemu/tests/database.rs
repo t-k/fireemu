@@ -552,3 +552,39 @@ fn production_exact_holds_the_realtime_protocol_to_the_owner_too() {
     let wrote = send(2, r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/a","d":1}}}"#);
     assert!(wrote.contains(r#""r":3,"b":{"s":"ok""#), "{wrote}");
 }
+
+#[test]
+fn emulators_export_prints_the_database_warning_the_hub_answers() {
+    let dir = Scratch::new("database", "hub-export-warning");
+    let export = dir.join("export");
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["exec", "--no-config-discovery", "--project", PROJECT])
+        .args(["--only", "database,firestore", "--database-port", "0"])
+        .args([
+            "--http-port",
+            "0",
+            "--firestore-port",
+            "0",
+            "--hub-port",
+            "auto",
+        ])
+        .arg("--")
+        .arg(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["emulators:export"])
+        .arg(&export)
+        .args(["--project", PROJECT])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    // Once from the suite's own log, once from the command that asked, which read it from
+    // the Hub's answer.
+    assert_eq!(
+        stderr
+            .matches("warning: Realtime Database data is not exported")
+            .count(),
+        2,
+        "{stderr}"
+    );
+}

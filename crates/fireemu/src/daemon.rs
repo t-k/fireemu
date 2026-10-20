@@ -1774,7 +1774,7 @@ async fn serve_suite(
     if let Some(dir) = &export_on_exit {
         use hub::ExportRunner as _;
         match exporter.export(dir, "exit") {
-            Ok(()) => {
+            Ok(_) => {
                 if !quiet {
                     println!("exported to {}", dir.display());
                 }

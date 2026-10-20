@@ -29,6 +29,20 @@ if (record && option('--host')) {
   console.error('run.mjs: --record starts the pinned official emulator itself; drop --host');
   process.exit(2);
 }
+const smokes = {
+  crud,
+  listen,
+  queries,
+  disconnect,
+  'long-polling': async (h, s) => (await import('./long-polling.mjs')).longPolling(h, s),
+};
+const selected = (option('--only') ?? Object.keys(smokes).join(',')).split(',');
+// Every name is checked before anything starts, so a typo leaves nothing running.
+const unknown = selected.filter((name) => !smokes[name]);
+if (unknown.length) {
+  console.error(`run.mjs: unknown smoke ${unknown.join(', ')}`);
+  process.exit(2);
+}
 let jar;
 if (record) {
   try {
@@ -38,48 +52,46 @@ if (record) {
     process.exit(2);
   }
 }
-const host = jar?.host ?? option('--host') ?? process.env.FIREBASE_DATABASE_EMULATOR_HOST;
-if (!host) {
-  console.error('run.mjs: give --host <host:port> or set FIREBASE_DATABASE_EMULATOR_HOST');
-  process.exit(2);
+// The jar stops however the run ends: a smoke that throws, or Ctrl-C.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, async () => {
+    await jar?.stop();
+    process.exit(130);
+  });
 }
-const expect = option('--expect') ?? path.join(here, 'fixtures', 'official-emulator-4.11.2');
-const smokes = {
-  crud,
-  listen,
-  queries,
-  disconnect,
-  'long-polling': async (h, s) => (await import('./long-polling.mjs')).longPolling(h, s),
-};
-const selected = (option('--only') ?? Object.keys(smokes).join(',')).split(',');
-const suffix = Date.now().toString(36);
 let failed = 0;
-for (const name of selected) {
-  const smoke = smokes[name];
-  if (!smoke) {
-    console.error(`run.mjs: unknown smoke ${name}`);
-    process.exit(2);
-  }
-  const result = await smoke(host, suffix);
-  if (record) {
-    mkdirSync(record, { recursive: true });
-    writeFileSync(path.join(record, `${name}.json`), `${JSON.stringify(result, null, 1)}\n`);
-    console.log(`${name}: recorded`);
-    continue;
-  }
-  const file = path.join(expect, `${name}.json`);
-  if (!existsSync(file)) {
-    console.error(`${name}: no recording at ${file}`);
-    failed += 1;
-    continue;
-  }
-  const difference = firstDifference(JSON.parse(readFileSync(file, 'utf8')), result);
-  if (difference) {
-    console.log(`${name}: differs from the official emulator: ${difference}`);
-    failed += 1;
+try {
+  const host = jar?.host ?? option('--host') ?? process.env.FIREBASE_DATABASE_EMULATOR_HOST;
+  if (!host) {
+    console.error('run.mjs: give --host <host:port> or set FIREBASE_DATABASE_EMULATOR_HOST');
+    process.exitCode = 2;
   } else {
-    console.log(`${name}: same as the official emulator`);
+    const expect = option('--expect') ?? path.join(here, 'fixtures', 'official-emulator-4.11.2');
+    const suffix = Date.now().toString(36);
+    for (const name of selected) {
+      const result = await smokes[name](host, suffix);
+      if (record) {
+        mkdirSync(record, { recursive: true });
+        writeFileSync(path.join(record, `${name}.json`), `${JSON.stringify(result, null, 1)}\n`);
+        console.log(`${name}: recorded`);
+        continue;
+      }
+      const file = path.join(expect, `${name}.json`);
+      if (!existsSync(file)) {
+        console.error(`${name}: no recording at ${file}`);
+        failed += 1;
+        continue;
+      }
+      const difference = firstDifference(JSON.parse(readFileSync(file, 'utf8')), result);
+      if (difference) {
+        console.log(`${name}: differs from the official emulator: ${difference}`);
+        failed += 1;
+      } else {
+        console.log(`${name}: same as the official emulator`);
+      }
+    }
   }
+} finally {
+  await jar?.stop();
 }
-await jar?.stop();
-process.exit(failed ? 1 : 0);
+process.exit(process.exitCode ?? (failed ? 1 : 0));

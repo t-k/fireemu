@@ -284,6 +284,15 @@ fn answer(status: u16, body: &Value) -> Value {
 fn the_pipeline_corpus_replays_as_production_answered() {
     let requests = read("fs-ent-pipeline-requests.json");
     let production = read("fs-ent-pipeline-production.json");
+    // A stopped run's private fixture (`fixture.partial.json`) is never replayed as production:
+    // it holds programs finished by one recording, without the second recording's rows.
+    assert!(production.get("partial").is_none(), "a partial fixture");
+    assert!(
+        production["programs"]
+            .as_object()
+            .is_some_and(|programs| programs.values().all(|p| p.get("recordings").is_none())),
+        "a partial fixture"
+    );
     for strict in [true, false] {
         let s = state(strict);
         let mut differing = Vec::new();

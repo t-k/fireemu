@@ -888,3 +888,135 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
         },
     ]);
 }
+
+#[test]
+fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
+    // Production's order between an argument-type refusal and an empty map or a later stage's
+    // check is unrecorded, so under strict a function call that fails on its constants (fields
+    // read as absent) refuses the pipeline as unobserved; the emulator profile keeps its order.
+    let empty = || stage("select", vec![map(vec![])]);
+    let double = json!({ "doubleValue": 1.5 });
+    check(vec![
+        Case {
+            label: "N76 add_fields {a: map(1.5, i)} then select {}",
+            stages: vec![
+                stage(
+                    "add_fields",
+                    vec![map(vec![(
+                        "a",
+                        func("map", vec![double.clone(), field("i")]),
+                    )])],
+                ),
+                empty(),
+            ],
+            strict: None,
+            emulator: (400, EMPTY_SELECT),
+        },
+        Case {
+            label: "N78 select {v: document_id(1.5)} then limit(\"x\")",
+            stages: vec![
+                select(func("document_id", vec![double.clone()])),
+                stage("limit", vec![string("x")]),
+            ],
+            strict: None,
+            emulator: (
+                400,
+                "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+            ),
+        },
+        Case {
+            label: "N15 add_fields {a: document_id(1)} then select {}",
+            stages: vec![
+                stage(
+                    "add_fields",
+                    vec![map(vec![("a", func("document_id", vec![int(1)]))])],
+                ),
+                empty(),
+            ],
+            strict: None,
+            emulator: (400, EMPTY_SELECT),
+        },
+        Case {
+            label: "N14 where(equal(document_id(1), \"x\")) then select {}",
+            stages: vec![
+                stage(
+                    "where",
+                    vec![func(
+                        "equal",
+                        vec![func("document_id", vec![int(1)]), string("x")],
+                    )],
+                ),
+                empty(),
+            ],
+            strict: None,
+            emulator: (400, EMPTY_SELECT),
+        },
+        Case {
+            label: "N79 where(equal(i, map(1.5, i))) then select {}",
+            stages: vec![
+                stage(
+                    "where",
+                    vec![func(
+                        "equal",
+                        vec![field("i"), func("map", vec![double.clone(), field("i")])],
+                    )],
+                ),
+                empty(),
+            ],
+            strict: None,
+            emulator: (400, EMPTY_SELECT),
+        },
+        Case {
+            label: "N68 aggregate {c: count(n)} by {\"\": document_id(1)}",
+            stages: vec![stage(
+                "aggregate",
+                vec![
+                    map(vec![("c", func("count", vec![field("n")]))]),
+                    map(vec![("", func("document_id", vec![int(1)]))]),
+                ],
+            )],
+            strict: None,
+            emulator: (400, "Invalid empty property path string."),
+        },
+        // A type that depends on the data: the plan-time empty map still wins (N77).
+        Case {
+            label: "N77 add_fields {a: document_id(i)} then select {}",
+            stages: vec![
+                stage(
+                    "add_fields",
+                    vec![map(vec![("a", func("document_id", vec![field("i")]))])],
+                ),
+                empty(),
+            ],
+            strict: Some((400, EMPTY_SELECT)),
+            emulator: (400, EMPTY_SELECT),
+        },
+        // A constant that evaluates fine does not change the answer.
+        Case {
+            label: "add_fields {a: map(\"k\", 1)} then select {}",
+            stages: vec![
+                stage(
+                    "add_fields",
+                    vec![map(vec![("a", func("map", vec![string("k"), int(1)]))])],
+                ),
+                empty(),
+            ],
+            strict: Some((400, EMPTY_SELECT)),
+            emulator: (400, EMPTY_SELECT),
+        },
+        // Alone, a failing constant is answered at evaluation as recorded (O-4
+        // `functions#document-id-integer` with a field; a constant is a composition).
+        Case {
+            label: "select {v: document_id(1)} alone",
+            stages: vec![select(func("document_id", vec![int(1)]))],
+            strict: Some((
+                400,
+                "The function document_id(...) requires `Reference` but got `LONG`.",
+            )),
+            emulator: (
+                400,
+                "The function document_id(...) requires `Reference` but got `LONG`.",
+            ),
+        },
+    ]);
+}

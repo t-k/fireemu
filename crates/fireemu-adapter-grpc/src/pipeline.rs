@@ -525,18 +525,34 @@ pub fn compile_pipeline(
     // An empty map is answered after every other check of every stage (FS-ENT-ORACLE O-4,
     // `o4/stages#select-empty-then-*`, `#add-fields-then-select-empty`): a later stage's
     // refusal comes first. fireemu's own refusal of a stage it does not run is no check
-    // production makes, so the empty map wins over it; but production checks function names
-    // and argument types before the empty map (O-4 `#select-empty-then-unknown-function`),
-    // so under strict the empty map wins only when every part passed fireemu's checks.
-    match (compiled, deferred) {
+    // production makes, so the empty map wins over it in the emulator profile, as in the
+    // official emulator. Production answered a nonexistent function before the empty map
+    // (O-4 `#select-empty-then-unknown-function`); where it puts other checks fireemu does
+    // not make is unrecorded, so under strict the empty map wins only when every part passed
+    // fireemu's checks.
+    let outcome = match (compiled, deferred) {
         (Err(error), Some(empty))
             if error.code() != tonic::Code::InvalidArgument
                 && (validated_unrun || unrecorded == Unrecorded::OfficialEmulator) =>
         {
-            return Err(empty)
+            Err(empty)
         }
-        (Ok(()), Some(empty)) => return Err(empty),
-        (result, _) => result?,
+        (Ok(()), Some(empty)) => Err(empty),
+        (result, _) => result,
+    };
+    // An argument-type refusal is answered per row, and its order against an empty map or a
+    // later stage's check is unrecorded (coordinator ruling (a), 2026-10-20): under strict,
+    // such a text is answered only when no function call fails on its constants.
+    if let Err(error) = outcome {
+        if unrecorded == Unrecorded::Refuse
+            && error.code() == tonic::Code::InvalidArgument
+            && pipeline.stages.iter().any(constant_call_fails)
+        {
+            return Err(Status::unimplemented(
+                "a function that fails on its constants beside another refusal is not observed locally",
+            ));
+        }
+        return Err(error);
     }
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
@@ -1130,6 +1146,38 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
     }
 }
 
+/// Whether a function call a stage holds (at any depth of its arguments and alias maps) fails
+/// when evaluated with every field absent: under strict, as decoded for the executor, so the
+/// error can only come from the call's constants (a missing value gives null or leaves its
+/// entry out, and a `map(...)` key from a field is refused before).
+fn constant_call_fails(stage: &pb::pipeline::Stage) -> bool {
+    use pb::value::ValueType as V;
+    fn fails(value: &pb::Value, row: &pipeline_exec::Row) -> bool {
+        match value.value_type.as_ref() {
+            Some(V::FunctionValue(function)) => {
+                matches!(
+                    decode_operand(value, Unrecorded::Refuse)
+                        .map(|expr| expr.eval_in(row, Unrecorded::Refuse)),
+                    Ok(pipeline_exec::Eval::Error(_))
+                ) || function.args.iter().any(|arg| fails(arg, row))
+            }
+            Some(V::ArrayValue(array)) => array.values.iter().any(|v| fails(v, row)),
+            Some(V::MapValue(map)) => map.fields.values().any(|v| fails(v, row)),
+            _ => false,
+        }
+    }
+    let Some(path) =
+        DocumentPath::from_resource_name("projects/p/databases/(default)/documents/constants/row")
+    else {
+        return false;
+    };
+    let row = pipeline_exec::Row {
+        path,
+        fields: std::collections::BTreeMap::new(),
+    };
+    stage.args.iter().any(|arg| fails(arg, &row))
+}
+
 /// The official emulator's argument checks on a stage the local executor does not run
 /// (`add_fields`, `distinct`, `aggregate`), answered before the stage is refused as
 /// unsupported, in the official order: the stage's arity, each alias, then an empty map, which
@@ -1137,9 +1185,9 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
 /// (FS-ENT-ORACLE O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`), so both profiles
 /// do. A `select`, `limit` or `offset` after an unrun stage gets its checks here too.
 ///
-/// Production also checks every function name and argument type of every stage before the
-/// empty map, which fireemu cannot do for what it does not decode (O-4
-/// `#select-empty-then-unknown-function`). So under strict a stage's values must pass
+/// Production answered a nonexistent function before the empty map (O-4
+/// `#select-empty-then-unknown-function`), and where it puts the other checks fireemu does not
+/// make for what it does not decode is unrecorded. So under strict a stage's values must pass
 /// fireemu's own checks (an accumulator must be `count` of at most one field, as recorded),
 /// and any other stage ends the checks: the pipeline is refused as unobserved there.
 fn check_unrun_alias_stage(

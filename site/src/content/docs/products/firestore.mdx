@@ -68,6 +68,7 @@ The answers follow production as recorded by fireemu's production observations (
 | The wrong number of arguments for a supported function | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |
 | Function options | `UNIMPLEMENTED` | Ignored, as the official emulator ignores them |
 | An empty `select` map or a later stage's check after a function or stage value fireemu does not check (production names an unknown function first) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the later check |
+| An empty map or another refusal beside a function call that fails on its constants, such as `map(1.5, i)` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the other refusal |
 
 Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.
 

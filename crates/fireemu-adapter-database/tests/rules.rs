@@ -1429,6 +1429,51 @@ fn a_write_that_makes_a_read_false_cancels_the_listens_instead_of_telling_them()
 }
 
 #[test]
+fn a_refused_gauth_signs_the_connection_out_under_strict() {
+    let rules = r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}},"anon":{".read":"auth == null"}}}"#;
+    let good = token(r#"{"sub":"ok-1","iat":1}"#);
+    let mut db = with_credentials(true, true);
+    load(&mut db, "demo-default-rtdb", rules);
+    let mut session = open(&mut db, "demo-default-rtdb");
+    let client = session.client();
+    // Signed in as the owner, then as a user, each refused gauth signs the connection out.
+    send(&mut db, &mut session, 1, "gauth", r#"{"cred":"owner"}"#);
+    let unparsable = |r| reply(r, "invalid_token", r#""Could not parse auth token.""#);
+    assert_eq!(
+        send(&mut db, &mut session, 2, "gauth", r#"{"cred":"ya29.x"}"#),
+        vec![unparsable(2)]
+    );
+    assert_eq!(
+        send(&mut db, &mut session, 3, "g", r#"{"p":"/anon"}"#),
+        vec![reply(3, "ok", "null")]
+    );
+    send(
+        &mut db,
+        &mut session,
+        4,
+        "auth",
+        &format!(r#"{{"cred":"{good}"}}"#),
+    );
+    send(
+        &mut db,
+        &mut session,
+        5,
+        "q",
+        r#"{"p":"/users/ok-1","h":""}"#,
+    );
+    pushes_to(&mut db, client);
+    let cancel = r#"{"t":"d","d":{"b":{"p":"users/ok-1","q":null},"a":"c"}}"#.to_owned();
+    assert_eq!(
+        send(&mut db, &mut session, 6, "gauth", r#"{"cred":7}"#),
+        vec![cancel, unparsable(6)]
+    );
+    assert_eq!(
+        send(&mut db, &mut session, 7, "g", r#"{"p":"/users/ok-1"}"#),
+        vec![refused(7)]
+    );
+}
+
+#[test]
 fn a_refused_token_signs_the_connection_out_under_strict_only() {
     // The official emulator keeps the user after a refused token (docs.local reauth-probe).
     let rules = r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}},"anon":{".read":"auth == null"}}}"#;

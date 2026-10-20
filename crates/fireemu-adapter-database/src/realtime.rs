@@ -439,9 +439,13 @@ impl Session {
                         Access::administrator(cred, &db.options().credentials)
                     }
                     Some(_) => Access::administrator("", &db.options().credentials),
-                }
-                // Provisional: the strict profile refuses another credential as a bad token.
-                .map_err(|_| unparsable_token())?;
+                };
+                // Provisional: the strict profile refuses another credential as a bad token,
+                // and the connection is signed out, as after a refused `auth` (review S1b).
+                let Ok(access) = access else {
+                    self.become_(db, Access::Anonymous, context.now_millis);
+                    return Err(unparsable_token());
+                };
                 self.become_(db, access, context.now_millis);
                 let expires = context.now_millis / 1000 + 3600;
                 Ok(Json::object([

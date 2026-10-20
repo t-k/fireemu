@@ -1559,6 +1559,16 @@ fn the_round_four_checks_hold_in_every_position() {
             strict: None,
             emulator: (400, field_text),
         },
+        // An aggregate without accumulators is an empty map, a second refusal here.
+        Case {
+            label: "aggregate {} by {} then select {__x__: i}",
+            stages: vec![
+                stage("aggregate", vec![map(vec![]), map(vec![])]),
+                stage("select", vec![map(vec![("__x__", field("i"))])]),
+            ],
+            strict: None,
+            emulator: (400, "Stage 'select': field name '__x__' is reserved."),
+        },
         // One refusal after an unrun stage.
         Case {
             label: "add_fields {t: top} then select {__x__: i}",

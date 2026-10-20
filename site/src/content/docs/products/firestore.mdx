@@ -62,7 +62,7 @@ The answers follow production as recorded by fireemu's production observations (
 | A `where` on a double, timestamp, bytes, geo point or vector | `UNIMPLEMENTED` | The row is dropped |
 | `collectionId` or `parent` of a missing or `null` value | `UNIMPLEMENTED` | `null` |
 | A repeated or non-string `map(...)` key | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
-| A literal `select` value other than a number or an array of numbers | `UNIMPLEMENTED` | Returned as written |
+| A literal `select` value other than a finite number or an array of finite numbers (infinities and NaN included) | `UNIMPLEMENTED` | Returned as written |
 | A quoted reserved alias (`` `__x__` ``), or a reserved name below another field (`a.__x__`) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, or a nested field, as the official emulator answers |
 
 Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.

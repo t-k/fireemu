@@ -7175,6 +7175,88 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
     }
 }
 
+/// FS-ENT-ORACLE O-2 rows over REST, both profiles: a `where` on a non-boolean function result
+/// (`document_id`, `parent`, `array`, `map`) answers 200 with no rows; a stored -0.0 reads back
+/// with its sign; strict answers the literal select values production recorded (integers,
+/// finite doubles, arrays of them) and refuses the other kinds, which the emulator profile
+/// answers.
+#[test]
+fn rest_execute_pipeline_answers_the_o2_rows() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/kinds/d"),
+            json!({"fields": {"b2": {"booleanValue": true}, "nz": {"doubleValue": "-0"}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let run = |stages: Value| {
+            let mut all =
+                vec![json!({"name": "collection", "args": [{"referenceValue": "/kinds"}]})];
+            all.extend(stages.as_array().unwrap().iter().cloned());
+            call(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                pipeline_body(&Value::Array(all)),
+            )
+        };
+        let name = json!({"fieldReferenceValue": "__name__"});
+        let b2 = json!({"fieldReferenceValue": "b2"});
+        for condition in [
+            json!({"functionValue": {"name": "document_id", "args": [name]}}),
+            json!({"functionValue": {"name": "parent", "args": [name]}}),
+            json!({"functionValue": {"name": "array", "args": [b2]}}),
+            json!({"functionValue": {"name": "map", "args": [{"stringValue": "k"}, b2]}}),
+        ] {
+            let (status, body) = run(json!([{"name": "where", "args": [condition]}]));
+            assert_eq!(status, 200, "strict={strict} {condition}: {body}");
+            assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+            assert!(body[0].get("results").is_none(), "strict={strict} {body}");
+        }
+        let select = |v: Value| {
+            run(json!([{"name": "select", "args": [{"mapValue": {"fields": {"v": v}}}]}]))
+        };
+        let (status, body) = select(json!({"fieldReferenceValue": "nz"}));
+        assert_eq!(status, 200, "{body}");
+        let zero = body[0]["results"][0]["fields"]["v"]["doubleValue"]
+            .as_f64()
+            .unwrap();
+        assert!(
+            zero == 0.0 && zero.is_sign_negative(),
+            "strict={strict} {body}"
+        );
+        for literal in [
+            json!({"integerValue": "7"}),
+            json!({"doubleValue": -0.5}),
+            json!({"arrayValue": {"values": [{"integerValue": "1"}, {"arrayValue": {"values": [{"integerValue": "2"}]}}]}}),
+        ] {
+            let (status, body) = select(literal.clone());
+            assert_eq!(status, 200, "strict={strict} {literal}: {body}");
+            assert_eq!(
+                body[0]["results"][0]["fields"]["v"], literal,
+                "strict={strict}"
+            );
+        }
+        for literal in [
+            json!({"stringValue": "x"}),
+            json!({"booleanValue": true}),
+            json!({"nullValue": null}),
+            json!({"doubleValue": "Infinity"}),
+            json!({"mapValue": {"fields": {"a": {"integerValue": "1"}}}}),
+            json!({"arrayValue": {"values": [{"stringValue": "x"}]}}),
+        ] {
+            let (status, body) = select(literal.clone());
+            assert_eq!(
+                status,
+                if strict { 501 } else { 200 },
+                "strict={strict} {literal}: {body}"
+            );
+        }
+    }
+}
+
 /// Owner first, as over gRPC, also on Enterprise; and a body field the request does not have
 /// is refused by the strict transcoder only.
 #[test]
@@ -7449,6 +7531,14 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
         let empty = write("time/b", json!({}));
         let second = query_read_time();
         assert_ne!(second, first, "strict={strict}");
+        // At or after the commit time of the write (both are fireemu's fixed-width RFC 3339
+        // UTC text, so their order is the text order).
+        let committed = empty["updateTime"].as_str().unwrap();
+        assert_eq!(second.len(), committed.len(), "{second} {committed}");
+        assert!(
+            second.as_str() >= committed,
+            "strict={strict}: {second} < {committed}"
+        );
         for times in answers() {
             assert!(!times.is_empty(), "strict={strict}");
             assert!(

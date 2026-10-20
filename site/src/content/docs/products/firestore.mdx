@@ -52,7 +52,7 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 | Construction | `array(...)` and `map(...)` |
 | Document functions | `documentId`, `collectionId` and `parent` |
 
-A `where` keeps a row only when its condition is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and every answer carries the execution time.
+A `where` keeps a row only when its condition (a comparison, a field or another supported function) is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and every answer carries the execution time. A stored `-0.0` reads back as `-0.0`, as in production; the official emulator stores it as `0.0`.
 
 The answers follow production as recorded by fireemu's production observations (comparisons across value types, missing fields, integer and double values compared exactly, select alias rules and refusal texts). Where production has not been observed, the profiles differ:
 
@@ -62,6 +62,8 @@ The answers follow production as recorded by fireemu's production observations (
 | A `where` on a double, timestamp, bytes, geo point or vector | `UNIMPLEMENTED` | The row is dropped |
 | `collectionId` or `parent` of a missing or `null` value | `UNIMPLEMENTED` | `null` |
 | A repeated or non-string `map(...)` key | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
+| A literal `select` value other than a number or an array of numbers | `UNIMPLEMENTED` | Returned as written |
+| A quoted reserved alias (`` `__x__` ``), or a reserved name below another field (`a.__x__`) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, or a nested field, as the official emulator answers |
 
 Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.
 

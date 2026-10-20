@@ -6728,7 +6728,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 pipeline_stage("collection", s("nest")),
                 pipeline_select_map(vec![
                     ("n", name()),
-                    ("lit", s("x")),
+                    ("lit", i(7)),
                     (
                         "gone",
                         pipeline_function("document_id", vec![pipeline_field("missing")]),
@@ -6746,7 +6746,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         docs[0].fields,
         [
             ("n".to_owned(), reference("nest/a")),
-            ("lit".to_owned(), s("x")),
+            ("lit".to_owned(), i(7)),
             (
                 "gone".to_owned(),
                 pb::Value {
@@ -6836,14 +6836,6 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "abs",
                 pipeline_function("abs", vec![pipeline_field("name")]),
             )])],
-            unsupported,
-        ),
-        (
-            "value function as a where condition",
-            vec![pipeline_stage(
-                "where",
-                pipeline_function("document_id", vec![name()]),
-            )],
             unsupported,
         ),
         (
@@ -7068,6 +7060,76 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
                 "The function document_id(...) requires `Reference` but got `STRING`."
             );
         }
+        handle.abort();
+    }
+}
+
+/// FS-ENT-ORACLE O-2 rows over gRPC, both profiles: a `where` on a non-boolean function result
+/// (`document_id`, `parent`, `array`, `map`) answers with no rows, and a stored -0.0 reads back
+/// with its sign.
+#[tokio::test]
+async fn execute_pipeline_answers_the_o2_rows() {
+    let f = pipeline_field;
+    let collection = || pipeline_stage("collection", s("kinds"));
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        let negative_zero = pb::Value {
+            value_type: Some(pb::value::ValueType::DoubleValue(-0.0)),
+        };
+        let flag = pb::Value {
+            value_type: Some(pb::value::ValueType::BooleanValue(true)),
+        };
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "kinds/d",
+                    &[("b2", flag), ("nz", negative_zero)],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for condition in [
+            pipeline_function("document_id", vec![f("__name__")]),
+            pipeline_function("parent", vec![f("__name__")]),
+            pipeline_function("array", vec![f("b2")]),
+            pipeline_function("map", vec![s("k"), f("b2")]),
+        ] {
+            let docs = drain_pipeline(
+                client
+                    .execute_pipeline(pipeline_request(vec![
+                        collection(),
+                        pipeline_stage("where", condition),
+                    ]))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                1,
+            )
+            .await;
+            assert!(docs.is_empty(), "{policy:?}");
+        }
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(vec![
+                    collection(),
+                    pipeline_select_map(vec![("v", f("nz"))]),
+                ]))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        let Some(pb::value::ValueType::DoubleValue(zero)) = docs[0].fields["v"].value_type else {
+            panic!("{docs:?}")
+        };
+        assert!(zero == 0.0 && zero.is_sign_negative(), "{policy:?}");
         handle.abort();
     }
 }
@@ -7315,10 +7377,6 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
     };
     let invalid = [
         (
-            "invalid path",
-            stages(vec![("a..b", pipeline_field("top"))]),
-        ),
-        (
             "document name",
             stages(vec![("__name__", pipeline_field("top"))]),
         ),
@@ -7348,14 +7406,6 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         (
             "reserved-looking",
             stages(vec![("__x__", pipeline_field("top"))]),
-        ),
-        (
-            "quoted reserved name",
-            stages(vec![("`__x__`", pipeline_field("top"))]),
-        ),
-        (
-            "quoted document name",
-            stages(vec![("`__name__`", pipeline_field("top"))]),
         ),
     ];
     for policy in [
@@ -7435,6 +7485,53 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                 "FS_PIPE_INVALID",
                 "{label}"
             );
+        }
+        // Alias shapes production has not answered: strict refuses them as unobserved; the
+        // emulator profile answers as the official emulator does (a quoted reserved name is
+        // refused, a reserved name below another field is a nested key).
+        let strict = policy == IndexValidationPolicy::Production;
+        for (alias, official) in [
+            ("a..b", Some("Invalid property path")),
+            (
+                "`__x__`",
+                Some("Stage 'select': field name '__x__' is reserved."),
+            ),
+            (
+                "`__name__`",
+                Some(
+                    "Stage 'select': field name '__name__' is reserved and can not be overwritten.",
+                ),
+            ),
+            ("a.__x__", None),
+            ("a.__name__", None),
+        ] {
+            let request = stages(vec![(alias, pipeline_field("top"))]);
+            if strict {
+                let err = pipeline_error(&mut client, request).await;
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{alias}: {err}");
+            } else if let Some(text) = official {
+                let err = pipeline_error(&mut client, request).await;
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{alias}: {err}");
+                assert!(err.message().starts_with(text), "{alias}: {err}");
+            } else {
+                let docs = drain_pipeline(
+                    client
+                        .execute_pipeline(pipeline_request(request))
+                        .await
+                        .unwrap()
+                        .into_inner(),
+                    1,
+                )
+                .await;
+                let leaf = alias.trim_start_matches("a.");
+                assert_eq!(
+                    docs[0].fields,
+                    [("a".to_owned(), map(&[(leaf, s("t"))]))]
+                        .into_iter()
+                        .collect(),
+                    "{alias}"
+                );
+            }
         }
         handle.abort();
     }

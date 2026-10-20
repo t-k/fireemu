@@ -648,9 +648,9 @@ fn decode_operand(
     }
 }
 
-/// Decodes `where(condition)`: a field (production keeps the rows where it is `true`), a
-/// call of a table function that returns a boolean, or (under the emulator profile, as the
-/// official emulator answers it) a literal. An `equal(field, scalar literal)` also gives the
+/// Decodes `where(condition)`: a field or a call of a table function (production keeps the
+/// rows where it is `true`), or (under the emulator profile, as the official emulator answers
+/// it) a literal. An `equal(field, scalar literal)` also gives the
 /// same filter the `RunQuery` lowering sends, for the scan to apply before it copies
 /// documents.
 fn decode_condition(
@@ -675,12 +675,17 @@ fn decode_condition(
             ))
         }
     };
-    let Some(def) = pipeline_exec::function(&function.name).filter(|def| def.returns_boolean)
-    else {
+    let Some(def) = pipeline_exec::function(&function.name) else {
         return Err(Status::unimplemented(
             "where expression is unsupported locally",
         ));
     };
+    if !def.returns_boolean {
+        // A function of another value: production drops the row for the kinds it recorded
+        // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
+        // cursor decides by the value's kind.
+        return Ok((decode_operand(condition, unrecorded, false)?, None));
+    }
     // Every boolean function of the table is a comparison of two arguments; the wording is
     // the finite subset's.
     if def.arity != Arity::Exact(function.args.len()) || !function.options.is_empty() {
@@ -741,21 +746,14 @@ fn decode_select(
                 "select expressions are unsupported locally",
             ));
         }
-        // Production's texts (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`), which the
-        // official emulator answers too. A path refuses reserved names but `__name__`.
-        let path = FieldPath::parse(alias).map_err(|_| {
-            Status::invalid_argument(if alias.split('.').any(is_reserved_name) {
-                format!("Stage 'select': field name '{alias}' is reserved.")
-            } else {
-                format!(
-                    r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
-                )
-            })
-        })?;
-        if path.is_document_name() {
-            return Err(Status::invalid_argument(format!(
-                "Stage 'select': field name '{alias}' is reserved and can not be overwritten."
-            )));
+        let path = decode_alias(alias, unrecorded)?;
+        if unrecorded == Unrecorded::Refuse
+            && is_literal(value)
+            && !is_recorded_select_literal(value)
+        {
+            return Err(Status::unimplemented(
+                "a select value literal of this kind is not observed locally",
+            ));
         }
         aliases.push((alias, path, decode_operand(value, unrecorded, true)?));
     }
@@ -782,6 +780,60 @@ fn decode_select(
         .into_iter()
         .map(|(_, path, expr)| (path, expr))
         .collect())
+}
+
+/// Reads a select alias as a field path. Production's refusals are recorded for a single
+/// unquoted segment (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`): an invalid name, a
+/// reserved `__x__` and `__name__`; their texts are production's, which the official emulator
+/// answers too. The official emulator also refuses a quoted reserved name, and accepts a
+/// reserved name below another field (`a.__x__`, `a.__name__`); production has not answered
+/// those shapes, nor an invalid quoted or dotted alias, so strict refuses them as unobserved.
+fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
+    let strict = unrecorded == Unrecorded::Refuse;
+    let unobserved = || {
+        Status::unimplemented(format!(
+            "select alias {alias:?}: this alias shape is not observed locally"
+        ))
+    };
+    let plain = !alias.contains(['.', '`']);
+    let path = match FieldPath::parse_allowing_reserved(alias) {
+        Ok(path) => path,
+        Err(_) if strict && !plain => return Err(unobserved()),
+        Err(_) => {
+            return Err(Status::invalid_argument(format!(
+                r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+            )))
+        }
+    };
+    let reserved = path
+        .segments()
+        .iter()
+        .any(|segment| is_reserved_name(segment));
+    match path.segments() {
+        _ if !reserved => Ok(path),
+        _ if strict && !plain => Err(unobserved()),
+        [name] if name == "__name__" => Err(Status::invalid_argument(format!(
+            "Stage 'select': field name '{name}' is reserved and can not be overwritten."
+        ))),
+        [name] => Err(Status::invalid_argument(format!(
+            "Stage 'select': field name '{name}' is reserved."
+        ))),
+        // A reserved name below another field, as the official emulator answers it.
+        _ => Ok(path),
+    }
+}
+
+/// The literal select values production answered (FS-ENT-ORACLE O-1
+/// `px1/select#constant-nested-array`, `[1, [2]]`): integers, finite doubles and arrays of them.
+/// Strict refuses literal select values of other kinds until production answers them.
+fn is_recorded_select_literal(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::IntegerValue(_)) => true,
+        Some(V::DoubleValue(d)) => d.is_finite(),
+        Some(V::ArrayValue(array)) => array.values.iter().all(is_recorded_select_literal),
+        _ => false,
+    }
 }
 
 /// The most fields one `select` stage sets.

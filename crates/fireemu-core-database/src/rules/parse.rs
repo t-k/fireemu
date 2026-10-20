@@ -483,7 +483,8 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
 }
 
 /// The deepest nesting of operands in an expression (each group, unary operator, call
-/// argument and index adds one, and the innermost operand counts too). Past it the
+/// argument, index and operator of a chain adds one, and the innermost operand counts too).
+/// Past it the
 /// expression is refused with "Rule expression may not be empty.", the text the official
 /// emulator gives to 1,000 nested groups. The official emulator loads up to 600 groups and
 /// 1,000 `!`; fireemu stops at 256, a local safety budget, so that evaluating a rule on a
@@ -597,6 +598,8 @@ impl Parser<'_> {
 
     fn binary(&mut self, min_level: u8) -> Result<Expr, ExprError> {
         let mut left = self.unary()?;
+        // Each operator of a chain nests the operands before it one level deeper.
+        let mut chained = 0;
         loop {
             let (op, level) = match self.peek()? {
                 (_, Token::Punct(p)) => match *p {
@@ -629,6 +632,10 @@ impl Parser<'_> {
             }
             self.next()?;
             let right = self.binary(level)?;
+            chained += 1;
+            if self.depth + chained >= MAX_EXPRESSION_DEPTH {
+                return Err(ExprError::new(0, "Rule expression may not be empty."));
+            }
             left = Expr {
                 at: left.at,
                 kind: ExprKind::Binary(op, Box::new(left), Box::new(right)),

@@ -606,3 +606,42 @@ mod properties {
         }
     }
 }
+
+#[test]
+fn expressions_nest_at_most_256_operands() {
+    // Loading recurses once per level, so it runs where the adapter runs it: on a thread
+    // with room for the bound.
+    let load = |text: String| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || Rules::compile(&read_rule_at_t(&text)).map(|_| ()))
+            .unwrap()
+            .join()
+            .unwrap()
+    };
+    let groups = |n: usize| format!("{}true{}", "(".repeat(n), ")".repeat(n));
+    assert!(load(groups(255)).is_ok());
+    assert!(load(format!("{}true", "!".repeat(255))).is_ok());
+    for deep in [
+        groups(256),
+        format!("{}true", "!".repeat(256)),
+        groups(10_000),
+    ] {
+        assert_eq!(
+            load(deep).unwrap_err().message,
+            "Rule expression may not be empty."
+        );
+    }
+    // A chain nests its operands too: 256 operands load, 257 do not, and neither do 100,000.
+    let chain = |n: usize| vec!["true"; n].join(" && ");
+    assert!(load(chain(256)).is_ok());
+    for long in [chain(257), chain(100_000)] {
+        assert_eq!(
+            load(long).unwrap_err().message,
+            "Rule expression may not be empty."
+        );
+    }
+    // Nesting is counted along each path, not over the whole: groups side by side load.
+    let wide = format!("{} && {}", groups(200), groups(200));
+    assert!(load(wide).is_ok());
+}

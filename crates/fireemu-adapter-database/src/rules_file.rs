@@ -554,6 +554,11 @@ mod tests {
         ] {
             assert!(compile(text).is_ok(), "{text}");
         }
+        // Depth counts nesting, not width: 1,100 sibling levels below a 900-deep one load.
+        let deep = format!("{}{{}}{}", r#"{"a":"#.repeat(900), "}".repeat(900));
+        let siblings: Vec<String> = (0..1100).map(|i| format!(r#""k{i}":{{}}"#)).collect();
+        let wide = format!(r#"{{"rules":{{"d":{deep},{}}}}}"#, siblings.join(","));
+        assert!(compile(&wide).is_ok());
         let spec = read(r#"{"rules":{"q":{".indexOn":["n","m"]}}}"#).unwrap();
         assert_eq!(
             spec.children["q"].index_on,

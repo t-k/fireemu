@@ -2632,5 +2632,68 @@
   "load": 400,
   "error": "1:37: Illegal regular expression, expected '}' at position 5\n",
   "read": null
+ },
+ {
+  "expr": "'a'.matches(/[{]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[a(]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/[\\\\](]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[]a]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/[^)]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/[]{]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[a]{]/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, integer expected at position 6\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/[{]{2}/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[\\\\]]{x}/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, integer expected at position 8\n",
+  "read": null
  }
 ]

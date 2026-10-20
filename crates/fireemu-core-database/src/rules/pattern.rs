@@ -101,6 +101,14 @@ mod tests {
     }
 
     #[test]
+    fn patterns_are_equal_by_text_and_flags() {
+        let pattern = |text: &str, flags: &str| Pattern::new(text.to_owned(), flags.to_owned());
+        assert_eq!(pattern("a", ""), pattern("a", ""));
+        assert_ne!(pattern("a", ""), pattern("a", "i"));
+        assert_ne!(pattern("a", ""), pattern("b", ""));
+    }
+
+    #[test]
     fn patterns_search_unless_anchored() {
         assert_eq!(matches("b", "abc"), Some(true));
         assert_eq!(matches("^b", "abc"), Some(false));

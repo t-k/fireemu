@@ -1483,3 +1483,23 @@ fn the_rules_come_before_the_index() {
     let no_index = send(&mut db, &mut session, 3, "g", r#"{"p":"/o","q":{"i":"n"}}"#);
     assert!(no_index[0].contains(r#""s":"no_index""#), "{no_index:?}");
 }
+
+#[test]
+fn a_long_chain_is_evaluated_on_a_worker_stack() {
+    on_worker_stack(|| {
+        let mut db = db();
+        let chain = vec!["auth == null"; 200].join(" && ");
+        let body = format!(r#"{{"rules":{{".read":"{chain}"}}}}"#);
+        assert_eq!(
+            call(&mut db, "PUT", "/.settings/rules.json?ns=ch", OWNER, &body).0,
+            200
+        );
+        assert_eq!(call(&mut db, "GET", "/.json?ns=ch", &[], "").0, 200);
+        let long = vec!["true"; 100_000].join(" && ");
+        let body = format!(r#"{{"rules":{{".read":"{long}"}}}}"#);
+        assert_eq!(
+            call(&mut db, "PUT", "/.settings/rules.json?ns=ch", OWNER, &body).0,
+            400
+        );
+    });
+}

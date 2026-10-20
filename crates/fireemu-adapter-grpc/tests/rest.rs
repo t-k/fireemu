@@ -338,6 +338,41 @@ fn document_crud_over_rest() {
     assert_eq!(err[fireemu_adapter_grpc::rest::TEXT_KEY], "Not Found\n");
 }
 
+/// A geo point with a zero coordinate: REST leaves the zero out, as production answered the
+/// point (0, 1) (FS-ENT-ORACLE O-3, `{"longitude": 1}`), and reads a left-out coordinate as
+/// zero, as proto3 JSON reads a default; a geo point that is no object is refused.
+#[test]
+fn rest_geo_points_leave_out_zero_coordinates() {
+    let s = state(None);
+    for (written, read) in [
+        (
+            json!({"latitude": 0, "longitude": 1}),
+            json!({"longitude": 1.0}),
+        ),
+        (json!({"longitude": 1}), json!({"longitude": 1.0})),
+        (json!({"latitude": -2.5}), json!({"latitude": -2.5})),
+        (json!({}), json!({})),
+    ] {
+        let (status, created) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/geo/p"),
+            json!({"fields": {"g": {"geoPointValue": written.clone()}}}),
+        );
+        assert_eq!(status, 200, "{written}: {created}");
+        let (status, got) = call(&s, "GET", &format!("{DOCS}/geo/p"), Value::Null);
+        assert_eq!(status, 200, "{got}");
+        assert_eq!(got["fields"]["g"]["geoPointValue"], read, "{written}");
+    }
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/geo/p"),
+        json!({"fields": {"g": {"geoPointValue": 5}}}),
+    );
+    assert_eq!(status, 400, "{body}");
+}
+
 #[test]
 fn rest_round_trips_all_standard_value_types_and_preserves_refused_writes() {
     let s = state(None);

@@ -772,14 +772,12 @@ fn decode_condition(
     let Some(condition) = stage.args.first() else {
         return Err(Status::invalid_argument("where requires a condition"));
     };
-    let function = match condition.value_type.as_ref() {
-        Some(V::FunctionValue(function)) => function,
-        // A field, or a literal: production kept the row for `true` and dropped it for a
-        // constant of every other kind (FS-ENT-ORACLE O-3 and O-4,
-        // `comparisons#where-constant-*`, `conditions#where-*`), and refused a literal holding
-        // a field or function as it does anywhere (O-4 `literals#*`); the operand decoder answers
-        // each.
-        _ => return Ok((decode_operand(condition, unrecorded)?, None)),
+    // A field, or a literal: production kept the row for `true` and dropped it for a constant
+    // of every other kind (FS-ENT-ORACLE O-3 and O-4, `comparisons#where-constant-*`,
+    // `conditions#where-*`), and refused a literal holding a field or function as it does
+    // anywhere (O-4 `literals#*`); the operand decoder answers each.
+    let Some(V::FunctionValue(function)) = condition.value_type.as_ref() else {
+        return Ok((decode_operand(condition, unrecorded)?, None));
     };
     let Some(def) = pipeline_exec::function(&function.name) else {
         return Err(Status::unimplemented(

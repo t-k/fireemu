@@ -536,6 +536,19 @@ fn answer_text(
         .database
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
+    // A connection `deliver` dropped for falling behind has ended: its onDisconnect writes
+    // have fired, so nothing it still sends may be answered or applied after them.
+    let registered = shared
+        .listeners
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains_key(&session.client());
+    if !registered {
+        return Received {
+            drop_connection: true,
+            ..Received::default()
+        };
+    }
     let mut earlier = Vec::new();
     while let Some(message) = pushes.try_recv() {
         earlier.extend(split_frames(message));
@@ -718,6 +731,54 @@ mod tests {
     ) -> Vec<String> {
         let prepared = session.prepare(frame).unwrap();
         answer_text(shared, session, pushes, prepared).replies
+    }
+
+    #[test]
+    fn a_connection_dropped_for_falling_behind_answers_nothing_more() {
+        let shared = shared();
+        let (mut session, mut pushes) = connect(&shared);
+        let frame = |r: u64, action: &str, body: &str| {
+            format!(r#"{{"t":"d","d":{{"r":{r},"a":"{action}","b":{body}}}}}"#)
+        };
+        send(
+            &shared,
+            &mut session,
+            &mut pushes,
+            &frame(1, "o", r#"{"p":"/state","d":"offline"}"#),
+        );
+        // `deliver` drops a connection whose queue is full: its listener goes and its
+        // onDisconnect writes fire, from another connection's task.
+        {
+            let mut database = shared.database.lock().unwrap();
+            shared.listeners.lock().unwrap().remove(&session.client());
+            database.close_realtime(session.client(), 1);
+        }
+        // Frames the dropped connection still reads are not answered or applied.
+        let received = {
+            let prepared = session
+                .prepare(&frame(2, "p", r#"{"p":"/state","d":"online"}"#))
+                .unwrap();
+            answer_text(&shared, &mut session, &mut pushes, prepared)
+        };
+        assert!(received.replies.is_empty());
+        assert!(received.drop_connection);
+        let prepared = session
+            .prepare(&frame(3, "o", r#"{"p":"/again","d":1}"#))
+            .unwrap();
+        assert!(answer_text(&shared, &mut session, &mut pushes, prepared).drop_connection);
+        let mut database = shared.database.lock().unwrap();
+        database.close_realtime(session.client(), 2);
+        let tree = database.tree("o").unwrap();
+        assert_eq!(
+            tree.get_json(
+                &fireemu_core_database::Path::root(),
+                fireemu_core_database::Format::Export
+            ),
+            fireemu_core_database::Json::object([(
+                "state",
+                fireemu_core_database::Json::string("offline")
+            )])
+        );
     }
 
     #[test]

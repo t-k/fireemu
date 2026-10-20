@@ -572,8 +572,8 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
     }
 }
 
-/// The literal shape production refused with "Value type is not supported:
-/// FIELD_REFERENCE_VALUE" (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px1/select#map-literal`): a map
+/// The literal shape production refused with `Value type is not supported:
+/// FIELD_REFERENCE_VALUE` (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px1/select#map-literal`): a map
 /// literal whose entries are all field references, as a select value.
 fn is_recorded_map_literal(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;

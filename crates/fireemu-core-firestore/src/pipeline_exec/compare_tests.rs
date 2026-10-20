@@ -246,7 +246,7 @@ fn strict_answers_the_recorded_cells_of_the_official_matrix() {
     assert!(answered > 100, "{answered}");
 }
 
-/// The cells the PX1a round-2 review named as inferred stay unobserved under strict until a
+/// The cells the `PX1a` round-2 review named as inferred stay unobserved under strict until a
 /// production recording answers them (FS-ENT-ORACLE O-2); the emulator profile answers them.
 #[test]
 fn strict_refuses_the_cells_production_has_not_answered() {
@@ -400,14 +400,12 @@ fn strict_answers_the_classic_field_versus_literal_shapes() {
         )
         .eval_condition_in(&r, Unrecorded::Refuse)
     ));
-    // Null, NaN, arrays and maps are not ordered by a classic filter.
+    // Null is not ordered by a classic filter.
     let n = row(vec![("n".to_owned(), Value::Null)]);
-    for literal in [Value::Null] {
-        assert!(unobserved(
-            &call("less_than", vec![field("n"), Expr::Constant(literal)])
-                .eval_in(&n, Unrecorded::Refuse)
-        ));
-    }
+    assert!(unobserved(
+        &call("less_than", vec![field("n"), Expr::Constant(Value::Null)])
+            .eval_in(&n, Unrecorded::Refuse)
+    ));
     // A refused comparison names itself.
     for op in OPS {
         let got = call(op, vec![field("s"), field("g")]).eval_in(&r, Unrecorded::Refuse);

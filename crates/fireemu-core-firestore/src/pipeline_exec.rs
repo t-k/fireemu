@@ -279,7 +279,7 @@ impl Expr {
     }
 
     /// A field, or a document function of an operand or a literal: the operands the finite
-    /// subset compared with a literal before PX1a, whose classic-shaped comparisons strict
+    /// subset compared with a literal before `PX1a`, whose classic-shaped comparisons strict
     /// keeps answering.
     fn is_operand(&self) -> bool {
         match self {

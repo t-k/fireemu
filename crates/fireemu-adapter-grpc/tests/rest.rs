@@ -7220,6 +7220,7 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
 /// finite doubles, arrays of them) and refuses the other kinds, which the emulator profile
 /// answers.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rest_execute_pipeline_answers_the_o2_rows() {
     for strict in [true, false] {
         let s = enterprise_state(strict, None);

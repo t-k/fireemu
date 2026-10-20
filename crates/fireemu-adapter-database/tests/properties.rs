@@ -214,6 +214,9 @@ fn malformed_escapes_stay_as_they_are() {
     assert_eq!(percent_decode("a%"), "a%");
     assert_eq!(percent_decode("%zz%41"), "%zzA");
     assert_eq!(percent_decode("%41%"), "A%");
+    // A sign is not a hexadecimal digit (u8::from_str_radix would read "+f" as 15).
+    assert_eq!(percent_decode("%+f"), "%+f");
+    assert_eq!(percent_decode("%-1"), "%-1");
 }
 
 proptest! {

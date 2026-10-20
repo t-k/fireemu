@@ -1271,9 +1271,12 @@ pub struct RuntimeConfig {
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
     /// `database.defaultAccess`: what a Realtime Database without rules allows.
     pub database_default_access: DatabaseDefaultAccess,
-    /// The rules files the `database` section of `firebase.json` names, which are not
-    /// evaluated yet (a warning says so when the database is served).
-    pub database_rules: Vec<String>,
+    /// The rules files the `database` section of `firebase.json` names, and where each
+    /// applies.
+    pub database_rules: Vec<DatabaseRulesEntry>,
+    /// The instance and rules file of each `database` rules file once the project is known,
+    /// in load order (`database_rules_by_instance`).
+    pub database_rules_resolved: Vec<(String, String)>,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -1376,8 +1379,8 @@ impl AppCheckDebugTokens {
 
 /// `database.defaultAccess`: what a Realtime Database without a rules file allows.
 ///
-/// The official emulator allows everything without rules, and fireemu does not evaluate rules
-/// files yet (RTDB-03), so both profiles default to `open`. A new production database in
+/// The official emulator allows everything in an instance without rules, so both profiles
+/// default to `open`; an instance with a rules file follows its rules. A new production database in
 /// locked mode refuses everyone but administrators; `productionExact` asks for that
 /// (`locked`): only the emulator's `owner` credential, the administrator the official tooling
 /// uses, gets through (owner decision Q4, ledger 1471).
@@ -1388,6 +1391,26 @@ pub enum DatabaseDefaultAccess {
     Open,
     /// Only the `owner` credential is allowed.
     Locked,
+}
+
+/// A rules file of the `database` section of `firebase.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseRulesEntry {
+    /// The file, resolved against the directory of `firebase.json`.
+    pub file: String,
+    /// Where it applies.
+    pub scope: DatabaseRulesScope,
+}
+
+/// Where a `database` rules file applies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatabaseRulesScope {
+    /// The single form: the project's default instance (`<project>-default-rtdb`).
+    Default,
+    /// An array entry naming an instance.
+    Instance(String),
+    /// An array entry naming a deploy target, resolved through `.firebaserc`.
+    Target(String),
 }
 
 impl DatabaseDefaultAccess {
@@ -1694,6 +1717,7 @@ impl Default for RuntimeConfig {
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
             database_default_access: DatabaseDefaultAccess::Open,
             database_rules: Vec::new(),
+            database_rules_resolved: Vec::new(),
             pubsub_push_minimum_redelivery_interval_millis:
                 fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
@@ -3073,7 +3097,7 @@ impl RuntimeConfig {
         };
         self.apply_firestore(obj.get("firestore"), &file, &mut report)?;
         self.apply_storage(obj.get("storage"), &file, &mut report)?;
-        self.database_rules = Self::apply_database(obj.get("database"))?;
+        self.database_rules = Self::apply_database(obj.get("database"), &file)?;
         self.apply_functions(obj.get("functions"), base, only, &mut report)?;
         if let Some(emulators) = obj.get("emulators") {
             let emulators = emulators.as_object().ok_or_else(|| {
@@ -3304,16 +3328,19 @@ impl RuntimeConfig {
         Ok(())
     }
 
-    /// `storage`, in object or array (multi-bucket) form.
     /// Checks the `database` section (one entry, or an array of entries naming their
-    /// `instance` or `target`). The rules files it names are not evaluated yet (RTDB-03):
-    /// requests are answered as without rules, which the startup notice says.
-    /// Checks the `database` section and returns the rules files it names.
-    fn apply_database(section: Option<&Value>) -> Result<Vec<String>, ConfigError> {
+    /// `instance` or `target`) and returns the rules files it names, as firebase-tools
+    /// 15.28.2 reads them: the single form applies to the project's default instance whatever
+    /// else it says, and an array entry applies to its target's instances, else to its
+    /// instance. A single form without rules, or an empty array, names none.
+    fn apply_database(
+        section: Option<&Value>,
+        file: &dyn Fn(&Value, &str) -> Result<String, ConfigError>,
+    ) -> Result<Vec<DatabaseRulesEntry>, ConfigError> {
         let entries: Vec<(&serde_json::Map<String, Value>, String)> = match section {
             None => return Ok(Vec::new()),
             Some(Value::Object(o)) => vec![(o, "database".to_owned())],
-            Some(Value::Array(a)) if !a.is_empty() => a
+            Some(Value::Array(a)) => a
                 .iter()
                 .enumerate()
                 .map(|(i, e)| {
@@ -3324,11 +3351,6 @@ impl RuntimeConfig {
                         })
                 })
                 .collect::<Result<_, _>>()?,
-            Some(Value::Array(_)) => {
-                return Err(ConfigError(
-                    "firebase.json: database must contain at least one entry".to_owned(),
-                ))
-            }
             Some(_) => {
                 return Err(ConfigError(
                     "firebase.json: database must be an object or an array".to_owned(),
@@ -3346,19 +3368,15 @@ impl RuntimeConfig {
                     "firebase.json: unknown key {path}.{key}"
                 )));
             }
-            match entry.get("rules") {
-                Some(Value::String(file)) => rules.push(file.clone()),
-                Some(_) => {
-                    return Err(ConfigError(format!(
-                        "firebase.json: {path}.rules must be a string"
-                    )))
-                }
-                None => {
+            let rules_file = match entry.get("rules") {
+                Some(value) => Some(file(value, &format!("{path}.rules"))?),
+                None if array_form => {
                     return Err(ConfigError(format!(
                         "firebase.json: {path}.rules is required"
                     )))
                 }
-            }
+                None => None,
+            };
             if entry.get("instance").is_some_and(|v| !v.is_string()) {
                 return Err(ConfigError(format!(
                     "firebase.json: {path}.instance must be a string"
@@ -3369,13 +3387,66 @@ impl RuntimeConfig {
                     "firebase.json: {path}.target must be a string"
                 )));
             }
-            if array_form && !entry.contains_key("instance") && !entry.contains_key("target") {
+            let scope = if !array_form {
+                DatabaseRulesScope::Default
+            } else if let Some(Value::String(target)) = entry.get("target") {
+                DatabaseRulesScope::Target(target.clone())
+            } else if let Some(Value::String(instance)) = entry.get("instance") {
+                DatabaseRulesScope::Instance(instance.clone())
+            } else {
                 return Err(ConfigError(format!(
                     "firebase.json: {path} must name an instance or a target"
                 )));
+            };
+            if let Some(file) = rules_file {
+                rules.push(DatabaseRulesEntry { file, scope });
             }
         }
         Ok(rules)
+    }
+
+    /// The instance each `database` rules file applies to, in the order firebase-tools loads
+    /// them (a later file for the same instance replaces an earlier one). Targets resolve
+    /// through `.firebaserc.targets[project].database`.
+    pub fn database_rules_by_instance(
+        &self,
+        rc: Option<&Value>,
+        project: &str,
+    ) -> Result<Vec<(String, String)>, ConfigError> {
+        let mut out = Vec::new();
+        for entry in &self.database_rules {
+            match &entry.scope {
+                DatabaseRulesScope::Default => {
+                    out.push((format!("{project}-default-rtdb"), entry.file.clone()));
+                }
+                DatabaseRulesScope::Instance(instance) => {
+                    out.push((instance.clone(), entry.file.clone()));
+                }
+                DatabaseRulesScope::Target(target) => {
+                    let instances = rc
+                        .and_then(|rc| rc.get("targets"))
+                        .and_then(|targets| targets.get(project))
+                        .and_then(|targets| targets.get("database"))
+                        .and_then(|targets| targets.get(target))
+                        .and_then(Value::as_array)
+                        .filter(|instances| !instances.is_empty())
+                        .ok_or_else(|| {
+                            ConfigError(format!(
+                                "Deploy target {target} not configured for project {project}. Configure with:\n\n  firebase target:apply database {target} <resources...>"
+                            ))
+                        })?;
+                    for (index, instance) in instances.iter().enumerate() {
+                        let instance = instance.as_str().ok_or_else(|| {
+                            ConfigError(format!(
+                                ".firebaserc: targets.{project}.database.{target}[{index}] must be a string"
+                            ))
+                        })?;
+                        out.push((instance.to_owned(), entry.file.clone()));
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn apply_storage(
@@ -8593,7 +8664,13 @@ mod tests {
             .unwrap();
         assert!(cfg.database_enabled);
         assert_eq!(cfg.database_addr, "127.0.0.1:9010");
-        assert_eq!(cfg.database_rules, vec!["database.rules.json".to_owned()]);
+        assert_eq!(
+            cfg.database_rules,
+            vec![DatabaseRulesEntry {
+                file: "/proj/database.rules.json".to_owned(),
+                scope: DatabaseRulesScope::Default,
+            }]
+        );
         assert!(report.notices.is_empty(), "{:?}", report.notices);
         // The deploy hooks firebase-tools 15.28.2 accepts belong to `firebase deploy`.
         for ok in [
@@ -8615,12 +8692,11 @@ mod tests {
                 json!({"database": 1}),
                 "database must be an object or an array",
             ),
-            (
-                json!({"database": []}),
-                "database must contain at least one entry",
-            ),
             (json!({"database": [1]}), "database[0] must be an object"),
-            (json!({"database": {}}), "database.rules is required"),
+            (
+                json!({"database": [{"instance": "i"}]}),
+                "database[0].rules is required",
+            ),
             (
                 json!({"database": {"rules": 1}}),
                 "database.rules must be a string",
@@ -8648,6 +8724,75 @@ mod tests {
             .apply_firebase_json(&json!({}), base, &Selection::default())
             .unwrap();
         assert!(quiet.notices.is_empty(), "{:?}", quiet.notices);
+    }
+
+    #[test]
+    fn database_rules_files_apply_where_firebase_tools_loads_them() {
+        let base = std::path::Path::new("/proj");
+        let resolved = |firebase: Value, rc: Option<Value>| {
+            let mut cfg = RuntimeConfig::default();
+            cfg.apply_firebase_json(&firebase, base, &Selection::default())
+                .unwrap();
+            cfg.database_rules_by_instance(rc.as_ref(), "demo-p")
+        };
+        // The single form applies to the default instance whatever else it names.
+        assert_eq!(
+            resolved(
+                json!({"database": {"rules": "r.json", "instance": "x", "target": "t"}}),
+                None
+            )
+            .unwrap(),
+            vec![("demo-p-default-rtdb".to_owned(), "/proj/r.json".to_owned())]
+        );
+        // Without rules, or with an empty array, there are none (firebase-tools accepts both).
+        for none in [json!({"database": {}}), json!({"database": []})] {
+            assert_eq!(resolved(none.clone(), None).unwrap(), Vec::new(), "{none}");
+        }
+        // An array entry applies to its target's instances, else to its instance, in order.
+        let rc = json!({"targets": {"demo-p": {"database": {"main": ["m1", "m2"]}}}});
+        assert_eq!(
+            resolved(
+                json!({"database": [
+                    {"instance": "i1", "rules": "a.json"},
+                    {"target": "main", "instance": "ignored", "rules": "b.json"},
+                    {"instance": "m1", "rules": "c.json"}
+                ]}),
+                Some(rc)
+            )
+            .unwrap(),
+            vec![
+                ("i1".to_owned(), "/proj/a.json".to_owned()),
+                ("m1".to_owned(), "/proj/b.json".to_owned()),
+                ("m2".to_owned(), "/proj/b.json".to_owned()),
+                ("m1".to_owned(), "/proj/c.json".to_owned()),
+            ]
+        );
+        // A target that names no instances stops the start, as firebase-tools does.
+        for rc in [
+            None,
+            Some(json!({"targets": {"demo-p": {"database": {"main": []}}}})),
+            Some(json!({"targets": {"other": {"database": {"main": ["m"]}}}})),
+        ] {
+            let error = resolved(
+                json!({"database": [{"target": "main", "rules": "b.json"}]}),
+                rc.clone(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.0,
+                "Deploy target main not configured for project demo-p. Configure with:\n\n  firebase target:apply database main <resources...>",
+                "{rc:?}"
+            );
+        }
+        let error = resolved(
+            json!({"database": [{"target": "main", "rules": "b.json"}]}),
+            Some(json!({"targets": {"demo-p": {"database": {"main": [1]}}}})),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.0,
+            ".firebaserc: targets.demo-p.database.main[0] must be a string"
+        );
     }
 
     #[test]

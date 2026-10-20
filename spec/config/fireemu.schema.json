@@ -849,7 +849,7 @@
         "defaultAccess": {
           "enum": ["open", "locked"],
           "default": "open",
-          "description": "What a database without a rules file allows. fireemu does not evaluate Realtime Database rules files yet. \"open\" (development default, as the official emulator): every request. \"locked\" (productionExact; strict profile only): only the emulator's owner credential (Authorization: Bearer owner), as a new production database in locked mode admits only administrators."
+          "description": "What a database instance without a rules file allows; an instance with one follows its rules. \"open\" (development default, as the official emulator): every request. \"locked\" (productionExact; strict profile only): only the emulator's owner credential (Authorization: Bearer owner), as a new production database in locked mode admits only administrators."
         }
       }
     },

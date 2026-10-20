@@ -592,6 +592,22 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         },
         cfg.seed ^ 0x5254_4442,
     )));
+    // The rules files of `firebase.json`, each in its instance; one that does not load stops
+    // the start, as firebase-tools does, and a change is loaded again.
+    if !cfg.database_rules_resolved.is_empty() {
+        crate::database_rules::load_initial(
+            &realtime_database,
+            &cfg.database_rules_resolved,
+            clock_millis(&clock),
+        )?;
+        let database_clock = clock.clone();
+        crate::database_rules::start_reload_supervisors(
+            &realtime_database,
+            &cfg.database_rules_resolved,
+            &(Arc::new(move || clock_millis(&database_clock))
+                as Arc<dyn Fn() -> i64 + Send + Sync>),
+        );
+    }
     {
         // Without a retry policy production redelivers as soon as possible, which is the default
         // here too. `pubsub.pushMinimumRedeliveryIntervalMillis` is the opt-in protection against
@@ -1249,13 +1265,6 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         }
         locator
     });
-    if addrs.database.is_some() && !cfg.database_rules.is_empty() {
-        eprintln!(
-            "warning: database: the rules in {} are not enforced (fireemu does not evaluate Realtime Database rules yet), so {}",
-            cfg.database_rules.join(", "),
-            crate::database_access(&cfg)
-        );
-    }
     if !quiet {
         print_banner(
             &cfg,

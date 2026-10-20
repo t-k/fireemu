@@ -838,6 +838,7 @@ mod tests {
                     | "config_show"
                     | "resolve_project_alias"
                     | "resolve_storage_rules_targets"
+                    | "database_rules_by_instance"
             ) {
                 continue;
             }

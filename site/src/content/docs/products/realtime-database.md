@@ -22,11 +22,11 @@ npx fireemu exec --only database -- npm test
 
 ## Security Rules
 
-Rules are not evaluated yet. A `database` section in `firebase.json` is accepted (its deploy hooks too), the start banner has a `database rules:` line saying what access is in effect, a served database whose `firebase.json` names rules files prints a warning that they are not enforced, and every request is answered as for a database without rules. By default that is open to everyone, as the official emulator serves a database with no rules file. With `database.defaultAccess = "locked"` (the `productionExact` default, strict profile only) only the emulator's `owner` credential, which the Admin SDK sends to an emulator, can read and write.
+Security Rules are evaluated as the official emulator (firebase-database-emulator v4.11.2) evaluates them: `.read`, `.write`, `.validate` and `.indexOn`, with `auth`, `now`, `root`, `data`, `newData`, `query` and `$` variables, over REST, event streams and the realtime protocol, onDisconnect writes included (checked when registered and again when they run). The `database` section of `firebase.json` is loaded as firebase-tools 15.28.2 loads it: the single form into `<project>-default-rtdb`, the array form into each entry's deploy target instances (from `.firebaserc`) or instance. A file that does not load stops the start with the file, line and column; a changed file is loaded again, and a change that does not load keeps the rules in force and prints why. `GET` and `PUT /.settings/rules.json?ns=<instance>` read and replace an instance's rules with an administrator credential. A rules change, or a client signing in or out, cancels the listens and event streams the new rules no longer allow. Credentials are read as the official emulator reads them: `Authorization: Bearer <token>` and `access_token` are administrators that rules do not apply to, and `auth=<ID token>` is the user the token names (its signature is not checked). An instance without rules follows `database.defaultAccess`: open, as the official emulator serves it, or, with `"locked"` (the `productionExact` default, strict profile only), only the emulator's `owner` credential, which the Admin SDK sends against an emulator; under `"locked"` other administrator tokens are held to the rules too. The start banner's `database rules:` line names each file and its instance, and what an instance without rules allows.
 
 ## Not supported yet
 
-- Security Rules evaluation.
+- Rules coverage reports (the official emulator's `/.inspect/coverage`).
 - Import and export: a `database_export` section is refused on import, and nothing is exported.
 - Realtime Database triggers for Cloud Functions, and a view in the Emulator UI.
 

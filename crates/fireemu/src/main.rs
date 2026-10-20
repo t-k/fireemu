@@ -47,6 +47,7 @@ mod config_discovery;
 mod config_shape;
 mod control;
 mod daemon;
+mod database_rules;
 mod doctor;
 mod functions;
 mod help;
@@ -445,6 +446,11 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
         })?;
         let project = cfg.auth_project.clone();
         cfg.resolve_storage_rules_targets(rc, &project)?;
+    }
+    // firebase-tools resolves the rules targets only for a database it starts.
+    if cfg.database_enabled {
+        cfg.database_rules_resolved =
+            cfg.database_rules_by_instance(rc.as_ref(), &cfg.auth_project)?;
     }
     let input = match &sources.canonical {
         Some(path) => config_document(&raw, path)?.0,
@@ -1705,6 +1711,11 @@ fn parse_options(
         })?;
         let project = cfg.auth_project.clone();
         cfg.resolve_storage_rules_targets(rc, &project)?;
+    }
+    // firebase-tools resolves the rules targets only for a database it starts.
+    if only.database && (cfg.database_enabled || only.explicit) {
+        cfg.database_rules_resolved =
+            cfg.database_rules_by_instance(rc.as_ref(), &cfg.auth_project)?;
     }
     if !only.functions {
         cfg.functions_source = None;
@@ -3032,8 +3043,8 @@ fn pubsub_project_numbers(cfg: &RuntimeConfig) -> std::collections::BTreeMap<Str
     numbers
 }
 
-/// What every Realtime Database request is answered with while rules are not evaluated, and
-/// why: `database.defaultAccess` and where its value came from.
+/// What a Realtime Database instance without rules allows, and why: `database.defaultAccess`
+/// and where its value came from.
 pub fn database_access(cfg: &RuntimeConfig) -> String {
     let source = cfg
         .development_defaults
@@ -3051,16 +3062,30 @@ pub fn database_access(cfg: &RuntimeConfig) -> String {
     }
 }
 
-/// The banner lines of the Realtime Database: where it listens, and the access in effect
-/// while its rules are not evaluated.
+/// The rules files and their instances, then what the instances without rules allow.
+fn database_rules_line(cfg: &RuntimeConfig) -> String {
+    if cfg.database_rules_resolved.is_empty() {
+        return format!("none in firebase.json, so {}", database_access(cfg));
+    }
+    let files: Vec<String> = cfg
+        .database_rules_resolved
+        .iter()
+        .map(|(instance, file)| format!("{instance} <- {file}"))
+        .collect();
+    format!(
+        "{}; another instance: {}",
+        files.join(", "),
+        database_access(cfg)
+    )
+}
+
+/// The banner lines of the Realtime Database: where it listens, the rules files and their
+/// instances, and what an instance without rules allows.
 fn print_database_lines(cfg: &RuntimeConfig, addrs: &BoundAddrs) {
     match addrs.database {
         Some(a) => {
             println!("  database:         {a}   FIREBASE_DATABASE_EMULATOR_HOST={a}");
-            println!(
-                "  database rules:   not evaluated yet, so {}",
-                database_access(cfg)
-            );
+            println!("  database rules:   {}", database_rules_line(cfg));
         }
         None => println!(
             "  database:         not started (configure emulators.database / --database-port, or --only database)"

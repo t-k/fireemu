@@ -742,3 +742,34 @@ fn on_disconnect_writes_are_made_as_the_connection_is_at_its_end() {
         (200, "null".to_owned())
     );
 }
+
+#[test]
+fn rules_loaded_outside_a_request_reach_streams_through_the_flush_queue() {
+    let mut db = db();
+    assert_eq!(
+        db.load_rules("bad.name", r#"{"rules":{}}"#, NOW),
+        Err("Invalid Firebase database name".to_owned())
+    );
+    assert_eq!(
+        db.load_rules("lo", r#"{"rules":{".read":"auth.foo()"}}"#, NOW),
+        Err("1:20: Type error: Function call on target that is not a function.".to_owned())
+    );
+    db.load_rules("lo", r#"{"rules":{".read":true}}"#, NOW)
+        .unwrap();
+    let id = match db.handle(
+        &request(
+            "GET",
+            "/.json?ns=lo",
+            &[("Accept", "text/event-stream")],
+            "",
+        ),
+        NOW,
+    ) {
+        Handled::Stream { id, .. } => id,
+        Handled::Response { response, .. } => panic!("{response:?}"),
+    };
+    db.load_rules("lo", r#"{"rules":{".read":false}}"#, NOW)
+        .unwrap();
+    assert_eq!(db.drain_events(), vec![(id, SseEvent::cancel())]);
+    assert_eq!(db.rules_text("lo"), r#"{"rules":{".read":false}}"#);
+}

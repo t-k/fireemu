@@ -907,6 +907,11 @@ impl Database {
         }
     }
 
+    pub(crate) fn queue_events(&mut self, events: Vec<(u64, SseEvent)>) {
+        self.events.extend(events);
+        self.wake();
+    }
+
     /// Takes the stream events caused outside a request, in order.
     pub fn drain_events(&mut self) -> Vec<(u64, SseEvent)> {
         std::mem::take(&mut self.events)

@@ -227,6 +227,19 @@ impl Database {
         Ok(self.revoke(namespace, None, now))
     }
 
+    /// Loads `text` as the rules of `namespace` from outside a request (a rules file at
+    /// startup or after it changed), as `PUT /.settings/rules.json` would. The cancelled
+    /// streams hear of it through the flush queue. The error is what that request would answer.
+    pub fn load_rules(&mut self, namespace: &str, text: &str, now: i64) -> Result<(), String> {
+        crate::namespace::route(Some(namespace), None, namespace)
+            .map_err(|_| "Invalid Firebase database name".to_owned())?;
+        let events = self
+            .set_rules(namespace, text, now)
+            .map_err(|error| error.to_string())?;
+        self.queue_events(events);
+        Ok(())
+    }
+
     /// Records the access of a realtime connection (after `auth`, `gauth` or `unauth`) and
     /// cancels its listens that access no longer allows.
     pub(crate) fn set_client_access(

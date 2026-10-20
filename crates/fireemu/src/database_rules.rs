@@ -1,0 +1,243 @@
+//! Realtime Database Security Rules from `firebase.json`, as firebase-tools 15.28.2 loads
+//! them: each file into its instance at startup, where a file that does not load stops the
+//! start, and again whenever the file changes, where a file that does not load keeps the
+//! rules in force and says why.
+
+use std::sync::{Arc, Mutex, PoisonError};
+
+use fireemu_adapter_database::rest::Database;
+
+/// How often a rules file is looked at for a change.
+const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// A path as firebase-tools shows it: relative to the working directory when it is below it.
+fn shown(path: &str) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| {
+            std::path::Path::new(path)
+                .strip_prefix(cwd)
+                .ok()
+                .map(|relative| relative.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| path.to_owned())
+}
+
+/// Loads every `(instance, file)` in order. The error is the one firebase-tools stops with.
+pub(crate) fn load_initial(
+    database: &Mutex<Database>,
+    files: &[(String, String)],
+    now_millis: i64,
+) -> Result<(), String> {
+    let mut database = database.lock().unwrap_or_else(PoisonError::into_inner);
+    for (instance, path) in files {
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|error| error.to_string())
+            .and_then(|text| database.load_rules(instance, &text, now_millis));
+        if let Err(error) = loaded {
+            return Err(format!(
+                "Failed to load initial Realtime Database rules:\n{}:{}",
+                shown(path),
+                error.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Watches every file and loads it again into its instance when it changes. The watchers end
+/// with the database.
+pub(crate) fn start_reload_supervisors(
+    database: &Arc<Mutex<Database>>,
+    files: &[(String, String)],
+    clock: &Arc<dyn Fn() -> i64 + Send + Sync>,
+) {
+    for (instance, path) in files {
+        let weak = Arc::downgrade(database);
+        let clock = Arc::clone(clock);
+        let instance = instance.clone();
+        let path = path.clone();
+        let mut observed = crate::watched_file(&path)
+            .ok()
+            .map(|(stamp, signature, _)| (stamp, signature));
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(SCAN_INTERVAL).await;
+                if weak.strong_count() == 0 {
+                    return;
+                }
+                let Ok((stamp, signature, bytes)) = crate::watched_file_off_thread(&path).await
+                else {
+                    continue;
+                };
+                if !crate::watched_file_changed(
+                    observed.map(|(stamp, _)| stamp),
+                    observed.map(|(_, signature)| signature),
+                    stamp,
+                    signature,
+                ) {
+                    continue;
+                }
+                let unchanged = observed.is_some_and(|(_, seen)| seen == signature);
+                observed = Some((stamp, signature));
+                if unchanged {
+                    continue;
+                }
+                let Some(database) = weak.upgrade() else {
+                    return;
+                };
+                eprintln!("note: database: change detected, updating rules for {instance}");
+                let loaded = String::from_utf8(bytes)
+                    .map_err(|error| error.to_string())
+                    .and_then(|text| {
+                        database
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .load_rules(&instance, &text, clock())
+                    });
+                match loaded {
+                    Ok(()) => eprintln!("note: database: rules updated for {instance}"),
+                    Err(error) => eprintln!(
+                        "warning: database: {}:{}\nwarning: database: failed to update rules for {instance}; the previous rules stay in force",
+                        shown(&path),
+                        error.trim()
+                    ),
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fireemu_adapter_database::rest::{Handled, HttpRequest, RestOptions};
+
+    fn read(database: &Mutex<Database>, ns: &str) -> u16 {
+        let request = HttpRequest {
+            method: "GET".to_owned(),
+            target: format!("/.json?ns={ns}"),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        match database.lock().unwrap().handle(&request, 0) {
+            Handled::Response { response, .. } => response.status,
+            Handled::Stream { .. } => panic!("stream"),
+        }
+    }
+
+    fn temp(name: &str, text: &str) -> (tempdir::Dir, String) {
+        let dir = tempdir::Dir::new(name);
+        let path = dir.path().join("database.rules.json");
+        std::fs::write(&path, text).unwrap();
+        let path = path.to_string_lossy().into_owned();
+        (dir, path)
+    }
+
+    mod tempdir {
+        /// A directory removed when dropped.
+        pub struct Dir(std::path::PathBuf);
+
+        impl Dir {
+            pub fn new(name: &str) -> Self {
+                let path = std::env::temp_dir().join(format!(
+                    "fireemu-database-rules-{name}-{}",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_dir_all(&path);
+                std::fs::create_dir_all(&path).unwrap();
+                Self(path)
+            }
+
+            pub fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+        }
+
+        impl Drop for Dir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+    }
+
+    #[test]
+    fn files_load_into_their_instances_in_order_and_a_bad_one_stops_the_start() {
+        let (_closed_dir, closed) = temp("closed", r#"{"rules":{".read":false}}"#);
+        let (_open_dir, open) = temp("open", r#"{"rules":{".read":true}}"#);
+        let database = Mutex::new(Database::new(RestOptions::default(), 1));
+        load_initial(
+            &database,
+            &[
+                ("a".to_owned(), closed.clone()),
+                ("b".to_owned(), closed.clone()),
+                ("b".to_owned(), open.clone()),
+            ],
+            0,
+        )
+        .unwrap();
+        assert_eq!(read(&database, "a"), 401);
+        // A later file for the same instance replaces the earlier one.
+        assert_eq!(read(&database, "b"), 200);
+        // Other instances have no rules.
+        assert_eq!(read(&database, "c"), 200);
+
+        let (_bad_dir, bad) = temp("bad", r#"{"rules":{".read":"auth.foo()"}}"#);
+        let error = load_initial(&database, &[("a".to_owned(), bad.clone())], 0).unwrap_err();
+        assert!(
+            error.starts_with("Failed to load initial Realtime Database rules:\n"),
+            "{error}"
+        );
+        assert!(
+            error.ends_with(":1:20: Type error: Function call on target that is not a function."),
+            "{error}"
+        );
+        let missing = format!("{bad}.missing");
+        let error = load_initial(&database, &[("a".to_owned(), missing.clone())], 0).unwrap_err();
+        assert!(error.contains(&missing), "{error}");
+        let error = load_initial(&database, &[("bad.name".to_owned(), open)], 0).unwrap_err();
+        assert!(
+            error.ends_with(":Invalid Firebase database name"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changed_file_is_loaded_again_and_a_bad_change_keeps_the_rules() {
+        let (_dir, path) = temp("reload", r#"{"rules":{".read":true}}"#);
+        let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 1)));
+        let files = [("r".to_owned(), path.clone())];
+        load_initial(&database, &files, 0).unwrap();
+        start_reload_supervisors(
+            &database,
+            &files,
+            &(Arc::new(|| 0_i64) as Arc<dyn Fn() -> i64 + Send + Sync>),
+        );
+        let wait_for = |status: u16| {
+            let database = Arc::clone(&database);
+            async move {
+                for _ in 0..100 {
+                    if read(&database, "r") == status {
+                        return true;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                false
+            }
+        };
+        std::fs::write(&path, r#"{"rules":{".read":false}}"#).unwrap();
+        assert!(wait_for(401).await, "the change was not loaded");
+        std::fs::write(&path, r#"{"rules":{".read":"auth.foo()"}}"#).unwrap();
+        tokio::time::sleep(SCAN_INTERVAL * 3).await;
+        assert_eq!(read(&database, "r"), 401, "a bad change replaced the rules");
+        assert_eq!(
+            database.lock().unwrap().rules_text("r"),
+            r#"{"rules":{".read":false}}"#
+        );
+        std::fs::write(&path, r#"{"rules":{".read":true}}"#).unwrap();
+        assert!(
+            wait_for(200).await,
+            "a good change after a bad one was not loaded"
+        );
+    }
+}

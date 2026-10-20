@@ -2807,7 +2807,7 @@
         "useEmulator"
       ],
       "state": "gap",
-      "decision": "Served, without a parity claim yet. `--only database`, `emulators.database` and `--database-port` start it on 9000; the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, onDisconnect writes, and namespace routing are implemented and compared with the official emulator (firebase-database-emulator v4.11.2) through the pinned SDKs in tools/sdk-smoke-database. Behaviour taken from that emulator where production has not been observed (number forms, equal-value writes, priorities, refusal texts, long-polling framing, how onDisconnect writes combine) is provisional. Security rules evaluation, import and export, and Functions triggers are open, so the surface stays a gap until they land and production is observed.",
+      "decision": "Served, without a parity claim yet. `--only database`, `emulators.database` and `--database-port` start it on 9000; the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, onDisconnect writes, and namespace routing are implemented and compared with the official emulator (firebase-database-emulator v4.11.2) through the pinned SDKs in tools/sdk-smoke-database. Behaviour taken from that emulator where production has not been observed (number forms, equal-value writes, priorities, refusal texts, long-polling framing, how onDisconnect writes combine) is provisional. Security rules are evaluated as that emulator evaluates them and loaded from firebase.json as firebase-tools loads them. Rules coverage reports, import and export, and Functions triggers are open, so the surface stays a gap until they land and production is observed.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_rtdb"
       ],
@@ -2819,7 +2819,7 @@
         "behaviour copied from the official emulator rather than observed in production is provisional and listed for production observation"
       ],
       "gaps": [
-        "security rules are not evaluated: database.rules.json is accepted in firebase.json, a warning says it is not enforced when the database is served, the banner names the access in effect, and requests are answered as without rules",
+        "security rules coverage reports (/.inspect/coverage) are not served",
         "database_export sections are refused on import and nothing is exported",
         "Realtime Database Functions triggers and the Emulator UI database view are not wired",
         "Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope"

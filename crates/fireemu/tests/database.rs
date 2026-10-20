@@ -349,6 +349,7 @@ fn database_deploy_hooks_in_firebase_json_are_accepted_whatever_is_selected() {
         r#"{"database":{"rules":"database.rules.json","predeploy":["echo hi"],"postdeploy":"echo bye"}}"#,
     )
     .unwrap();
+    std::fs::write(dir.join("database.rules.json"), r#"{"rules":{}}"#).unwrap();
     for only in ["auth", "database"] {
         let daemon = Daemon::start(&[
             "--firebase-json",
@@ -368,11 +369,11 @@ fn database_deploy_hooks_in_firebase_json_are_accepted_whatever_is_selected() {
 }
 
 #[test]
-fn the_banner_says_rules_are_not_evaluated_and_what_access_is_in_effect() {
+fn the_banner_says_what_an_instance_without_rules_allows() {
     let dir = Scratch::new("database", "rules-banner");
     let open = Daemon::start(&["--only", "database", "--database-port", "0"]);
     let line = open.rules_line();
-    assert!(line.contains("not evaluated"), "{line}");
+    assert!(line.contains("none in firebase.json"), "{line}");
     assert!(line.contains("every request is allowed"), "{line}");
     assert!(
         line.contains("database.defaultAccess = open, default"),
@@ -412,8 +413,63 @@ fn the_banner_says_rules_are_not_evaluated_and_what_access_is_in_effect() {
 }
 
 #[test]
-fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_served() {
-    let dir = Scratch::new("database", "rules-warning");
+fn declared_rules_are_enforced_on_the_default_instance_and_reloaded_when_they_change() {
+    let dir = Scratch::new("database", "rules-file");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":{"rules":"database.rules.json"}}"#,
+    )
+    .unwrap();
+    let rules = dir.join("database.rules.json");
+    std::fs::write(&rules, r#"{"rules":{".read":false,".write":false}}"#).unwrap();
+    let daemon = Daemon::start(&[
+        "--firebase-json",
+        firebase_json.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let line = daemon.rules_line();
+    assert!(
+        line.contains("demo-rtdb-default-rtdb <- ") && line.contains("database.rules.json"),
+        "{line}"
+    );
+    assert!(
+        line.contains("another instance: every request is allowed"),
+        "{line}"
+    );
+    let port = daemon.database_port();
+    let read = |ns: &str| request(port, "GET", &format!("/.json?ns={ns}"), &[], "").0;
+    assert_eq!(read("demo-rtdb-default-rtdb"), 401);
+    // Only the default instance has the file's rules.
+    assert_eq!(read("other"), 200);
+    let eventually = |status: u16| {
+        (0..100).any(|_| {
+            if read("demo-rtdb-default-rtdb") == status {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            false
+        })
+    };
+    std::fs::write(&rules, r#"{"rules":{".read":true}}"#).unwrap();
+    assert!(eventually(200), "the changed rules were not loaded");
+    // A change that does not load keeps the rules in force.
+    std::fs::write(&rules, r#"{"rules":{".read":"auth.foo()"}}"#).unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(read("demo-rtdb-default-rtdb"), 200);
+    std::fs::write(&rules, r#"{"rules":{".read":false}}"#).unwrap();
+    assert!(
+        eventually(401),
+        "a good change after a bad one was not loaded"
+    );
+}
+
+#[test]
+fn a_rules_file_that_does_not_load_stops_the_start_only_when_the_database_is_served() {
+    let dir = Scratch::new("database", "rules-start");
     let firebase_json = dir.join("firebase.json");
     std::fs::write(
         &firebase_json,
@@ -421,32 +477,43 @@ fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_serve
     )
     .unwrap();
     let run = |only: &str| {
-        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args(["exec", "--no-config-discovery", "--project", PROJECT])
             .args(["--firebase-json", firebase_json.to_str().unwrap()])
             .args(["--only", only, "--database-port", "0", "--http-port", "0"])
             .args(["--hub-port", "0", "--log-verbosity", "quiet", "--", "true"])
             .stdin(Stdio::null())
             .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stderr).unwrap()
+            .unwrap()
     };
-    let stderr = run("database");
+    let missing = run("database");
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(!missing.status.success(), "{stderr}");
     assert!(
-        stderr.contains("warning: database: the rules in database.rules.json are not enforced"),
+        stderr.contains("Failed to load initial Realtime Database rules:")
+            && stderr.contains("database.rules.json:"),
         "{stderr}"
     );
+    std::fs::write(
+        dir.join("database.rules.json"),
+        r#"{"rules":{".read":"auth.foo()"}}"#,
+    )
+    .unwrap();
+    let invalid = run("database");
+    let stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(!invalid.status.success(), "{stderr}");
     assert!(
-        stderr.contains("database.defaultAccess = open, default"),
+        stderr.contains(
+            "database.rules.json:1:20: Type error: Function call on target that is not a function."
+        ),
         "{stderr}"
     );
-    let stderr = run("auth");
-    assert!(!stderr.contains("database.rules.json"), "{stderr}");
+    let unserved = run("auth");
+    assert!(
+        unserved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unserved.stderr)
+    );
 }
 
 #[test]

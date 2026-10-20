@@ -43,7 +43,7 @@ import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
-import { scanFixture } from "./fixture-scan.mjs";
+import { assertCompleteFixture, loadCommittedFixture, scanFixture } from "./fixture-scan.mjs";
 import { LANES, selectLane } from "./lanes.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -478,18 +478,7 @@ function fixtureEntry(program, meta, one, two) {
   };
 }
 
-/**
- * Refuses the private fixture of a stopped run (`fixture.partial.json`: `partial: true`, and a
- * program finished by one recording has `recordings: 1` and no `second`, so it would pass for a
- * deterministic row) wherever a committed fixture is read.
- */
-export function assertCompleteFixture(fixture, path) {
-  const programs = Object.values(fixture.programs ?? {});
-  if (fixture.partial !== undefined || programs.some((p) => p.recordings !== undefined)) {
-    throw new Error(`${path} is the partial fixture of a stopped run, not a committed fixture`);
-  }
-  return fixture;
-}
+export { assertCompleteFixture };
 
 /**
  * Writes the committed fixture from two recordings. Kept separate from recording so that a
@@ -620,6 +609,24 @@ export async function recordRecordings({
   return { recordings, outcome, error, partial };
 }
 
+/**
+ * Writes the run's meta.json; a failure is returned in the error (the caller still appends the
+ * ledger row of a run that has sent requests), never thrown.
+ */
+export async function writeMeta({ runDir, meta, outcome, error, partial, write = writeFile }) {
+  try {
+    await write(
+      join(runDir, "meta.json"),
+      JSON.stringify({ ...meta, outcome, error, ...(partial ? { partial } : {}) }, null, 2),
+      { mode: 0o600 },
+    );
+    return error;
+  } catch (failed) {
+    const reason = `meta.json not written: ${String(failed.message ?? failed)}`;
+    return error ? `${error} (${reason})` : reason;
+  }
+}
+
 /** The private fixture of a stopped run: each program with the recordings that finished it. */
 async function writePartialFixture({
   programs,
@@ -694,11 +701,8 @@ async function recordProductionLocked() {
   });
   const { recordings, partial } = recorded;
   let { outcome, error } = recorded;
-  await writeFile(
-    join(runDir, "meta.json"),
-    JSON.stringify({ ...meta, outcome, error, ...(partial ? { partial } : {}) }, null, 2),
-    { mode: 0o600 },
-  );
+  // writeMeta never throws, so the ledger row below always lands.
+  error = await writeMeta({ runDir, meta, outcome, error, partial });
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const failures = recordings.flatMap((r) => r.failures);
   try {
@@ -918,7 +922,7 @@ export function classify({ stale, production, alternative, fireemu }) {
 
 async function check() {
   const fixture = existsSync(FIXTURE)
-    ? assertCompleteFixture(JSON.parse(await readFile(FIXTURE, "utf8")), FIXTURE)
+    ? (await loadCommittedFixture(FIXTURE)).fixture
     : { programs: {} };
   const selected = selectPrograms(PROGRAMS);
   const harness = await harnessDigest();
@@ -1007,8 +1011,7 @@ export function differencePaths(production, fireemu) {
 async function exportComparison(out) {
   if (!out) throw new Error("usage: export-comparison <output.json>");
   const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
-  const fixtureText = await readFile(FIXTURE, "utf8");
-  assertCompleteFixture(JSON.parse(fixtureText), FIXTURE);
+  const { text: fixtureText } = await loadCommittedFixture(FIXTURE);
   const fixtureSha256 = sha256(fixtureText);
   const evidence = {
     kind: `${LANE.id}-comparison-v1`,
@@ -1032,7 +1035,8 @@ async function exportComparison(out) {
 }
 
 const mode = process.argv[2];
-if (import.meta.url === `file://${process.argv[1]}`) {
+// `import.meta.main`: a launch through a symlink or an escaped path still runs the mode.
+if (import.meta.main) {
   if (mode === "verify-indexes") await verifyIndexes();
   else if (mode === "preflight") await preflight(await accessToken());
   else if (mode === "record-production") await recordProduction();

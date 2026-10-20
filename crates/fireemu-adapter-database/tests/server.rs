@@ -769,3 +769,26 @@ async fn a_reset_outside_any_request_reaches_listeners_at_once() {
         r#"{"t":"d","d":{"b":{"p":"a","d":null},"a":"d"}}"#
     );
 }
+
+#[tokio::test]
+async fn stopping_the_server_stops_its_flush_task() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 3)));
+    let server = tokio::spawn(serve(
+        listener,
+        Arc::clone(&database),
+        ServerConfig::default(),
+    ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(Arc::strong_count(&database) > 1);
+    server.abort();
+    let _ = server.await;
+    // The flush task held the database too; it goes with the server.
+    for _ in 0..100 {
+        if Arc::strong_count(&database) == 1 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the database is still held after the server stopped");
+}

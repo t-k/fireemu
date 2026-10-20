@@ -763,6 +763,12 @@ fn same_form_compares_numbers_by_kind_and_bits() {
     assert!(!Json::int(1).same_form(&Json::int(2)));
     assert!(!Json::Null.same_form(&Json::Bool(false)));
     assert!(!Json::Array(vec![Json::int(1)]).same_form(&Json::Array(vec![double(1.0)])));
+    assert!(
+        !Json::Array(vec![Json::int(1)]).same_form(&Json::Array(vec![Json::int(1), Json::int(2)]))
+    );
+    assert!(
+        !Json::Array(vec![Json::int(1), Json::int(2)]).same_form(&Json::Array(vec![Json::int(1)]))
+    );
     assert!(!Json::object([("a", Json::int(1))]).same_form(&Json::object([("b", Json::int(1))])));
     assert!(!Json::object([("a", Json::int(1))])
         .same_form(&Json::object([("a", Json::int(1)), ("b", Json::int(1))])));

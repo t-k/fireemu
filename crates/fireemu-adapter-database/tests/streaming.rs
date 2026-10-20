@@ -383,3 +383,26 @@ fn a_patch_entry_at_or_above_a_stream_sends_its_whole_value() {
         );
     }
 }
+
+#[test]
+fn a_reset_queues_the_emptied_value_for_streams_until_drained() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/s.json?ns=f6", r#"{"a":1}"#);
+    let (id, _) = open(&mut db, "/s.json?ns=f6");
+    db.clear_namespaces_where(|ns| ns == "f6");
+    assert_eq!(db.drain_events(), vec![(id, put("/", "null"))]);
+    assert!(db.drain_events().is_empty());
+}
+
+#[test]
+fn a_null_write_beside_a_full_limit_window_sends_nothing() {
+    // The official emulator sends nothing to a full limit window for null written to an
+    // absent child. (It sends the null to a range window whose range holds the key; this
+    // server does not, see the module notes of rest.rs.)
+    let mut db = Database::new(RestOptions::default(), 1);
+    write(&mut db, "PUT", "/q.json?ns=f5", r#"{"a":1,"b":2,"c":3}"#);
+    let (_, initial) = open(&mut db, "/q.json?ns=f5&orderBy=%22%24key%22&limitToFirst=2");
+    assert_eq!(initial, put("/", r#"{"a":1,"b":2}"#));
+    assert!(write(&mut db, "PUT", "/q/zz.json?ns=f5", "null").is_empty());
+    assert!(write(&mut db, "PUT", "/q/a0.json?ns=f5", "null").is_empty());
+}

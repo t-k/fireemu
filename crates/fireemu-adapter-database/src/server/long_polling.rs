@@ -200,21 +200,27 @@ fn find(shared: &Shared, id: &str, password: &str) -> Option<Arc<Connection>> {
 /// connection (the client number is sequential), so it never comes from the database's
 /// seeded generator; `None` when the operating system has no entropy to give.
 fn draw_password() -> Option<String> {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut password = String::with_capacity(PASSWORD_LENGTH);
     let mut bytes = [0u8; 32];
     while password.len() < PASSWORD_LENGTH {
         entropy::fill(&mut bytes).ok()?;
-        // 248 = 4 * 62: rejecting the rest keeps every character equally likely.
-        password.extend(
-            bytes
-                .iter()
-                .filter(|b| **b < 248)
-                .map(|b| char::from(ALPHABET[usize::from(*b % 62)]))
-                .take(PASSWORD_LENGTH - password.len()),
-        );
+        extend_password(&mut password, &bytes);
     }
     Some(password)
+}
+
+/// Adds a letter or digit for each usable byte until the password is long enough. Bytes
+/// from 248 (4 * 62) up are skipped, which keeps every character equally likely.
+fn extend_password(password: &mut String, bytes: &[u8]) {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    for byte in bytes {
+        if password.len() == PASSWORD_LENGTH {
+            return;
+        }
+        if *byte < 248 {
+            password.push(char::from(ALPHABET[usize::from(*byte % 62)]));
+        }
+    }
 }
 
 const PASSWORD_LENGTH: usize = 10;
@@ -419,7 +425,21 @@ async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{expiry, oneshot, Expiry};
+    use super::{expiry, extend_password, oneshot, Expiry};
+
+    #[test]
+    fn password_bytes_map_to_letters_and_digits_evenly() {
+        let mut password = String::new();
+        extend_password(&mut password, &[0, 25, 26, 61, 62, 247, 248, 255]);
+        // 248 and up are skipped; the rest are taken modulo 62.
+        assert_eq!(password, "AZa9A9");
+        extend_password(&mut password, &[1, 2, 3, 4, 5, 6]);
+        // Ten characters, then nothing more.
+        assert_eq!(password, "AZa9A9BCDE");
+        let full = password.clone();
+        extend_password(&mut password, &[7]);
+        assert_eq!(password, full);
+    }
 
     #[test]
     fn an_expired_hold_tells_released_closed_and_held_apart() {

@@ -611,6 +611,23 @@ async fn bounds_are_inclusive_and_regular_requests_keep_a_connection() {
     get(&address, "PUT", "/a.json?ns=lp9", &format!("\"{value}\"")).await;
     assert_eq!(database.lock().unwrap().listen_count(), 1);
     assert_eq!(lp.poll(&[]).await, format!("pRTLPCB(2,[{message}]);\n"));
+    // Two pushes waiting together up to exactly the budget are kept too.
+    let first = r#"{"t":"d","d":{"b":{"p":"a","d":1},"a":"d"}}"#;
+    let second = r#"{"t":"d","d":{"b":{"p":"a","d":2},"a":"d"}}"#;
+    let (address, database) = start(ServerConfig {
+        stream_queue_bytes: first.len() + second.len(),
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lp11").await;
+    lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+    get(&address, "PUT", "/a.json?ns=lp11", "1").await;
+    get(&address, "PUT", "/a.json?ns=lp11", "2").await;
+    assert_eq!(database.lock().unwrap().listen_count(), 1);
+    assert_eq!(
+        lp.poll(&[]).await,
+        format!("pRTLPCB(2,[{first},{second}]);\n")
+    );
     // A connection asking again within twice the hold time stays open.
     let (address, _) = start(ServerConfig {
         long_poll_hold: Duration::from_millis(400),

@@ -4,6 +4,10 @@
 //! Every answer and refusal follows what the official emulator (firebase-database-emulator
 //! v4.11.2, the jar firebase-tools 15.28.2 runs) answers to the same request; the lane's
 //! exploration logs hold those answers. Production has not been observed yet.
+//!
+//! Not followed: the official emulator streams null written to an absent child to a query
+//! stream whose range holds the child's key; a query stream here receives such a null only
+//! when its view changes, which matches the official emulator for a full limit window.
 
 use std::collections::{BTreeMap, BTreeSet};
 

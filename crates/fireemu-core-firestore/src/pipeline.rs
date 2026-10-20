@@ -531,6 +531,7 @@ mod tests {
         assert!(canonicalize(&[users(), stage("limit", vec![Arg::String("text".into())])]).is_ok());
         let bad_skip = canonicalize(&[users(), stage("sample", vec![Arg::String("x".into())])]);
         assert!(bad_skip.is_err(), "{bad_skip:?}");
+        assert!(canonicalize(&[users(), stage("distinct", vec![Arg::Integer(1)])]).is_err());
         assert!(canonicalize(&[stage("collection", vec![Arg::Null])]).is_err());
         assert!(
             canonicalize(&[stage("collection", vec![Arg::String("/users/u1".into())])]).is_err()

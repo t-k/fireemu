@@ -287,16 +287,35 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                 );
             }
         }
-        assert!(
-            unobserved(
-                &call(
-                    "document_id",
-                    vec![reference("projects//databases/(default)/documents")]
-                )
-                .eval_in(&r, unrecorded)
-            ),
-            "{unrecorded:?}"
-        );
+        // A top-level collection for every function: the official emulator's text under the
+        // emulator profile (production recorded only document_id's).
+        for function in ["collection_id", "parent"] {
+            let got = call(function, vec![reference(collection)]).eval_in(&r, unrecorded);
+            if unrecorded == Unrecorded::Refuse {
+                assert!(unobserved(&got), "{function}");
+            } else {
+                assert_eq!(
+                    got,
+                    Eval::Error(EvalError::Invalid(format!(
+                        "Document parent name \"{collection}\" lacks \"/\" at index {}.",
+                        collection.len()
+                    ))),
+                    "{function}"
+                );
+            }
+        }
+        // Malformed references name no collection: an empty project, database or segment.
+        for name in [
+            "projects//databases/(default)/documents",
+            "projects//databases/(default)/documents/c",
+            "projects/p/databases//documents/c",
+            "projects/p/databases/(default)/documents/c//s",
+        ] {
+            assert!(
+                unobserved(&call("collection_id", vec![reference(name)]).eval_in(&r, unrecorded)),
+                "{name} {unrecorded:?}"
+            );
+        }
     }
     // An error argument propagates unchanged.
     let inner = call("parent", vec![field("num")]).eval(&r);

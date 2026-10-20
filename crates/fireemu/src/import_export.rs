@@ -2832,6 +2832,14 @@ fn read_database_section_within(
             "Realtime Database files",
         )
         .map_err(|e| ArtifactError::new("database", &path, e))?;
+        // Written into a scratch database first, so a file the import would refuse stops the
+        // start before any section is installed (review RTDB-04 S4).
+        fireemu_adapter_database::rest::Database::new(
+            fireemu_adapter_database::rest::RestOptions::default(),
+            0,
+        )
+        .import_text(&namespace, &text, 0)
+        .map_err(|e| ArtifactError::new("database", &path, e))?;
         namespaces.push((namespace, text));
     }
     Ok(namespaces)
@@ -5211,6 +5219,34 @@ mod tests {
     #[cfg(unix)]
     fn budget_dir(name: &str) -> TrustedTempDir {
         TrustedTempDir::new(&format!("import-budget-{name}"))
+    }
+
+    /// A database file the import would refuse (an invalid key, too deep, a bad server value)
+    /// is refused while the import is prepared, before any section is installed (review
+    /// RTDB-04 S4), with the official emulator's text.
+    #[cfg(unix)]
+    #[test]
+    fn a_database_file_the_import_would_refuse_is_refused_while_preparing() {
+        let root = budget_dir("database-prepare");
+        let section_dir = root.path().join("database_export");
+        std::fs::create_dir_all(&section_dir).unwrap();
+        std::fs::write(section_dir.join("good.json"), r#"{"x":1}"#).unwrap();
+        std::fs::write(section_dir.join("bad.json"), r#"{"a.b":1}"#).unwrap();
+        let section = fireemu_core_export::metadata::Section {
+            version: "4.11.2".to_owned(),
+            path: "database_export".to_owned(),
+            metadata_file: None,
+        };
+        let refused = super::read_database_section(root.path(), &section)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("database_export/bad.json"), "{refused}");
+        assert!(refused.contains("Invalid data"), "{refused}");
+        std::fs::remove_file(section_dir.join("bad.json")).unwrap();
+        assert_eq!(
+            super::read_database_section(root.path(), &section).unwrap(),
+            vec![("good".to_owned(), r#"{"x":1}"#.to_owned())]
+        );
     }
 
     /// The Realtime Database files share one budget: 1 GiB, as the Storage and Firestore

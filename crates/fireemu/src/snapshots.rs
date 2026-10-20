@@ -1512,9 +1512,8 @@ mod tests {
         assert!(hook.retained_bytes(&populated) > hook.retained_bytes(&empty));
     }
 
-    /// `SNAP-MEM-01`: the production Auth hook reports a positive retained-byte estimate for a
-    /// populated store and zero for a part that is not its shape, so the session byte budget
-    /// counts the Auth part and never miscounts a foreign one.
+    /// The Realtime Database part names itself and refuses a part that is not its shape or a
+    /// store that cannot be locked.
     #[test]
     fn the_database_hook_names_its_part_and_refuses_a_foreign_or_poisoned_one() {
         use fireemu_adapter_database::rest::{Database, RestOptions};
@@ -1543,6 +1542,8 @@ mod tests {
         assert_eq!(refused.message, "the Realtime Database is poisoned");
     }
 
+    /// `SNAP-MEM-01`: the Realtime Database part counts the owned namespaces toward the session
+    /// byte budget and a foreign part as zero.
     #[test]
     fn the_database_hook_counts_the_owned_namespaces_in_the_retained_bytes() {
         use fireemu_adapter_database::rest::{Database, NamespacesSnapshot, RestOptions};
@@ -1571,6 +1572,9 @@ mod tests {
         assert_eq!(hook.retained_bytes(&foreign), 0);
     }
 
+    /// `SNAP-MEM-01`: the production Auth hook reports a positive retained-byte estimate for a
+    /// populated store and zero for a part that is not its shape, so the session byte budget
+    /// counts the Auth part and never miscounts a foreign one.
     #[test]
     fn the_auth_hook_estimates_retained_bytes_and_ignores_a_foreign_part() {
         use fireemu_core_auth::mfa::TotpPolicy;

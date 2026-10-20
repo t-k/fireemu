@@ -11,7 +11,8 @@
 //                                                       fireemu-oracle-query/(default) and update
 //                                                       fs-query-index-production.json
 //   node src/fs-query-index/run.mjs rebuild-fixture <runDir> [--skip-changed]
-//   node src/fs-query-index/unknown-rows.mjs <log>  the run-close check: step lines whose
+//   node src/fs-query-index/unknown-rows.mjs <log> [--expect <n>]
+//                                                       the run-close check: step lines whose
 //                                                       outcome production did not settle
 //   node src/fs-query-index/run.mjs check               run the corpus against fireemu and
 //                                                       compare with the saved production rows
@@ -478,6 +479,19 @@ function fixtureEntry(program, meta, one, two) {
 }
 
 /**
+ * Refuses the private fixture of a stopped run (`fixture.partial.json`: `partial: true`, and a
+ * program finished by one recording has `recordings: 1` and no `second`, so it would pass for a
+ * deterministic row) wherever a committed fixture is read.
+ */
+export function assertCompleteFixture(fixture, path) {
+  const programs = Object.values(fixture.programs ?? {});
+  if (fixture.partial !== undefined || programs.some((p) => p.recordings !== undefined)) {
+    throw new Error(`${path} is the partial fixture of a stopped run, not a committed fixture`);
+  }
+  return fixture;
+}
+
+/**
  * Writes the committed fixture from two recordings. Kept separate from recording so that a
  * refusal here (for example by the secret scan) never loses a production run: the recordings
  * are saved privately first and `rebuild-fixture` can retry from them.
@@ -492,7 +506,7 @@ export async function writeFixture({
 }) {
   const [first, second] = recordings;
   const fixture = existsSync(fixturePath)
-    ? JSON.parse(await readFile(fixturePath, "utf8"))
+    ? assertCompleteFixture(JSON.parse(await readFile(fixturePath, "utf8")), fixturePath)
     : { version: 1, recordedAgainst: {}, programs: {} };
   fixture.recordedAgainst = recordedAgainst(lane);
   for (const program of programs) {
@@ -553,6 +567,7 @@ export async function recordRecordings({
   record,
   preflightCheck = async () => {},
   lane = LANE,
+  write = writeFile,
 }) {
   const recordings = [];
   let outcome = "recorded";
@@ -563,7 +578,7 @@ export async function recordRecordings({
     for (const offset of [0, 1]) {
       const recording = await record(offset);
       recordings.push(recording);
-      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
+      await write(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
         mode: 0o600,
       });
     }
@@ -573,23 +588,32 @@ export async function recordRecordings({
     if (caught.partial) {
       const file = `recording-${recordings.length + 1}.partial.json`;
       recordings.push(caught.partial);
-      await writeFile(join(runDir, file), JSON.stringify(caught.partial), { mode: 0o600 });
-      partial = { file };
+      // Nothing here may throw: the caller still writes meta.json and the ledger row of a run
+      // that has sent requests.
       try {
-        partial = {
-          ...partial,
-          ...(await writePartialFixture({
-            programs,
-            recordings,
-            meta,
-            outcome,
-            secrets: secrets(),
-            lane,
-            fixturePath: join(runDir, "fixture.partial.json"),
-          })),
-        };
-      } catch (refused) {
-        error = `${error} (partial fixture not written: ${String(refused.message ?? refused)})`;
+        await write(join(runDir, file), JSON.stringify(caught.partial), { mode: 0o600 });
+        partial = { file };
+      } catch (failed) {
+        error = `${error} (partial recording not written: ${String(failed.message ?? failed)})`;
+      }
+      if (partial) {
+        try {
+          partial = {
+            ...partial,
+            ...(await writePartialFixture({
+              programs,
+              recordings,
+              meta,
+              outcome,
+              secrets: secrets(),
+              lane,
+              fixturePath: join(runDir, "fixture.partial.json"),
+              write,
+            })),
+          };
+        } catch (refused) {
+          error = `${error} (partial fixture not written: ${String(refused.message ?? refused)})`;
+        }
       }
     }
   }
@@ -605,6 +629,7 @@ async function writePartialFixture({
   secrets,
   lane,
   fixturePath,
+  write,
 }) {
   const fixture = { version: 1, partial: true, outcome, recordedAgainst: recordedAgainst(lane) };
   fixture.programs = {};
@@ -618,7 +643,7 @@ async function writePartialFixture({
   }
   const text = `${JSON.stringify(fixture, null, 2)}\n`;
   scanFixture(text, secrets);
-  await writeFile(fixturePath, text, { mode: 0o600 });
+  await write(fixturePath, text, { mode: 0o600 });
   return { fixture: "fixture.partial.json", programs: Object.keys(fixture.programs) };
 }
 
@@ -893,7 +918,7 @@ export function classify({ stale, production, alternative, fireemu }) {
 
 async function check() {
   const fixture = existsSync(FIXTURE)
-    ? JSON.parse(await readFile(FIXTURE, "utf8"))
+    ? assertCompleteFixture(JSON.parse(await readFile(FIXTURE, "utf8")), FIXTURE)
     : { programs: {} };
   const selected = selectPrograms(PROGRAMS);
   const harness = await harnessDigest();
@@ -982,7 +1007,9 @@ export function differencePaths(production, fireemu) {
 async function exportComparison(out) {
   if (!out) throw new Error("usage: export-comparison <output.json>");
   const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
-  const fixtureSha256 = sha256(await readFile(FIXTURE, "utf8"));
+  const fixtureText = await readFile(FIXTURE, "utf8");
+  assertCompleteFixture(JSON.parse(fixtureText), FIXTURE);
+  const fixtureSha256 = sha256(fixtureText);
   const evidence = {
     kind: `${LANE.id}-comparison-v1`,
     artifactSha256: comparison.artifactSha256,

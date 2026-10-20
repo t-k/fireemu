@@ -288,7 +288,10 @@ const resultProgram = {
  */
 export function seedCommit(id, path, fields) {
   if (path.startsWith("/")) throw new Error(`${id}: a seed path is relative to {docs}`);
-  if (path.split("/").length % 2 !== 0) throw new Error(`${id}: ${path} is not a document path`);
+  const segments = path.split("/");
+  if (segments.length % 2 !== 0 || segments.includes("")) {
+    throw new Error(`${id}: ${path} is not a document path`);
+  }
   return { id, rpc: "commit", body: { writes: [{ update: { name: `{docs}/${path}`, fields } }] } };
 }
 

@@ -797,4 +797,6 @@ test("a seed commit is a reviewed single-document write into the named database"
   guardRestRequest(request, ctx);
   assert.throws(() => seedCommit("seed-x", "/abs/d", fields), /relative/);
   assert.throws(() => seedCommit("seed-x", "odd", fields), /document path/);
+  assert.throws(() => seedCommit("seed-x", "a//b", fields), /document path/);
+  assert.throws(() => seedCommit("seed-x", "a/b/", fields), /document path/);
 });

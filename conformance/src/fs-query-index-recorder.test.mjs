@@ -10,7 +10,7 @@ import { test } from "node:test";
 
 import { LANES } from "./fs-query-index/lanes.mjs";
 import * as run from "./fs-query-index/run.mjs";
-import { UNKNOWN_ROW_PATTERN, isUnknownRow, unknownRows } from "./fs-query-index/unknown-rows.mjs";
+import { isStepLine, isUnknownRow, scanLog, unknownRows } from "./fs-query-index/unknown-rows.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
 const programs = [
@@ -201,19 +201,95 @@ test("a non-fatal error that carries a partial recording ends as aborted and kee
     assert.equal(existsSync(join(runDir, "recording-1.partial.json")), true);
   }));
 
+test("a partial recording that cannot be written still returns the outcome for meta.json and the ledger", () =>
+  withDir(async (runDir) => {
+    const { writeFile } = await import("node:fs/promises");
+    const out = await run.recordRecordings({
+      programs,
+      runDir,
+      meta,
+      lane,
+      secrets: () => [],
+      write: async (path, ...rest) => {
+        if (String(path).endsWith(".partial.json")) {
+          throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+        }
+        return writeFile(path, ...rest);
+      },
+      record: async (n) => {
+        if (n === 1) throw fatal("1", 1);
+        return recording("0");
+      },
+    });
+    assert.equal(out.outcome, "aborted-fatal");
+    assert.match(out.error, /harness seed answered 400/);
+    assert.match(out.error, /partial recording not written: ENOSPC/);
+    // The partial recording still counts toward the ledger's requests.
+    assert.equal(out.recordings.length, 2);
+    assert.equal(existsSync(join(runDir, "recording-1.json")), true);
+    assert.equal(existsSync(join(runDir, "recording-2.partial.json")), false);
+    assert.equal(existsSync(join(runDir, "fixture.partial.json")), false);
+    assert.equal(out.partial, undefined);
+  }));
+
+test("a partial fixture is never read as a committed one", () =>
+  withDir(async (dir) => {
+    const { writeFile } = await import("node:fs/promises");
+    const base = { version: 1, recordedAgainst: {}, programs: {} };
+    assert.doesNotThrow(() => run.assertCompleteFixture(base, "f.json"));
+    assert.throws(
+      () => run.assertCompleteFixture({ ...base, partial: true }, "f.json"),
+      /f\.json is the partial fixture of a stopped run/,
+    );
+    assert.throws(
+      () =>
+        run.assertCompleteFixture(
+          { ...base, programs: { [programs[0].id]: { steps: {}, recordings: 1 } } },
+          "f.json",
+        ),
+      /f\.json is the partial fixture of a stopped run/,
+    );
+    // writeFixture refuses to merge into one.
+    const fixturePath = join(dir, "fixture.json");
+    await writeFile(fixturePath, JSON.stringify({ ...base, partial: true, outcome: "aborted" }));
+    await assert.rejects(
+      run.writeFixture({
+        programs,
+        recordings: [recording("0"), recording("0")],
+        meta,
+        secrets: [],
+        lane,
+        fixturePath,
+      }),
+      /partial fixture of a stopped run/,
+    );
+    // No committed lane fixture is partial (the Rust replay reads them directly).
+    const { readFile: read } = await import("node:fs/promises");
+    for (const each of Object.values(LANES)) {
+      const path = new URL(`../${each.fixture}`, import.meta.url);
+      if (!existsSync(path)) continue;
+      run.assertCompleteFixture(JSON.parse(await read(path, "utf8")), each.fixture);
+    }
+  }));
+
 // --- unknown rows: the run-close check of the S3 log ---
 
 const definiteHttp = (status) =>
-  (status >= 200 && status <= 299) || (status >= 400 && status <= 499 && status !== 429);
+  (status >= 200 && status <= 299) ||
+  (status >= 400 && status <= 499 && ![408, 429, 499].includes(status));
 const DEFINITE_GRPC = new Set([0, 3, 5, 6, 7, 9, 10, 11, 12, 16]);
 
-test("every HTTP status but a 2xx or a 4xx other than 429 is an unknown row", () => {
+test("every HTTP status but a 2xx or a 4xx other than 408, 429 and 499 is an unknown row", () => {
   for (let status = -3; status <= 1200; status += 1) {
     const line = `fs-ent-pipeline/o4/stages#select-empty ${status}`;
     assert.equal(isUnknownRow(line), !definiteHttp(status), line);
   }
-  for (const status of [0, -1, 100, 103, 199, 301, 302, 304, 399, 429, 500, 503, 599]) {
+  // A timeout (408) and a cancellation (499, gRPC CANCELLED) settle nothing.
+  for (const status of [0, -1, 100, 103, 199, 301, 302, 304, 399, 408, 429, 499, 500, 503, 599]) {
     assert.equal(isUnknownRow(`p/a/b#s ${status}`), true, String(status));
+  }
+  for (const status of [200, 204, 400, 403, 404, 409, 412]) {
+    assert.equal(isUnknownRow(`p/a/b#s ${status}`), false, String(status));
   }
 });
 
@@ -226,20 +302,34 @@ test("a gRPC row is unknown unless its code settles the outcome", () => {
   for (const code of [-1, 4, 8, 13, 14]) assert.equal(isUnknownRow(`p#s grpc ${code}`), true);
 });
 
-test("the grep -E pattern the after-steps quote says the same as the check", () => {
-  const pattern = new RegExp(UNKNOWN_ROW_PATTERN);
-  const lines = [];
-  for (let status = -12; status <= 1200; status += 1) lines.push(`p/a/b#s-1 ${status}`);
-  for (let code = -12; code <= 120; code += 1) lines.push(`p/a/b#s-1 grpc ${code}`);
-  // A log prefix before the step and text after the status.
-  for (const status of [200, 404, 429, 500]) {
-    lines.push(`2026-10-20T00:00:00Z p/a/b#s ${status}`, `p/a/b#s ${status} extra`);
+test("a step line whose outcome is not a plain integer is unknown (fail-closed)", () => {
+  for (const line of [
+    "p#s grpc undefined",
+    "p#s undefined",
+    "p#s null",
+    "p#s NaN",
+    "p#s grpc null",
+    "p#s grpc UNAVAILABLE",
+    "p#s 500 ",
+    "p#s\t500",
+    "p#s\t200",
+    "p#s grpc  14",
+    "p#s grpc  0",
+    "p#s  200",
+    "p#s 0200",
+    "p#s +200",
+    "p#s 200 extra",
+    "p#s 200.0",
+    "p#s grpc",
+    "p#s grpc 0x0",
+    "2026-10-20T00:00:00Z p#s 200 trailing",
+  ]) {
+    assert.equal(isStepLine(line), true, JSON.stringify(line));
+    assert.equal(isUnknownRow(line), true, JSON.stringify(line));
   }
-  for (const line of lines) assert.equal(pattern.test(line), isUnknownRow(line), line);
+  // A log prefix before a plain step line is fine.
+  assert.equal(isUnknownRow("2026-10-20T00:00:00Z p/a/b#s 200"), false);
   assert.equal(isUnknownRow("2026-10-20T00:00:00Z p/a/b#s 500"), true);
-  assert.equal(isUnknownRow("p/a/b#s 500 extra"), false);
-  // POSIX ERE has no \d, lazy quantifier or lookahead.
-  assert.doesNotMatch(UNKNOWN_ROW_PATTERN, /\\d|\*\?|\(\?/);
 });
 
 test("only step lines count: the summary, the ledger echo and other log lines never do", () => {
@@ -249,16 +339,72 @@ test("only step lines count: the summary, the ledger echo and other log lines ne
     "fs-ent-pipeline/o4/documents#write-a 503",
     "{",
     '  "requests": 242,',
+    '  "nondeterministic": [',
+    '    "fs-ent-pipeline/o5/function-names#fn-rand",',
+    "  ],",
     "fs-ent-pipeline/o4/documents#get-a 302",
     "HTTP 500 from the token endpoint",
     "fs-ent-pipeline/o4/stages#x 200 extra",
     "fs-ent-pipeline/o4/stages#y grpc 14",
     "",
   ].join("\n");
-  assert.deepEqual(unknownRows(log), [
-    { line: 3, text: "fs-ent-pipeline/o4/documents#write-a 503" },
-    { line: 6, text: "fs-ent-pipeline/o4/documents#get-a 302" },
-    { line: 9, text: "fs-ent-pipeline/o4/stages#y grpc 14" },
-  ]);
-  assert.deepEqual(unknownRows("p#s 200\r\np#t 500\r\n"), [{ line: 2, text: "p#t 500" }]);
+  assert.deepEqual(scanLog(log), {
+    stepLines: 6,
+    unknown: [
+      { line: 3, text: "fs-ent-pipeline/o4/documents#write-a 503" },
+      { line: 9, text: "fs-ent-pipeline/o4/documents#get-a 302" },
+      { line: 11, text: "fs-ent-pipeline/o4/stages#x 200 extra" },
+      { line: 12, text: "fs-ent-pipeline/o4/stages#y grpc 14" },
+    ],
+  });
+  assert.deepEqual(unknownRows(log), scanLog(log).unknown);
+  assert.deepEqual(scanLog("p#s 200\r\np#t 500\r\n"), {
+    stepLines: 2,
+    unknown: [{ line: 2, text: "p#t 500" }],
+  });
+  assert.equal(isUnknownRow("p#t 200\r"), false);
+  assert.equal(isUnknownRow("p#t 500\r"), true);
+  for (const line of ["{", "", '  "requests": 242,', "HTTP 500", '    "p#s",']) {
+    assert.equal(isStepLine(line), false, JSON.stringify(line));
+  }
+});
+
+test("the CLI exits non-zero on an unknown row, on no step lines and on a count other than expected", async () => {
+  const { execFile } = await import("node:child_process");
+  const { writeFile } = await import("node:fs/promises");
+  const cli = new URL("./fs-query-index/unknown-rows.mjs", import.meta.url).pathname;
+  const runCli = (args) =>
+    new Promise((resolve) => {
+      execFile(process.execPath, [cli, ...args], (error, stdout) =>
+        resolve({ code: error ? error.code : 0, stdout }),
+      );
+    });
+  await withDir(async (dir) => {
+    const log = async (name, text) => {
+      const path = join(dir, name);
+      await writeFile(path, text);
+      return path;
+    };
+    const clean = await log("clean.log", "p#a 200\np#b 404\nq#c grpc 5\n{\n}\n");
+    const unknown = await log("unknown.log", "p#a 200\np#b 503\n");
+    const empty = await log("empty.log", "");
+    const noSteps = await log("ledger.log", '{"ts":"x","outcome":"recorded"}\n');
+    let out = await runCli([clean]);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /step lines: 3\nunknown rows: 0\n$/);
+    assert.equal((await runCli([clean, "--expect", "3"])).code, 0);
+    out = await runCli([clean, "--expect", "4"]);
+    assert.equal(out.code, 3);
+    assert.match(out.stdout, /expected 4 step lines, saw 3/);
+    out = await runCli([unknown]);
+    assert.equal(out.code, 1);
+    assert.match(out.stdout, /^2:p#b 503\n/);
+    for (const path of [empty, noSteps]) {
+      out = await runCli([path]);
+      assert.equal(out.code, 3, path);
+      assert.match(out.stdout, /step lines: 0/);
+    }
+    assert.equal((await runCli([])).code, 2);
+    assert.equal((await runCli([clean, "--expect", "x"])).code, 2);
+  });
 });

@@ -3,6 +3,9 @@ import { test } from "node:test";
 
 import {
   CELLS_PER_STEP,
+  O3_ALIASES,
+  O3_CELLS,
+  O3_KIND_DOC,
   COMPARISON_CELLS,
   KINDS,
   KIND_DOC,
@@ -134,7 +137,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 220);
+  assert.equal(requests, 285);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline"]);
   // The only writes are the order program's single-document commits into `ord`.
@@ -183,7 +186,7 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
       await import("node:fs/promises")
     ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
-  const o1 = PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o2/"));
+  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[23]\//.test(p.id));
   assert.equal(o1.length, 6);
   for (const program of o1) {
     assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
@@ -345,13 +348,79 @@ test("a wipe read that is not JSON fails its program and the cleanup wipe still 
   assert.equal(wipeReads.length, 0);
 });
 
+test("O-3 records only its four new programs, within its request cap: 2 x (65 + 60) + 5", async () => {
+  const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const o3 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o3/");
+  assert.deepEqual(
+    o3.map((p) => p.id),
+    [
+      "fs-ent-pipeline/o3/aliases",
+      "fs-ent-pipeline/o3/comparisons",
+      "fs-ent-pipeline/o3/literals",
+      "fs-ent-pipeline/o3/functions",
+    ],
+  );
+  // The harness ceiling is a base of 20 plus 8 and the seed batches per program.
+  assert.deepEqual(ceilings(o3), { maxRequests: 65, maxHarnessRequests: 60 });
+  // S0 one describe, the preflight two reads, two recordings, A1 two read-backs.
+  const worst = 1 + 2 + 2 * (65 + 60) + 2;
+  assert.equal(worst, 255);
+  // The O-1 and O-2 programs are recorded already and keep their digests.
+  const recorded = JSON.parse(
+    await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  ).programs;
+  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o3/"))) {
+    assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
+  }
+  for (const program of o3) assert.equal(recorded[program.id], undefined, program.id);
+  // Each O-3 cell step selects at most CELLS_PER_STEP aliases, each cell once.
+  const comparisons = o3[1].steps.filter((s) => s.id.startsWith("cells-"));
+  const aliases = comparisons.flatMap((s) =>
+    Object.keys(s.body.structuredPipeline.pipeline.stages[1].args[0].mapValue.fields),
+  );
+  assert.ok(
+    comparisons.every(
+      (s) =>
+        Object.keys(s.body.structuredPipeline.pipeline.stages[1].args[0].mapValue.fields).length <=
+        CELLS_PER_STEP,
+    ),
+  );
+  assert.deepEqual(aliases.toSorted(), O3_CELLS.map(([alias]) => alias).toSorted());
+  assert.equal(O3_CELLS.length, 6 * (3 + 2 * 12 + 2 * 9));
+  // The alias lengths sit on both sides of the official emulator's 1500-byte boundary.
+  const lengths = Object.fromEntries(
+    O3_ALIASES.map(([label, alias]) => [label, Buffer.byteLength(alias)]),
+  );
+  assert.deepEqual(
+    [lengths["plain-1499"], lengths["plain-1500"], lengths["plain-1501"]],
+    [1499, 1500, 1501],
+  );
+  assert.deepEqual(
+    [lengths["quoted-1499"], lengths["quoted-1500"], lengths["quoted-1502"]],
+    [1499, 1500, 1502],
+  );
+  // A vector is written as a vector.
+  assert.equal(O3_KIND_DOC.v.mapValue.fields.__type__.stringValue, "__vector__");
+});
+
 test("the committed REST request export is the corpus's", async () => {
   const { EXPORT, exportText } = await import("./fs-ent-pipeline/export-requests.mjs");
   const { readFile } = await import("node:fs/promises");
   assert.equal(await readFile(EXPORT, "utf8"), exportText());
   const exported = JSON.parse(exportText());
-  assert.equal(exported.programs.length, PROGRAMS.length);
-  const rest = PROGRAMS.flatMap((p) => p.steps).filter((s) => (s.transport ?? "rest") === "rest");
+  // Only the programs the fixture records: O-3 joins after its recording.
+  const recordedIds = Object.keys(
+    JSON.parse(
+      await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+    ).programs,
+  );
+  const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
+  assert.equal(exported.programs.length, recordedPrograms.length);
+  assert.equal(recordedPrograms.length, 9);
+  const rest = recordedPrograms
+    .flatMap((p) => p.steps)
+    .filter((s) => (s.transport ?? "rest") === "rest");
   assert.equal(
     exported.programs.reduce((n, p) => n + p.steps.length, 0),
     rest.length,

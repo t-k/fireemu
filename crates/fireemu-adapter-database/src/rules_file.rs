@@ -243,17 +243,22 @@ impl Reader {
                         Some('b') => '\u{8}',
                         Some('f') => '\u{c}',
                         Some('u') => {
-                            let mut code = 0u32;
+                            // A JSON `\uXXXX` escape (not a percent escape): four hex digits,
+                            // refused at the first one that is not.
+                            let mut digits = String::with_capacity(4);
                             for _ in 0..4 {
                                 self.bump();
                                 let digit = self
                                     .peek()
-                                    .and_then(|c| c.to_digit(16))
+                                    .filter(char::is_ascii_hexdigit)
                                     .ok_or_else(|| self.error_here("Parse error."))?;
-                                code = code * 16 + digit;
+                                digits.push(digit);
                             }
                             place = self.position();
-                            char::from_u32(code).unwrap_or('\u{fffd}')
+                            u32::from_str_radix(&digits, 16)
+                                .ok()
+                                .and_then(char::from_u32)
+                                .unwrap_or('\u{fffd}')
                         }
                         Some(other) => other,
                     };

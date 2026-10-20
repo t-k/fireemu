@@ -338,6 +338,41 @@ fn document_crud_over_rest() {
     assert_eq!(err[fireemu_adapter_grpc::rest::TEXT_KEY], "Not Found\n");
 }
 
+/// A geo point with a zero coordinate: REST leaves the zero out, as production answered the
+/// point (0, 1) (FS-ENT-ORACLE O-3, `{"longitude": 1}`), and reads a left-out coordinate as
+/// zero, as proto3 JSON reads a default; a geo point that is no object is refused.
+#[test]
+fn rest_geo_points_leave_out_zero_coordinates() {
+    let s = state(None);
+    for (written, read) in [
+        (
+            json!({"latitude": 0, "longitude": 1}),
+            json!({"longitude": 1.0}),
+        ),
+        (json!({"longitude": 1}), json!({"longitude": 1.0})),
+        (json!({"latitude": -2.5}), json!({"latitude": -2.5})),
+        (json!({}), json!({})),
+    ] {
+        let (status, created) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/geo/p"),
+            json!({"fields": {"g": {"geoPointValue": written.clone()}}}),
+        );
+        assert_eq!(status, 200, "{written}: {created}");
+        let (status, got) = call(&s, "GET", &format!("{DOCS}/geo/p"), Value::Null);
+        assert_eq!(status, 200, "{got}");
+        assert_eq!(got["fields"]["g"]["geoPointValue"], read, "{written}");
+    }
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/geo/p"),
+        json!({"fields": {"g": {"geoPointValue": 5}}}),
+    );
+    assert_eq!(status, 400, "{body}");
+}
+
 #[test]
 fn rest_round_trips_all_standard_value_types_and_preserves_refused_writes() {
     let s = state(None);
@@ -7070,8 +7105,8 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
             assert_eq!(body.as_array().map(Vec::len), Some(1), "{label}");
         }
         // The parent of a top-level document is the documents root under both profiles
-        // (FS-ENT-ORACLE O-1); its document ID is INVALID_ARGUMENT as in production, its
-        // collection ID INVALID_ARGUMENT as in the official emulator and unrecorded under strict.
+        // (FS-ENT-ORACLE O-1); its document ID and collection ID are INVALID_ARGUMENT as in
+        // production (O-1, O-3).
         let up = json!({"functionValue": {"name": "parent", "args": [{"fieldReferenceValue": "__name__"}]}});
         let select = |v: &Value| {
             pipeline_body(
@@ -7095,7 +7130,11 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
         let (status, body) = run(select(
             &json!({"functionValue": {"name": "collection_id", "args": [up]}}),
         ));
-        assert_eq!(status, if strict { 501 } else { 400 }, "{body}");
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            stream_error(&body)["error"]["message"],
+            "collection_id(...) requires a non-empty path."
+        );
         assert_eq!(body.as_array().map(Vec::len), Some(1));
     }
 }
@@ -7181,6 +7220,7 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
 /// finite doubles, arrays of them) and refuses the other kinds, which the emulator profile
 /// answers.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rest_execute_pipeline_answers_the_o2_rows() {
     for strict in [true, false] {
         let s = enterprise_state(strict, None);
@@ -7239,6 +7279,7 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
                 "strict={strict}"
             );
         }
+        // The literal kinds FS-ENT-ORACLE O-3 recorded, and arrays and maps of them.
         for literal in [
             json!({"stringValue": "x"}),
             json!({"booleanValue": true}),
@@ -7248,12 +7289,46 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
             json!({"arrayValue": {"values": [{"stringValue": "x"}]}}),
         ] {
             let (status, body) = select(literal.clone());
+            assert_eq!(status, 200, "strict={strict} {literal}: {body}");
             assert_eq!(
-                status,
-                if strict { 501 } else { 200 },
-                "strict={strict} {literal}: {body}"
+                body[0]["results"][0]["fields"]["v"], literal,
+                "strict={strict}"
             );
         }
+        // A map of recorded literals with plain keys composes (a named coordinator inference,
+        // PX1b review M3); empty, reserved and dotted keys are unrecorded.
+        let nested = json!({"mapValue": {"fields": {"a": {"mapValue": {"fields": {"b": {"arrayValue": {"values": [{"integerValue": "1"}, {"mapValue": {"fields": {"c": {"stringValue": "x"}}}}]}}}}}}}});
+        let (status, body) = select(nested.clone());
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        assert_eq!(
+            body[0]["results"][0]["fields"]["v"], nested,
+            "strict={strict}"
+        );
+        for key in ["ab_c9", "_k", "K"] {
+            let plain = json!({"mapValue": {"fields": {key: {"integerValue": "1"}}}});
+            let (status, body) = select(plain.clone());
+            assert_eq!(status, 200, "strict={strict} {key:?}: {body}");
+            assert_eq!(
+                body[0]["results"][0]["fields"]["v"], plain,
+                "strict={strict}"
+            );
+        }
+        for key in ["", "__x__", "a.b", "1a", "a-b"] {
+            let (status, body) =
+                select(json!({"mapValue": {"fields": {key: {"integerValue": "1"}}}}));
+            // The emulator profile answers as before (a reserved key is refused by the value
+            // decoder, as for a write).
+            assert_eq!(status == 501, strict, "strict={strict} {key:?}: {body}");
+        }
+        // A vector literal is unrecorded.
+        let (status, body) = select(
+            json!({"mapValue": {"fields": {"__type__": {"stringValue": "__vector__"}, "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}}),
+        );
+        assert_eq!(
+            status,
+            if strict { 501 } else { 200 },
+            "strict={strict}: {body}"
+        );
     }
 }
 

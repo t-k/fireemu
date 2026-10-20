@@ -119,12 +119,12 @@ await assert.rejects(rows(source().where(field("name").regexMatch("a"))), (error
 // a reference with an empty path.
 const [{ up: root }] = await rows(source().select(parent(field("__name__")).as("up")).limit(1));
 assert.equal(root.path, "");
-// The collection ID of the documents root: unrecorded in production, so strict refuses it as
-// unimplemented (501); the official emulator refuses it as INVALID_ARGUMENT (400), which the
-// Lite SDK reports as failed-precondition, as it maps every HTTP 400.
+// The collection ID of the documents root: production and the official emulator refuse it as
+// INVALID_ARGUMENT (400, FS-ENT-ORACLE O-3), which the Lite SDK reports as failed-precondition,
+// as it maps every HTTP 400.
 await assert.rejects(
   rows(source().select(collectionId(parent(field("__name__"))).as("c"))),
-  (error) => error.code === (profile === "strict" ? "unimplemented" : "failed-precondition"),
+  (error) => error.code === "failed-precondition",
 );
 console.log(`pipeline-lite smoke passed (${profile})`);
 process.exit(0);

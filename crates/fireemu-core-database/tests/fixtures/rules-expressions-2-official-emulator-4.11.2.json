@@ -2499,5 +2499,138 @@
   "load": 200,
   "error": null,
   "read": 200
+ },
+ {
+  "expr": "'a'.matches(/^(a/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected ')' at position 4\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/(a$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected ')' at position 4\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/^(a$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected ')' at position 2\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a{2,/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected '}' at position 6\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a{2,3/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected '}' at position 7\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a{2,3}/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/(a))/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, end-of-string expected\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/[(]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/\\(/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a{3}$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/^a{x}/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, integer expected at position 2\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a{}/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, integer expected at position 4\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/((a)/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected ')' at position 8\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/[)]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a{2}{3}/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/x(?:a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[[:digit:]]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a{1,}/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/^a{1,2$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected '}' at position 5\n",
+  "read": null
  }
 ]

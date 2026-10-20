@@ -152,21 +152,12 @@ fn every_recorded_expression_loads_and_decides_as_the_official_emulator() {
     failures.extend(differences(include_str!(
         "fixtures/rules-expressions-2-official-emulator-4.11.2.json"
     )));
-    // The official emulator's regular expressions are a dialect of their own, which these
-    // rules do not follow yet: the RE2 engine they use reads these patterns otherwise.
-    let known: BTreeSet<&str> = [
-        r#""'a'.matches(/(a/)" : loaded, expected "1:37: Illegal regular expression, expected ')' at position 6\n""#,
-        r#""'a'.matches(/a)/)" : loaded, expected "1:37: Illegal regular expression, end-of-string expected\n""#,
-        r#""'a'.matches(/a{2/)" : loaded, expected "1:37: Illegal regular expression, expected '}' at position 5\n""#,
-        r#""'a'.matches(/a**/)" : read false, expected true"#,
-        r#""'a'.matches(/(?:a)/)" : read true, expected false"#,
-        r#""'a'.matches(/(?i)a/)" : read true, expected false"#,
-        r#""'a'.matches(/a{,2}/)" : loaded, expected "1:37: Illegal regular expression, integer expected at position 4\n""#,
-        r#""'a'.matches(/\\p{L}/)" : loaded, expected "1:37: Illegal regular expression, integer expected at position 5\n""#,
-        r#""'a'.matches(/[[:alpha:]]/)" : read true, expected false"#,
-    ]
-    .into_iter()
-    .collect();
+    // The official emulator's regular expressions are a dialect of their own (RTDB-03c).
+    // Until it is followed, its load refusals are copied and the constructs RE2 reads
+    // otherwise never match; the one recorded difference left denies where it allows.
+    let known: BTreeSet<&str> = [r#""'a'.matches(/a**/)" : read false, expected true"#]
+        .into_iter()
+        .collect();
     let unknown: Vec<&String> = failures
         .iter()
         .filter(|f| !known.contains(f.as_str()))

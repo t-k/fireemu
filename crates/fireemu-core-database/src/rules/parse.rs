@@ -112,8 +112,8 @@ pub enum ExprKind {
     Str(String),
     /// `null`
     Null,
-    /// `/pattern/flags`
-    Regex(String, String),
+    /// `/pattern/flags`, compiled when the rules load.
+    Regex(super::pattern::Pattern),
     /// `[a, b]`, only as an argument of `hasChildren`.
     Array(Vec<Expr>),
     /// A variable.
@@ -343,8 +343,75 @@ impl Lexer<'_> {
             }
         }
         check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
+        check_groups_and_counts(&pattern).map_err(|message| ExprError::new(start, message))?;
         Ok((start, Token::Regex(pattern, flags)))
     }
+}
+
+/// The groups and counted repetitions of a pattern, as the official emulator checks them. It
+/// reads the pattern wrapped as it searches with it (`.*` before an unanchored start and after
+/// an unanchored end), and its positions count in that text: an unclosed group is "expected
+/// ')' at position <end>", a `)` without its group "end-of-string expected", and a `{` must
+/// open `{n}`, `{n,}` or `{n,m}` ("integer expected" or "expected '}'" where it stops). An
+/// escape such as `\p` is one character, so `\p{L}` is a count without its integer.
+fn check_groups_and_counts(pattern: &str) -> Result<(), String> {
+    let (start, body) = match pattern.strip_prefix('^') {
+        Some(body) => ("", body),
+        None => (".*", pattern),
+    };
+    let (body, end) = match body.strip_suffix('$') {
+        Some(body) => (body, ""),
+        None => (body, ".*"),
+    };
+    let wrapped: Vec<char> = format!("{start}{body}{end}").chars().collect();
+    let illegal = |what: String| Err(format!("Illegal regular expression, {what}"));
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < wrapped.len() {
+        match wrapped[i] {
+            '\\' => i += 1,
+            '[' => {
+                // A class ends at the first `]` after its first member.
+                i += 2;
+                while i < wrapped.len() && wrapped[i] != ']' {
+                    if wrapped[i] == '\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            '(' => depth += 1,
+            ')' if depth == 0 => return illegal("end-of-string expected".to_owned()),
+            ')' => depth -= 1,
+            '{' => {
+                let digits = |from: usize| {
+                    let mut to = from;
+                    while wrapped.get(to).is_some_and(char::is_ascii_digit) {
+                        to += 1;
+                    }
+                    to
+                };
+                let after = digits(i + 1);
+                if after == i + 1 {
+                    return illegal(format!("integer expected at position {}", i + 1));
+                }
+                let mut at = after;
+                if wrapped.get(at) == Some(&',') {
+                    at = digits(at + 1);
+                }
+                if wrapped.get(at) != Some(&'}') {
+                    return illegal(format!("expected '}}' at position {at}"));
+                }
+                i = at;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if depth > 0 {
+        return illegal(format!("expected ')' at position {}", wrapped.len()));
+    }
+    Ok(())
 }
 
 /// The anchors of a pattern, as the official emulator checks them: a final `$` is the end
@@ -658,7 +725,9 @@ impl Parser<'_> {
         let kind = match token {
             Token::Number(n) => ExprKind::Number(n),
             Token::Str(s) => ExprKind::Str(s),
-            Token::Regex(pattern, flags) => ExprKind::Regex(pattern, flags),
+            Token::Regex(pattern, flags) => {
+                ExprKind::Regex(super::pattern::Pattern::new(pattern, flags))
+            }
             Token::Name(name) => match name.as_str() {
                 "true" => ExprKind::Bool(true),
                 "false" => ExprKind::Bool(false),

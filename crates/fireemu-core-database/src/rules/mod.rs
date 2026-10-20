@@ -14,6 +14,7 @@
 mod check;
 mod eval;
 mod parse;
+mod pattern;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

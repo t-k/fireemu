@@ -53,7 +53,7 @@ enum Value<'a> {
     Json(Json),
     Snapshot(Snapshot<'a>),
     Query,
-    Regex(String, String),
+    Regex(super::pattern::Pattern),
     Array(Vec<Value<'a>>),
 }
 
@@ -116,7 +116,7 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
         ExprKind::Number(n) => Some(Value::Num(*n)),
         ExprKind::Str(s) => Some(Value::Str(s.clone())),
         ExprKind::Null => Some(Value::Null),
-        ExprKind::Regex(pattern, flags) => Some(Value::Regex(pattern.clone(), flags.clone())),
+        ExprKind::Regex(pattern) => Some(Value::Regex(pattern.clone())),
         ExprKind::Array(items) => items
             .iter()
             .map(|item| eval(item, scope))
@@ -263,36 +263,13 @@ fn call<'a>(object: Value<'a>, name: &str, arguments: &[Value<'a>]) -> Option<Va
             "toLowerCase" => Some(Value::Str(s.to_lowercase())),
             "toUpperCase" => Some(Value::Str(s.to_uppercase())),
             "matches" => match arguments.first()? {
-                Value::Regex(pattern, flags) => regex_matches(pattern, flags, &s),
+                Value::Regex(pattern) => pattern.matches(&s).map(Value::Bool),
                 _ => None,
             },
             _ => None,
         },
         _ => None,
     }
-}
-
-/// `string.matches(/pattern/flags)`: a search, so the pattern is unanchored unless it
-/// anchors itself; `i` ignores case.
-fn regex_matches<'a>(pattern: &str, flags: &str, text: &str) -> Option<Value<'a>> {
-    let mut source = String::new();
-    if flags.contains('i') {
-        source.push_str("(?i)");
-    }
-    let anchored_start = pattern.starts_with('^');
-    // A final `$` is the end anchor; loading refused one left escaping nothing.
-    let anchored_end = pattern.ends_with('$');
-    if !anchored_start {
-        source.push_str("(?s:.)*?");
-    }
-    source.push_str("(?:");
-    source.push_str(pattern);
-    source.push(')');
-    if !anchored_end {
-        source.push_str("(?s:.)*");
-    }
-    let regex = fireemu_core_rules::regex::Regex::new(&source).ok()?;
-    regex.is_full_match(text).ok().map(Value::Bool)
 }
 
 fn snapshot_call<'a>(

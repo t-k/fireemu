@@ -7828,6 +7828,46 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             Some(arity.to_owned()),
         ),
         (
+            "aggregate without groups, field accumulator",
+            stage("aggregate", vec![map(vec![("c", pipeline_field("n"))])]),
+            Some(arity.to_owned()),
+        ),
+        (
+            "aggregate without groups, unknown function",
+            stage(
+                "aggregate",
+                vec![map(vec![("c", pipeline_function("nope_fn", vec![]))])],
+            ),
+            Some(arity.to_owned()),
+        ),
+        (
+            "aggregate without groups, reserved alias",
+            stage("aggregate", vec![map(vec![("__name__", count())])]),
+            Some(arity.to_owned()),
+        ),
+        (
+            "add_fields, then select empty map",
+            {
+                let mut stages = stage("add_fields", vec![map(vec![("t", pipeline_field("top"))])]);
+                stages.extend(stage("select", vec![map(vec![])]).into_iter().skip(1));
+                stages
+            },
+            Some("The 'select(...)' stage requires at least one field.".to_owned()),
+        ),
+        (
+            "add_fields, then select empty alias",
+            {
+                let mut stages = stage("add_fields", vec![map(vec![("t", pipeline_field("top"))])]);
+                stages.extend(
+                    stage("select", vec![map(vec![("", pipeline_field("top"))])])
+                        .into_iter()
+                        .skip(1),
+                );
+                stages
+            },
+            Some(empty_path.to_owned()),
+        ),
+        (
             "aggregate without groups, quoted alias",
             stage("aggregate", vec![map(vec![("`c`", count())])]),
             Some(arity.to_owned()),

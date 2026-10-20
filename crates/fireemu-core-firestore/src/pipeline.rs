@@ -354,6 +354,9 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
             Arg::Map(_) => alias_map(name, i, a, "a map of aliases to expressions"),
             other => Err(argument(name, i, "a field, expression or alias map", other)),
         }),
+        // The official emulator answers its arity text for a one-argument aggregate before
+        // any check of the accumulators; the adapter answers it per profile.
+        "aggregate" if args.len() == 1 => Ok(()),
         "aggregate" => {
             alias_map(name, 0, &args[0], "a map of aliases to aggregate functions")?;
             match args.get(1) {
@@ -565,6 +568,15 @@ mod tests {
                 "add_fields",
                 vec![Arg::Map(vec![("a".into(), Arg::Pipeline)])]
             )
+        ])
+        .is_err());
+        // A one-argument aggregate is left to the adapter's arity answer, whatever it holds;
+        // with its groups the accumulators must be functions.
+        let field_accumulator = || Arg::Map(vec![("c".into(), Arg::Field("age".into()))]);
+        assert!(canonicalize(&[users(), stage("aggregate", vec![field_accumulator()])]).is_ok());
+        assert!(canonicalize(&[
+            users(),
+            stage("aggregate", vec![field_accumulator(), Arg::Map(Vec::new())])
         ])
         .is_err());
         assert!(canonicalize(&[

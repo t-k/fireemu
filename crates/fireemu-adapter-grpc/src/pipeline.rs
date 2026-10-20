@@ -923,9 +923,9 @@ fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status>
 /// is `deferred` until every stage's other checks are done. Production answered
 /// `aggregate({c: count()})` directly after the collection with the official arity text
 /// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/results/metadata#aggregate`), so strict answers that
-/// text for that shape (a non-empty map of plain valid aliases, at `position` 1; the request
-/// validator already refuses accumulators that are not functions) and leaves every other shape
-/// here to the unsupported-stage refusal.
+/// text for that shape (directly after the collection, a non-empty map of plain, valid,
+/// unreserved aliases to `count`) and leaves every other shape here to the unsupported-stage
+/// refusal. A `select` after an unrun stage gets its alias checks here too.
 fn check_unrun_alias_stage(
     stage: &pb::pipeline::Stage,
     position: usize,
@@ -937,10 +937,15 @@ fn check_unrun_alias_stage(
         let recorded = || {
             position == 1
                 && map_fields(&stage.args[0]).is_some_and(|fields| {
-                    !fields.is_empty()
-                        && fields.keys().all(|alias| {
-                            !alias.contains(['.', '`']) && parse_alias(alias, unrecorded).is_ok()
-                        })
+                    !fields.is_empty() && fields.iter().all(|(alias, accumulator)| {
+                        !alias.contains(['.', '`'])
+                            && !is_reserved_name(alias)
+                            && parse_alias(alias, unrecorded).is_ok()
+                            && matches!(
+                                &accumulator.value_type,
+                                Some(pb::value::ValueType::FunctionValue(f)) if f.name == "count"
+                            )
+                    })
                 })
         };
         if !strict || recorded() {
@@ -950,7 +955,25 @@ fn check_unrun_alias_stage(
         }
     }
     let name = stage.name.as_str();
-    if strict || !matches!(name, "aggregate" | "add_fields" | "distinct") {
+    if strict || !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
+        return Ok(());
+    }
+    // A select after an unrun stage: the official emulator checks its aliases too, with the
+    // select texts, and answers an empty map last.
+    if name == "select" {
+        for alias in stage
+            .args
+            .iter()
+            .filter_map(map_fields)
+            .flat_map(|fields| fields.keys())
+        {
+            decode_alias(alias, unrecorded)?;
+        }
+        if stage.args.first().is_some_and(is_empty_map) {
+            deferred.get_or_insert_with(|| {
+                Status::invalid_argument("The 'select(...)' stage requires at least one field.")
+            });
+        }
         return Ok(());
     }
     for alias in stage

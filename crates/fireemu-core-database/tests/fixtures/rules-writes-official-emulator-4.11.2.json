@@ -1,0 +1,1286 @@
+[
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.exists()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.exists()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "!newData.exists()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"!newData.exists()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "data.exists()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"data.exists()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.child('name').val() == 'b'"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.child('name').val() == 'b'\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.child('n').val() > data.child('n').val()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.child('n').val() > data.child('n').val()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.child('n').val() < data.child('n').val()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.child('n').val() < data.child('n').val()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "$k == 'x'"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"$k == 'x'\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "$k == 'z'"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"$k == 'z'\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "root.child('u').val() == auth.uid"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"root.child('u').val() == auth.uid\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "auth.token.admin == true"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"auth.token.admin == true\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "auth.token.admin"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"auth.token.admin\"}}}}",
+  "load": 400,
+  "error": "1:32: Expression must evaluate to a boolean.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "auth.uid == 'u1' && newData.hasChildren(['name','n'])"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"auth.uid == 'u1' && newData.hasChildren(['name','n'])\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.val() == null"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.val() == null\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "data.val() != null"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"data.val() != null\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.parent().child('y').val() == 5"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.parent().child('y').val() == 5\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.getPriority() == null"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.getPriority() == null\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "query.limitToFirst == null"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"query.limitToFirst == null\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.child('name').val().length < 2"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.child('name').val().length < 2\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "newData.child('name').isString()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"newData.child('name').isString()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "now > 0"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"now > 0\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true ? newData.exists() : false"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true ? newData.exists() : false\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "auth != null ? true : 1"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"auth != null ? true : 1\"}}}}",
+  "load": 400,
+  "error": "1:32: Expression must evaluate to a boolean.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "auth == null"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": false,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"auth == null\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "auth == null"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"auth == null\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "!newData.exists()"
+     }
+    }
+   }
+  },
+  "method": "DELETE",
+  "path": "/t/x",
+  "body": null,
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"!newData.exists()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "data.exists() && !newData.exists()"
+     }
+    }
+   }
+  },
+  "method": "DELETE",
+  "path": "/t/x",
+  "body": null,
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"data.exists() && !newData.exists()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x/name",
+  "body": "c",
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "c"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "newData.hasChildren(['name','n'])"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b"
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"newData.hasChildren(['name','n'])\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "newData.child('n').val() > data.child('n').val()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 3
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"newData.child('n').val() > data.child('n').val()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 3,
+    "name": "b"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "newData.child('n').val() > data.child('n').val()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 0
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"newData.child('n').val() > data.child('n').val()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "auth.uid == $k"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b",
+   "n": 3
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"auth.uid == $k\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "auth.uid == $k"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/u1",
+  "body": {
+   "name": "b",
+   "n": 3
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"auth.uid == $k\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "u1": {
+    "n": 3,
+    "name": "b"
+   },
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "newData.isString()"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t",
+  "body": {
+   "x": {
+    "name": 1
+   }
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"newData.isString()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "newData.child('n').isNumber() || newData.child('name').isString()"
+     }
+    }
+   }
+  },
+  "method": "PATCH",
+  "path": "/t",
+  "body": {
+   "x/n": 5,
+   "z/name": "q"
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"newData.child('n').isNumber() || newData.child('name').isString()\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 5,
+    "name": "a"
+   },
+   "y": 5,
+   "z": {
+    "name": "q"
+   }
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "true",
+      ".validate": "newData.child('n').val() == 2"
+     }
+    }
+   }
+  },
+  "method": "PATCH",
+  "path": "/t/x",
+  "body": {
+   "n": 2
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"true\",\".validate\":\"newData.child('n').val() == 2\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 200,
+  "after": {
+   "x": {
+    "n": 2,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": {
+   "rules": {
+    "t": {
+     "$k": {
+      ".write": "false"
+     }
+    }
+   }
+  },
+  "method": "PUT",
+  "path": "/t/x",
+  "body": {
+   "name": "b"
+  },
+  "auth": true,
+  "rulesText": "{\"rules\":{\"t\":{\"$k\":{\".write\":\"false\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": 401,
+  "after": {
+   "x": {
+    "n": 1,
+    "name": "a"
+   },
+   "y": 5
+  }
+ },
+ {
+  "rules": "{\"rules\":{\".read\":1}}",
+  "rulesText": "{\"rules\":{\".read\":1}}",
+  "load": 400,
+  "error": "1:19: Invalid rule expression.  Expected 'true', 'false', or an expression string.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"true\",\"t\":{\".foo\":true}}}",
+  "rulesText": "{\"rules\":{\".read\":\"true\",\"t\":{\".foo\":true}}}",
+  "load": 400,
+  "error": "1:38: Expected '{'.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".indexOn\":\"n\"}}",
+  "rulesText": "{\"rules\":{\".indexOn\":\"n\"}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".indexOn\":[\"n\",\"m\"]}}",
+  "rulesText": "{\"rules\":{\".indexOn\":[\"n\",\"m\"]}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".indexOn\":[1]}}",
+  "rulesText": "{\"rules\":{\".indexOn\":[1]}}",
+  "load": 400,
+  "error": "1:23: Invalid indexOn expression. Expected ']'\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":null}}",
+  "rulesText": "{\"rules\":{\".read\":null}}",
+  "load": 400,
+  "error": "1:19: Invalid rule expression.  Expected 'true', 'false', or an expression string.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\"t\":{\"$a\":{},\"$b\":{}}}}",
+  "rulesText": "{\"rules\":{\"t\":{\"$a\":{},\"$b\":{}}}}",
+  "load": 400,
+  "error": "1:30: Cannot have multiple default rules ('$a' and '$b').\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\"t\":{\".validate\":\"true\"}}}",
+  "rulesText": "{\"rules\":{\"t\":{\".validate\":\"true\"}}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"true\"}} ",
+  "rulesText": "{\"rules\":{\".read\":\"true\"}} ",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\n  \".read\":\n    \"auth.x ===\"\n}}",
+  "rulesText": "{\"rules\":{\n  \".read\":\n    \"auth.x ===\"\n}}",
+  "load": 400,
+  "error": "3:16: Unexpected end of expression\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "// c\n{\"rules\":{\".read\":true}}",
+  "rulesText": "// c\n{\"rules\":{\".read\":true}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":true /* c */}}",
+  "rulesText": "{\"rules\":{\".read\":true /* c */}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".write\":\"newData.val() ===\"}}",
+  "rulesText": "{\"rules\":{\".write\":\"newData.val() ===\"}}",
+  "load": 400,
+  "error": "1:38: Unexpected end of expression\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".validate\":\"query.limitToFirst == 1\"}}",
+  "rulesText": "{\"rules\":{\".validate\":\"query.limitToFirst == 1\"}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".write\":\"query.limitToFirst == 1\"}}",
+  "rulesText": "{\"rules\":{\".write\":\"query.limitToFirst == 1\"}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"x\":1}",
+  "rulesText": "{\"x\":1}",
+  "load": 400,
+  "error": "1:2: Expected 'rules' property.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":true}",
+  "rulesText": "{\"rules\":true}",
+  "load": 400,
+  "error": "1:10: Expected '{'.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\"$a\":{\"$b\":{\".read\":\"$a == $b\"}}}}",
+  "rulesText": "{\"rules\":{\"$a\":{\"$b\":{\".read\":\"$a == $b\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\"a\":{\"$a\":{\".read\":\"$a == 1\"}}}}",
+  "rulesText": "{\"rules\":{\"a\":{\"$a\":{\".read\":\"$a == 1\"}}}}",
+  "load": 200,
+  "error": null,
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"data.child('a').val().contains(1)\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"data.child('a').val().contains(1)\"}}",
+  "load": 400,
+  "error": "1:51: contains() expects a string argument.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"'a'.replace('a')\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"'a'.replace('a')\"}}",
+  "load": 400,
+  "error": "1:20: replace() expects two arguments.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"'a'.matches('a')\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"'a'.matches('a')\"}}",
+  "load": 400,
+  "error": "1:32: matches() expects a regular expression literal argument.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"data.hasChildren('a')\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"data.hasChildren('a')\"}}",
+  "load": 400,
+  "error": "1:37: hasChildren() expects an array of child names.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"data.hasChildren([1])\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"data.hasChildren([1])\"}}",
+  "load": 400,
+  "error": "1:38: hasChildren() expects an array of strings.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"data.hasChild('a', 'b')\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"data.hasChild('a', 'b')\"}}",
+  "load": 400,
+  "error": "1:20: hasChild() expects 1 argument.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"data.val(1) == null\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"data.val(1) == null\"}}",
+  "load": 400,
+  "error": "1:20: val() expects no arguments.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"1 - 'a' == 0\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"1 - 'a' == 0\"}}",
+  "load": 400,
+  "error": "1:20: Invalid - expression: right operand is not a number.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"1 < true\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"1 < true\"}}",
+  "load": 400,
+  "error": "1:20: Invalid < expression: right operand must be a number or string.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"data < 1\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"data < 1\"}}",
+  "load": 400,
+  "error": "1:20: Invalid < expression: left operand must be a number or string.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"auth.token.x()\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"auth.token.x()\"}}",
+  "load": 400,
+  "error": "1:20: Type error: Function call on target that is not a function.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"/a/ == 1\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"/a/ == 1\"}}",
+  "load": 400,
+  "error": "1:20: Invalid == expression: left operand is not a number, boolean, string, null.\n",
+  "status": null,
+  "after": null
+ },
+ {
+  "rules": "{\"rules\":{\".read\":\"now.length == 1\"}}",
+  "rulesText": "{\"rules\":{\".read\":\"now.length == 1\"}}",
+  "load": 400,
+  "error": "1:20: Invalid property access: target is not an object.\n",
+  "status": null,
+  "after": null
+ }
+]

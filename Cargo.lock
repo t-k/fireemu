@@ -822,6 +822,7 @@ dependencies = [
 name = "fireemu-core-database"
 version = "0.28.0"
 dependencies = [
+ "fireemu-core-rules",
  "proptest",
  "serde_json",
 ]

@@ -707,8 +707,10 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
             }
             // A reference argument of a document function is answered per row, as production
             // recorded it (O-3 and O-4 `functions#*-collection`), not refused as a literal.
-            let document_function =
-                matches!(function.name.as_str(), "document_id" | "collection_id" | "parent");
+            let document_function = matches!(
+                function.name.as_str(),
+                "document_id" | "collection_id" | "parent"
+            );
             let args = function
                 .args
                 .iter()
@@ -716,9 +718,9 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                     Some(V::ReferenceValue(name))
                         if document_function && unrecorded == Unrecorded::Refuse =>
                     {
-                        Ok(Expr::Constant(fireemu_core_firestore::value::Value::Reference(
-                            name.clone(),
-                        )))
+                        Ok(Expr::Constant(
+                            fireemu_core_firestore::value::Value::Reference(name.clone()),
+                        ))
                     }
                     _ => decode_operand(arg, unrecorded),
                 })
@@ -750,25 +752,21 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                 Status::unimplemented("a literal of this shape is not observed locally"),
             ),
             // fireemu's nesting limit is its own text: strict refuses it as unobserved.
-            None => Ok(Expr::Constant(decode_official_literal(value).map_err(|e| {
-                if e.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH") {
-                    own_text(e.message().to_owned(), unrecorded)
-                } else {
-                    e
-                }
-            })?)),
+            None => Ok(Expr::Constant(decode_official_literal(value).map_err(
+                |e| {
+                    if e.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH") {
+                        own_text(e.message().to_owned(), unrecorded)
+                    } else {
+                        e
+                    }
+                },
+            )?)),
             // A literal holding an expression with a key that is not plain: the official
             // emulator names a reserved key before the value type; production has not answered
             // such a key, so strict refuses it as unobserved.
             Some(_) if !literal_keys_are_plain(value) && unrecorded == Unrecorded::Refuse => {
                 Err(Status::unimplemented(
                     "a literal holding an expression with this key is not observed locally",
-                ))
-            }
-            // A literal of literals inside it that strict does not answer on its own.
-            Some(_) if unrecorded == Unrecorded::Refuse && holds_unrecorded_literal(value) => {
-                Err(Status::unimplemented(
-                    "a literal holding an expression and an unrecorded value is not observed locally",
                 ))
             }
             Some(_) if reserved_key(value).is_some() => Err(Status::invalid_argument(format!(
@@ -952,7 +950,8 @@ fn vector_error(map: &pb::MapValue) -> Option<&'static str> {
         .then_some("Vectors cannot contain NaN values.")
 }
 
-/// A wire value's type as the official emulator names it in its `__type__` refusal.
+/// A wire value's type as the official emulator names it in its `__type__` refusal (a string is
+/// no refusal).
 fn official_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
     use pb::value::ValueType as V;
     match value {
@@ -961,9 +960,8 @@ fn official_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
         Some(V::IntegerValue(_)) => "LONG",
         Some(V::DoubleValue(_)) => "DOUBLE",
         Some(V::TimestampValue(_)) => "TIMESTAMP",
-        Some(V::StringValue(_)) => "STRING",
         Some(V::BytesValue(_)) => "BYTES",
-        Some(V::ReferenceValue(_)) => "REFERENCE",
+        Some(V::ReferenceValue(_)) => "ENTITY_REF",
         Some(V::GeoPointValue(_)) => "GEO_POINT",
         Some(V::ArrayValue(_)) => "ARRAY",
         Some(V::MapValue(_)) => "MAP",
@@ -996,26 +994,6 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
     }
 }
 
-/// Whether a literal holding an expression holds a literal of literals strict does not answer
-/// on its own (a malformed vector, a `__type__` that is no string, an unrecorded shape).
-fn holds_unrecorded_literal(value: &pb::Value) -> bool {
-    use pb::value::ValueType as V;
-    let entry = |inner: &pb::Value| match inner.value_type.as_ref() {
-        Some(V::ArrayValue(_) | V::MapValue(_)) if expression_kind(inner).is_some() => {
-            holds_unrecorded_literal(inner)
-        }
-        _ => {
-            expression_kind(inner).is_none()
-                && (literal_value_error(inner).is_some() || !literal_shape_recorded(inner))
-        }
-    };
-    match value.value_type.as_ref() {
-        Some(V::ArrayValue(array)) => array.values.iter().any(entry),
-        Some(V::MapValue(map)) => map.fields.values().any(entry),
-        _ => false,
-    }
-}
-
 /// Whether production recorded a literal of this shape: every vector map is
 /// `{__type__: "__vector__", value: [doubles]}` with at least one element, every one finite and
 /// none a negative zero (O-3, O-4
@@ -1037,12 +1015,9 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
                     )
             }
             // Production read reference literals naming a document (O-3 `literals#*`).
-            Some(V::ReferenceValue(name)) => {
-                name.is_ascii()
-                    && reference_literal_error(name).is_none()
-                    && name.split('/').count() > 5
-                    && name.split('/').count() % 2 == 1
-            }
+            // A reference that names no document was refused before (`literal_value_error`); the
+            // documents root and a non-ASCII name are unrecorded.
+            Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
                 if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
                     *refusable += 1;
@@ -1511,6 +1486,8 @@ fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<(usize, Refusal)> {
                             out.push((position, alias_kind(error)));
                         }
                     } else if name != "select" && reserved_alias(name, alias).is_some() {
+                        // A reserved alias of a stage fireemu does not run (strict refuses it
+                        // alone; beside another refusal it is a second one).
                         out.push((position, Refusal::Other));
                     }
                 }

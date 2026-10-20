@@ -1493,3 +1493,121 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
     ]);
     check(cases);
 }
+
+#[test]
+fn the_round_four_checks_hold_in_every_position() {
+    let reference = |path: &str| json!({ "referenceValue": format!("{DOCS}/{path}") });
+    let typed = |value: Value| map(vec![("__type__", value)]);
+    let vec_int = || vector(vec![int(1)]);
+    let list = |values: Vec<Value>| json!({ "arrayValue": { "values": values } });
+    let field_text = "Value type is not supported: FIELD_REFERENCE_VALUE";
+    let function_text = "Value type is not supported: FUNCTION_VALUE";
+    let doubles = "Vector must only contain values of type 'double'";
+    let key_call = || func("map", vec![field("i"), int(1)]);
+    let mut cases = Vec::new();
+    for (label, value, kind) in [
+        (
+            "{__type__: ts}",
+            json!({ "timestampValue": "2020-01-01T00:00:00Z" }),
+            "TIMESTAMP",
+        ),
+        (
+            "{__type__: bytes}",
+            json!({ "bytesValue": "AA==" }),
+            "BYTES",
+        ),
+        ("{__type__: ref}", reference("c/d"), "ENTITY_REF"),
+        (
+            "{__type__: geo}",
+            json!({ "geoPointValue": { "latitude": 1, "longitude": 1 } }),
+            "GEO_POINT",
+        ),
+    ] {
+        let text: &'static str =
+            Box::leak(format!("Field __type__ must be a string; founds {kind}.").into_boxed_str());
+        cases.push(Case {
+            label,
+            stages: vec![select(typed(value))],
+            strict: None,
+            emulator: (400, text),
+        });
+    }
+    cases.extend([
+        // Entries in order: a field first, a vector first, nested arrays and maps.
+        Case { label: "[i, vector of integers]", stages: vec![select(list(vec![field("i"), vec_int()]))], strict: None, emulator: (400, field_text) },
+        Case { label: "[[vector of integers, i]]", stages: vec![select(list(vec![list(vec![vec_int(), field("i")])]))], strict: None, emulator: (400, doubles) },
+        Case { label: "{a: [vector of integers, i]}", stages: vec![select(map(vec![("a", list(vec![vec_int(), field("i")]))]))], strict: None, emulator: (400, doubles) },
+        // References.
+        Case { label: "ref to the documents root", stages: vec![select(json!({ "referenceValue": DOCS }))], strict: None, emulator: (200, "") },
+        Case { label: "ref to a non-ASCII document", stages: vec![select(reference("あ/d"))], strict: None, emulator: (200, "") },
+        Case {
+            label: "document_id(ref garbage)",
+            stages: vec![select(func("document_id", vec![json!({ "referenceValue": "garbage" })]))],
+            strict: None,
+            emulator: (400, "Document parent name \"garbage\" lacks \"projects\" at index 0."),
+        },
+        Case {
+            label: "equal(i, ref c)",
+            stages: vec![select(func("equal", vec![field("i"), reference("c")]))],
+            strict: None,
+            emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."),
+        },
+        // Two value refusals in one stage.
+        Case {
+            label: "select {a: [i], b: [n]}",
+            stages: vec![stage("select", vec![map(vec![("a", list(vec![field("i")])), ("b", list(vec![field("n")]))])])],
+            strict: None,
+            emulator: (400, field_text),
+        },
+        // One refusal after an unrun stage.
+        Case {
+            label: "add_fields {t: top} then select {__x__: i}",
+            stages: vec![stage("add_fields", vec![map(vec![("t", field("top"))])]), stage("select", vec![map(vec![("__x__", field("i"))])])],
+            strict: Some((400, "Stage 'select': field name '__x__' is reserved.")),
+            emulator: (400, "Stage 'select': field name '__x__' is reserved."),
+        },
+        // A function's own refusal inside a literal holding it, at any depth.
+        Case { label: "[map(i, 1)]", stages: vec![select(list(vec![key_call()]))], strict: None, emulator: (400, function_text) },
+        Case { label: "[[map(i, 1)]]", stages: vec![select(list(vec![list(vec![key_call()])]))], strict: None, emulator: (400, function_text) },
+        Case { label: "{a: {b: map(i, 1)}}", stages: vec![select(map(vec![("a", map(vec![("b", key_call())]))]))], strict: None, emulator: (400, function_text) },
+        // A part strict refuses inside a function's arguments or a literal's entries.
+        Case {
+            label: "equal(map(i, 1), nope_fn())",
+            stages: vec![select(func("equal", vec![key_call(), func("nope_fn", vec![])]))],
+            strict: None,
+            emulator: (400, "map keys must be constants/literals"),
+        },
+        Case {
+            label: "{a: [i], b: nope_fn()}",
+            stages: vec![select(map(vec![("a", list(vec![field("i")])), ("b", func("nope_fn", vec![]))]))],
+            strict: None,
+            emulator: (400, field_text),
+        },
+        // Alias checks of a stage fireemu does not run: syntax, then reserved, then length.
+        Case {
+            label: "distinct {__name__: 1, 1500 bytes: 1}",
+            stages: vec![stage("distinct", vec![map(vec![("__name__", int(1)), (&*Box::leak("a".repeat(1500).into_boxed_str()), int(1))])])],
+            strict: None,
+            emulator: (400, "Stage 'distinct': field name '__name__' is reserved and can not be overwritten."),
+        },
+        Case {
+            label: "add_fields {\"\": top, __x__: top}",
+            stages: vec![stage("add_fields", vec![map(vec![("", field("top")), ("__x__", field("top"))])])],
+            strict: None,
+            emulator: (400, "Invalid empty property path string."),
+        },
+        Case {
+            label: "add_fields {__name__: __name__} is no overwrite",
+            stages: vec![stage("add_fields", vec![map(vec![("__name__", field("__name__"))])])],
+            strict: None,
+            emulator: (501, "pipeline stage \"add_fields\" is unsupported locally"),
+        },
+        Case {
+            label: "add_fields {__x__: __name__}",
+            stages: vec![stage("add_fields", vec![map(vec![("__x__", field("__name__"))])])],
+            strict: None,
+            emulator: (400, "Stage 'add_fields': field name '__x__' is reserved."),
+        },
+    ]);
+    check(cases);
+}

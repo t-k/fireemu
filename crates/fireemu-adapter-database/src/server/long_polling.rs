@@ -403,7 +403,7 @@ fn close(shared: &Shared, database: &mut Database, connection: &Connection, stat
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&connection.client);
     shared.long_polls.lock().remove(&connection.client);
-    database.close_realtime(connection.client);
+    database.close_realtime(connection.client, (shared.config.clock)());
 }
 
 /// Closes a connection that sends no request for twice the hold time (a held request that

@@ -15,8 +15,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_database::hash::node_hash;
+use fireemu_core_database::server_value::resolve;
 use fireemu_core_database::{
-    Bound, BoundKey, ErrorKind, Json, Limit, OrderBy, Path, QueryParams, ServerValueContext,
+    Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, Priority, QueryParams,
+    ServerValueContext,
 };
 
 use crate::json_parse::parse_with_keys;
@@ -460,6 +462,14 @@ impl Session {
                 self.authorize(db)?;
                 self.listen(db, arguments)
             }
+            "o" | "om" | "oc" => {
+                // Without a path the official emulator answers nothing and registers nothing.
+                if !arguments.contains_key("p") {
+                    return Err(Failure::Silent);
+                }
+                self.authorize(db)?;
+                self.on_disconnect(db, action, arguments, context)
+            }
             "n" => {
                 let path = location(arguments, false, db)?;
                 db.remove_listen(self.client, &path, listen_tag(arguments)?);
@@ -467,6 +477,54 @@ impl Session {
             }
             _ => Err(Failure::Malformed),
         }
+    }
+
+    /// Registers (`o`, `om`) or cancels (`oc`) writes for the end of this connection. The data
+    /// is checked now, as a write of it would be, with its server values resolved against
+    /// nothing; they are resolved again when the connection ends. A hash (`h`) is refused:
+    /// these are not transactions.
+    fn on_disconnect(
+        &mut self,
+        db: &mut Database,
+        action: &str,
+        arguments: &BTreeMap<String, Json>,
+        context: ServerValueContext,
+    ) -> Answer {
+        let path = location(arguments, true, db)?;
+        if action == "oc" {
+            db.forget_on_disconnect(self.client, &path);
+            return Ok(Json::string(""));
+        }
+        if arguments.contains_key("h") {
+            return Err(Failure::Malformed);
+        }
+        let limits = db.options().limits;
+        let data = arguments.get("d").cloned().unwrap_or(Json::Null);
+        let writes = if action == "o" {
+            vec![(path, data)]
+        } else {
+            let Json::Object(entries) = data else {
+                return Err(Failure::Malformed);
+            };
+            let mut relative = Vec::with_capacity(entries.len());
+            for key in entries.keys() {
+                let parsed = Path::parse(key, &limits).map_err(|_| Failure::Malformed)?;
+                relative.push((key.clone(), parsed));
+            }
+            refuse_overlap(&relative)?;
+            relative
+                .into_iter()
+                .zip(entries.into_values())
+                .map(|((_, relative), value)| (path.join(&relative), value))
+                .collect()
+        };
+        for (path, value) in &writes {
+            check_registered(path, value, &limits, context)?;
+        }
+        for (path, value) in writes {
+            db.remember_on_disconnect(self.client, &self.namespace, &path, value);
+        }
+        Ok(Json::string(""))
     }
 
     /// `auth` with a JWT reads its claims (the official emulator does not verify the
@@ -674,17 +732,7 @@ impl Session {
             let parsed = Path::parse(key, &limits).map_err(|_| Failure::Malformed)?;
             relative.push((key.clone(), parsed));
         }
-        // Report an overlap the way the server words it, naming the keys as sent.
-        let mut sorted: Vec<&(String, Path)> = relative.iter().collect();
-        sorted.sort_by(|a, b| a.1.cmp(&b.1));
-        for pair in sorted.windows(2) {
-            if pair[0].1.contains(&pair[1].1) {
-                return Err(invalid(format!(
-                    "Path '{}' is ancestor of '{}'",
-                    pair[0].0, pair[1].0
-                )));
-            }
-        }
+        refuse_overlap(&relative)?;
         let wire: Vec<(String, Json)> = entries
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -816,6 +864,40 @@ fn location(
 
 /// A write the tree refused: a priority on an absent node is answered; bad data is a
 /// connection error, as the official emulator treats it.
+/// Refuses merge entries of which one contains another, the way the server words it, naming
+/// the keys as sent.
+fn refuse_overlap(relative: &[(String, Path)]) -> Result<(), Failure> {
+    let mut sorted: Vec<&(String, Path)> = relative.iter().collect();
+    sorted.sort_by(|a, b| a.1.cmp(&b.1));
+    for pair in sorted.windows(2) {
+        if pair[0].1.contains(&pair[1].1) {
+            return Err(invalid(format!(
+                "Path '{}' is ancestor of '{}'",
+                pair[0].0, pair[1].0
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Checks a write registered for a connection's end as the tree would check it now: keys,
+/// depth, sizes, priorities and server-value placeholders. The official emulator answers a
+/// value it cannot read with a connection error, as it does for a write.
+fn check_registered(
+    path: &Path,
+    value: &Json,
+    limits: &fireemu_core_database::Limits,
+    context: ServerValueContext,
+) -> Result<(), Failure> {
+    let resolved = resolve(value, None, context).map_err(|_| Failure::Malformed)?;
+    if path.is_priority() {
+        Priority::from_json(&resolved).map_err(|_| Failure::Malformed)?;
+    } else {
+        Node::from_json(&resolved, path, limits).map_err(|_| Failure::Malformed)?;
+    }
+    Ok(())
+}
+
 fn write_failure(err: &fireemu_core_database::DatabaseError) -> Failure {
     match err.kind {
         ErrorKind::PriorityOnAbsentNode => invalid("could not set priority on non-existent node"),

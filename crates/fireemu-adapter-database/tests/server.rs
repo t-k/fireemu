@@ -792,3 +792,46 @@ async fn stopping_the_server_stops_its_flush_task() {
     }
     panic!("the database is still held after the server stopped");
 }
+
+#[tokio::test]
+async fn a_closing_websocket_writes_what_it_registered_and_listeners_hear_it() {
+    let (address, _) = start(Duration::from_secs(30)).await;
+    exchange(
+        &address,
+        "PUT",
+        "/presence/other.json?ns=w20",
+        r#""online""#,
+    )
+    .await;
+    let (mut listener, _) = Client::connect(&address, "/.ws?v=5&ns=w20").await;
+    listener.next_text().await;
+    listener
+        .text(r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/presence","h":""}}}"#)
+        .await;
+    listener.next_text().await;
+    listener.next_text().await;
+    let (mut leaving, _) = Client::connect(&address, "/.ws?v=5&ns=w20").await;
+    leaving.next_text().await;
+    leaving
+        .text(r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/presence/me","d":"offline"}}}"#)
+        .await;
+    assert_eq!(
+        leaving.next_text().await,
+        r#"{"t":"d","d":{"r":1,"b":{"s":"ok","d":""}}}"#
+    );
+    // A close frame ends the connection; a dropped socket would too.
+    leaving.send(0x8, &[0x03, 0xe8]).await;
+    drop(leaving);
+    assert_eq!(
+        listener.next_text().await,
+        r#"{"t":"d","d":{"b":{"p":"presence","d":{"me":"offline"}},"a":"m"}}"#
+    );
+    assert_eq!(
+        exchange(&address, "GET", "/presence.json?ns=w20", "")
+            .await
+            .rsplit("\r\n\r\n")
+            .next()
+            .unwrap(),
+        r#"{"me":"offline","other":"online"}"#
+    );
+}

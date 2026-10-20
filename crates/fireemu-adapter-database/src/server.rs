@@ -333,7 +333,7 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
         });
         if !delivered {
             listeners.remove(&client);
-            database.close_realtime(client);
+            database.close_realtime(client, (shared.config.clock)());
         }
     }
 }
@@ -519,7 +519,7 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&client);
-    database.close_realtime(client);
+    database.close_realtime(client, (shared.config.clock)());
 }
 
 /// Answers one prepared message under the database lock. Pushes already queued for the

@@ -28,6 +28,7 @@ use crate::json_text::{
 };
 use crate::listen::Listen;
 use crate::namespace::route;
+use crate::on_disconnect::Pending;
 use crate::request::{self, Location, Output, Refusal};
 
 /// An HTTP request as the REST layer sees it.
@@ -256,6 +257,8 @@ pub struct Database {
     events: Vec<(u64, SseEvent)>,
     /// Called when pushes or events wait outside a request, so the server delivers them.
     waker: Waker,
+    /// The writes each realtime connection registered for its end, with its namespace.
+    on_disconnect: BTreeMap<u64, (String, Pending)>,
 }
 
 /// The server's callback for messages that wait outside a request.
@@ -290,6 +293,7 @@ impl Database {
             session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
             events: Vec::new(),
             waker: Waker::default(),
+            on_disconnect: BTreeMap::new(),
         }
     }
 
@@ -773,10 +777,93 @@ impl Database {
         own.into_iter().map(|(_, frame)| frame).collect()
     }
 
-    /// Ends a realtime connection: its listens and undelivered messages go.
-    pub fn close_realtime(&mut self, client: u64) {
+    /// Ends a realtime connection at `now_millis`: its listens and undelivered messages go,
+    /// then the writes it registered for its end are applied as one update at the root (a
+    /// value registered at the root is written as a put there). An update the tree refuses
+    /// (a priority for a node that is not there) writes nothing, as on the official
+    /// emulator. What the writes cause waits for the server, which the waker calls.
+    pub fn close_realtime(&mut self, client: u64, now_millis: i64) {
         self.listens.retain(|_, listen| listen.client != client);
         self.pushes.retain(|(to, _)| *to != client);
+        let Some((namespace, pending)) = self.on_disconnect.remove(&client) else {
+            return;
+        };
+        let entries = pending.entries();
+        if entries.is_empty() {
+            return;
+        }
+        let context = ServerValueContext { now_millis };
+        let root_value = match entries.as_slice() {
+            [(keys, value)] if keys.is_empty() => Some(value.clone()),
+            _ => None,
+        };
+        let change = if let Some(value) = root_value {
+            let paths = [Path::root()];
+            let before = self.before_write(&namespace, &paths);
+            if self
+                .tree_mut(&namespace)
+                .set(&paths[0], &value, context)
+                .is_err()
+            {
+                return;
+            }
+            let effective = self.effective(&namespace, &paths, before)[0];
+            let [path] = paths;
+            Change::Put { path, effective }
+        } else {
+            let paths: Vec<Path> = entries
+                .iter()
+                .map(|(keys, _)| Path::from_keys(keys.iter().cloned()))
+                .collect();
+            let wire: Vec<(String, Json)> = entries
+                .into_iter()
+                .map(|(keys, value)| (keys.join("/"), value))
+                .collect();
+            let before = self.before_write(&namespace, &paths);
+            if self
+                .tree_mut(&namespace)
+                .update(&Path::root(), &wire, context)
+                .is_err()
+            {
+                return;
+            }
+            let effective = self.effective(&namespace, &paths, before);
+            Change::Patch {
+                base: Path::root(),
+                entries: paths
+                    .into_iter()
+                    .zip(effective)
+                    .map(|(path, effective)| Patched { path, effective })
+                    .collect(),
+            }
+        };
+        let events = self.notify(&namespace, &change);
+        self.events.extend(events);
+        if let Some(waker) = &self.waker.0 {
+            waker();
+        }
+    }
+
+    /// Registers `value` to be written at `path` when `client`'s connection ends.
+    pub(crate) fn remember_on_disconnect(
+        &mut self,
+        client: u64,
+        namespace: &str,
+        path: &Path,
+        value: Json,
+    ) {
+        self.on_disconnect
+            .entry(client)
+            .or_insert_with(|| (namespace.to_owned(), Pending::default()))
+            .1
+            .remember(path.keys(), value);
+    }
+
+    /// Cancels what `client` registered at and below `path`.
+    pub(crate) fn forget_on_disconnect(&mut self, client: u64, path: &Path) {
+        if let Some((_, pending)) = self.on_disconnect.get_mut(&client) {
+            pending.forget(path.keys());
+        }
     }
 
     /// The number of realtime listens.

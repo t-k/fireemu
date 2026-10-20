@@ -301,7 +301,7 @@ fn other_connections_receive_pushes_and_closing_ends_their_listens() {
     // Another namespace pushes nothing.
     rest(&mut db, "PUT", "/a/c.json?ns=other", "2");
     assert!(db.drain_pushes().is_empty());
-    db.close_realtime(reader.client());
+    db.close_realtime(reader.client(), NOW);
     rest(&mut db, "PUT", "/a/d.json?ns=l6", "3");
     assert!(db.drain_pushes().is_empty());
 }
@@ -603,7 +603,7 @@ fn closing_one_connection_keeps_the_pushes_queued_for_others() {
         &mut writer,
         &request(1, "p", r#"{"p":"/a","d":1}"#),
     );
-    db.close_realtime(writer.client());
+    db.close_realtime(writer.client(), NOW);
     assert_eq!(
         db.drain_pushes(),
         vec![(reader.client(), push("d", "a", "1", None))]

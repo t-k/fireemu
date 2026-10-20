@@ -686,3 +686,27 @@ async fn a_push_into_an_abandoned_held_request_waits_for_the_next_one() {
         vec![r#"{"d":{"a":"d","b":{"d":7,"p":"a"}},"t":"d"}"#.to_owned()]
     );
 }
+
+#[tokio::test]
+async fn a_long_polling_connection_writes_what_it_registered_when_it_ends() {
+    let (address, _) = start(ServerConfig {
+        long_poll_hold: Duration::from_millis(300),
+        ..ServerConfig::default()
+    })
+    .await;
+    // Ended by the page's unload request.
+    let (mut lp, _) = Lp::start(&address, "lpo").await;
+    lp.poll(&[&request(1, "o", r#"{"p":"/gone","d":true}"#)])
+        .await;
+    let target = format!("/.lp?disconn=t&id={}&pw={}", lp.id, lp.pw);
+    get(&address, "GET", &target, "").await;
+    assert_eq!(
+        get(&address, "GET", "/gone.json?ns=lpo", "").await.2,
+        "true"
+    );
+    // Ended because nobody asked again within the hold time.
+    let (mut lp, _) = Lp::start(&address, "lpo").await;
+    lp.poll(&[&request(1, "o", r#"{"p":"/idle","d":1}"#)]).await;
+    lp.poll(&[]).await;
+    assert_eq!(get(&address, "GET", "/idle.json?ns=lpo", "").await.2, "1");
+}

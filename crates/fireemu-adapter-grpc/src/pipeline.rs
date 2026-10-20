@@ -589,29 +589,34 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
 }
 
 /// The literal shapes production refused with `Value type is not supported: <kind>` as a select
-/// value: a map of field references (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px1/select#map-literal`),
-/// an array holding a field, a map holding a function, a map mixing a field and a literal and a
-/// map nesting a field (O-3, `fs-ent-pipeline/o3/functions#*-literal-*`): an array or map literal
-/// whose expressions, at any depth, are all field references or all functions.
+/// value: a map of fields and literals (FS-ENT-ORACLE O-1 `px1/select#map-literal`, O-3
+/// `o3/functions#map-literal-mixed`), a map holding one map of fields (`#map-literal-nested-field`),
+/// a map holding one function (`#map-literal-function`) and an array holding one field
+/// (`#array-literal-field`). Other compositions stay unobserved under strict.
 fn is_recorded_expression_literal(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
-    fn kinds(value: &pb::Value, out: &mut std::collections::BTreeSet<&'static str>) {
-        match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().for_each(|v| kinds(v, out)),
-            Some(V::MapValue(map)) => map.fields.values().for_each(|v| kinds(v, out)),
-            _ => {
-                if let Some(kind) = expression_kind(value) {
-                    out.insert(kind);
+    let field = |v: &pb::Value| matches!(v.value_type, Some(V::FieldReferenceValue(_)));
+    let scalar = |v: &pb::Value| {
+        is_literal(v) && !matches!(v.value_type, Some(V::ArrayValue(_) | V::MapValue(_)))
+    };
+    let map_of_fields = |v: &pb::Value| {
+        matches!(&v.value_type, Some(V::MapValue(map))
+            if !map.fields.is_empty() && map.fields.values().all(field))
+    };
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => matches!(array.values.as_slice(), [only] if field(only)),
+        Some(V::MapValue(map)) => {
+            let values: Vec<&pb::Value> = map.fields.values().collect();
+            match values.as_slice() {
+                [only] if matches!(only.value_type, Some(V::FunctionValue(_))) => true,
+                [only] if map_of_fields(only) => true,
+                _ => {
+                    values.iter().any(|v| field(v)) && values.iter().all(|v| field(v) || scalar(v))
                 }
             }
         }
+        _ => false,
     }
-    let mut found = std::collections::BTreeSet::new();
-    kinds(value, &mut found);
-    matches!(
-        found.into_iter().collect::<Vec<_>>().as_slice(),
-        ["FIELD_REFERENCE_VALUE" | "FUNCTION_VALUE"]
-    )
 }
 
 /// Decodes an operand expression: a field reference (`__name__` is the document reference),
@@ -861,6 +866,13 @@ fn unquoted_alias(alias: &str) -> String {
 fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
     let path = parse_alias(alias, unrecorded)?;
     match path.segments() {
+        // A reserved first segment with a child is unrecorded (O-3 recorded reserved names
+        // alone and below another field only).
+        [first, _, ..] if unrecorded == Unrecorded::Refuse && is_reserved_name(first) => {
+            Err(Status::unimplemented(format!(
+                "select alias {alias:?}: a reserved first segment with a child is not observed locally"
+            )))
+        }
         [name] if name == "__name__" => Err(Status::invalid_argument(format!(
             "Stage 'select': field name '{name}' is reserved and can not be overwritten."
         ))),
@@ -1073,20 +1085,30 @@ fn is_empty_map(value: &pb::Value) -> bool {
 
 /// The literal select values production answered: integers and finite doubles (O-1, O-2),
 /// infinities, NaN, -0.0, strings, booleans, null, timestamps, bytes, geo points, references,
-/// maps and arrays, empty ones included (FS-ENT-ORACLE O-3, `fs-ent-pipeline/o3/literals`).
-/// Arrays and maps holding them are compositions of recorded shapes (rulings (5)). A vector
-/// literal, or any other map with a `__type__` key, is unrecorded; strict refuses it.
+/// `{a: 1}` and empty maps and arrays (FS-ENT-ORACLE O-3, `fs-ent-pipeline/o3/literals`).
+/// Arrays of them are compositions of recorded shapes (rulings (5)), and so are maps of them
+/// whose keys are plain, non-empty and unreserved (a named coordinator inference, rulings (5),
+/// `PX1b` review M3). A vector literal, and a map with another key (empty, reserved such as
+/// `__type__`, or holding dots or backticks), is unrecorded; strict refuses it.
 fn is_recorded_select_literal(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => array.values.iter().all(is_recorded_select_literal),
-        Some(V::MapValue(map)) => {
-            !map.fields.contains_key("__type__")
-                && map.fields.values().all(is_recorded_select_literal)
-        }
+        Some(V::MapValue(map)) => map
+            .fields
+            .iter()
+            .all(|(key, value)| is_plain_key(key) && is_recorded_select_literal(value)),
         Some(_) => true,
         None => false,
     }
+}
+
+/// A map key a plain path segment names: `[a-zA-Z_][a-zA-Z_0-9]*`, not reserved (`__x__`).
+fn is_plain_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !is_reserved_name(key)
 }
 
 /// The most fields one `select` stage sets.

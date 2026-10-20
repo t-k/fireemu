@@ -247,25 +247,11 @@ async fn unknown_connections_frames_and_bad_segments() {
         get(&address, "GET", "/.lp?dframe=t&id=x&pw=y", "").await.2,
         ""
     );
-    let (status, _, body) = get(
-        &address,
-        "GET",
-        &format!(
-            "/.lp?id={}&pw={}&ser=9&seg0=0&ts0=1&d0=%25%25%25",
-            lp.id, lp.pw
-        ),
-        "",
-    )
-    .await;
-    assert_eq!(
-        (status, body.as_str()),
-        (400, "{\n  \"error\" : \"Bad Request\"\n}\n")
-    );
-    // The bad packet used segment 0. A packet split over two requests is answered once it is whole; POST works as GET.
+    // A packet split over two requests is answered once it is whole; POST works as GET.
     let message = b64(&request(1, "echo", r#"{"d":"split"}"#));
     let (first, second) = message.split_at(10);
     let target = format!(
-        "/.lp?id={}&pw={}&ser=20&seg0=1&ts0=2&d0={first}",
+        "/.lp?id={}&pw={}&ser=20&seg0=0&ts0=2&d0={first}",
         lp.id, lp.pw
     );
     let held = tokio::spawn({
@@ -274,7 +260,7 @@ async fn unknown_connections_frames_and_bad_segments() {
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     let target = format!(
-        "/.lp?id={}&pw={}&ser=21&seg0=2&ts0=2&d0={second}",
+        "/.lp?id={}&pw={}&ser=21&seg0=1&ts0=2&d0={second}",
         lp.id, lp.pw
     );
     assert_eq!(
@@ -282,7 +268,7 @@ async fn unknown_connections_frames_and_bad_segments() {
         "pRTLPCB(2,[{\"t\":\"d\",\"d\":{\"r\":1,\"b\":{\"s\":\"ok\",\"d\":\"split\"}}}]);\n"
     );
     assert_eq!(held.await.unwrap(), "pRTLPCB(1,[]);\n");
-    lp.segment = 3;
+    lp.segment = 2;
     assert!(lp
         .poll(&[&request(2, "echo", r#"{"d":"y"}"#)])
         .await
@@ -295,6 +281,62 @@ async fn unknown_connections_frames_and_bad_segments() {
         lp.poll(&[&request(4, "g", r#"{"p":"/big","q":{}}"#)]).await,
         format!("pRTLPCB(5,[{{\"t\":\"d\",\"d\":{{\"r\":4,\"b\":{{\"s\":\"ok\",\"d\":\"{big}\"}}}}}}]);\n")
     );
+}
+
+#[tokio::test]
+async fn bad_segments_answer_400_and_end_the_connection() {
+    // The official emulator never answers a packet that is not base64 and stops answering
+    // the connection at all; this server answers 400 and ends the connection, so the next
+    // request gets a reset and the SDK reconnects.
+    let (address, database) = start(ServerConfig::default()).await;
+    let reset = format!(
+        "pRTLPCB(0,[{{\"t\":\"c\",\"d\":{{\"t\":\"r\",\"d\":\"{address}\"}}}}]);\npLPCommand('close');\n"
+    );
+    for (ns, bad) in [("lpb1", "%25%25%25"), ("lpb2", "_w..")] {
+        let (mut lp, _) = Lp::start(&address, ns).await;
+        lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
+        assert_eq!(database.lock().unwrap().listen_count(), 1);
+        let target = format!(
+            "/.lp?id={}&pw={}&ser=50&seg0=1&ts0=1&d0={bad}",
+            lp.id, lp.pw
+        );
+        assert_eq!(
+            get(&address, "GET", &target, "").await,
+            (
+                400,
+                "application/json; charset=utf-8".to_owned(),
+                "{\n  \"error\" : \"Bad Request\"\n}\n".to_owned()
+            ),
+            "{bad}"
+        );
+        assert_eq!(database.lock().unwrap().listen_count(), 0, "{bad}");
+        assert_eq!(lp.poll(&[]).await, reset, "{bad}");
+    }
+    // Far-ahead segments with no data are bounded by their number.
+    let (mut lp, _) = Lp::start(&address, "lpb3").await;
+    let mut refused = None;
+    for batch in 0..2000u64 {
+        // An echo keeps each request from being held.
+        let mut target = lp.target(&[&request(batch, "echo", "{}")]);
+        for i in 1..=40u64 {
+            write!(
+                target,
+                "&seg{i}={}&ts{i}=1&d{i}=",
+                1_000_000 + batch * 40 + i
+            )
+            .unwrap();
+        }
+        let (status, _, _) = get(&address, "GET", &target, "").await;
+        if status == 400 {
+            refused = Some(batch);
+            break;
+        }
+    }
+    assert!(
+        refused.is_some(),
+        "80,000 waiting segments were all accepted"
+    );
+    assert_eq!(lp.poll(&[]).await, reset);
 }
 
 #[tokio::test]

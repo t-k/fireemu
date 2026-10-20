@@ -276,6 +276,9 @@ async fn poll(
             return script(reset(host));
         }
         let Ok(messages) = state.segments.add(segments) else {
+            // Segments the client numbered are gone, so its packets can never line up
+            // again: end the connection, and the next request gets a reset.
+            close(shared, &mut database, connection, &mut state);
             return full(refusal_response(&Refusal::bad("Bad Request")));
         };
         state.last_request = Instant::now();

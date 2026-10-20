@@ -130,6 +130,9 @@ pub struct RestOptions {
     pub limits: Limits,
     /// The longest realtime message, split frames joined (the SDKs' 16 MB write limit).
     pub realtime_message_bytes: usize,
+    /// Whether `/.inspect/databases.json` answers only the owner credential (strict and a
+    /// locked database); the official emulator answers anyone.
+    pub inspect_needs_owner: bool,
 }
 
 impl Default for RestOptions {
@@ -139,6 +142,7 @@ impl Default for RestOptions {
             rules: RulesMode::AllowAll,
             limits: Limits::default(),
             realtime_message_bytes: 16 * 1024 * 1024,
+            inspect_needs_owner: false,
         }
     }
 }
@@ -398,7 +402,10 @@ impl Database {
         let path = match request::location(raw_path, writing, &self.options.limits)? {
             Location::Data(path) => path,
             Location::Settings => return Err(Refusal::new(403, "Permission denied.")),
-            Location::Inspect(name) => return self.inspect(&method, &name, &namespace),
+            Location::Inspect(name) => {
+                let owner = credential(request, &params) == Some(OWNER);
+                return self.inspect(&method, &name, &namespace, owner);
+            }
         };
         request::check_disable_triggers(&params, writing, request.header("Authorization"))?;
         let condition = condition(request, &method)?;
@@ -637,13 +644,23 @@ impl Database {
 
     /// `/.inspect/<name>`: `databases.json` lists every namespace a request reached, the one
     /// asked about included, by name (the official emulator's order is its own). Any other
-    /// name is not found.
-    fn inspect(&mut self, method: &str, name: &str, namespace: &str) -> Result<Handled, Refusal> {
+    /// name is not found. With [`RestOptions::inspect_needs_owner`] a request without the
+    /// owner credential is refused as a denied read is, before the namespace is created.
+    fn inspect(
+        &mut self,
+        method: &str,
+        name: &str,
+        namespace: &str,
+        owner: bool,
+    ) -> Result<Handled, Refusal> {
         if method != "GET" {
             return Err(Refusal::new(405, "Unsupported request type"));
         }
         if name != "databases.json" {
             return Err(Refusal::new(404, "404 Not Found"));
+        }
+        if self.options.inspect_needs_owner && !owner {
+            return Err(Refusal::new(401, "Permission denied"));
         }
         self.namespace(namespace);
         let names: Vec<Json> = self

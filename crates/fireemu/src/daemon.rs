@@ -588,6 +588,10 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                     fireemu_adapter_database::rest::RulesMode::AllowAll
                 }
             },
+            // Only the owner lists the namespaces under strict and a locked database (review
+            // RTDB-04 S1); the emulator profile answers anyone, as the official emulator.
+            inspect_needs_owner: cfg.profile == crate::config::CompatibilityProfile::Strict
+                || cfg.database_default_access == crate::config::DatabaseDefaultAccess::Locked,
             ..fireemu_adapter_database::rest::RestOptions::default()
         },
         cfg.seed ^ 0x5254_4442,

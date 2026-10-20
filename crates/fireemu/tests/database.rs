@@ -687,3 +687,46 @@ echo"#;
     assert!(stdout.contains("restore 200"), "{log}");
     assert!(stdout.contains(r#"value {"kept":1}"#), "{log}");
 }
+
+#[test]
+fn the_inspect_route_needs_the_owner_except_under_the_emulator_profile() {
+    let dir = Scratch::new("database", "inspect");
+    for (name, config, open) in [
+        (
+            "emulator",
+            r#"{"schemaVersion":1,"profile":"emulator"}"#,
+            true,
+        ),
+        ("strict", r#"{"schemaVersion":1,"profile":"strict"}"#, false),
+        (
+            "exact",
+            r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+            false,
+        ),
+    ] {
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path, config).unwrap();
+        let daemon = Daemon::start(&[
+            "--config",
+            path.to_str().unwrap(),
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+        ]);
+        let port = daemon.database_port();
+        let inspect = "/.inspect/databases.json?ns=probe";
+        let (status, _) = request(port, "GET", inspect, &[], "");
+        assert_eq!(status, if open { 200 } else { 401 }, "{name}");
+        let (status, body) = request(
+            port,
+            "GET",
+            "/.inspect/databases.json?ns=owner-asked",
+            &["Authorization: Bearer owner"],
+            "",
+        );
+        assert_eq!(status, 200, "{name}");
+        // A refused request created no namespace.
+        assert_eq!(body.contains(r#""probe""#), open, "{name}: {body}");
+    }
+}

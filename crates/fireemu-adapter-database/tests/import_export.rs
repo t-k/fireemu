@@ -213,3 +213,48 @@ fn a_namespace_is_exported_as_its_export_format_read_and_imported_back() {
         Err("Invalid Firebase database name".to_owned())
     );
 }
+
+#[test]
+fn the_inspect_route_can_require_the_owner() {
+    // Under strict and a locked database (review RTDB-04 S1) only the owner lists namespaces,
+    // and a refused request creates none; firebase-tools sends the owner credential.
+    let options = RestOptions {
+        inspect_needs_owner: true,
+        ..RestOptions::default()
+    };
+    let mut db = Database::new(options, 1);
+    call(&mut db, "PUT", "/.json?ns=kept", OWNER, "1");
+    for headers in [&[][..], &[("Authorization", "Bearer someone")][..]] {
+        assert_eq!(
+            call(
+                &mut db,
+                "GET",
+                "/.inspect/databases.json?ns=probe",
+                headers,
+                ""
+            ),
+            (401, error("Permission denied"))
+        );
+    }
+    assert_eq!(
+        call(
+            &mut db,
+            "GET",
+            "/.inspect/databases.json?ns=kept",
+            OWNER,
+            ""
+        ),
+        (200, r#"[{"name":"kept"}]"#.to_owned())
+    );
+    assert_eq!(
+        call(
+            &mut db,
+            "GET",
+            "/.inspect/databases.json?ns=kept&access_token=owner",
+            &[],
+            ""
+        )
+        .0,
+        200
+    );
+}

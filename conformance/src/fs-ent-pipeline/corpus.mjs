@@ -675,7 +675,7 @@ export const O3_CONDITIONS = [
 
 const o3ComparisonProgram = {
   id: "fs-ent-pipeline/o3/comparisons",
-  seed: [["kinds3/d", { ...O3_KIND_DOC, d5: dbl(1.5) }]],
+  seed: [["kinds3/d", O3_KIND_DOC]],
   steps: [
     ...o3CellSteps,
     ...O3_CONDITIONS.map(([label, condition]) =>

@@ -82,15 +82,13 @@ impl State {
     }
 
     /// Answers the held request, if any, with what is waiting. A held request whose client
-    /// went away takes nothing: its packet number and messages wait for the next request,
-    /// since the SDK reads packets strictly in order.
+    /// went away takes nothing (its receiver is gone, so the send hands the packet back): its
+    /// packet number and messages wait for the next request, since the SDK reads packets
+    /// strictly in order.
     fn release(&mut self) {
         let Some(sender) = self.held.take() else {
             return;
         };
-        if sender.is_closed() {
-            return;
-        }
         let messages = std::mem::take(&mut self.outbox);
         match sender.send(packet(self.next_packet, &messages)) {
             Ok(()) => {

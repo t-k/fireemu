@@ -345,15 +345,14 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 other,
             )),
         }),
-        "limit" | "offset" => match &args[0] {
-            Arg::Integer(n) if *n >= 0 => Ok(()),
-            other => Err(argument(name, 0, "a non-negative integer", other)),
-        },
         "distinct" => args.iter().enumerate().try_for_each(|(i, a)| match a {
             Arg::Field(_) | Arg::Function { .. } => Ok(()),
             Arg::Map(_) => alias_map(name, i, a, "a map of aliases to expressions"),
             other => Err(argument(name, i, "a field, expression or alias map", other)),
         }),
+        // The official emulator answers its arity text for a one-argument aggregate before
+        // any check of the accumulators; the adapter answers it per profile.
+        "aggregate" if args.len() == 1 => Ok(()),
         "aggregate" => {
             alias_map(name, 0, &args[0], "a map of aliases to aggregate functions")?;
             match args.get(1) {
@@ -422,6 +421,9 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 )),
             }
         }
+        // limit and offset among them: their argument's type and sign are the adapter's to
+        // answer per profile, in stage order (the official emulator names the type it got, or
+        // the negative value).
         _ => Ok(()),
     }
 }
@@ -525,12 +527,11 @@ mod tests {
             stage("limit", vec![Arg::Integer(5)])
         ])
         .is_ok());
-        let bad_limit =
-            canonicalize(&[users(), stage("limit", vec![Arg::String("text".into())])]).unwrap_err();
-        assert!(
-            matches!(bad_limit, PipelineError::Argument { index: 0, .. }),
-            "{bad_limit}"
-        );
+        // A limit's argument is the adapter's to answer per profile.
+        assert!(canonicalize(&[users(), stage("limit", vec![Arg::String("text".into())])]).is_ok());
+        let bad_skip = canonicalize(&[users(), stage("sample", vec![Arg::String("x".into())])]);
+        assert!(bad_skip.is_err(), "{bad_skip:?}");
+        assert!(canonicalize(&[users(), stage("distinct", vec![Arg::Integer(1)])]).is_err());
         assert!(canonicalize(&[stage("collection", vec![Arg::Null])]).is_err());
         assert!(
             canonicalize(&[stage("collection", vec![Arg::String("/users/u1".into())])]).is_err()
@@ -565,6 +566,15 @@ mod tests {
                 "add_fields",
                 vec![Arg::Map(vec![("a".into(), Arg::Pipeline)])]
             )
+        ])
+        .is_err());
+        // A one-argument aggregate is left to the adapter's arity answer, whatever it holds;
+        // with its groups the accumulators must be functions.
+        let field_accumulator = || Arg::Map(vec![("c".into(), Arg::Field("age".into()))]);
+        assert!(canonicalize(&[users(), stage("aggregate", vec![field_accumulator()])]).is_ok());
+        assert!(canonicalize(&[
+            users(),
+            stage("aggregate", vec![field_accumulator(), Arg::Map(Vec::new())])
         ])
         .is_err());
         assert!(canonicalize(&[

@@ -1,4 +1,4 @@
-//! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1 and O-2 programs,
+//! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1, O-2 and O-3 programs,
 //! `conformance/fs-ent-pipeline-requests.json`) against the in-process REST surface under both
 //! profiles and compares each answer with the production recording
 //! (`conformance/fs-ent-pipeline-production.json`): the status, the result documents as a
@@ -201,6 +201,29 @@ fn double(value: &Value) -> Value {
     })
 }
 
+/// An error message in a comparable form. A missing-separator refusal names the document parent
+/// and the index where the separator is missing, which is that name's length: the recorded
+/// name carries the placeholder project ID while production counted the real one, so the
+/// name is written relative to its documents root and the index is left out (fireemu's index
+/// is pinned against its own name in the local tests).
+fn message(text: &str) -> String {
+    let parent = text
+        .strip_prefix("Document parent name \"")
+        .and_then(|rest| rest.split_once("\" lacks \"/\" at index "))
+        .filter(|(_, index)| {
+            index
+                .strip_suffix('.')
+                .is_some_and(|n| n.parse::<usize>().is_ok())
+        });
+    match parent {
+        Some((name, _)) => format!(
+            "Document parent name \"{}\" lacks \"/\" at index <n>.",
+            relative(name)
+        ),
+        None => text.to_owned(),
+    }
+}
+
 /// A Firestore value or document in a comparable form.
 fn normalize(value: &Value) -> Value {
     match value {
@@ -208,10 +231,11 @@ fn normalize(value: &Value) -> Value {
             let mut out = serde_json::Map::new();
             for (key, inner) in map {
                 let inner = match key.as_str() {
-                    "doubleValue" => double(inner),
+                    "doubleValue" | "latitude" | "longitude" => double(inner),
                     "referenceValue" | "name" => json!(relative(inner.as_str().unwrap())),
                     "timestampValue" => json!(timestamp(inner.as_str().unwrap())),
                     "createTime" | "updateTime" => json!("<t>"),
+                    "message" if inner.is_string() => json!(message(inner.as_str().unwrap())),
                     _ => normalize(inner),
                 };
                 out.insert(key.clone(), inner);

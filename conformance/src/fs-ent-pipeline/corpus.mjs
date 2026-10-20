@@ -18,6 +18,7 @@ import {
   ref,
   str,
   ts,
+  vec,
 } from "../fs-query-index/values.mjs";
 
 // --- expression builders (proto3 JSON `Value`s) ---
@@ -563,6 +564,195 @@ const comparisonProgram = {
   ],
 };
 
+// --- O-3 (2026-10-20): what v0.28.0's strict profile still refuses (o3-candidates.md) ---
+
+/** Select alias shapes production has not answered, one alias per step. */
+export const O3_ALIASES = [
+  ["quoted-reserved", "`__x__`"],
+  ["quoted-name", "`__name__`"],
+  ["nested-reserved", "a.__x__"],
+  ["nested-name", "a.__name__"],
+  ["nested-quoted-reserved", "a.`__x__`"],
+  ["quoted-dotted-name", "`a.__name__`"],
+  // Invalid quoted and dotted aliases (the official emulator answers each with its
+  // invalid-path text).
+  ["empty-segment", "a..b"],
+  ["trailing-dot", "a."],
+  ["leading-dot", ".a"],
+  ["unterminated-quote", "`a"],
+  ["dotted-digit", "a.1b"],
+  ["empty-quoted", "``"],
+  ["empty", ""],
+  // The length boundary. The official emulator joins the unquoted segments with '.' and
+  // refuses 1500 bytes or more with that joined text, after the syntax check; the rows tell
+  // the joined length apart from the raw alias length.
+  ["plain-1499", "a".repeat(1499)],
+  ["plain-1500", "a".repeat(1500)],
+  ["plain-1501", "a".repeat(1501)],
+  ["quoted-inner-1497", `\`${"a".repeat(1497)}\``],
+  ["quoted-inner-1498", `\`${"a".repeat(1498)}\``],
+  ["quoted-inner-1499", `\`${"a".repeat(1499)}\``],
+  ["quoted-inner-1500", `\`${"a".repeat(1500)}\``],
+  ["dotted-1499", `a.${"b".repeat(1497)}`],
+  ["dotted-1500", `a.${"b".repeat(1498)}`],
+  ["quoted-dotted-1499", `\`a\`.${"b".repeat(1497)}`],
+  ["quoted-dotted-1500", `\`a\`.${"b".repeat(1498)}`],
+  ["escaped-1499", `\`\\\`${"a".repeat(1498)}\``],
+  ["escaped-1500", `\`\\\`${"a".repeat(1499)}\``],
+  ["invalid-1500", "-".repeat(1500)],
+];
+
+const o3AliasProgram = {
+  id: "fs-ent-pipeline/o3/aliases",
+  seed: [["al3/d", { top: str("t") }]],
+  steps: [
+    ...O3_ALIASES.map(([label, alias]) =>
+      step(label, pipeline(collection("al3"), select({ [alias]: fld("top") }))),
+    ),
+    // The empty alias's gRPC status code as well as its REST status.
+    grpcStep("empty-grpc", pipeline(collection("al3"), select({ "": fld("top") }))),
+  ],
+};
+
+/** The O-2 kinds plus two vectors (`v` orders before `v2`). */
+export const O3_KIND_DOC = { ...KIND_DOC, v: vec(1, 2), v2: vec(1, 3) };
+
+/** Comparison cells O-2 left open, as `[alias, left, right, op]`. */
+export const O3_CELLS = [
+  // Vectors with each other, and with every other kind and a missing field, both ways.
+  ...OPS.flatMap((op) =>
+    [
+      ["v", "v"],
+      ["v", "v2"],
+      ["v2", "v"],
+      ...[...KINDS, "x"].flatMap((other) => [
+        ["v", other],
+        [other, "v"],
+      ]),
+    ].map(([left, right]) => [`${op}__${left}__${right}`, left, right, op]),
+  ),
+  // A missing field against every kind O-2 did not pair it with, both ways.
+  ...OPS.flatMap((op) =>
+    ["b", "nan", "ts", "s", "by", "r", "g", "arr", "m"].flatMap((other) => [
+      [`${op}__x__${other}`, "x", other, op],
+      [`${op}__${other}__x`, other, "x", op],
+    ]),
+  ),
+];
+
+const o3CellSteps = [];
+for (let k = 0; k < O3_CELLS.length; k += CELLS_PER_STEP) {
+  const cells = O3_CELLS.slice(k, k + CELLS_PER_STEP);
+  o3CellSteps.push(
+    step(
+      `cells-${String(k / CELLS_PER_STEP + 1).padStart(2, "0")}`,
+      pipeline(
+        collection("kinds3"),
+        select(
+          Object.fromEntries(
+            cells.map(([alias, left, right, op]) => [alias, fn(op, fld(left), fld(right))]),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/** `where` conditions of the kinds production has not answered, fields and constants. */
+export const O3_CONDITIONS = [
+  ["field-double", fld("d5")],
+  ["field-nan", fld("nan")],
+  ["field-timestamp", fld("ts")],
+  ["field-bytes", fld("by")],
+  ["field-geo", fld("g")],
+  ["field-vector", fld("v")],
+  ["constant-true", bool(true)],
+  ["constant-false", bool(false)],
+  ["constant-null", nul()],
+  ["constant-double", dbl(1.5)],
+  ["constant-string", str("s")],
+];
+
+const o3ComparisonProgram = {
+  id: "fs-ent-pipeline/o3/comparisons",
+  seed: [["kinds3/d", O3_KIND_DOC]],
+  steps: [
+    ...o3CellSteps,
+    ...O3_CONDITIONS.map(([label, condition]) =>
+      step(
+        `where-${label}`,
+        pipeline(
+          collection("kinds3"),
+          stage("where", condition),
+          select({ id: fn("document_id", fld("__name__")) }),
+        ),
+      ),
+    ),
+  ],
+};
+
+/** Literal select values production has not returned. */
+export const O3_LITERALS = [
+  ["double", dbl(1.5)],
+  ["double-one", dbl(1)],
+  ["negative-zero", dbl("-0")],
+  ["double-array", arr(dbl(1.5), arr(dbl(2.5)))],
+  ["negative-zero-in-array", arr(dbl(1.5), dbl("-0"))],
+  ["infinity", inf()],
+  ["negative-infinity", inf(-1)],
+  ["nan", nan()],
+  ["string", str("x")],
+  ["boolean", bool(true)],
+  ["null", nul()],
+  ["timestamp", ts("2020-01-01T00:00:00Z")],
+  ["bytes", { bytesValue: "AAE=" }],
+  ["geo", { geoPointValue: { latitude: 0, longitude: 1 } }],
+  ["reference", ref("lit/d")],
+  ["map", map({ a: int(1) })],
+  ["empty-map", map({})],
+  ["empty-array", arr()],
+];
+
+const o3LiteralProgram = {
+  id: "fs-ent-pipeline/o3/literals",
+  seed: [["lit/d", { i: int(1) }]],
+  steps: O3_LITERALS.map(([label, literal]) =>
+    step(label, pipeline(collection("lit"), select({ v: literal }))),
+  ),
+};
+
+/** Document functions, map construction and literal shapes production has not answered. */
+export const O3_FUNCTIONS = [
+  ["collection-id-missing", fn("collection_id", fld("x"))],
+  ["collection-id-null", fn("collection_id", fld("n"))],
+  ["collection-id-string", fn("collection_id", fld("s"))],
+  ["parent-missing", fn("parent", fld("x"))],
+  ["parent-null", fn("parent", fld("n"))],
+  ["parent-string", fn("parent", fld("s"))],
+  ["document-id-string", fn("document_id", fld("s"))],
+  ["collection-id-root", fn("collection_id", fn("parent", fld("__name__")))],
+  ["parent-root", fn("parent", fn("parent", fld("__name__")))],
+  ["document-id-collection-named-documents", fn("document_id", ref("documents"))],
+  ["document-id-collection", fn("document_id", ref("fns"))],
+  ["map-repeated-key", fn("map", str("k"), fld("i"), str("k"), fld("s"))],
+  ["map-integer-key", fn("map", int(1), fld("i"))],
+  ["array-literal-field", { arrayValue: { values: [fld("i")] } }],
+  ["map-literal-function", { mapValue: { fields: { a: fn("document_id", fld("__name__")) } } }],
+  ["map-literal-mixed", { mapValue: { fields: { a: fld("i"), b: int(1) } } }],
+  [
+    "map-literal-nested-field",
+    { mapValue: { fields: { a: { mapValue: { fields: { b: fld("i") } } } } } },
+  ],
+];
+
+const o3FunctionProgram = {
+  id: "fs-ent-pipeline/o3/functions",
+  seed: [["fns/d", { i: int(1), s: str("a"), n: nul() }]],
+  steps: O3_FUNCTIONS.map(([label, expr]) =>
+    step(label, pipeline(collection("fns"), select({ v: expr }))),
+  ),
+};
+
 export const PROGRAMS = [
   expressionProgram,
   whereProgram,
@@ -573,4 +763,8 @@ export const PROGRAMS = [
   numberProgram,
   widthProgram,
   comparisonProgram,
+  o3AliasProgram,
+  o3ComparisonProgram,
+  o3LiteralProgram,
+  o3FunctionProgram,
 ];

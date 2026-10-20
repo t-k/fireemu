@@ -494,16 +494,7 @@ pub fn compile_pipeline(
                         ));
                     }
                     seen_offset = true;
-                    let Some(pb::value::ValueType::IntegerValue(n)) =
-                        stage.args.first().and_then(|v| v.value_type.as_ref())
-                    else {
-                        return Err(Status::invalid_argument("offset must be an integer"));
-                    };
-                    let offset = i32::try_from(*n).map_err(|_| {
-                        Status::unimplemented("offset exceeds the finite local execution range")
-                    })?;
-                    let offset = u64::try_from(offset)
-                        .map_err(|_| Status::invalid_argument("offset must not be negative"))?;
+                    let offset = count_argument(stage, i64::from(i32::MAX), unrecorded)?;
                     stages.push(Stage::Offset(offset));
                 }
                 "limit" => {
@@ -513,14 +504,8 @@ pub fn compile_pipeline(
                         ));
                     }
                     seen_limit = true;
-                    let Some(pb::value::ValueType::IntegerValue(n)) =
-                        stage.args.first().and_then(|v| v.value_type.as_ref())
-                    else {
-                        return Err(Status::invalid_argument("limit must be an integer"));
-                    };
-                    let limit = u32::try_from(*n)
-                        .map_err(|_| Status::invalid_argument("limit is out of range"))?;
-                    stages.push(Stage::Limit(u64::from(limit)));
+                    let limit = count_argument(stage, i64::from(u32::MAX), unrecorded)?;
+                    stages.push(Stage::Limit(limit));
                 }
                 other => {
                     // The official emulator checks every stage's arguments before running any.
@@ -572,6 +557,9 @@ pub fn eval_status(error: &pipeline_exec::EvalError) -> Status {
     match error {
         pipeline_exec::EvalError::Unobserved { .. } => Status::unimplemented(error.to_string()),
         pipeline_exec::EvalError::Invalid(message) => Status::invalid_argument(message.clone()),
+        pipeline_exec::EvalError::WrongType { function, .. } => {
+            crate::production_status::function_wrong_type(&error.to_string(), function)
+        }
     }
 }
 
@@ -600,27 +588,42 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
     }
 }
 
-/// The literal shape production refused with `Value type is not supported:
-/// FIELD_REFERENCE_VALUE` (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px1/select#map-literal`): a map
-/// literal whose entries are all field references, as a select value.
-fn is_recorded_map_literal(value: &pb::Value) -> bool {
+/// The literal shapes production refused with `Value type is not supported: <kind>` as a select
+/// value: a map of fields and literals (FS-ENT-ORACLE O-1 `px1/select#map-literal`, O-3
+/// `o3/functions#map-literal-mixed`), a map holding one map of fields (`#map-literal-nested-field`),
+/// a map holding one function (`#map-literal-function`) and an array holding one field
+/// (`#array-literal-field`). Other compositions stay unobserved under strict.
+fn is_recorded_expression_literal(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
-    matches!(
-        value.value_type.as_ref(),
-        Some(V::MapValue(map))
-            if !map.fields.is_empty()
-                && map
-                    .fields
-                    .values()
-                    .all(|entry| matches!(entry.value_type, Some(V::FieldReferenceValue(_))))
-    )
+    let field = |v: &pb::Value| matches!(v.value_type, Some(V::FieldReferenceValue(_)));
+    let scalar = |v: &pb::Value| {
+        is_literal(v) && !matches!(v.value_type, Some(V::ArrayValue(_) | V::MapValue(_)))
+    };
+    let map_of_fields = |v: &pb::Value| {
+        matches!(&v.value_type, Some(V::MapValue(map))
+            if !map.fields.is_empty() && map.fields.values().all(field))
+    };
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => matches!(array.values.as_slice(), [only] if field(only)),
+        Some(V::MapValue(map)) => {
+            let values: Vec<&pb::Value> = map.fields.values().collect();
+            match values.as_slice() {
+                [only] if matches!(only.value_type, Some(V::FunctionValue(_))) => true,
+                [only] if map_of_fields(only) => true,
+                _ => {
+                    values.iter().any(|v| field(v)) && values.iter().all(|v| field(v) || scalar(v))
+                }
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Decodes an operand expression: a field reference (`__name__` is the document reference),
 /// a call of a table function or a literal. An array or map literal that holds an
 /// expression is refused with `INVALID_ARGUMENT`, as the official emulator refuses every such
-/// literal; under strict only the shape production refused (a select value that is a map of
-/// fields) is, and the others are `UNIMPLEMENTED`. `select_value` says whether the operand is
+/// literal; under strict only the shapes production refused as select values
+/// ([`is_recorded_expression_literal`]) are, and the others are `UNIMPLEMENTED`. `select_value` says whether the operand is
 /// a select value itself (not an argument).
 fn decode_operand(
     value: &pb::Value,
@@ -639,6 +642,16 @@ fn decode_operand(
                     "function {:?} is unsupported locally",
                     function.name
                 )));
+            }
+            // The official emulator refuses a `map(...)` key that is no literal before it
+            // evaluates anything; production has not answered it.
+            if function.name == "map" && function.args.iter().step_by(2).any(|key| !is_literal(key))
+            {
+                return Err(if unrecorded == Unrecorded::Refuse {
+                    Status::unimplemented("a map key that is no literal is not observed locally")
+                } else {
+                    Status::invalid_argument("map keys must be constants/literals")
+                });
             }
             if !function.options.is_empty() {
                 return Err(Status::invalid_argument(format!(
@@ -663,7 +676,7 @@ fn decode_operand(
             )),
             Some(kind)
                 if unrecorded == Unrecorded::OfficialEmulator
-                    || (select_value && is_recorded_map_literal(value)) =>
+                    || (select_value && is_recorded_expression_literal(value)) =>
             {
                 Err(Status::invalid_argument(format!(
                     "Value type is not supported: {kind}"
@@ -694,7 +707,20 @@ fn decode_condition(
         Some(V::FieldReferenceValue(_)) => {
             return Ok((decode_operand(condition, unrecorded, false)?, None))
         }
-        _ if is_literal(condition) && unrecorded == Unrecorded::OfficialEmulator => {
+        // Production kept the row for `true` and dropped it for `false`, null, a double and a
+        // string (FS-ENT-ORACLE O-3, `fs-ent-pipeline/o3/comparisons#where-constant-*`).
+        _ if is_literal(condition)
+            && (unrecorded == Unrecorded::OfficialEmulator
+                || matches!(
+                    condition.value_type,
+                    Some(
+                        V::BooleanValue(_)
+                            | V::NullValue(_)
+                            | V::DoubleValue(_)
+                            | V::StringValue(_)
+                    )
+                )) =>
+        {
             return Ok((decode_operand(condition, unrecorded, false)?, None))
         }
         _ => {
@@ -832,79 +858,59 @@ fn unquoted_alias(alias: &str) -> String {
     out
 }
 
-/// Reads a select alias as a field path. Production's refusals are recorded for a single
-/// unquoted segment (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases`): an invalid name, a
-/// reserved `__x__` and `__name__`; their texts are production's, which the official emulator
-/// answers too. The official emulator also refuses a quoted reserved name, and accepts a
-/// reserved name below another field (`a.__x__`, `a.__name__`); production has not answered
-/// those shapes, nor an invalid quoted or dotted alias, nor an empty alias, nor a name at the
-/// length limit, so strict refuses them as unobserved. Production's regex text answers only a
-/// plain name that fails the path rules, the shape it was recorded for (`total-count`, `名前`,
-/// `1st`). The official emulator checks the syntax first, then the length of the segments
-/// joined with '.' after unquoting, refusing 1500 bytes or more with that joined text.
+/// Reads a select alias as a field path. Production answered every alias shape the official
+/// emulator answers, with the same texts (FS-ENT-ORACLE O-1 `fs-ent-pipeline/px0/aliases` and
+/// O-3 `fs-ent-pipeline/o3/aliases`): a reserved `__x__` or `__name__` is refused at the top
+/// level, quoted or not, and accepted below another field; the path checks are
+/// [`parse_alias`]'s.
 fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
-    let strict = unrecorded == Unrecorded::Refuse;
-    let unobserved = || {
-        Status::unimplemented(format!(
-            "select alias {alias:?}: this alias shape is not observed locally"
-        ))
-    };
-    let plain = !alias.contains(['.', '`']);
     let path = parse_alias(alias, unrecorded)?;
-    let reserved = path
-        .segments()
-        .iter()
-        .any(|segment| is_reserved_name(segment));
     match path.segments() {
-        _ if !reserved => Ok(path),
-        _ if strict && !plain => Err(unobserved()),
+        // A reserved first segment with a child is unrecorded (O-3 recorded reserved names
+        // alone and below another field only).
+        [first, _, ..] if unrecorded == Unrecorded::Refuse && is_reserved_name(first) => {
+            Err(Status::unimplemented(format!(
+                "select alias {alias:?}: a reserved first segment with a child is not observed locally"
+            )))
+        }
         [name] if name == "__name__" => Err(Status::invalid_argument(format!(
             "Stage 'select': field name '{name}' is reserved and can not be overwritten."
         ))),
-        [name] => Err(Status::invalid_argument(format!(
+        [name] if is_reserved_name(name) => Err(Status::invalid_argument(format!(
             "Stage 'select': field name '{name}' is reserved."
         ))),
-        // A reserved name below another field, as the official emulator answers it.
+        // A reserved name below another field is a nested key.
         _ => Ok(path),
     }
 }
 
-/// Reads an alias as a field path with the official emulator's syntax and length checks, in
-/// its order: the empty path, the path syntax, then the joined length. Reserved names are the
-/// caller's.
+/// Reads an alias as a field path with production's checks, in its order (FS-ENT-ORACLE O-3,
+/// the official emulator alike): the empty path, the path syntax (an invalid name of any
+/// length gets the syntax text), then the length of the segments unquoted and joined with
+/// '.', refused at 1500 bytes or more with that joined text and a `PROPERTY_PATH_TOO_LONG`
+/// detail. Production's length rows were all ASCII, so strict refuses a joined path of 1500
+/// bytes or more that holds other characters as unobserved (whether production counts bytes
+/// or characters is unrecorded). Reserved names are the caller's.
 fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
-    let strict = unrecorded == Unrecorded::Refuse;
-    let unobserved = || {
-        Status::unimplemented(format!(
-            "select alias {alias:?}: this alias shape is not observed locally"
-        ))
-    };
-    let too_long = |reference: &str| {
-        if strict {
-            unobserved()
-        } else {
-            Status::invalid_argument(format!(
-                "The field reference '{reference}' is longer than 1500 bytes."
+    let too_long = |joined: &str| {
+        if unrecorded == Unrecorded::Refuse && !joined.is_ascii() {
+            Status::unimplemented(format!(
+                "select alias {alias:?}: the length limit of a non-ASCII path is not observed locally"
             ))
+        } else {
+            crate::production_status::property_path_too_long(joined)
         }
     };
-    let plain = !alias.contains(['.', '`']);
     let path = match FieldPath::parse_allowing_reserved(alias) {
         Ok(path) => path,
-        Err(_) if strict && !plain => return Err(unobserved()),
-        Err(FieldPathError::Empty) if strict => return Err(unobserved()),
         Err(FieldPathError::Empty) => {
             return Err(Status::invalid_argument(
                 crate::query_messages::EMPTY_PROPERTY_PATH,
             ))
         }
-        // Production's regex text is recorded only for a name the regex refuses; a name over
-        // the length limit is unrecorded (the official emulator names the length).
         Err(FieldPathError::SegmentTooLong { .. } | FieldPathError::PathTooLong { .. }) => {
             return Err(too_long(&unquoted_alias(alias)))
         }
-        // Which refusal production answers first for a long invalid name is unrecorded.
-        Err(_) if strict && alias.len() >= ALIAS_LIMIT_BYTES => return Err(unobserved()),
         Err(_) => {
             return Err(Status::invalid_argument(format!(
                 r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
@@ -918,15 +924,70 @@ fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status>
     Ok(path)
 }
 
+/// The count a `limit` or `offset` stage takes. An integer from 0 to `recorded` is answered in
+/// both profiles. The official emulator also takes any larger integer, and refuses another
+/// type and a negative value with its own texts; production has not answered those, so strict
+/// refuses them as unobserved.
+fn count_argument(
+    stage: &pb::pipeline::Stage,
+    recorded: i64,
+    unrecorded: Unrecorded,
+) -> Result<u64, Status> {
+    use pb::value::ValueType as V;
+    let name = stage.name.as_str();
+    let answer = match stage.args.first().and_then(|v| v.value_type.as_ref()) {
+        Some(V::IntegerValue(n)) if (0..=recorded).contains(n) => {
+            return Ok(u64::try_from(*n).unwrap_or(u64::MAX))
+        }
+        Some(V::IntegerValue(n)) if *n > recorded => Ok(u64::try_from(*n).unwrap_or(u64::MAX)),
+        Some(V::IntegerValue(n)) => Err(Status::invalid_argument(format!(
+            "The '{name}(...)' cannot have a negative value: {n}"
+        ))),
+        other => Err(Status::invalid_argument(format!(
+            "Expected {name} to be INTEGER_VALUE, but was {}.",
+            value_type_name(other)
+        ))),
+    };
+    if unrecorded == Unrecorded::Refuse {
+        return Err(Status::unimplemented(format!(
+            "this {name} argument is not observed locally"
+        )));
+    }
+    answer
+}
+
+/// The proto name of a wire value's type, as the official emulator's messages give it.
+fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
+    use pb::value::ValueType as V;
+    match value {
+        Some(V::NullValue(_)) => "NULL_VALUE",
+        Some(V::BooleanValue(_)) => "BOOLEAN_VALUE",
+        Some(V::IntegerValue(_)) => "INTEGER_VALUE",
+        Some(V::DoubleValue(_)) => "DOUBLE_VALUE",
+        Some(V::TimestampValue(_)) => "TIMESTAMP_VALUE",
+        Some(V::StringValue(_)) => "STRING_VALUE",
+        Some(V::BytesValue(_)) => "BYTES_VALUE",
+        Some(V::ReferenceValue(_)) => "REFERENCE_VALUE",
+        Some(V::GeoPointValue(_)) => "GEO_POINT_VALUE",
+        Some(V::ArrayValue(_)) => "ARRAY_VALUE",
+        Some(V::MapValue(_)) => "MAP_VALUE",
+        Some(V::FieldReferenceValue(_)) => "FIELD_REFERENCE_VALUE",
+        Some(V::VariableReferenceValue(_)) => "VARIABLE_REFERENCE_VALUE",
+        Some(V::FunctionValue(_)) => "FUNCTION_VALUE",
+        Some(V::PipelineValue(_)) => "PIPELINE_VALUE",
+        None => "VALUE_TYPE_NOT_SET",
+    }
+}
+
 /// The official emulator's argument checks on a stage the local executor does not run
 /// (`add_fields`, `distinct`, `aggregate`), answered before the stage is refused as
 /// unsupported, in the official order: the stage's arity, each alias, then an empty map, which
 /// is `deferred` until every stage's other checks are done. Production answered
 /// `aggregate({c: count()})` directly after the collection with the official arity text
 /// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/results/metadata#aggregate`), so strict answers that
-/// text for that shape (a non-empty map of plain valid aliases, at `position` 1; the request
-/// validator already refuses accumulators that are not functions) and leaves every other shape
-/// here to the unsupported-stage refusal.
+/// text for that shape (directly after the collection, a non-empty map of plain, valid,
+/// unreserved aliases to `count`) and leaves every other shape here to the unsupported-stage
+/// refusal. A `select` after an unrun stage gets its alias checks here too.
 fn check_unrun_alias_stage(
     stage: &pb::pipeline::Stage,
     position: usize,
@@ -938,10 +999,15 @@ fn check_unrun_alias_stage(
         let recorded = || {
             position == 1
                 && map_fields(&stage.args[0]).is_some_and(|fields| {
-                    !fields.is_empty()
-                        && fields.keys().all(|alias| {
-                            !alias.contains(['.', '`']) && parse_alias(alias, unrecorded).is_ok()
-                        })
+                    !fields.is_empty() && fields.iter().all(|(alias, accumulator)| {
+                        !alias.contains(['.', '`'])
+                            && !is_reserved_name(alias)
+                            && parse_alias(alias, unrecorded).is_ok()
+                            && matches!(
+                                &accumulator.value_type,
+                                Some(pb::value::ValueType::FunctionValue(f)) if f.name == "count"
+                            )
+                    })
                 })
         };
         if !strict || recorded() {
@@ -951,7 +1017,33 @@ fn check_unrun_alias_stage(
         }
     }
     let name = stage.name.as_str();
-    if strict || !matches!(name, "aggregate" | "add_fields" | "distinct") {
+    if strict {
+        return Ok(());
+    }
+    // A limit or offset after an unrun stage: its argument checks come first, as above.
+    if matches!(name, "limit" | "offset") {
+        count_argument(stage, i64::MAX, unrecorded)?;
+        return Ok(());
+    }
+    if !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
+        return Ok(());
+    }
+    // A select after an unrun stage: the official emulator checks its aliases too, with the
+    // select texts, and answers an empty map last.
+    if name == "select" {
+        for alias in stage
+            .args
+            .iter()
+            .filter_map(map_fields)
+            .flat_map(|fields| fields.keys())
+        {
+            decode_alias(alias, unrecorded)?;
+        }
+        if stage.args.first().is_some_and(is_empty_map) {
+            deferred.get_or_insert_with(|| {
+                Status::invalid_argument("The 'select(...)' stage requires at least one field.")
+            });
+        }
         return Ok(());
     }
     for alias in stage
@@ -991,17 +1083,32 @@ fn is_empty_map(value: &pb::Value) -> bool {
     matches!(&value.value_type, Some(pb::value::ValueType::MapValue(map)) if map.fields.is_empty())
 }
 
-/// The literal select values production answered (FS-ENT-ORACLE O-1
-/// `px1/select#constant-nested-array`, `[1, [2]]`): integers, finite doubles and arrays of them.
-/// Strict refuses literal select values of other kinds until production answers them.
+/// The literal select values production answered: integers and finite doubles (O-1, O-2),
+/// infinities, NaN, -0.0, strings, booleans, null, timestamps, bytes, geo points, references,
+/// `{a: 1}` and empty maps and arrays (FS-ENT-ORACLE O-3, `fs-ent-pipeline/o3/literals`).
+/// Arrays of them are compositions of recorded shapes (rulings (5)), and so are maps of them
+/// whose keys are plain, non-empty and unreserved (a named coordinator inference, rulings (5),
+/// `PX1b` review M3). A vector literal, and a map with another key (empty, reserved such as
+/// `__type__`, or holding dots or backticks), is unrecorded; strict refuses it.
 fn is_recorded_select_literal(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
-        Some(V::IntegerValue(_)) => true,
-        Some(V::DoubleValue(d)) => d.is_finite(),
         Some(V::ArrayValue(array)) => array.values.iter().all(is_recorded_select_literal),
-        _ => false,
+        Some(V::MapValue(map)) => map
+            .fields
+            .iter()
+            .all(|(key, value)| is_plain_key(key) && is_recorded_select_literal(value)),
+        Some(_) => true,
+        None => false,
     }
+}
+
+/// A map key a plain path segment names: `[a-zA-Z_][a-zA-Z_0-9]*`, not reserved (`__x__`).
+fn is_plain_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !is_reserved_name(key)
 }
 
 /// The most fields one `select` stage sets.

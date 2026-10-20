@@ -1,0 +1,2104 @@
+[
+ {
+  "expr": "query.orderByKey == false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderByValue == false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByPriority == false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByKey == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderByChild == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByValue == true",
+  "query": "&orderBy=%22%24value%22",
+  "indexOn": [
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByKey == false",
+  "query": "&orderBy=%22%24value%22",
+  "indexOn": [
+   ".value"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByValue == false",
+  "query": "&orderBy=%22%24key%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByChild == null",
+  "query": "&orderBy=%22%24key%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByChild == 'n'",
+  "query": "&orderBy=%22n%22",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByChild == 'a/b'",
+  "query": "&orderBy=%22a%2Fb%22",
+  "indexOn": [
+   "a/b"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByPriority == false",
+  "query": "&orderBy=%22n%22",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == 1",
+  "query": "&orderBy=%22n%22&startAt=1&endAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == null",
+  "query": "&orderBy=%22n%22&startAt=1&endAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == null",
+  "query": "&orderBy=%22n%22&startAt=1&endAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAt == 1",
+  "query": "&orderBy=%22n%22&startAt=1&endAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == 'a'",
+  "query": "&orderBy=%22%24key%22&startAt=%22a%22&endAt=%22b%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == 'b'",
+  "query": "&orderBy=%22%24key%22&startAt=%22a%22&endAt=%22b%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == null",
+  "query": "&orderBy=%22%24key%22&startAt=%22a%22&endAt=%22b%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == null",
+  "query": "&orderBy=%22%24key%22&equalTo=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == null",
+  "query": "&orderBy=%22%24key%22&equalTo=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAt == 'a'",
+  "query": "&orderBy=%22%24key%22&startAfter=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == null",
+  "query": "&orderBy=%22%24key%22&startAfter=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == null",
+  "query": "&orderBy=%22%24key%22&startAfter=%22a%22&endAt=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAt == 'a'",
+  "query": "&orderBy=%22%24key%22&startAfter=%22a%22&endAt=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == 'a'",
+  "query": "&orderBy=%22%24key%22&endBefore=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.equalTo == null",
+  "query": "&orderBy=%22%24key%22&startAt=%22a%22&endBefore=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.limitToLast == null",
+  "query": "&orderBy=%22%24key%22&limitToFirst=2",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.limitToFirst == null",
+  "query": "&orderBy=%22%24key%22&limitToLast=2",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByKey + 1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid + expression: left operand is not a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "query.limitToFirst + 1 == 3",
+  "query": "&orderBy=%22%24key%22&limitToFirst=2",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByChild.length == 1",
+  "query": "&orderBy=%22n%22",
+  "indexOn": [
+   "n"
+  ],
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "'abc'.foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid.foo == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.foo == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(1 + 2).length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "('a' + 1).length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "('a' + 1).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(1 + 'a').foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(auth.n + 1).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(auth.n + 1).length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(1 + 2) + 'a' == '3a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "('a' + 'b').length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1.5 == 'a1.5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + -0 == 'a0'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 100 == 'a100'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1.0 == 'a1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1000000000 * 1000000000 * 1000 == 'a1e+21'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 1000000000 * 1000000000 * 1000 == 'a1.0E21'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1000000000 * 1000000000 * 100 == 'a100000000000000000000'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 0.0000001 == 'a1e-7'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 0.0000001 == 'a1.0E-7'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 0.000001 == 'a0.000001'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 0.1 == 'a0.1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles[-0] == 'x'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles[0] == 'x'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles[1.5] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles[0.0] == 'x'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.nope + 'a' == 'nulla'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.admin + 'a' == 'truea'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + auth.admin == 'atrue'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token['e' + 'mail'] == 'A@b.co'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth['uid'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "data['exists']()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "data['child']('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "false && true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true || false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "false && auth.x.y.z",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Right operand of && must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "true || auth.x.y.z",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Right operand of || must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "false ? false : true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "true ? true : false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.n == 3 ? true : false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": ".5 == 0.5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1e3 == 1000",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1E3 == 1000",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1e+3 == 1000",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1e-3 == 0.001",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1.5e2 == 150",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "2.e1 == 20",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1e == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:28: missing exponent\n",
+  "read": null
+ },
+ {
+  "expr": "'it\\'s'.length == 4",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a\\\\b'.length == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "\"q\\\"q\".length == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'xa$y'.matches(/a\\$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: Illegal regular expression, unexpected end-of-string\n",
+  "read": null
+ },
+ {
+  "expr": "'xa$'.matches(/a\\$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: Illegal regular expression, unexpected end-of-string\n",
+  "read": null
+ },
+ {
+  "expr": "'xab'.matches(/a$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a/b'.matches(/a\\/b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a/b'.matches(/[/]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'ab'.matches(/[/]b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' in auth",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain 'in' operator.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid.matches(/a/",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) after argument list\n",
+  "read": null
+ },
+ {
+  "expr": "(1 == 1]",
+  "query": "",
+  "load": 400,
+  "error": "1:33: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "data.child('s'",
+  "query": "",
+  "load": 400,
+  "error": "1:39: missing ) after argument list\n",
+  "read": null
+ },
+ {
+  "expr": "[1, 2",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ] after element list\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderByKey == true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByKey",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByValue == true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.orderByPriority == true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.limitToFirst == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByKey == true",
+  "query": "&orderBy=%22%24key%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.orderByKey == true",
+  "query": "&orderBy=%22n%22",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == null",
+  "query": "&orderBy=%22%24key%22&endBefore=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == 'a'",
+  "query": "&orderBy=%22%24key%22&startAfter=%22a%22&endAt=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == 'a'",
+  "query": "&orderBy=%22%24key%22&startAfter=%22a%22&endAt=%22a%22",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == 1",
+  "query": "&orderBy=%22n%22&startAfter=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == null",
+  "query": "&orderBy=%22n%22&startAfter=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == 5",
+  "query": "&orderBy=%22n%22&endBefore=5",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.endAt == null",
+  "query": "&orderBy=%22n%22&endBefore=5",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == 1",
+  "query": "&orderBy=%22n%22&startAfter=1&endAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == null",
+  "query": "&orderBy=%22n%22&startAt=1&endBefore=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == null",
+  "query": "&orderBy=%22n%22&startAfter=1&endBefore=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == 1",
+  "query": "&orderBy=%22n%22&equalTo=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == 1",
+  "query": "&orderBy=%22n%22&equalTo=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == 1",
+  "query": "&orderBy=%22n%22&equalTo=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.startAt == 1",
+  "query": "&orderBy=%22n%22&startAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.endAt == null",
+  "query": "&orderBy=%22n%22&startAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "query.equalTo == null",
+  "query": "&orderBy=%22n%22&startAt=1",
+  "indexOn": [
+   "n"
+  ],
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(1 + 2).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(auth.n + auth.n).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(auth.n + auth.n).length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(1 - 2).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "(-auth.n).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "(auth.n * 2).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "'a' + 10000000 == 'a10000000'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 10000000 == 'a1.0E7'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 1000000000 == 'a1000000000'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1000000000000000 == 'a1000000000000000'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 10000000000000000 == 'a10000000000000000'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1000000000 * 1000000000 == 'a1000000000000000000'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1000000000 * 1000000000 * 10 == 'a10000000000000000000'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 1000000000 * 1000000000 * 10 == 'a1.0E19'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1000000000 * 1000000000 * 100 == 'a1.0E20'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1234567.5 == 'a1234567.5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 12345678.5 == 'a1.23456785E7'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 12345678.5 == 'a12345678.5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' + 0.001 == 'a0.001'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 0.0001 == 'a1.0E-4'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 0.000001 == 'a1.0E-6'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + -1.5 == 'a-1.5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + -0.5 == 'a-0.5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + (0 - 0.0001) == 'a-1.0E-4'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1 / 3 == 'a0.3333333333333333'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 2 / 3 == 'a0.6666666666666666'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 0.1 * 3 == 'a0.30000000000000004'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 100 / 3 == 'a33.333333333333336'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a' + 1e300 * 10 == 'a1.0E301'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles[1] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles[5] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles['0'] == 'x'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles['a'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles[-1] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.roles.foo == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.nope + 'a' == 'a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.nope + 'a' == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.admin + 'a' == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(auth.nope + 'a').length == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.nope + 1 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.admin + 1 == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid + 1 == 'u11'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.n + 'a' == '3a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.n + auth.n == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.roles + 'a' == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token + 'a' == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true && auth.admin",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Right operand of && must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.admin && true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Left operand of && must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.admin || false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Left operand of || must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "true && auth.admin == true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!auth.admin",
+  "query": "",
+  "load": 400,
+  "error": "1:25: ! only operates on booleans.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.admin ? true : false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: condition of ? must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "true ? auth.admin : false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Expression must evaluate to a boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.admin",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Expression must evaluate to a boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "'a.b'.matches(/a\\.b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'$'.matches(/\\$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unexpected end-of-string\n",
+  "read": null
+ },
+ {
+  "expr": "'a$b'.matches(/a\\$b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a1'.matches(/\\d$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a\\\\'.matches(/a\\\\/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'ab'.matches(/b$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a$'.matches(/a[$]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/a$/i)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1e",
+  "query": "",
+  "load": 400,
+  "error": "1:27: missing exponent\n",
+  "read": null
+ },
+ {
+  "expr": "1e+ == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing exponent\n",
+  "read": null
+ },
+ {
+  "expr": "1.2.3 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "0x10 == 16",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "010 == 8",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1. == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(1",
+  "query": "",
+  "load": 400,
+  "error": "1:27: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "data.child(",
+  "query": "",
+  "load": 400,
+  "error": "1:36: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "[1,",
+  "query": "",
+  "load": 400,
+  "error": "1:28: missing ] after element list\n",
+  "read": null
+ },
+ {
+  "expr": "data.val( == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:38: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid.matches(/a/,",
+  "query": "",
+  "load": 400,
+  "error": "1:46: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth.n == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.admin == true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.email == 'A@b.co'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.sub == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.iat == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.exp == 9999999999",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.roles == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.roles[0] == 'x'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token.roles.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.roles[0.5] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.provider == 'anonymous'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.firebase == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.user_id == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(1 + 2) - 1 == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(1 + 2) * 2 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "-(1 + 2) == -3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(1 + 2) < 4",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "('a' + 'b') - 1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid - expression: left operand is not a number.\n",
+  "read": null
+ },
+ {
+  "expr": "1 + 2 + 3 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "(1 + 2) % 2 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a\\\\'.matches(/a\\\\$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/a$$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a$'.matches(/a$$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:38: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/^a$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'$'.matches(/^\\$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unexpected end-of-string\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token.admin + 'a' == 'truea'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.n + 'a' == '3a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "data.child('b').val() && true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Left operand of && must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "!data.child('b').val()",
+  "query": "",
+  "load": 400,
+  "error": "1:25: ! only operates on booleans.\n",
+  "read": null
+ },
+ {
+  "expr": "data.child('b').val() ? true : false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: condition of ? must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "data.child('b').val()",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Expression must evaluate to a boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "true && data.child('b').val()",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Right operand of && must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "(1 + 2).contains('3')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(1 + 2).toLowerCase() == '3'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(auth.n + 1).contains('4')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-('a' + 'b') == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: - only operates on numbers.\n",
+  "read": null
+ },
+ {
+  "expr": "(1 + 2) + 1 == 4",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "((1 + 2) + 'a').foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(true ? 1 : 2).foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "(true ? 'a' : 'b').foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(true ? 1 : 'b').foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:26: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "(true ? auth.n : 1).foo == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(true ? 1 : 2) + 1 == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "data.val().foo == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'foo'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val().contains('a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.contains('u')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.contains('u')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAt.contains('a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "query.startAt + 1 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "(1 + 2) && true",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Left operand of && must be boolean.\n",
+  "read": null
+ },
+ {
+  "expr": "query.orderByKey && true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/a^/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/^^a/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a\\/)",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/\\/)",
+  "query": "",
+  "load": 400,
+  "error": "1:42: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/(a/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected ')' at position 6\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a)/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, end-of-string expected\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/[a/)",
+  "query": "",
+  "load": 400,
+  "error": "1:42: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a{2/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, expected '}' at position 5\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a**/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/(?:a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a|b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/\\w+/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/^$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[^a]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[a^]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/a{1,2}/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/(?i)a/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/\\x41/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/\\u0041/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a+?/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/(a)\\1/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/(?=a)/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a$b/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a\\$b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[$]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a{,2}/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, integer expected at position 4\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a{2,1}/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/\\d{2}/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/\\./)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/\\//)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/[a-]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'a'.matches(/[z-a]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/\\p{L}/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, integer expected at position 5\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/[[:alpha:]]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a\\$\\$/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unexpected end-of-string\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/\\$$/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/^\\^/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/a\\^b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a'.matches(/(a$)/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/(^a)/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a|^b/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ },
+ {
+  "expr": "'a'.matches(/a$|b/)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions\n",
+  "read": null
+ }
+]

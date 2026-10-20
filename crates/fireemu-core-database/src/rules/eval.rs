@@ -80,14 +80,28 @@ fn leaf_value<'a>(leaf: &Leaf) -> Value<'a> {
     }
 }
 
-/// A number as JavaScript prints it.
+/// A number as the official emulator prints it: a whole number that fits a 64-bit integer
+/// as that integer, anything else as Java's `Double.toString` (plain from 10^-3 up to 10^7,
+/// otherwise `d.dddE<exponent>`).
 fn number_text(n: f64) -> String {
+    // 2^63: the first magnitude a 64-bit integer cannot hold.
+    const LONG_LIMIT: f64 = 9_223_372_036_854_775_808.0;
     #[allow(clippy::cast_possible_truncation)]
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{}", n as i64)
-    } else {
-        format!("{n}")
+    if n.fract() == 0.0 && n.abs() < LONG_LIMIT {
+        return format!("{}", n as i64);
     }
+    if (1e-3..1e7).contains(&n.abs()) {
+        return format!("{n}");
+    }
+    // Rust's `{:e}` has the same shortest digits: `1.5e-7`, `1e21`.
+    let text = format!("{n:e}");
+    let (mantissa, exponent) = text.split_once('e').unwrap_or((&text, "0"));
+    let mantissa = if mantissa.contains('.') {
+        mantissa.to_owned()
+    } else {
+        format!("{mantissa}.0")
+    };
+    format!("{mantissa}E{exponent}")
 }
 
 fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
@@ -157,10 +171,14 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
 fn member<'a>(object: Value<'a>, name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     match object {
         Value::Json(Json::Object(map)) => Some(map.get(name).map_or(Value::Null, from_json)),
-        Value::Json(Json::Array(items)) => {
-            let index: usize = name.parse().ok()?;
-            Some(items.get(index).map_or(Value::Null, from_json))
-        }
+        // An array is an object keyed by its indexes: any other member is null.
+        Value::Json(Json::Array(items)) => Some(
+            name.parse::<usize>()
+                .ok()
+                .filter(|index| index.to_string() == name)
+                .and_then(|index| items.get(index))
+                .map_or(Value::Null, from_json),
+        ),
         Value::Str(s) if name == "length" =>
         {
             #[allow(clippy::cast_precision_loss)]
@@ -175,15 +193,20 @@ fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
     bound.map_or(Value::Null, |b| from_json(&b.value))
 }
 
+/// A member of `query`. A read without a query is ordered by key. `startAt` is the start
+/// bound, inclusive or not; `endAt` is an inclusive end bound only; `equalTo` is the start
+/// value when an inclusive end bound has the same value.
 fn query_member<'a>(query: Option<&QueryParams>, name: &str) -> Value<'a> {
     let Some(q) = query else {
         return match name {
-            "orderByKey" | "orderByValue" | "orderByPriority" => Value::Bool(false),
+            "orderByKey" => Value::Bool(true),
+            "orderByValue" | "orderByPriority" => Value::Bool(false),
             _ => Value::Null,
         };
     };
-    let equal = match (&q.start, &q.end) {
-        (Some(s), Some(e)) if s.value == e.value && s.inclusive && e.inclusive => Some(s),
+    let end = q.end.as_ref().filter(|e| e.inclusive);
+    let equal = match (&q.start, end) {
+        (Some(s), Some(e)) if s.value == e.value => Some(s),
         _ => None,
     };
     match name {
@@ -195,8 +218,8 @@ fn query_member<'a>(query: Option<&QueryParams>, name: &str) -> Value<'a> {
             _ => Value::Null,
         },
         "equalTo" => bound_value(equal),
-        "startAt" => bound_value(q.start.as_ref().filter(|_| equal.is_none())),
-        "endAt" => bound_value(q.end.as_ref().filter(|_| equal.is_none())),
+        "startAt" => bound_value(q.start.as_ref()),
+        "endAt" => bound_value(end),
         "limitToFirst" => match q.limit {
             Some(Limit::First(n)) => Value::Num(f64::from(n)),
             _ => Value::Null,
@@ -400,10 +423,9 @@ fn finite<'a>(n: f64) -> Option<Value<'a>> {
     n.is_finite().then_some(Value::Num(n))
 }
 
+/// The text of a value added to a string: only numbers and strings have one.
 fn text(value: &Value<'_>) -> Option<String> {
     match value {
-        Value::Null => Some("null".to_owned()),
-        Value::Bool(b) => Some(b.to_string()),
         Value::Num(n) => Some(number_text(*n)),
         Value::Str(s) => Some(s.clone()),
         _ => None,

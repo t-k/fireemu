@@ -330,6 +330,18 @@ fn credentials_decide_who_the_rules_see() {
         ),
         // Without `iat` the token is no user.
         ("auth != null", r#"{"sub":"s1"}"#, 401),
+        // Custom claims are members of `auth`, and replace `provider` and `token`; the
+        // reserved ones are not, and `uid` stays `sub`.
+        ("auth.admin == true", r#"{"sub":"s1","iat":1,"admin":true}"#, 200),
+        ("auth.provider == 'p'", r#"{"sub":"s1","iat":1,"provider":"p","firebase":{"sign_in_provider":"password"}}"#, 200),
+        ("auth.token == 't'", r#"{"sub":"s1","iat":1,"token":"t"}"#, 200),
+        ("auth.user_id == 'x'", r#"{"sub":"s1","iat":1,"user_id":"x"}"#, 200),
+        ("auth.uid == 's1'", r#"{"sub":"s1","iat":1,"uid":"u2"}"#, 200),
+        (
+            "auth.sub == null && auth.iat == null && auth.exp == null && auth.nbf == null && auth.aud == null && auth.iss == null && auth.jti == null && auth.auth_time == null && auth.firebase == null",
+            r#"{"sub":"s1","iat":1,"exp":2,"nbf":3,"aud":"a","iss":"i","jti":"j","auth_time":4,"firebase":{}}"#,
+            200,
+        ),
     ];
     for (n, (rule, claims, status)) in checks.into_iter().enumerate() {
         let ns = format!("cr{n}");

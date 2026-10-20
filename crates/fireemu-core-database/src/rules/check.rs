@@ -1,9 +1,10 @@
 //! The static check the official emulator runs when rules are loaded: names, members,
 //! argument counts and types, and operand types, each refused with its own text.
 //!
-//! Values whose type is known only at run time (`auth` and its members, `val()`,
-//! `getPriority()`, the query bounds) are `Any` here and checked when the rule runs, where a
-//! wrong type makes the rule false.
+//! Values whose type is known only at run time are checked when the rule runs, where a wrong
+//! type makes the rule false. `auth` and its members (`Json`) take any member; `val()`,
+//! `getPriority()`, the query bounds and a sum without a string (`Any`) take the members of a
+//! string. Neither is a boolean: `&&`, `||`, `!`, `?:` and the rule itself need one.
 
 use std::collections::BTreeSet;
 
@@ -32,7 +33,7 @@ pub enum Ty {
     Query,
     Regex,
     Array,
-    /// `auth` and its members: a JSON value known only at run time, with no methods.
+    /// `auth` and its members: a JSON value known only at run time, with any member.
     Json,
 }
 
@@ -124,7 +125,7 @@ impl Checker<'_> {
             }
             ExprKind::Call(callee, arguments) => self.call(expr, callee, arguments),
             ExprKind::Not(operand) => {
-                if self.ty(operand)?.is(&[Ty::Bool]) {
+                if self.ty(operand)? == Ty::Bool {
                     Ok(Ty::Bool)
                 } else {
                     Err(ExprError::new(expr.at, "! only operates on booleans."))
@@ -139,12 +140,18 @@ impl Checker<'_> {
             }
             ExprKind::Binary(op, left, right) => self.binary(expr.at, *op, left, right),
             ExprKind::Ternary(condition, then, otherwise) => {
-                if !self.ty(condition)?.is(&[Ty::Bool]) {
+                if self.ty(condition)? != Ty::Bool {
                     return Err(ExprError::new(expr.at, "condition of ? must be boolean."));
                 }
                 let then = self.ty(then)?;
                 let otherwise = self.ty(otherwise)?;
-                Ok(if then == otherwise { then } else { Ty::Any })
+                Ok(if then == otherwise {
+                    then
+                } else if then == Ty::Json || otherwise == Ty::Json {
+                    Ty::Json
+                } else {
+                    Ty::Any
+                })
             }
         }
     }
@@ -166,14 +173,18 @@ impl Checker<'_> {
 
     fn member(&self, at: usize, object: &Expr, name: &str) -> Result<Ty, ExprError> {
         match self.ty(object)? {
-            ty @ (Ty::Any | Ty::Json) => Ok(ty),
-            Ty::Str if name == "length" => Ok(Ty::Num),
+            Ty::Json => Ok(Ty::Json),
+            Ty::Str | Ty::Any if name == "length" => Ok(Ty::Num),
             Ty::Num | Ty::Bool | Ty::Null | Ty::Regex | Ty::Array => Err(ExprError::new(
                 at,
                 "Invalid property access: target is not an object.",
             )),
+            // As the official emulator types them: `orderByChild` as null, the limits as
+            // numbers, the bounds as values known at run time.
             Ty::Query if QUERY_MEMBERS.contains(&name) => Ok(match name {
                 "orderByKey" | "orderByValue" | "orderByPriority" => Ty::Bool,
+                "orderByChild" => Ty::Null,
+                "limitToFirst" | "limitToLast" => Ty::Num,
                 _ => Ty::Any,
             }),
             // Methods are read only through a call.
@@ -322,13 +333,13 @@ impl Checker<'_> {
         };
         match op {
             BinaryOp::And | BinaryOp::Or => {
-                if !l.is(&[Ty::Bool]) {
+                if l != Ty::Bool {
                     return Err(ExprError::new(
                         at,
                         format!("Left operand of {symbol} must be boolean."),
                     ));
                 }
-                if !r.is(&[Ty::Bool]) {
+                if r != Ty::Bool {
                     return Err(ExprError::new(
                         at,
                         format!("Right operand of {symbol} must be boolean."),
@@ -353,9 +364,8 @@ impl Checker<'_> {
                 let allowed = [Ty::Num, Ty::Str];
                 operand(l, "left", &allowed, "is not a number or string")?;
                 operand(r, "right", &allowed, "is not a number or string")?;
-                Ok(if l == Ty::Num && r == Ty::Num {
-                    Ty::Num
-                } else if l == Ty::Str || r == Ty::Str {
+                // A sum is a string, or, without a string operand, a number or a string.
+                Ok(if l == Ty::Str || r == Ty::Str {
                     Ty::Str
                 } else {
                     Ty::Any

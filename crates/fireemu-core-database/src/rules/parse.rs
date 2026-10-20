@@ -196,16 +196,70 @@ impl Lexer<'_> {
             .is_some_and(char::is_ascii_digit)
     }
 
+    /// Where the JavaScript parser of the official emulator stands after a token that ends
+    /// at `end` and needed a character of lookahead to end: one past it, unless that is the
+    /// end of the text.
+    fn after_lookahead(&self, end: usize) -> usize {
+        if end < self.chars.len() {
+            end + 1
+        } else {
+            end
+        }
+    }
+
+    /// A number: decimal (`1`, `1.5`, `.5`, `1.`, `1e3`), hexadecimal (`0x10`) or legacy
+    /// octal (`010`, as JavaScript reads it).
     fn number(&mut self, start: usize) -> Result<(usize, Token), ExprError> {
-        let mut text = String::new();
-        while let Some(&c) = self.chars.get(self.at) {
-            let exponent_sign = (c == '+' || c == '-') && text.ends_with(['e', 'E']);
-            if c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || exponent_sign {
-                text.push(c);
-                self.at += 1;
-            } else {
-                break;
+        let digits = |lexer: &mut Self, radix: u32| {
+            let from = lexer.at;
+            while lexer.chars.get(lexer.at).is_some_and(|c| c.is_digit(radix)) {
+                lexer.at += 1;
             }
+            lexer.chars[from..lexer.at].iter().collect::<String>()
+        };
+        if self.chars[self.at] == '0' {
+            if matches!(self.chars.get(self.at + 1), Some('x' | 'X')) {
+                self.at += 2;
+                let hex = digits(self, 16);
+                #[allow(clippy::cast_precision_loss)]
+                return u64::from_str_radix(&hex, 16)
+                    .map(|n| (start, Token::Number(n as f64)))
+                    .map_err(|_| ExprError::new(start, "Unsupported javascript syntax."));
+            }
+            let mut end = self.at + 1;
+            while self.chars.get(end).is_some_and(char::is_ascii_digit) {
+                end += 1;
+            }
+            let octal: String = self.chars[self.at + 1..end].iter().collect();
+            if !octal.is_empty() && octal.chars().all(|c| c.is_digit(8)) {
+                self.at = end;
+                #[allow(clippy::cast_precision_loss)]
+                return u64::from_str_radix(&octal, 8)
+                    .map(|n| (start, Token::Number(n as f64)))
+                    .map_err(|_| ExprError::new(start, "Unsupported javascript syntax."));
+            }
+        }
+        let mut text = digits(self, 10);
+        if self.chars.get(self.at) == Some(&'.') {
+            self.at += 1;
+            text.push('.');
+            text.push_str(&digits(self, 10));
+        }
+        if matches!(self.chars.get(self.at), Some('e' | 'E')) {
+            self.at += 1;
+            text.push('e');
+            if let Some(&sign @ ('+' | '-')) = self.chars.get(self.at) {
+                self.at += 1;
+                text.push(sign);
+            }
+            let exponent = digits(self, 10);
+            if exponent.is_empty() {
+                return Err(ExprError::new(
+                    self.after_lookahead(self.at),
+                    "missing exponent",
+                ));
+            }
+            text.push_str(&exponent);
         }
         text.parse::<f64>()
             .map(|n| (start, Token::Number(n)))
@@ -249,16 +303,23 @@ impl Lexer<'_> {
         let mut in_class = false;
         loop {
             let Some(&c) = self.chars.get(self.at) else {
-                return Err(ExprError::new(start, "Unterminated regular expression."));
+                return Err(ExprError::new(
+                    self.chars.len(),
+                    "unterminated regular expression literal",
+                ));
             };
             self.at += 1;
             match c {
                 '\\' => {
                     pattern.push(c);
-                    if let Some(&next) = self.chars.get(self.at) {
-                        pattern.push(next);
-                        self.at += 1;
-                    }
+                    let Some(&next) = self.chars.get(self.at) else {
+                        return Err(ExprError::new(
+                            self.chars.len(),
+                            "unterminated regular expression literal",
+                        ));
+                    };
+                    pattern.push(next);
+                    self.at += 1;
                 }
                 '[' => {
                     in_class = true;
@@ -281,8 +342,39 @@ impl Lexer<'_> {
                 break;
             }
         }
+        check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
         Ok((start, Token::Regex(pattern, flags)))
     }
+}
+
+/// The anchors of a pattern, as the official emulator checks them: a final `$` is the end
+/// anchor (escaped or not, so `/a\$/` leaves a dangling escape), and otherwise `^` may stand
+/// only first and `$` nowhere, outside a character class.
+fn check_anchors(pattern: &str) -> Result<(), &'static str> {
+    let body = pattern.strip_suffix('$').unwrap_or(pattern);
+    let trailing_escapes = body.chars().rev().take_while(|c| *c == '\\').count();
+    if trailing_escapes % 2 == 1 {
+        return Err("Illegal regular expression, unexpected end-of-string");
+    }
+    let mut chars = body.chars().enumerate();
+    let mut in_class = false;
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '^' if !in_class && i > 0 => {
+                return Err("Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions")
+            }
+            '$' if !in_class => {
+                return Err("Illegal regular expression, unescaped ^, ^ can only appear at the end of regular expressions")
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Parses one rule expression. An optional trailing `;` is allowed; a second expression
@@ -312,7 +404,13 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
                 ))
             }
         }
-        _ => Err(ExprError::new(at, "Unexpected token.")),
+        token @ Token::Punct(")" | "]") => {
+            Err(ExprError::new(parser.rhino_end(at, &token), "syntax error"))
+        }
+        token => Err(ExprError::new(
+            parser.rhino_end(at, &token),
+            "missing ; before statement",
+        )),
     }
 }
 
@@ -355,6 +453,47 @@ impl Parser<'_> {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    /// Where the official emulator's JavaScript parser reports an error at `token`, which
+    /// starts at `at`: its end, one further after a token that needs lookahead to end.
+    fn rhino_end(&self, at: usize, token: &Token) -> usize {
+        let chars = self.lexer.chars;
+        match token {
+            Token::End => at,
+            Token::Punct(p @ ("(" | ")" | "[" | "]" | "{" | "}" | "," | ";" | "?" | ":")) => {
+                at + p.len()
+            }
+            Token::Punct(p) => self.lexer.after_lookahead(at + p.len()),
+            Token::Str(_) => {
+                // The closing quote ends it.
+                let quote = chars[at];
+                let mut end = at + 1;
+                while end < chars.len() && chars[end] != quote {
+                    end += if chars[end] == '\\' { 2 } else { 1 };
+                }
+                (end + 1).min(chars.len())
+            }
+            Token::Number(_) | Token::Name(_) | Token::Regex(..) => {
+                let mut end = at + 1;
+                while end < chars.len()
+                    && (chars[end].is_alphanumeric() || matches!(chars[end], '_' | '$' | '.'))
+                {
+                    end += 1;
+                }
+                self.lexer.after_lookahead(end)
+            }
+        }
+    }
+
+    /// The closing `)` or `]` of a group, call or array, refused with the official
+    /// emulator's text when something else stands there.
+    fn close(&mut self, closer: &str, message: &str) -> Result<(), ExprError> {
+        let (at, token) = self.next()?;
+        match token {
+            Token::Punct(p) if p == closer => Ok(()),
+            token => Err(ExprError::new(self.rhino_end(at, &token), message)),
+        }
     }
 
     fn ternary(&mut self) -> Result<Expr, ExprError> {
@@ -472,10 +611,10 @@ impl Parser<'_> {
                 if !self.eat(")")? {
                     loop {
                         arguments.push(self.ternary()?);
-                        if self.eat(")")? {
+                        if !self.eat(",")? {
+                            self.close(")", "missing ) after argument list")?;
                             break;
                         }
-                        self.expect(",")?;
                     }
                 }
                 expr = Expr {
@@ -511,18 +650,19 @@ impl Parser<'_> {
             },
             Token::Punct("(") => {
                 let inner = self.ternary()?;
-                self.expect(")")?;
+                self.close(")", "missing ) in parenthetical")?;
                 return Ok(inner);
             }
             Token::Punct("[") => {
                 let mut items = Vec::new();
-                if !self.eat("]")? {
-                    loop {
-                        items.push(self.ternary()?);
-                        if self.eat("]")? {
-                            break;
-                        }
-                        self.expect(",")?;
+                while !self.eat("]")? {
+                    if let (end, Token::End) = self.peek()?.clone() {
+                        return Err(ExprError::new(end, "missing ] after element list"));
+                    }
+                    items.push(self.ternary()?);
+                    if !self.eat(",")? {
+                        self.close("]", "missing ] after element list")?;
+                        break;
                     }
                 }
                 ExprKind::Array(items)
@@ -531,7 +671,9 @@ impl Parser<'_> {
                 return Err(ExprError::new(at, "Unsupported javascript syntax."))
             }
             Token::End => return Err(ExprError::new(at, "Unexpected end of expression")),
-            Token::Punct(_) => return Err(ExprError::new(at, "Unexpected token.")),
+            token @ Token::Punct(_) => {
+                return Err(ExprError::new(self.rhino_end(at, &token), "syntax error"))
+            }
         };
         Ok(Expr { at, kind })
     }

@@ -73,7 +73,24 @@ pub(crate) fn user_auth(token: &str) -> Option<Json> {
     auth_from_claims(&claims).ok()
 }
 
-/// Builds `auth` from token claims; the error names the missing claim.
+/// Claims that stay in `auth.token` only.
+const RESERVED_CLAIMS: [&str; 10] = [
+    "sub",
+    "uid",
+    "iat",
+    "exp",
+    "nbf",
+    "aud",
+    "iss",
+    "jti",
+    "auth_time",
+    "firebase",
+];
+
+/// Builds `auth` from token claims, as the official emulator does: `provider` from
+/// `firebase.sign_in_provider` (else `anonymous`) and `token` the claims, then every other
+/// claim as a member of its own (so a `provider` or `token` claim replaces those), then `uid`
+/// from `sub`. The error names the missing claim.
 pub(crate) fn auth_from_claims(claims: &BTreeMap<String, Json>) -> Result<Json, &'static str> {
     let Some(Json::String(subject)) = claims.get("sub") else {
         return Err("sub");
@@ -86,16 +103,18 @@ pub(crate) fn auth_from_claims(claims: &BTreeMap<String, Json>) -> Result<Json, 
         _ => None,
     };
     let mut auth = BTreeMap::from([
-        ("uid".to_owned(), Json::String(subject.clone())),
         ("token".to_owned(), Json::Object(claims.clone())),
         (
             "provider".to_owned(),
             provider.unwrap_or_else(|| Json::string("anonymous")),
         ),
     ]);
-    if let Some(user_id) = claims.get("user_id") {
-        auth.insert("user_id".to_owned(), user_id.clone());
+    for (name, value) in claims {
+        if !RESERVED_CLAIMS.contains(&name.as_str()) {
+            auth.insert(name.clone(), value.clone());
+        }
     }
+    auth.insert("uid".to_owned(), Json::String(subject.clone()));
     Ok(Json::Object(auth))
 }
 

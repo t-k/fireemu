@@ -111,7 +111,7 @@ export async function harnessDigest() {
 }
 
 /** Per recording: every step once; the harness gets its own budget for wipes and seeds. */
-const ceilings = (programs) => ({
+export const ceilings = (programs) => ({
   maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
   maxHarnessRequests: programs.reduce(
     (total, p) => total + 8 + 2 * Math.ceil((p.seed?.length ?? 0) / 500),

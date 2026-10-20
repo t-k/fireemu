@@ -255,6 +255,66 @@ test("O-2 compares every pair of kinds and each kind with itself under every com
   );
 });
 
+test("the O-2 launch stays within its request cap: the worst case is 2 x (58 + 50) + 5", async () => {
+  const { ceilings, selectPrograms } = await import("./fs-query-index/run.mjs");
+  const o2 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o2/");
+  // The harness ceiling is a base of 20 plus 8 and the seed batches per program.
+  assert.deepEqual(ceilings(o2), { maxRequests: 58, maxHarnessRequests: 50 });
+  // S0 one describe, the preflight two reads, two recordings, A1 two read-backs (E line: 230).
+  const worst = 1 + 2 + 2 * (58 + 50) + 2;
+  assert.equal(worst, 221);
+  assert.ok(worst <= 230);
+});
+
+test("a wipe read that is not JSON fails its program and the cleanup wipe still runs", async () => {
+  const { runCorpus } = await import("./fs-ent-pipeline/session.mjs");
+  const ctx = production();
+  const program = {
+    id: "fs-ent-pipeline/o2/wipe-probe",
+    seed: [["t/d", { i: { integerValue: "1" } }]],
+    steps: [
+      {
+        id: "s",
+        rpc: "executePipeline",
+        body: {
+          structuredPipeline: {
+            pipeline: { stages: [{ name: "collection", args: [{ referenceValue: "/t" }] }] },
+          },
+        },
+      },
+    ],
+  };
+  // The first wipe reads an empty database, the program's cleanup wipe reads a body that is
+  // not JSON, and the run's final wipe reads an empty database again.
+  const wipeReads = ["[]", "<html>not json</html>", "[]"];
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    calls.push(path);
+    const text = path.endsWith(":runQuery")
+      ? wipeReads.shift()
+      : path.endsWith(":commit")
+        ? "{}"
+        : `[{"executionTime": "2026-10-20T00:00:00Z"}]`;
+    return new Response(text, { status: 200 });
+  };
+  let out;
+  try {
+    out = await runCorpus([program], ctx, { maxRequests: 1, maxHarnessRequests: 20 });
+  } finally {
+    globalThis.fetch = original;
+  }
+  // The program is a harness failure, not a row, so record-production ends as
+  // recorded-with-program-failures rather than aborting.
+  assert.deepEqual(Object.keys(out.results), []);
+  assert.equal(out.failures.length, 1);
+  assert.equal(out.failures[0].program, program.id);
+  // Three wipe reads: before the program, its cleanup after the failure, and the final one.
+  assert.equal(calls.filter((path) => path.endsWith(":runQuery")).length, 3);
+  assert.equal(wipeReads.length, 0);
+});
+
 test("every step stays in the named database on both transports", () => {
   for (const ctx of [production()]) {
     for (const program of PROGRAMS) {

@@ -1105,3 +1105,106 @@ fn deep_rules_are_refused_without_exhausting_the_stack() {
         assert_eq!(call(&mut db, "GET", "/.json?ns=other", &[], "").0, 200);
     });
 }
+
+#[test]
+fn conditional_writes_need_the_read_too() {
+    // Recorded on the official emulator (docs.local cond-probe): rules let `w` be written
+    // but not read, and `r` be read and written.
+    let mut db = db();
+    load(
+        &mut db,
+        "cw",
+        r#"{"rules":{"w":{".write":true},"r":{".read":true,".write":true}}}"#,
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/.json?ns=cw",
+        OWNER,
+        r#"{"w":{"hidden":"h1"},"r":1}"#,
+    );
+    let tag = {
+        let (response, _) = respond(
+            &mut db,
+            "GET",
+            "/w.json?ns=cw",
+            &[
+                ("Authorization", "Bearer owner"),
+                ("X-Firebase-ETag", "true"),
+            ],
+            "",
+        );
+        response
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("etag"))
+            .unwrap()
+            .1
+            .clone()
+    };
+    for (method, headers, body) in [
+        ("PUT", vec![("if-match", "bogus")], r#""x""#),
+        ("PUT", vec![("if-match", tag.as_str())], r#""x""#),
+        ("PUT", vec![("if-none-match", "bogus")], r#""x""#),
+        ("DELETE", vec![("if-match", "bogus")], ""),
+    ] {
+        let (response, _) = respond(&mut db, method, "/w.json?ns=cw", &headers, body);
+        assert_eq!(response.status, 401, "{method} {headers:?}");
+        assert_eq!(String::from_utf8(response.body).unwrap(), denied());
+        assert!(!response
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("etag")));
+    }
+    // Where the caller may read, the comparison answers as before.
+    let (response, _) = respond(
+        &mut db,
+        "PUT",
+        "/r.json?ns=cw",
+        &[("if-match", "bogus")],
+        "2",
+    );
+    assert_eq!(response.status, 412);
+    // An unconditional write answers the ETag of what it wrote.
+    let (response, _) = respond(
+        &mut db,
+        "PUT",
+        "/w.json?ns=cw",
+        &[("X-Firebase-ETag", "true")],
+        r#"{"hidden":"h1"}"#,
+    );
+    assert_eq!(response.status, 200);
+    let mut session = open(&mut db, "cw");
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            1,
+            "p",
+            r#"{"p":"/w","d":"x","h":"bogus"}"#
+        ),
+        vec![refused(1)]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            2,
+            "p",
+            r#"{"p":"/r","d":3,"h":"bogus"}"#
+        ),
+        vec![reply(
+            2,
+            "datastale",
+            r#""Transaction ETag does not match""#
+        )]
+    );
+    assert_eq!(
+        send(&mut db, &mut session, 3, "p", r#"{"p":"/w","d":"z"}"#),
+        vec![reply(3, "ok", r#""""#)]
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.json?ns=cw", OWNER, ""),
+        (200, r#"{"r":1,"w":"z"}"#.to_owned())
+    );
+}

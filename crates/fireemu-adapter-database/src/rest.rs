@@ -600,6 +600,19 @@ impl Database {
     fn put(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
         let written_paths = [call.path.clone()];
         let before = self.before_write(&call.namespace, &written_paths);
+        // A conditional write answers with the value it compares, so it needs the read as
+        // well as the write, both checked before the comparison, as the official emulator
+        // does (review M1).
+        if call.condition.is_some() {
+            let now = call.context.now_millis;
+            let writable = body.json.as_ref().map_or(true, |value| {
+                let op = WriteOp::Set(&call.path, value);
+                self.may_write(&call.namespace, &op, &call.access, now)
+            });
+            if !writable || !self.may_read(&call.namespace, &call.path, None, &call.access, now) {
+                return Err(Refusal::new(401, "Permission denied"));
+            }
+        }
         let tree = &mut self.namespace(&call.namespace).tree;
         let current = tree.get(&call.path);
         let current_tag = tag_at(tree, &call.path);

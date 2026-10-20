@@ -661,6 +661,19 @@ impl Session {
         ) {
             return Err(Self::denied());
         }
+        // A transaction (a put with a hash) answers with the value it compares, so it needs
+        // the read too (review M1).
+        if arguments.contains_key("h")
+            && !db.may_read(
+                &self.namespace,
+                &path,
+                None,
+                &self.access,
+                context.now_millis,
+            )
+        {
+            return Err(Self::denied());
+        }
         let paths = [path];
         let before = db.before_write(&self.namespace, &paths);
         let [path] = paths;

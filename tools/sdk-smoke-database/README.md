@@ -24,11 +24,13 @@ fireemu exec --only database -- node tools/sdk-smoke-database/run.mjs
 
 ## Recording the official emulator again
 
+The recordings come only from the pinned jar, `firebase-database-emulator-v4.11.2.jar` with SHA-256 `b70d99344caf17c98b6f910fa8f6edf32a7c016cb1035e8915f70d38901eb97f` (the value `spec/compatibility/contract.json` pins). Fetch it with the pinned firebase-tools, which puts it in `~/.cache/firebase/emulators/`, then record:
+
 ```sh
-java -jar ~/.cache/firebase/emulators/firebase-database-emulator-v4.11.2.jar --port 9400 --host 127.0.0.1 &
-node tools/sdk-smoke-database/run.mjs --host 127.0.0.1:9400 --record tools/sdk-smoke-database/fixtures/official-emulator-4.11.2
+npx firebase-tools@15.28.2 setup:emulators:database
+node tools/sdk-smoke-database/run.mjs --record tools/sdk-smoke-database/fixtures/official-emulator-4.11.2
 ```
 
-Stop the emulator afterwards. A recording that changes between two runs against the same server is a timing problem in the smoke, not a difference between servers.
+`--record` checks the jar's SHA-256 and refuses any other file, starts it on a free loopback port and stops it afterwards; `--jar <path>` names a jar kept elsewhere. A recording that changes between two runs is a timing problem in the smoke, not a difference between servers.
 
-`npm test` checks the comparison helper.
+`npm test` checks the comparison helper and the jar check.

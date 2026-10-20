@@ -1179,6 +1179,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         products: import_export::Products::from(&only),
         blocking: auth.blocking.clone(),
         auth_operation_gate,
+        database_served: addrs.database.is_some(),
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.
@@ -1248,6 +1249,13 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         }
         locator
     });
+    if addrs.database.is_some() && !cfg.database_rules.is_empty() {
+        eprintln!(
+            "warning: database: the rules in {} are not enforced (fireemu does not evaluate Realtime Database rules yet), so {}",
+            cfg.database_rules.join(", "),
+            crate::database_access(&cfg)
+        );
+    }
     if !quiet {
         print_banner(
             &cfg,

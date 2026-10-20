@@ -57,7 +57,7 @@ Running Functions requires `firebase-functions` v6 or v7 in the codebase.
 
 ## Supported scope
 
-Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), Cloud Storage for Firebase, Cloud Functions for Firebase, Cloud Pub/Sub, and Eventarc. It also serves the Firebase Realtime Database, without a compatibility claim yet (see the table below). It also provides a local Firebase App Check implementation and a UI for managing data and viewing logs. 
+Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), Cloud Storage for Firebase, Cloud Functions for Firebase, Cloud Pub/Sub, and Eventarc. It also serves the Firebase Realtime Database as an open gap, without a compatibility claim yet (see the table below). It also provides a local Firebase App Check implementation and a UI for managing data and viewing logs. 
 
 ### Key unsupported features and limitations
 
@@ -119,9 +119,9 @@ npx fireemu emulators:start
 npx fireemu emulators:exec -- npm test
 ```
 
-### Realtime Database
+### Realtime Database (an open gap)
 
-The Realtime Database starts when it is selected with `--only database`, configured under `emulators.database` in `firebase.json`, or given a port with `--database-port`; it listens on 9000 by default. `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the child command.
+The Realtime Database, served as an open gap without a compatibility claim, starts when it is selected with `--only database`, configured under `emulators.database` in `firebase.json`, or given a port with `--database-port`; it listens on 9000 by default. `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the child command.
 
 ```sh
 npx fireemu exec --only database -- npm test
@@ -129,7 +129,7 @@ npx fireemu exec --only database -- npm test
 
 Databases are addressed as on the official emulator: by the `ns` query parameter (`http://127.0.0.1:9000/path.json?ns=my-project-default-rtdb`), which the SDKs send when `connectDatabaseEmulator` is used, or by the first label of the host name. A session reset empties the namespaces of the project being reset, `<project>` and `<project>-default-rtdb`.
 
-Security Rules are not evaluated yet. A `database` section in `firebase.json` is accepted and reported with a notice, and requests are answered as for a database without rules: open, or, with `database.defaultAccess = "locked"` (the `productionExact` default), only for the emulator's `owner` credential, which firebase-admin uses against an emulator.
+Security Rules are not evaluated yet. A `database` section in `firebase.json` is accepted, with its deploy hooks. The start banner's `database rules:` line says what access is in effect, and a served database whose `firebase.json` names rules files prints a warning that they are not enforced. Requests are answered as for a database without rules: open, or, with `database.defaultAccess = "locked"` (the `productionExact` default), only for the emulator's `owner` credential, which firebase-admin uses against an emulator.
 
 ### UI
 
@@ -293,7 +293,7 @@ JSON also works: existing `fireemu.json` files and `--config <path>.json` remain
 | Multi-factor authentication is on, SMS and TOTP, without a console toggle, an `updateConfig` call or an `auth.mfa` block | `auth.mfa` (`state: "ENABLED"`, `PHONE_SMS` and TOTP) | off until enabled, as in a new production project: enrollment is refused with `OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` or `TOTP based MFA not enabled.` |
 | An end user's native gRPC `Listen` stream stays open however long it is held. `POST /v1/firestore/listen:expire` on the control API ends every held end-user stream at once, with production's status, to test a client's reconnect | `firestore.listenStreamLifetime` (`"unlimited"`) | ended with `INTERNAL` an hour after it opened, as production ends it (`"oneHour"`) |
 | App Check is served without registering an app: any well-formed debug token (a UUIDv4) exchanges for any app, so an `enforceAppCheck` callable works with no `appCheck` block and a missing or malformed token is still refused | `appCheck.debugTokens` (`"any"`) | only registered apps and digests exchange (`"registered"`); an `appCheck` block asks for this too |
-| A Realtime Database without Security Rules is open to every request, as the official emulator serves it (rules are not evaluated yet) | `database.defaultAccess` (`"open"`) | only the emulator's `owner` credential reads and writes (`"locked"`), as production admits only admin credentials to a database whose rules deny everything |
+| A Realtime Database without Security Rules is open to every request, as the official emulator serves it (rules are not evaluated yet, an open gap) | `database.defaultAccess` (`"open"`) | only the emulator's `owner` credential reads and writes (`"locked"`), as production admits only admin credentials to a database whose rules deny everything |
 | Dead-letter forwarding needs neither a project number nor IAM grants | `pubsub.deadLetterAuthorization` (`"implicit"`) | forwarded only after the service agent holds `roles/pubsub.subscriber` on the subscription and `roles/pubsub.publisher` on the dead-letter topic (`"iam"`); naming `pubsub.projectNumbers` selects it |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
@@ -613,8 +613,8 @@ allowNonLoopbackHosts = true
 { "emulators": { "firestore": { "host": "0.0.0.0", "port": 8080 }, "auth": { "host": "0.0.0.0", "port": 9099 } } }
 ```
 
-- Only Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback. Auth, whose port also serves the control API, listens on loopback or on every interface (`0.0.0.0` or `::`), not on one other address.
-- The emulators serve without a credential, so the start prints a `warning:` line for each listener off loopback. Any client that reaches a published port can do what a local client can on the product APIs, including the Admin SDK's `Bearer owner` credential and the Auth emulator's own routes. Publish the ports only to a network you trust.
+- Only Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks, Pub/Sub and the Realtime Database (an open gap) may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback. Auth, whose port also serves the control API, listens on loopback or on every interface (`0.0.0.0` or `::`), not on one other address.
+- The emulators serve without a credential, so the start prints a `warning:` line for each listener off loopback. Any client that reaches a published port can do what a local client can on the product APIs, including the Admin SDK's `Bearer owner` credential and the Auth emulator's own routes. For the Realtime Database (an open gap) this includes `database.defaultAccess = "locked"`, which admits that well-known `owner` credential, so it is no access control off loopback. Publish the ports only to a network you trust.
 - Fireemu's own controls answer loopback peers only and return 403 to any other peer: the control API (`/v1/` and `/health/` on the Auth port), App Check debug-token management, and the routes that load Security Rules or clear Firestore data (what `@firebase/rules-unit-testing`'s `loadFirestoreRules`, `loadStorageRules` and `clearFirestore` call). Run the code that uses them in the emulator's network namespace: inside the container, or in a container that shares it (a Podman pod, `--network container:<name>`).
 - Because a forwarder inside that namespace (`kubectl port-forward`, a sidecar proxy) connects from loopback, every control API request also needs `Authorization: Bearer <control token>` once the option is on, from a process as from a page; only `/health/` is exempt. The routes that load Security Rules or clear Firestore data are not held to the token, so `@firebase/rules-unit-testing` keeps working; a client that reaches the emulator through such a forwarder can call them, as it could on the official emulator. `fireemu exec` gives its command the token in `FIREEMU_CONTROL_TOKEN`, and `fireemu/testing` and the UI send it.
 - Browser pages must still come from a loopback origin (`http://localhost:...`), so a page served from another host cannot use the exposed ports.

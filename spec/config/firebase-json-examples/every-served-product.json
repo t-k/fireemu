@@ -7,7 +7,7 @@
     "rules": "storage.rules"
   },
   "database": [
-    { "instance": "demo-default-rtdb", "rules": "database.rules.json" }
+    { "instance": "demo-default-rtdb", "rules": "database.rules.json", "predeploy": ["echo database"] }
   ],
   "functions": {
     "source": "functions",

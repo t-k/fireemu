@@ -432,6 +432,60 @@ fn cases() -> Vec<Case> {
             mutate: |contract, _, _| set(contract, "surfaces/1/prohibitedClaimTerms", json!([])),
             expect: Some("declares no prohibitedClaimTerms"),
         },
+        // CC-06: an active surface in the gap state is policed like a deferred one: every
+        // README line naming it says it is a gap.
+        Case {
+            name: "gap-in-readme",
+            mutate: |contract, _, fixture| {
+                set(contract, "surfaces/1/scope", json!("active"));
+                set(contract, "surfaces/1/state", json!("gap"));
+                fixture.write(
+                    "README.md",
+                    &format!("# fixture\n\n{CLAIM}\n\nfireemu serves Realtime Database too.\n"),
+                );
+            },
+            expect: Some("names \"Realtime Database\" without saying it is an open gap"),
+        },
+        Case {
+            name: "gap-in-readme-with-disclaimer",
+            mutate: |contract, _, fixture| {
+                set(
+                    contract,
+                    "vocabulary/scopeDisclaimers",
+                    json!(["deferred", "not planned", "gap"]),
+                );
+                set(contract, "surfaces/1/scope", json!("active"));
+                set(contract, "surfaces/1/state", json!("gap"));
+                fixture.write(
+                    "README.md",
+                    &format!("# fixture\n\n{CLAIM}\n\nRealtime Database is served as an open gap.\n"),
+                );
+            },
+            expect: None,
+        },
+        // A gap surface is served, so the manifest may list what it serves.
+        Case {
+            name: "gap-in-manifest",
+            mutate: |contract, manifest, _| {
+                set(contract, "surfaces/1/scope", json!("active"));
+                set(contract, "surfaces/1/state", json!("gap"));
+                set(
+                    manifest,
+                    "FS-RPC-1/implemented",
+                    json!(["GetDocument", "Realtime Database references"]),
+                );
+            },
+            expect: None,
+        },
+        Case {
+            name: "gap-without-terms",
+            mutate: |contract, _, _| {
+                set(contract, "surfaces/1/scope", json!("active"));
+                set(contract, "surfaces/1/state", json!("gap"));
+                set(contract, "surfaces/1/prohibitedClaimTerms", json!([]));
+            },
+            expect: Some("surface database is active in the gap state and declares no prohibitedClaimTerms"),
+        },
         // CC-07: an unimplemented item that cross-references an implemented capability.
         Case {
             name: "cross-reference-contradiction",

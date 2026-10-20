@@ -2819,12 +2819,14 @@
         "behaviour copied from the official emulator rather than observed in production is provisional and listed for production observation"
       ],
       "gaps": [
-        "security rules are not evaluated: database.rules.json is accepted in firebase.json and reported with a notice, and requests are answered as without rules",
+        "security rules are not evaluated: database.rules.json is accepted in firebase.json, a warning says it is not enforced when the database is served, the banner names the access in effect, and requests are answered as without rules",
         "database_export sections are refused on import and nothing is exported",
         "Realtime Database Functions triggers and the Emulator UI database view are not wired",
         "Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope"
       ],
-      "prohibitedClaimTerms": [],
+      "prohibitedClaimTerms": [
+        "Realtime Database"
+      ],
       "claims": []
     },
     {

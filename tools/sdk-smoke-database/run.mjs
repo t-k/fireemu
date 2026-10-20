@@ -2,18 +2,21 @@
 // recording of the official emulator (firebase-database-emulator v4.11.2) in fixtures/.
 //
 //   node run.mjs [--host <host:port>] [--only crud,listen,queries,disconnect,long-polling]
-//                [--record <dir>] [--expect <dir>]
+//                [--expect <dir>]
+//   node run.mjs --record <dir> [--jar <path>] [--only ...]
 //
 // The host defaults to FIREBASE_DATABASE_EMULATOR_HOST, so that
 //   fireemu exec --only database -- node tools/sdk-smoke-database/run.mjs
-// needs no configuration. --record writes each smoke's events instead of comparing them
-// (that is how the fixtures were made, against the official emulator).
+// needs no configuration. --record writes each smoke's events instead of comparing them, and
+// records only the official emulator: it checks the jar's SHA-256 against the pinned one
+// (jar.mjs) and starts it on a free port itself, so --host does not go with it.
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crud, disconnect, listen, queries } from './smokes.mjs';
 import { firstDifference } from './compare.mjs';
+import { DEFAULT_JAR, startJar } from './jar.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -21,12 +24,25 @@ const option = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const host = option('--host') ?? process.env.FIREBASE_DATABASE_EMULATOR_HOST;
+const record = option('--record');
+if (record && option('--host')) {
+  console.error('run.mjs: --record starts the pinned official emulator itself; drop --host');
+  process.exit(2);
+}
+let jar;
+if (record) {
+  try {
+    jar = await startJar(option('--jar') ?? DEFAULT_JAR);
+  } catch (e) {
+    console.error(`run.mjs: ${e.message}`);
+    process.exit(2);
+  }
+}
+const host = jar?.host ?? option('--host') ?? process.env.FIREBASE_DATABASE_EMULATOR_HOST;
 if (!host) {
   console.error('run.mjs: give --host <host:port> or set FIREBASE_DATABASE_EMULATOR_HOST');
   process.exit(2);
 }
-const record = option('--record');
 const expect = option('--expect') ?? path.join(here, 'fixtures', 'official-emulator-4.11.2');
 const smokes = {
   crud,
@@ -65,4 +81,5 @@ for (const name of selected) {
     console.log(`${name}: same as the official emulator`);
   }
 }
+await jar?.stop();
 process.exit(failed ? 1 : 0);

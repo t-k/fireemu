@@ -1271,6 +1271,9 @@ pub struct RuntimeConfig {
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
     /// `database.defaultAccess`: what a Realtime Database without rules allows.
     pub database_default_access: DatabaseDefaultAccess,
+    /// The rules files the `database` section of `firebase.json` names, which are not
+    /// evaluated yet (a warning says so when the database is served).
+    pub database_rules: Vec<String>,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -1690,6 +1693,7 @@ impl Default for RuntimeConfig {
             pubsub_local_bearer_token: None,
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
             database_default_access: DatabaseDefaultAccess::Open,
+            database_rules: Vec::new(),
             pubsub_push_minimum_redelivery_interval_millis:
                 fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
@@ -2427,7 +2431,9 @@ const STORAGE_ENTRY_KEYS: [&str; 2] = ["target", "rules"];
 
 /// The official keys of one Realtime Database configuration entry: `rules` for every
 /// instance, or `instance` / `target` naming the instance an entry of the array form serves.
-const DATABASE_ENTRY_KEYS: [&str; 3] = ["rules", "instance", "target"];
+/// The deploy hooks (`predeploy`, `postdeploy`) belong to `firebase deploy`; firebase-tools
+/// 15.28.2 accepts them here, so they are accepted and ignored, as for Functions.
+const DATABASE_ENTRY_KEYS: [&str; 5] = ["rules", "instance", "target", "predeploy", "postdeploy"];
 
 /// The `firebase.json` keys of one Functions codebase that fireemu reads; the deploy hooks
 /// (`predeploy`, `postdeploy`) belong to `firebase deploy` and are not emulator settings.
@@ -3067,7 +3073,7 @@ impl RuntimeConfig {
         };
         self.apply_firestore(obj.get("firestore"), &file, &mut report)?;
         self.apply_storage(obj.get("storage"), &file, &mut report)?;
-        Self::apply_database(obj.get("database"), &mut report)?;
+        self.database_rules = Self::apply_database(obj.get("database"))?;
         self.apply_functions(obj.get("functions"), base, only, &mut report)?;
         if let Some(emulators) = obj.get("emulators") {
             let emulators = emulators.as_object().ok_or_else(|| {
@@ -3302,12 +3308,10 @@ impl RuntimeConfig {
     /// Checks the `database` section (one entry, or an array of entries naming their
     /// `instance` or `target`). The rules files it names are not evaluated yet (RTDB-03):
     /// requests are answered as without rules, which the startup notice says.
-    fn apply_database(
-        section: Option<&Value>,
-        report: &mut FirebaseJsonReport,
-    ) -> Result<(), ConfigError> {
+    /// Checks the `database` section and returns the rules files it names.
+    fn apply_database(section: Option<&Value>) -> Result<Vec<String>, ConfigError> {
         let entries: Vec<(&serde_json::Map<String, Value>, String)> = match section {
-            None => return Ok(()),
+            None => return Ok(Vec::new()),
             Some(Value::Object(o)) => vec![(o, "database".to_owned())],
             Some(Value::Array(a)) if !a.is_empty() => a
                 .iter()
@@ -3332,6 +3336,7 @@ impl RuntimeConfig {
             }
         };
         let array_form = section.is_some_and(Value::is_array);
+        let mut rules = Vec::new();
         for (entry, path) in entries {
             if let Some(key) = entry
                 .keys()
@@ -3342,7 +3347,7 @@ impl RuntimeConfig {
                 )));
             }
             match entry.get("rules") {
-                Some(Value::String(_)) => {}
+                Some(Value::String(file)) => rules.push(file.clone()),
                 Some(_) => {
                     return Err(ConfigError(format!(
                         "firebase.json: {path}.rules must be a string"
@@ -3370,10 +3375,7 @@ impl RuntimeConfig {
                 )));
             }
         }
-        report.notices.push(
-            "database: fireemu does not evaluate Realtime Database rules yet; requests are answered as without rules (open, or only the owner credential under productionExact)".to_owned(),
-        );
-        Ok(())
+        Ok(rules)
     }
 
     fn apply_storage(
@@ -8591,21 +8593,23 @@ mod tests {
             .unwrap();
         assert!(cfg.database_enabled);
         assert_eq!(cfg.database_addr, "127.0.0.1:9010");
-        assert!(
-            report
-                .notices
-                .iter()
-                .any(|n| n.contains("does not evaluate Realtime Database rules")),
-            "{:?}",
-            report.notices
-        );
-        let ok = json!({"database": [
-            {"instance": "demo-default-rtdb", "rules": "a.json"},
-            {"target": "main", "rules": "b.json"}
-        ]});
-        assert!(RuntimeConfig::default()
-            .apply_firebase_json(&ok, base, &Selection::default())
-            .is_ok());
+        assert_eq!(cfg.database_rules, vec!["database.rules.json".to_owned()]);
+        assert!(report.notices.is_empty(), "{:?}", report.notices);
+        // The deploy hooks firebase-tools 15.28.2 accepts belong to `firebase deploy`.
+        for ok in [
+            json!({"database": [
+                {"instance": "demo-default-rtdb", "rules": "a.json", "predeploy": ["echo a"]},
+                {"target": "main", "rules": "b.json", "postdeploy": "echo b"}
+            ]}),
+            json!({"database": {"rules": "r", "predeploy": "echo", "postdeploy": ["x", "y"]}}),
+        ] {
+            assert!(
+                RuntimeConfig::default()
+                    .apply_firebase_json(&ok, base, &Selection::default())
+                    .is_ok(),
+                "{ok}"
+            );
+        }
         for (bad, message) in [
             (
                 json!({"database": 1}),

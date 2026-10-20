@@ -98,6 +98,17 @@ impl Daemon {
             .to_owned()
     }
 
+    /// The banner line about Realtime Database rules.
+    fn rules_line(&self) -> String {
+        self.banner
+            .lock()
+            .unwrap()
+            .lines()
+            .find(|line| line.trim_start().starts_with("database rules:"))
+            .unwrap_or_default()
+            .to_owned()
+    }
+
     fn database_port(&self) -> u16 {
         let line = self.database_line();
         line.split("127.0.0.1:")
@@ -327,4 +338,217 @@ fn the_hub_lists_the_database() {
         u64::from(daemon.database_port()),
         "{emulators}"
     );
+}
+
+#[test]
+fn database_deploy_hooks_in_firebase_json_are_accepted_whatever_is_selected() {
+    let dir = Scratch::new("database", "deploy-hooks");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":{"rules":"database.rules.json","predeploy":["echo hi"],"postdeploy":"echo bye"}}"#,
+    )
+    .unwrap();
+    for only in ["auth", "database"] {
+        let daemon = Daemon::start(&[
+            "--firebase-json",
+            firebase_json.to_str().unwrap(),
+            "--only",
+            only,
+            "--database-port",
+            "0",
+        ]);
+        let line = daemon.database_line();
+        assert_eq!(
+            line.contains("not started"),
+            only == "auth",
+            "{only}: {line}"
+        );
+    }
+}
+
+#[test]
+fn the_banner_says_rules_are_not_evaluated_and_what_access_is_in_effect() {
+    let dir = Scratch::new("database", "rules-banner");
+    let open = Daemon::start(&["--only", "database", "--database-port", "0"]);
+    let line = open.rules_line();
+    assert!(line.contains("not evaluated"), "{line}");
+    assert!(line.contains("every request is allowed"), "{line}");
+    assert!(
+        line.contains("database.defaultAccess = open, default"),
+        "{line}"
+    );
+    drop(open);
+    for (config, source) in [
+        (
+            r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+            "productionExact",
+        ),
+        (
+            r#"{"schemaVersion":1,"profile":"strict","database":{"defaultAccess":"locked"}}"#,
+            "explicit",
+        ),
+    ] {
+        let path = dir.join(format!("{source}.json"));
+        std::fs::write(&path, config).unwrap();
+        let daemon = Daemon::start(&[
+            "--config",
+            path.to_str().unwrap(),
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+        ]);
+        let line = daemon.rules_line();
+        assert!(line.contains("only the owner credential"), "{line}");
+        assert!(
+            line.contains(&format!("database.defaultAccess = locked, {source}")),
+            "{line}"
+        );
+    }
+    // Not served: no rules line.
+    let unserved = Daemon::start(&[]);
+    assert_eq!(unserved.rules_line(), "");
+}
+
+#[test]
+fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_served() {
+    let dir = Scratch::new("database", "rules-warning");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":{"rules":"database.rules.json"}}"#,
+    )
+    .unwrap();
+    let run = |only: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--no-config-discovery", "--project", PROJECT])
+            .args(["--firebase-json", firebase_json.to_str().unwrap()])
+            .args(["--only", only, "--database-port", "0", "--http-port", "0"])
+            .args(["--hub-port", "0", "--log-verbosity", "quiet", "--", "true"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let stderr = run("database");
+    assert!(
+        stderr.contains("warning: database: the rules in database.rules.json are not enforced"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("database.defaultAccess = open, default"),
+        "{stderr}"
+    );
+    let stderr = run("auth");
+    assert!(!stderr.contains("database.rules.json"), "{stderr}");
+}
+
+#[test]
+fn an_export_with_the_database_served_warns_that_its_data_is_not_exported() {
+    let dir = Scratch::new("database", "export-warning");
+    let run = |only: &str| {
+        let export = dir.join(format!("export-{only}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--no-config-discovery", "--project", PROJECT])
+            .args(["--only", only, "--database-port", "0", "--http-port", "0"])
+            .args(["--firestore-port", "0", "--hub-port", "0"])
+            .arg("--export-on-exit")
+            .arg(&export)
+            .args(["--", "true"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let stderr = run("database,firestore");
+    assert!(
+        stderr.contains("warning: Realtime Database data is not exported"),
+        "{stderr}"
+    );
+    let stderr = run("firestore");
+    assert!(!stderr.contains("Realtime Database"), "{stderr}");
+}
+
+/// One long-polling request: the body.
+fn lp(port: u16, target: &str) -> String {
+    request(port, "GET", target, &[], "").1
+}
+
+/// The SDK's web-safe base64 of a message (`-`, `_`, and `.` for padding).
+fn segment(message: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in message.as_bytes().chunks(3) {
+        let bytes = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
+            } else {
+                out.push('.');
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn production_exact_holds_the_realtime_protocol_to_the_owner_too() {
+    let dir = Scratch::new("database", "production-exact-lp");
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+    )
+    .unwrap();
+    let daemon = Daemon::start(&[
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    let start = lp(port, "/.lp?start=t&ser=1&cb=1&v=5&ns=pe");
+    let line = start
+        .lines()
+        .find(|l| l.contains("pLPCommand('start'"))
+        .unwrap_or_else(|| panic!("{start}"));
+    let parts: Vec<&str> = line.split('\'').collect();
+    let (id, pw) = (parts[3], parts[5]);
+    let send = |n: u64, message: &str| {
+        lp(
+            port,
+            &format!(
+                "/.lp?id={id}&pw={pw}&ser={}&ns=pe&seg0={n}&ts0=1&d0={}",
+                n + 10,
+                segment(message)
+            ),
+        )
+    };
+    let denied = send(0, r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/a","h":""}}}"#);
+    assert!(denied.contains(r#""s":"permission_denied""#), "{denied}");
+    let authed = send(
+        1,
+        r#"{"t":"d","d":{"r":2,"a":"gauth","b":{"cred":"owner"}}}"#,
+    );
+    assert!(authed.contains(r#""r":2,"b":{"s":"ok""#), "{authed}");
+    let wrote = send(2, r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/a","d":1}}}"#);
+    assert!(wrote.contains(r#""r":3,"b":{"s":"ok""#), "{wrote}");
 }

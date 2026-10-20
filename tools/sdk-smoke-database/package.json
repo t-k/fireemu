@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "smoke": "node run.mjs",
-    "test": "node --test compare.test.mjs"
+    "test": "node --test compare.test.mjs jar.test.mjs"
   },
   "devDependencies": {
     "firebase": "12.18.0",

@@ -455,9 +455,17 @@ impl Database {
             _ => {}
         }
         let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
-        tree.set(&call.path, &value, call.context)
+        let node = tree
+            .set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
-        let response = written(tree, &call.path, &value, &call.output, call.want_etag);
+        let response = written(
+            tree,
+            &call.path,
+            &value,
+            node.as_ref(),
+            &call.output,
+            call.want_etag,
+        );
         let [path] = written_paths;
         let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
         Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
@@ -1124,22 +1132,22 @@ fn written(
     tree: &Tree,
     path: &Path,
     value: &Json,
+    node: Option<&Node>,
     output: &Output,
     want_etag: bool,
 ) -> HttpResponse {
-    let json = if path.is_priority() {
-        match Priority::from_json(value) {
+    if path.is_priority() {
+        let json = match Priority::from_json(value) {
             Ok(Some(priority)) => priority.to_json(),
             _ => written_priority_at(tree, path),
-        }
-    } else {
-        match Node::from_json(value, path, tree.limits()) {
-            Ok(node) => output_json(node.as_ref(), Format::Export),
-            Err(_) => output_json(tree.get(path), Format::Export),
-        }
-    };
-    let tag = want_etag.then(|| tag_at(tree, path));
-    json_response(&json, output, tag)
+        };
+        let tag = want_etag.then(|| tag_at(tree, path));
+        return json_response(&json, output, tag);
+    }
+    // The node as written, server values resolved: an equal value stays stored in its own
+    // form, but the answer and its ETag are what was written, as the official emulator's.
+    let tag = want_etag.then(|| etag(node));
+    json_response(&output_json(node, Format::Export), output, tag)
 }
 
 /// The refusal for a write the tree did not accept: the official emulator's own text for a

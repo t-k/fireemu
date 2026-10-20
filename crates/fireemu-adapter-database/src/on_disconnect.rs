@@ -109,6 +109,10 @@ fn update_child(value: Json, keys: &[String], data: Json) -> Json {
     let Some((key, rest)) = keys.split_first() else {
         return data;
     };
+    // Removing something below a leaf leaves the leaf.
+    if data == Json::Null && key != PRIORITY && is_leaf(&value) {
+        return value;
+    }
     let mut map = match value {
         Json::Object(map) if map.contains_key(VALUE) => {
             map.into_iter().filter(|(key, _)| key == PRIORITY).collect()
@@ -140,7 +144,8 @@ fn update_child(value: Json, keys: &[String], data: Json) -> Json {
 #[cfg(test)]
 mod tests {
     use super::{update_child, Pending};
-    use fireemu_core_database::Json;
+    use fireemu_core_database::{Json, Limits, Path, ServerValueContext, Tree};
+    use proptest::prelude::*;
 
     fn keys(path: &str) -> Vec<String> {
         path.split('/')
@@ -197,6 +202,11 @@ mod tests {
             json(r#"{"a":{"b":1}}"#)
         );
         assert_eq!(update_child(json("1"), &[], json("2")), json("2"));
+        assert_eq!(update_child(json("1"), &keys("a/b"), Json::Null), json("1"));
+        assert_eq!(
+            update_child(json(r#"{".value":1,".priority":2}"#), &keys("a"), Json::Null),
+            json(r#"{".value":1,".priority":2}"#)
+        );
     }
 
     #[test]
@@ -216,6 +226,54 @@ mod tests {
         assert_eq!(entries(&pending).len(), 2);
         assert!(pending.forget(&[]));
         assert!(pending.entries().is_empty());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// Registered writes, applied as one update, leave what the same writes applied one
+        /// by one would leave.
+        #[test]
+        fn one_update_equals_the_writes_in_order(
+            writes in prop::collection::vec(
+                (
+                    prop::collection::vec(prop::sample::select(vec!["a", "b", "c"]), 0..4),
+                    prop_oneof![
+                        (0i64..3).prop_map(Json::int),
+                        Just(Json::Null),
+                        (0i64..3).prop_map(|n| Json::object([("a", Json::int(n))])),
+                        (0i64..3).prop_map(|n| Json::object([("b", Json::object([("c", Json::int(n))]))])),
+                    ],
+                ),
+                0..8,
+            ),
+        ) {
+            let context = ServerValueContext { now_millis: 0 };
+            let mut pending = Pending::default();
+            let mut one_by_one = Tree::new(Limits::default());
+            for (keys, value) in &writes {
+                let keys: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
+                pending.remember(&keys, value.clone());
+                one_by_one
+                    .set(&Path::from_keys(keys.iter().cloned()), value, context)
+                    .unwrap();
+            }
+            let mut at_once = Tree::new(Limits::default());
+            let entries = pending.entries();
+            match entries.as_slice() {
+                [(keys, value)] if keys.is_empty() => {
+                    at_once.set(&Path::root(), value, context).unwrap();
+                }
+                _ => {
+                    let wire: Vec<(String, Json)> = entries
+                        .into_iter()
+                        .map(|(keys, value)| (keys.join("/"), value))
+                        .collect();
+                    at_once.update(&Path::root(), &wire, context).unwrap();
+                }
+            }
+            prop_assert_eq!(at_once.root(), one_by_one.root());
+        }
     }
 
     #[test]

@@ -23,6 +23,7 @@ Fireemu validates the file at startup, including rules the schema cannot express
 | `rules` | Firestore Security Rules source, and the denial log for Firestore and Storage | [Security Rules](../../guides/security-rules/) |
 | `auth` | Sign-in methods, password policy, MFA, tenants, providers, tokens | [Authentication](../../products/auth/) |
 | `storage` | Storage Security Rules and stored-byte limit | [Cloud Storage](../../products/storage/) |
+| `database` | What a Realtime Database instance without a rules file allows (`defaultAccess`) | [Realtime Database](../../products/realtime-database/) |
 | `functions` | Codebase, runner, application clock, unserved triggers | [Cloud Functions](../../products/functions/) |
 | `scheduler` | Time zone, catch-up and overlap of scheduled functions | [Time and scheduled functions](../../guides/time/) |
 | `pubsub`, `eventarc` | Authentication and delivery settings | [Pub/Sub and Eventarc](../../products/pubsub-eventarc/) |

@@ -1,0 +1,491 @@
+//! Reading a Realtime Database rules file (`database.rules.json`, or the body of
+//! `PUT /.settings/rules.json`) into the rules tree, with the official emulator's error texts
+//! and places (firebase-database-emulator v4.11.2).
+//!
+//! The file is JSON with `//` and `/* */` comments and trailing commas allowed. Its one
+//! property is `rules`; each level holds `.read`, `.write`, `.validate` (`true`, `false` or an
+//! expression string), `.indexOn` (a string or an array of strings) and child levels, of which
+//! at most one is a `$wildcard`. Every expression keeps the line and column of each of its
+//! characters, so an error in it names the place in the file.
+
+use fireemu_core_database::rules::{RuleSource, RuleSpec, Rules, RulesError, SourceExpr};
+
+/// Reads and compiles a rules file.
+pub fn compile(text: &str) -> Result<Rules, RulesError> {
+    Rules::compile(&read(text)?)
+}
+
+/// Reads a rules file into its tree, without checking the expressions.
+pub fn read(text: &str) -> Result<RuleSpec, RulesError> {
+    let mut reader = Reader::new(text);
+    reader.space()?;
+    if reader.peek() != Some('{') {
+        reader.literal()?;
+        return Err(reader.error_here("Expected '{'."));
+    }
+    reader.bump();
+    reader.space()?;
+    let key_at = reader.position();
+    let key = match reader.peek() {
+        Some('"') => reader.string()?.0,
+        _ => String::new(),
+    };
+    if key != "rules" {
+        return Err(Reader::error_at(key_at, "Expected 'rules' property."));
+    }
+    reader.colon()?;
+    let spec = reader.level()?;
+    reader.space()?;
+    match reader.peek() {
+        Some('}') => reader.bump(),
+        Some(',') => {
+            reader.bump();
+            reader.space()?;
+            if reader.peek() == Some('}') {
+                reader.bump();
+            } else {
+                return Err(reader.error_here("Expected '}'."));
+            }
+        }
+        None => return Err(reader.error_here("Unexpected EOF.")),
+        _ => return Err(reader.error_here("Expected '}'.")),
+    }
+    reader.space()?;
+    if reader.peek().is_some() {
+        return Err(reader.error_here("Parse error."));
+    }
+    Ok(spec)
+}
+
+/// A place in the file: character index, line and column (both from 1).
+#[derive(Debug, Clone, Copy)]
+struct Place {
+    line: usize,
+    column: usize,
+}
+
+struct Reader {
+    chars: Vec<char>,
+    at: usize,
+    line: usize,
+    column: usize,
+}
+
+/// A JSON value inside a level that is not an object, by kind, with where it starts.
+enum Scalar {
+    Bool(bool),
+    Str(SourceExpr),
+    Other,
+}
+
+impl Reader {
+    fn new(text: &str) -> Self {
+        Self {
+            chars: text.chars().collect(),
+            at: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.at).copied()
+    }
+
+    fn bump(&mut self) {
+        if let Some(c) = self.peek() {
+            self.at += 1;
+            if c == '\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
+        }
+    }
+
+    fn position(&self) -> Place {
+        Place {
+            line: self.line,
+            column: self.column,
+        }
+    }
+
+    fn error_at(place: Place, message: &str) -> RulesError {
+        RulesError {
+            line: place.line,
+            column: place.column,
+            message: message.to_owned(),
+        }
+    }
+
+    fn error_here(&self, message: &str) -> RulesError {
+        Self::error_at(self.position(), message)
+    }
+
+    /// Skips white space and comments.
+    fn space(&mut self) -> Result<(), RulesError> {
+        loop {
+            match self.peek() {
+                Some(c) if c.is_whitespace() => self.bump(),
+                Some('/') if self.chars.get(self.at + 1) == Some(&'/') => {
+                    while self.peek().is_some_and(|c| c != '\n') {
+                        self.bump();
+                    }
+                }
+                Some('/') if self.chars.get(self.at + 1) == Some(&'*') => {
+                    self.bump();
+                    self.bump();
+                    loop {
+                        match self.peek() {
+                            None => return Err(self.error_here("Unexpected EOF.")),
+                            Some('*') if self.chars.get(self.at + 1) == Some(&'/') => {
+                                self.bump();
+                                self.bump();
+                                break;
+                            }
+                            Some(_) => self.bump(),
+                        }
+                    }
+                }
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    /// At the start of a file that is not an object: a word must spell `true`, `false` or
+    /// `null`, or it is a parse error where it stops matching; the place stays at the start
+    /// for what follows.
+    fn literal(&self) -> Result<(), RulesError> {
+        let Some(first) = self.peek().filter(char::is_ascii_alphabetic) else {
+            return Ok(());
+        };
+        let word = ["true", "false", "null"]
+            .into_iter()
+            .find(|w| w.starts_with(first))
+            .unwrap_or("");
+        for (i, expected) in word.chars().enumerate() {
+            if self.chars.get(self.at + i) != Some(&expected) {
+                return Err(RulesError {
+                    line: self.line,
+                    column: self.column + i.max(1),
+                    message: "Parse error.".to_owned(),
+                });
+            }
+        }
+        if word.is_empty() {
+            return Err(RulesError {
+                line: self.line,
+                column: self.column + 1,
+                message: "Parse error.".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    fn colon(&mut self) -> Result<(), RulesError> {
+        self.space()?;
+        match self.peek() {
+            Some(':') => {
+                self.bump();
+                self.space()
+            }
+            None => Err(self.error_here("Unexpected EOF.")),
+            _ => Err(self.error_here("Parse error.")),
+        }
+    }
+
+    /// A JSON string, with the place of each decoded character (and of the closing quote).
+    fn string(&mut self) -> Result<(String, Vec<(usize, usize)>), RulesError> {
+        self.bump();
+        let mut text = String::new();
+        let mut places = Vec::new();
+        loop {
+            let place = self.position();
+            match self.peek() {
+                None => return Err(self.error_here("Unexpected EOF.")),
+                Some('"') => {
+                    places.push((place.line, place.column));
+                    self.bump();
+                    return Ok((text, places));
+                }
+                Some('\\') => {
+                    self.bump();
+                    let decoded = match self.peek() {
+                        None => return Err(self.error_here("Unexpected EOF.")),
+                        Some('n') => '\n',
+                        Some('t') => '\t',
+                        Some('r') => '\r',
+                        Some('b') => '\u{8}',
+                        Some('f') => '\u{c}',
+                        Some('u') => {
+                            let mut code = 0u32;
+                            for _ in 0..4 {
+                                self.bump();
+                                let digit = self
+                                    .peek()
+                                    .and_then(|c| c.to_digit(16))
+                                    .ok_or_else(|| self.error_here("Parse error."))?;
+                                code = code * 16 + digit;
+                            }
+                            char::from_u32(code).unwrap_or('\u{fffd}')
+                        }
+                        Some(other) => other,
+                    };
+                    self.bump();
+                    text.push(decoded);
+                    places.push((place.line, place.column));
+                }
+                Some(c) => {
+                    self.bump();
+                    text.push(c);
+                    places.push((place.line, place.column));
+                }
+            }
+        }
+    }
+
+    /// Skips a JSON value that is neither an object nor a string, and tells what it was.
+    fn scalar(&mut self) -> Result<Scalar, RulesError> {
+        if self.peek() == Some('"') {
+            let (text, positions) = self.string()?;
+            return Ok(Scalar::Str(SourceExpr { text, positions }));
+        }
+        if self.peek() == Some('[') {
+            self.skip_array()?;
+            return Ok(Scalar::Other);
+        }
+        let mut word = String::new();
+        while let Some(c) = self.peek() {
+            if c.is_alphanumeric() || matches!(c, '-' | '+' | '.') {
+                word.push(c);
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        match word.as_str() {
+            "true" => Ok(Scalar::Bool(true)),
+            "false" => Ok(Scalar::Bool(false)),
+            "" => Err(match self.peek() {
+                None => self.error_here("Unexpected EOF."),
+                Some(_) => self.error_here("Parse error."),
+            }),
+            _ => Ok(Scalar::Other),
+        }
+    }
+
+    fn skip_array(&mut self) -> Result<(), RulesError> {
+        self.bump();
+        loop {
+            self.space()?;
+            match self.peek() {
+                None => return Err(self.error_here("Unexpected EOF.")),
+                Some(']') => {
+                    self.bump();
+                    return Ok(());
+                }
+                Some(',') => self.bump(),
+                Some('{') => {
+                    self.level()?;
+                }
+                _ => {
+                    self.scalar()?;
+                }
+            }
+        }
+    }
+
+    /// `.indexOn`: a string, or an array of strings.
+    fn index_on(&mut self) -> Result<Vec<String>, RulesError> {
+        let start = self.position();
+        match self.peek() {
+            Some('"') => Ok(vec![self.string()?.0]),
+            Some('[') => {
+                self.bump();
+                let mut names = Vec::new();
+                loop {
+                    self.space()?;
+                    match self.peek() {
+                        Some(']') => {
+                            self.bump();
+                            return Ok(names);
+                        }
+                        Some(',') => self.bump(),
+                        Some('"') => names.push(self.string()?.0),
+                        None => return Err(self.error_here("Unexpected EOF.")),
+                        _ => {
+                            return Err(self.error_here("Invalid indexOn expression. Expected ']'"))
+                        }
+                    }
+                }
+            }
+            _ => Err(Self::error_at(
+                start,
+                "Invalid indexOn expression. Must be either a string or an array of strings",
+            )),
+        }
+    }
+
+    /// One level of the rules: an object.
+    fn level(&mut self) -> Result<RuleSpec, RulesError> {
+        if self.peek() != Some('{') {
+            return Err(match self.peek() {
+                None => self.error_here("Unexpected EOF."),
+                _ => self.error_here("Expected '{'."),
+            });
+        }
+        self.bump();
+        let mut spec = RuleSpec::default();
+        let mut wildcard: Option<String> = None;
+        loop {
+            self.space()?;
+            match self.peek() {
+                None => return Err(self.error_here("Unexpected EOF.")),
+                Some('}') => {
+                    self.bump();
+                    return Ok(spec);
+                }
+                Some(',') => {
+                    self.bump();
+                    continue;
+                }
+                Some('"') => {}
+                Some(_) => return Err(self.error_here("Parse error.")),
+            }
+            let key_at = self.position();
+            let (key, _) = self.string()?;
+            if key.is_empty() {
+                return Err(Self::error_at(key_at, "Unexpected empty string."));
+            }
+            self.colon()?;
+            match key.as_str() {
+                ".read" | ".write" | ".validate" => {
+                    let value_at = self.position();
+                    let rule = match self.scalar_or_object()? {
+                        Some(Scalar::Bool(b)) => RuleSource::Bool(b),
+                        Some(Scalar::Str(expr)) => RuleSource::Expr(expr),
+                        _ => {
+                            return Err(Self::error_at(
+                                value_at,
+                                "Invalid rule expression.  Expected 'true', 'false', or an expression string.",
+                            ))
+                        }
+                    };
+                    match key.as_str() {
+                        ".read" => spec.read = Some(rule),
+                        ".write" => spec.write = Some(rule),
+                        _ => spec.validate = Some(rule),
+                    }
+                }
+                ".indexOn" => spec.index_on = self.index_on()?,
+                _ => {
+                    let child = self.level()?;
+                    // The key is checked once its level is read, at its closing brace.
+                    let end = Place {
+                        line: self.line,
+                        column: self.column - 1,
+                    };
+                    if let Some(name) = key.strip_prefix('$') {
+                        if !valid_key(name) {
+                            return Err(Self::error_at(end, INVALID_KEY));
+                        }
+                        if let Some(other) = &wildcard {
+                            return Err(Self::error_at(
+                                end,
+                                &format!(
+                                    "Cannot have multiple default rules ('{other}' and '{key}')."
+                                ),
+                            ));
+                        }
+                        wildcard = Some(key.clone());
+                    } else if !valid_key(&key) {
+                        return Err(Self::error_at(end, INVALID_KEY));
+                    }
+                    spec.children.insert(key, child);
+                }
+            }
+        }
+    }
+
+    /// A rule value: a scalar, or `None` for an object (which is no rule value).
+    fn scalar_or_object(&mut self) -> Result<Option<Scalar>, RulesError> {
+        if self.peek() == Some('{') {
+            self.level()?;
+            return Ok(None);
+        }
+        self.scalar().map(Some)
+    }
+}
+
+const INVALID_KEY: &str = r##"String can't contain ".", "#", "$", "/", "[", or "]""##;
+
+fn valid_key(key: &str) -> bool {
+    !key.is_empty() && !key.contains(['.', '#', '$', '/', '[', ']'])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn error(text: &str) -> String {
+        compile(text).unwrap_err().to_string()
+    }
+
+    /// Answers of firebase-database-emulator v4.11.2 to the same files.
+    #[test]
+    fn structural_errors_are_named_and_placed_as_the_official_emulator_does() {
+        for (text, expected) in [
+            ("{}", "1:2: Expected 'rules' property."),
+            (r#"{"x":1}"#, "1:2: Expected 'rules' property."),
+            (r#"{"rules":"#, "1:10: Unexpected EOF."),
+            ("not json", "1:2: Parse error."),
+            ("[1]", "1:1: Expected '{'."),
+            (r#"{"rules":true}"#, "1:10: Expected '{'."),
+            (r#"{"rules":{"a":1}}"#, "1:15: Expected '{'."),
+            (r#"{"rules":{".read":1}}"#, "1:19: Invalid rule expression.  Expected 'true', 'false', or an expression string."),
+            (r#"{"rules":{".read":null}}"#, "1:19: Invalid rule expression.  Expected 'true', 'false', or an expression string."),
+            (r#"{"rules":{".read":"true","t":{".foo":true}}}"#, "1:38: Expected '{'."),
+            (r#"{"rules":{".indexOn":[1]}}"#, "1:23: Invalid indexOn expression. Expected ']'"),
+            (r#"{"rules":{".indexOn":{}}}"#, "1:22: Invalid indexOn expression. Must be either a string or an array of strings"),
+            (r#"{"rules":{"t":{"$a":{},"$b":{}}}}"#, "1:30: Cannot have multiple default rules ('$a' and '$b')."),
+            (r#"{"rules":{"$a":{".read":true},"$a2":{".read":true}}}"#, "1:50: Cannot have multiple default rules ('$a' and '$a2')."),
+            (r#"{"rules":{"t":{"$a":{"x":{}},"$b":{"y":{}}}}}"#, "1:42: Cannot have multiple default rules ('$a' and '$b')."),
+            ("{\n  \"rules\": {\n    \"$a\": {},\n    \"$b\": {\n      \".read\": true\n    }\n  }\n}", "6:5: Cannot have multiple default rules ('$a' and '$b')."),
+            (r#"{"rules":{".read":true},"x":1}"#, "1:25: Expected '}'."),
+            (r#"{"rules":{".read":true}}x"#, "1:25: Parse error."),
+            ("{\"rules\":{\n\".read\":true,\n\"a\":5}}", "3:5: Expected '{'."),
+            (r#"{"rules":{"a":{".foo":{}}}}"#, r##"1:24: String can't contain ".", "#", "$", "/", "[", or "]""##),
+            (r#"{"rules":{"a.b":{}}}"#, r##"1:18: String can't contain ".", "#", "$", "/", "[", or "]""##),
+            (r#"{"rules":{".value":{}}}"#, r##"1:21: String can't contain ".", "#", "$", "/", "[", or "]""##),
+            (r#"{"rules":{"":{}}}"#, "1:11: Unexpected empty string."),
+            (r#"{"rules":{".read":"\"a\" == 1 +"}}"#, "1:32: Unexpected end of expression"),
+            (r#"{"rules":{".read":"'é' == 1 +"}}"#, "1:30: Unexpected end of expression"),
+            ("{\"rules\":{\n  \".read\":\n    \"auth.x ===\"\n}}", "3:16: Unexpected end of expression"),
+        ] {
+            assert_eq!(error(text), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn comments_trailing_commas_and_index_names_are_accepted() {
+        for text in [
+            r#"{"rules":{".read":true,}}"#,
+            "// c\n{\"rules\":{\".read\":true}}",
+            r#"{"rules":{".read":true /* c */}}"#,
+            r#"{"rules":{".read":"true"/*c*/,".write":false}}"#,
+            r#"{"rules":{".indexOn":"n"}}"#,
+            r#"{"rules":{".indexOn":["n","m"]}}"#,
+            r#"{"rules":{".validate":true,".indexOn":["a",".value"]}}"#,
+            r#"{"rules":{"$a":{"$b":{".read":"$a == $b"}}}}"#,
+            "{\"rules\":{\".read\":\"true\"}} ",
+        ] {
+            assert!(compile(text).is_ok(), "{text}");
+        }
+        let spec = read(r#"{"rules":{"q":{".indexOn":["n","m"]}}}"#).unwrap();
+        assert_eq!(
+            spec.children["q"].index_on,
+            vec!["n".to_owned(), "m".to_owned()]
+        );
+    }
+}

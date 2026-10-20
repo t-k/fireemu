@@ -14,6 +14,7 @@ mod on_disconnect;
 pub mod realtime;
 pub mod request;
 pub mod rest;
+pub mod rules_file;
 pub mod server;
 pub mod target_escape;
 pub mod websocket;

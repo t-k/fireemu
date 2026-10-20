@@ -1,5 +1,5 @@
 //! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1 and O-2 programs; the
-//! O-3 programs wait for PX1b, see `NOT_YET_REPLAYED`,
+//! O-3 programs wait for `PX1b`, see `NOT_YET_REPLAYED`,
 //! `conformance/fs-ent-pipeline-requests.json`) against the in-process REST surface under both
 //! profiles and compares each answer with the production recording
 //! (`conformance/fs-ent-pipeline-production.json`): the status, the result documents as a
@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
 /// Programs the fixture records that this test does not replay yet: FS-ENT-ORACLE O-3
-/// (recorded 2026-10-20). PX1b maps their answers into the strict profile and replays them; each
+/// (recorded 2026-10-20). `PX1b` maps their answers into the strict profile and replays them; each
 /// must be in the export, so the list cannot hide a program that is not there.
 const NOT_YET_REPLAYED: &[&str] = &[
     "fs-ent-pipeline/o3/aliases",

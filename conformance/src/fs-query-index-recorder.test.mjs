@@ -274,6 +274,71 @@ test("a partial fixture is never read as a committed one", () =>
     }
   }));
 
+test("meta.json that cannot be written is reported, never thrown, so the ledger row still lands", () =>
+  withDir(async (runDir) => {
+    const failing = async () => {
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    };
+    const meta1 = { ...meta, programs: [] };
+    assert.equal(
+      await run.writeMeta({ runDir, meta: meta1, outcome: "recorded", write: failing }),
+      "meta.json not written: ENOSPC: no space left on device",
+    );
+    assert.equal(
+      await run.writeMeta({
+        runDir,
+        meta: meta1,
+        outcome: "aborted",
+        error: "seed refused",
+        write: failing,
+      }),
+      "seed refused (meta.json not written: ENOSPC: no space left on device)",
+    );
+    assert.equal(
+      await run.writeMeta({ runDir, meta: meta1, outcome: "aborted", error: "seed refused" }),
+      "seed refused",
+    );
+    const written = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
+    assert.equal(written.outcome, "aborted");
+    assert.equal(written.error, "seed refused");
+    assert.equal((await stat(join(runDir, "meta.json"))).mode & 0o777, 0o600);
+    assert.equal(await run.writeMeta({ runDir, meta: meta1, outcome: "recorded" }), undefined);
+  }));
+
+test("check, export-comparison and the request export read the committed fixture through the guard", () =>
+  withDir(async (dir) => {
+    const { writeFile } = await import("node:fs/promises");
+    const { loadCommittedFixture } = await import("./fs-query-index/fixture-scan.mjs");
+    const { recordedPrograms } = await import("./fs-ent-pipeline/export-requests.mjs");
+    const complete = join(dir, "complete.json");
+    const partial = join(dir, "partial.json");
+    const once = join(dir, "once.json");
+    const body = { version: 1, recordedAgainst: {}, programs: { [programs[0].id]: { steps: {} } } };
+    await writeFile(complete, JSON.stringify(body));
+    await writeFile(partial, JSON.stringify({ ...body, partial: true }));
+    await writeFile(
+      once,
+      JSON.stringify({ ...body, programs: { [programs[0].id]: { steps: {}, recordings: 1 } } }),
+    );
+    const loaded = await loadCommittedFixture(complete);
+    assert.deepEqual(loaded.fixture, body);
+    assert.equal(loaded.text, JSON.stringify(body));
+    for (const path of [partial, once]) {
+      await assert.rejects(loadCommittedFixture(path), /partial fixture of a stopped run/);
+      assert.throws(() => recordedPrograms(programs, path), /partial fixture of a stopped run/);
+    }
+    assert.deepEqual(
+      recordedPrograms(programs, complete).map((p) => p.id),
+      [programs[0].id],
+    );
+    // run.mjs reads through the same loader at both places.
+    const source = await readFile(new URL("./fs-query-index/run.mjs", import.meta.url), "utf8");
+    const checkBody = source.slice(source.indexOf("async function check()"));
+    assert.match(checkBody.slice(0, 400), /loadCommittedFixture\(FIXTURE\)/);
+    const exportBody = source.slice(source.indexOf("async function exportComparison("));
+    assert.match(exportBody.slice(0, 400), /loadCommittedFixture\(FIXTURE\)/);
+  }));
+
 // --- unknown rows: the run-close check of the S3 log ---
 
 const definiteHttp = (status) =>
@@ -325,6 +390,19 @@ test("a step line whose outcome is not a plain integer is unknown (fail-closed)"
     "p#s grpc",
     "p#s grpc 0x0",
     "2026-10-20T00:00:00Z p#s 200 trailing",
+    // More than one step outcome on one line: the earlier one must not hide.
+    "p#s 503\rp#t 200",
+    "p#s 503 p#t 200",
+    "p#s 503\u0085p#t 200",
+    "p#s 503\u2028p#t 200",
+    "p#s 503p#t 200",
+    "p#s 200\r\r",
+    // A line break before a single step token (a CR-only rewrite of an earlier line).
+    "garbage\rp#s 200",
+    "\u0085p#s 200",
+    // No sign but `-`, and no `-0`.
+    "p#s grpc -0",
+    "p#s -0",
   ]) {
     assert.equal(isStepLine(line), true, JSON.stringify(line));
     assert.equal(isUnknownRow(line), true, JSON.stringify(line));
@@ -366,47 +444,77 @@ test("only step lines count: the summary, the ledger echo and other log lines ne
   });
   assert.equal(isUnknownRow("p#t 200\r"), false);
   assert.equal(isUnknownRow("p#t 500\r"), true);
+  assert.deepEqual(scanLog("p#s 200\r\r\n"), {
+    stepLines: 1,
+    unknown: [{ line: 1, text: "p#s 200\r" }],
+  });
   for (const line of ["{", "", '  "requests": 242,', "HTTP 500", '    "p#s",']) {
     assert.equal(isStepLine(line), false, JSON.stringify(line));
   }
 });
 
-test("the CLI exits non-zero on an unknown row, on no step lines and on a count other than expected", async () => {
-  const { execFile } = await import("node:child_process");
-  const { writeFile } = await import("node:fs/promises");
-  const cli = new URL("./fs-query-index/unknown-rows.mjs", import.meta.url).pathname;
-  const runCli = (args) =>
-    new Promise((resolve) => {
-      execFile(process.execPath, [cli, ...args], (error, stdout) =>
-        resolve({ code: error ? error.code : 0, stdout }),
-      );
-    });
+const { execFile } = await import("node:child_process");
+const { mkdir, symlink, writeFile: writeText } = await import("node:fs/promises");
+const sourceDir = new URL("./fs-query-index/", import.meta.url).pathname;
+const runNode = (args) =>
+  new Promise((resolve) => {
+    execFile(process.execPath, args, (error, stdout, stderr) =>
+      resolve({ code: error ? error.code : 0, stdout, stderr }),
+    );
+  });
+
+test("the CLI requires --expect and exits non-zero on an unknown row, on no step lines and on another count", async () => {
+  const cli = join(sourceDir, "unknown-rows.mjs");
   await withDir(async (dir) => {
     const log = async (name, text) => {
       const path = join(dir, name);
-      await writeFile(path, text);
+      await writeText(path, text);
       return path;
     };
     const clean = await log("clean.log", "p#a 200\np#b 404\nq#c grpc 5\n{\n}\n");
     const unknown = await log("unknown.log", "p#a 200\np#b 503\n");
     const empty = await log("empty.log", "");
     const noSteps = await log("ledger.log", '{"ts":"x","outcome":"recorded"}\n');
-    let out = await runCli([clean]);
+    let out = await runNode([cli, clean, "--expect", "3"]);
     assert.equal(out.code, 0);
     assert.match(out.stdout, /step lines: 3\nunknown rows: 0\n$/);
-    assert.equal((await runCli([clean, "--expect", "3"])).code, 0);
-    out = await runCli([clean, "--expect", "4"]);
+    out = await runNode([cli, clean, "--expect", "4"]);
     assert.equal(out.code, 3);
     assert.match(out.stdout, /expected 4 step lines, saw 3/);
-    out = await runCli([unknown]);
+    out = await runNode([cli, unknown, "--expect", "2"]);
     assert.equal(out.code, 1);
     assert.match(out.stdout, /^2:p#b 503\n/);
     for (const path of [empty, noSteps]) {
-      out = await runCli([path]);
+      out = await runNode([cli, path, "--expect", "1"]);
       assert.equal(out.code, 3, path);
       assert.match(out.stdout, /step lines: 0/);
     }
-    assert.equal((await runCli([])).code, 2);
-    assert.equal((await runCli([clean, "--expect", "x"])).code, 2);
+    // --expect is required: without it nothing is judged.
+    for (const args of [[clean], [], [clean, "--expect", "x"], [clean, "--expect", "0"]]) {
+      out = await runNode([cli, ...args]);
+      assert.equal(out.code, 2, JSON.stringify(args));
+      assert.equal(out.stdout, "");
+    }
+  });
+});
+
+test("the CLIs run through a symlinked directory and a directory whose name holds a space", async () => {
+  await withDir(async (dir) => {
+    const spaced = join(dir, "a dir with space");
+    await mkdir(spaced);
+    // A symlink to the source directory, inside a directory whose name holds a space.
+    const linked = join(spaced, "linked");
+    await symlink(sourceDir, linked);
+    const log = join(dir, "unknown.log");
+    await writeText(log, "p#a 200\np#b 503\n");
+    for (const base of [linked, sourceDir]) {
+      const out = await runNode([join(base, "unknown-rows.mjs"), log, "--expect", "2"]);
+      assert.equal(out.code, 1, base);
+      assert.match(out.stdout, /^2:p#b 503\n/, base);
+      // run.mjs runs its main block too: without a mode it prints its usage and exits 2.
+      const usage = await runNode([join(base, "run.mjs")]);
+      assert.equal(usage.code, 2, base);
+      assert.match(usage.stderr, /^usage: run\.mjs /, base);
+    }
   });
 });

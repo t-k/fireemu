@@ -2,6 +2,8 @@
 // sandbox project id in any encoding, or an access token. Kept outside the harness digest so a
 // stricter scan never makes saved rows stale.
 
+import { readFile } from "node:fs/promises";
+
 const TOKEN = /\bya29\.[A-Za-z0-9_-]{10,}/;
 /** A numeric project name, as ErrorInfo `consumer` and quota messages carry it. */
 const PROJECT_NUMBER = /projects\/\d{6,}|project_number\W{0,3}\d{6,}/;
@@ -20,6 +22,25 @@ function encodings(secret) {
     }
   }
   return [...forms];
+}
+
+/**
+ * Refuses the private fixture of a stopped run (`fixture.partial.json`: `partial: true`, and a
+ * program finished by one recording has `recordings: 1` and no `second`, so it would pass for a
+ * deterministic row) wherever a committed fixture is read.
+ */
+export function assertCompleteFixture(fixture, path) {
+  const programs = Object.values(fixture.programs ?? {});
+  if (fixture.partial !== undefined || programs.some((p) => p.recordings !== undefined)) {
+    throw new Error(`${path} is the partial fixture of a stopped run, not a committed fixture`);
+  }
+  return fixture;
+}
+
+/** A committed fixture and its text, refused when it is a partial one. */
+export async function loadCommittedFixture(path) {
+  const text = await readFile(path, "utf8");
+  return { fixture: assertCompleteFixture(JSON.parse(text), path), text };
 }
 
 export function scanFixture(text, secrets) {

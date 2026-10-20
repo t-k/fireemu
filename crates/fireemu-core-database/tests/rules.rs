@@ -607,41 +607,115 @@ mod properties {
     }
 }
 
+/// The stack of the daemon's server workers, where rules are evaluated
+/// (`RUNTIME_THREAD_STACK_BYTES` in fireemu's daemon).
+const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn on_stack<T: Send + 'static>(bytes: usize, f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(bytes)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// Loads `.read: <text>` at `/t` where the adapter loads it: on a thread with room for the
+/// bound.
+fn load_deep(text: String) -> Result<Rules, String> {
+    on_stack(256 * 1024 * 1024, move || {
+        Rules::compile(&read_rule_at_t(&text)).map_err(|error| error.message)
+    })
+}
+
+/// An expression of a shape, nested `n` deep.
+type Shape = fn(usize) -> String;
+
 #[test]
-fn expressions_nest_at_most_256_operands() {
-    // Loading recurses once per level, so it runs where the adapter runs it: on a thread
-    // with room for the bound.
-    let load = |text: String| {
-        std::thread::Builder::new()
-            .stack_size(256 * 1024 * 1024)
-            .spawn(move || Rules::compile(&read_rule_at_t(&text)).map(|_| ()))
-            .unwrap()
-            .join()
-            .unwrap()
-    };
-    let groups = |n: usize| format!("{}true{}", "(".repeat(n), ")".repeat(n));
-    assert!(load(groups(255)).is_ok());
-    assert!(load(format!("{}true", "!".repeat(255))).is_ok());
-    for deep in [
-        groups(256),
-        format!("{}true", "!".repeat(256)),
-        groups(10_000),
+fn every_level_counts_and_a_rule_at_the_bound_is_evaluated_on_a_worker_stack() {
+    let shapes: Vec<(&str, Shape)> = vec![
+        ("groups", |n| {
+            format!("{}true{}", "(".repeat(n), ")".repeat(n))
+        }),
+        ("not", |n| format!("{}true", "!".repeat(n))),
+        ("child", |n| {
+            format!("root{}.val() == null", ".child('a')".repeat(n))
+        }),
+        ("parent", |n| {
+            format!("data{}.val() == null", ".parent()".repeat(n))
+        }),
+        ("index", |n| format!("auth{} == null", "['a']".repeat(n))),
+        ("ternary then", |n| {
+            format!("{}true{}", "true ? ".repeat(n), " : false".repeat(n))
+        }),
+        ("ternary otherwise", |n| {
+            format!("{}true", "false ? false : ".repeat(n))
+        }),
+        ("minus", |n| format!("1{} < 0", " - 1".repeat(n))),
+    ];
+    let tree = seed();
+    for (name, shape) in shapes {
+        // The deepest that loads, found by bisection, is within the bound.
+        let (mut ok, mut refused) = (1usize, 2_000usize);
+        assert!(load_deep(shape(ok)).is_ok(), "{name}");
+        while refused - ok > 1 {
+            let mid = usize::midpoint(ok, refused);
+            if load_deep(shape(mid)).is_ok() {
+                ok = mid;
+            } else {
+                refused = mid;
+            }
+        }
+        assert!(ok >= 290, "{name}: only {ok} load");
+        for deeper in [ok + 1, 10_000] {
+            assert_eq!(
+                load_deep(shape(deeper)).unwrap_err(),
+                "Rule expression may not be empty.",
+                "{name} {deeper}"
+            );
+        }
+        // The deepest is evaluated on a worker's stack without running out of it.
+        let rules = load_deep(shape(ok)).unwrap();
+        let root = tree.root().cloned();
+        on_stack(WORKER_STACK_BYTES, move || {
+            let auth = auth();
+            let requester = Requester {
+                auth: &auth,
+                now: 0,
+            };
+            let _ = rules.can_read(root.as_ref(), &p("/t"), None, &requester);
+        });
+    }
+}
+
+#[test]
+fn chains_of_one_associative_operator_have_no_depth() {
+    let tree = seed();
+    for (text, allowed) in [
+        (vec!["false"; 5_000].join(" || ") + " || true", true),
+        (vec!["true"; 5_000].join(" && "), true),
+        (vec!["true"; 5_000].join(" && ") + " && false", false),
+        (format!("{} != ''", vec!["'a'"; 5_000].join(" + ")), true),
+        (format!("{} == 5000", vec!["1"; 5_000].join(" + ")), true),
     ] {
-        assert_eq!(
-            load(deep).unwrap_err().message,
-            "Rule expression may not be empty."
-        );
+        let rules = load_deep(text).unwrap();
+        let root = tree.root().cloned();
+        let decided = on_stack(WORKER_STACK_BYTES, move || {
+            let auth = auth();
+            let requester = Requester {
+                auth: &auth,
+                now: 0,
+            };
+            rules.can_read(root.as_ref(), &p("/t"), None, &requester)
+        });
+        assert_eq!(decided, allowed);
     }
-    // A chain nests its operands too: 256 operands load, 257 do not, and neither do 100,000.
-    let chain = |n: usize| vec!["true"; n].join(" && ");
-    assert!(load(chain(256)).is_ok());
-    for long in [chain(257), chain(100_000)] {
-        assert_eq!(
-            load(long).unwrap_err().message,
-            "Rule expression may not be empty."
-        );
-    }
-    // Nesting is counted along each path, not over the whole: groups side by side load.
-    let wide = format!("{} && {}", groups(200), groups(200));
-    assert!(load(wide).is_ok());
+    // A chain reads left to right: a string met first makes the rest text.
+    let rules = load_deep("1 + 2 + 'a' + 1 + 2 == '3a12'".to_owned()).unwrap();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 0,
+    };
+    assert!(rules.can_read(tree.root(), &p("/t"), None, &requester));
 }

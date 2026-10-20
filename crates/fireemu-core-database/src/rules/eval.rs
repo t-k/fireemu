@@ -153,6 +153,7 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
             _ => None,
         },
         ExprKind::Binary(op, left, right) => binary(*op, left, right, scope),
+        ExprKind::Chain(op, operands) => chain(*op, operands, scope),
         ExprKind::Ternary(condition, then, otherwise) => match eval(condition, scope)? {
             Value::Bool(true) => eval(then, scope),
             Value::Bool(false) => eval(otherwise, scope),
@@ -366,11 +367,42 @@ fn binary<'a>(op: BinaryOp, left: &Expr, right: &Expr, scope: &Scope<'a>) -> Opt
     }
     let l = eval(left, scope)?;
     let r = eval(right, scope)?;
+    combine(op, &l, &r)
+}
+
+/// A chain of `&&`, `||` or `+`, read left to right as the nested operators it stands for:
+/// `&&` and `||` stop at the first operand that decides.
+fn chain<'a>(op: BinaryOp, operands: &[Expr], scope: &Scope<'a>) -> Option<Value<'a>> {
+    let (first, rest) = operands.split_first()?;
+    if matches!(op, BinaryOp::And | BinaryOp::Or) {
+        let Value::Bool(mut value) = eval(first, scope)? else {
+            return None;
+        };
+        for operand in rest {
+            if (op == BinaryOp::And && !value) || (op == BinaryOp::Or && value) {
+                break;
+            }
+            let Value::Bool(next) = eval(operand, scope)? else {
+                return None;
+            };
+            value = next;
+        }
+        return Some(Value::Bool(value));
+    }
+    let mut value = eval(first, scope)?;
+    for operand in rest {
+        value = combine(op, &value, &eval(operand, scope)?)?;
+    }
+    Some(value)
+}
+
+/// `l op r` for an operator that is not `&&` or `||`.
+fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> {
     match op {
-        BinaryOp::Eq => Some(Value::Bool(equal(&l, &r))),
-        BinaryOp::Ne => Some(Value::Bool(!equal(&l, &r))),
+        BinaryOp::Eq => Some(Value::Bool(equal(l, r))),
+        BinaryOp::Ne => Some(Value::Bool(!equal(l, r))),
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-            let ordering = match (&l, &r) {
+            let ordering = match (l, r) {
                 (Value::Num(a), Value::Num(b)) => a.partial_cmp(b)?,
                 (Value::Str(a), Value::Str(b)) => a.encode_utf16().cmp(b.encode_utf16()),
                 _ => return Some(Value::Bool(false)),
@@ -382,14 +414,14 @@ fn binary<'a>(op: BinaryOp, left: &Expr, right: &Expr, scope: &Scope<'a>) -> Opt
                 _ => ordering.is_ge(),
             }))
         }
-        BinaryOp::Add => match (&l, &r) {
+        BinaryOp::Add => match (l, r) {
             (Value::Num(a), Value::Num(b)) => finite(a + b),
-            (Value::Str(a), _) => Some(Value::Str(format!("{a}{}", text(&r)?))),
-            (_, Value::Str(b)) => Some(Value::Str(format!("{}{b}", text(&l)?))),
+            (Value::Str(a), _) => Some(Value::Str(format!("{a}{}", text(r)?))),
+            (_, Value::Str(b)) => Some(Value::Str(format!("{}{b}", text(l)?))),
             _ => None,
         },
         BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-            let (Value::Num(a), Value::Num(b)) = (&l, &r) else {
+            let (Value::Num(a), Value::Num(b)) = (l, r) else {
                 return None;
             };
             finite(match op {

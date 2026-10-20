@@ -1049,10 +1049,11 @@ fn credentials_debug_says_whether_a_verifier_is_set() {
     assert_eq!(text, "Credentials { strict: false, id_tokens: false }");
 }
 
-/// Runs `f` on a thread with the stack of a tokio worker (2 MiB), where requests run.
+/// Runs `f` on a thread with the stack of the daemon's server workers, where requests run
+/// (`RUNTIME_THREAD_STACK_BYTES`, 8 MiB).
 fn on_worker_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
-        .stack_size(2 * 1024 * 1024)
+        .stack_size(8 * 1024 * 1024)
         .spawn(f)
         .unwrap()
         .join()
@@ -1063,17 +1064,10 @@ fn on_worker_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) ->
 fn deep_rules_are_refused_without_exhausting_the_stack() {
     on_worker_stack(|| {
         let mut db = db();
-        let put = |db: &mut Database, body: &str| {
-            call(db, "PUT", "/.settings/rules.json?ns=deep", OWNER, body)
+        let put = |db: &mut Database, rule: &str| {
+            let body = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+            call(db, "PUT", "/.settings/rules.json?ns=deep", OWNER, &body)
         };
-        let groups = |n: usize| {
-            format!(
-                r#"{{"rules":{{".read":"{}true{}"}}}}"#,
-                "(".repeat(n),
-                ")".repeat(n)
-            )
-        };
-        let nots = |n: usize| format!(r#"{{"rules":{{".read":"{}true"}}}}"#, "!".repeat(n));
         let levels = |n: usize| {
             format!(
                 r#"{{"rules":{}{{}}{}}}"#,
@@ -1081,25 +1075,60 @@ fn deep_rules_are_refused_without_exhausting_the_stack() {
                 "}".repeat(n)
             )
         };
-        // Up to the local budget an expression loads and is evaluated (the official emulator
-        // loads up to 600 groups and 1,000 `!`); rule levels load as deep as it loads them.
-        for body in [groups(255), nots(255), levels(1000)] {
-            let (status, text) = put(&mut db, &body);
+        // Deep rules within the bounds load, and are evaluated.
+        for rule in [
+            format!("{}true{}", "(".repeat(500), ")".repeat(500)),
+            format!("{}true", "!".repeat(500)),
+            format!("root{}.val() == null", ".child('a')".repeat(250)),
+            format!("{}true{}", "true ? ".repeat(500), " : false".repeat(500)),
+        ] {
+            let (status, text) = put(&mut db, &rule);
             assert_eq!(status, 200, "{text}");
             call(&mut db, "GET", "/a.json?ns=deep", &[], "");
         }
-        for (body, message) in [
-            (groups(256), "1:20: Rule expression may not be empty."),
-            (nots(256), "1:20: Rule expression may not be empty."),
-            (groups(10_000), "1:20: Rule expression may not be empty."),
-            (nots(10_000), "1:20: Rule expression may not be empty."),
+        let (status, text) = call(
+            &mut db,
+            "PUT",
+            "/.settings/rules.json?ns=deep",
+            OWNER,
+            &levels(1000),
+        );
+        assert_eq!(status, 200, "{text}");
+        call(&mut db, "GET", "/a.json?ns=deep", &[], "");
+        // Deeper ones are refused with the official emulator's text, whatever the shape.
+        for rule in [
+            format!("{}true{}", "(".repeat(10_000), ")".repeat(10_000)),
+            format!("{}true", "!".repeat(10_000)),
+            format!("root{}.val() == null", ".child('a')".repeat(10_000)),
+            format!("data{}.val() == null", ".parent()".repeat(10_000)),
+            format!("auth{} == null", "['a']".repeat(10_000)),
+            format!(
+                "{}true{}",
+                "true ? ".repeat(10_000),
+                " : false".repeat(10_000)
+            ),
+            format!("{}true", "false ? false : ".repeat(10_000)),
         ] {
-            let (status, text) = put(&mut db, &body);
+            let (status, text) = put(&mut db, &rule);
             assert_eq!(status, 400);
-            assert!(text.contains(message), "{text}");
+            assert!(
+                text.contains("1:20: Rule expression may not be empty."),
+                "{text}"
+            );
         }
         for n in [1001, 10_000] {
-            assert_eq!(put(&mut db, &levels(n)).0, 400, "{n}");
+            assert_eq!(
+                call(
+                    &mut db,
+                    "PUT",
+                    "/.settings/rules.json?ns=deep",
+                    OWNER,
+                    &levels(n)
+                )
+                .0,
+                400,
+                "{n}"
+            );
         }
         // The database still answers.
         assert_eq!(call(&mut db, "GET", "/.json?ns=other", &[], "").0, 200);
@@ -1485,21 +1514,20 @@ fn the_rules_come_before_the_index() {
 }
 
 #[test]
-fn a_long_chain_is_evaluated_on_a_worker_stack() {
+fn a_long_chain_loads_and_is_evaluated_on_a_worker_stack() {
+    // The official emulator loads chains of 5,000 operands.
     on_worker_stack(|| {
         let mut db = db();
-        let chain = vec!["auth == null"; 200].join(" && ");
-        let body = format!(r#"{{"rules":{{".read":"{chain}"}}}}"#);
-        assert_eq!(
-            call(&mut db, "PUT", "/.settings/rules.json?ns=ch", OWNER, &body).0,
-            200
-        );
-        assert_eq!(call(&mut db, "GET", "/.json?ns=ch", &[], "").0, 200);
-        let long = vec!["true"; 100_000].join(" && ");
-        let body = format!(r#"{{"rules":{{".read":"{long}"}}}}"#);
-        assert_eq!(
-            call(&mut db, "PUT", "/.settings/rules.json?ns=ch", OWNER, &body).0,
-            400
-        );
+        for (rule, status) in [
+            (vec!["auth == null"; 5_000].join(" && "), 200),
+            (vec!["auth != null"; 5_000].join(" || "), 401),
+        ] {
+            let body = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+            assert_eq!(
+                call(&mut db, "PUT", "/.settings/rules.json?ns=ch", OWNER, &body).0,
+                200
+            );
+            assert_eq!(call(&mut db, "GET", "/.json?ns=ch", &[], "").0, status);
+        }
     });
 }

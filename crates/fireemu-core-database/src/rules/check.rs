@@ -138,7 +138,20 @@ impl Checker<'_> {
                     Err(ExprError::new(expr.at, "- only operates on numbers."))
                 }
             }
-            ExprKind::Binary(op, left, right) => self.binary(expr.at, *op, left, right),
+            ExprKind::Binary(op, left, right) => {
+                let l = self.ty(left)?;
+                let r = self.ty(right)?;
+                Self::binary(expr.at, *op, l, r)
+            }
+            // A chain is checked as the left-nested operators it stands for.
+            ExprKind::Chain(op, operands) => {
+                let mut types = operands.iter().map(|operand| self.ty(operand));
+                let mut l = types.next().unwrap_or(Ok(Ty::Any))?;
+                for r in types {
+                    l = Self::binary(expr.at, *op, l, r?)?;
+                }
+                Ok(l)
+            }
             ExprKind::Ternary(condition, then, otherwise) => {
                 if self.ty(condition)? != Ty::Bool {
                     return Err(ExprError::new(expr.at, "condition of ? must be boolean."));
@@ -247,9 +260,7 @@ impl Checker<'_> {
             .collect()
     }
 
-    fn binary(&self, at: usize, op: BinaryOp, left: &Expr, right: &Expr) -> Result<Ty, ExprError> {
-        let l = self.ty(left)?;
-        let r = self.ty(right)?;
+    fn binary(at: usize, op: BinaryOp, l: Ty, r: Ty) -> Result<Ty, ExprError> {
         let symbol = op.symbol();
         let operand = |ty: Ty, side: &str, allowed: &[Ty], what: &str| {
             if ty.is(allowed) {

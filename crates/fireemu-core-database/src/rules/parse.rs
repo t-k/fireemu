@@ -130,6 +130,9 @@ pub enum ExprKind {
     Neg(Box<Expr>),
     /// `left op right`
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    /// `a && b && …`, `a || b || …` or `a + b + …`: a chain of one associative operator,
+    /// read left to right, kept flat so its length is no depth.
+    Chain(BinaryOp, Vec<Expr>),
     /// `condition ? then : otherwise`
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
 }
@@ -482,14 +485,16 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
     }
 }
 
-/// The deepest nesting of operands in an expression (each group, unary operator, call
-/// argument, index and operator of a chain adds one, and the innermost operand counts too).
-/// Past it the
-/// expression is refused with "Rule expression may not be empty.", the text the official
-/// emulator gives to 1,000 nested groups. The official emulator loads up to 600 groups and
-/// 1,000 `!`; fireemu stops at 256, a local safety budget, so that evaluating a rule on a
-/// server worker's stack never runs out of it.
-pub(crate) const MAX_EXPRESSION_DEPTH: usize = 256;
+/// The deepest an expression may nest: every level the checker and the evaluator recurse
+/// through counts (a group, a unary operator, a member, index or call step, a conditional
+/// branch, an operator that is not `&&`, `||` or `+`, and the innermost operand), so a rule
+/// that loads is evaluated within this many levels. `&&`, `||` and `+` chains are one level
+/// however long they are, as the official emulator loads chains of thousands. Past the bound
+/// the expression is refused with "Rule expression may not be empty.", the official
+/// emulator's text for 562 nested groups. 600 is a local safety budget: the official emulator
+/// loads 561 groups and dies past 2,000 to 4,000 levels; fireemu evaluates on its 8 MiB
+/// server workers.
+pub(crate) const MAX_EXPRESSION_DEPTH: usize = 600;
 
 struct Parser<'a> {
     lexer: Lexer<'a>,
@@ -584,12 +589,14 @@ impl Parser<'_> {
         if !self.eat("?")? {
             return Ok(condition);
         }
+        self.deeper()?;
         let then = self.ternary()?;
         if !self.eat(":")? {
             let (at, _) = self.peek()?.clone();
             return Err(ExprError::new(at, "Unexpected end of expression"));
         }
         let otherwise = self.ternary()?;
+        self.depth -= 1;
         Ok(Expr {
             at: condition.at,
             kind: ExprKind::Ternary(Box::new(condition), Box::new(then), Box::new(otherwise)),
@@ -598,9 +605,9 @@ impl Parser<'_> {
 
     fn binary(&mut self, min_level: u8) -> Result<Expr, ExprError> {
         let mut left = self.unary()?;
-        // Each operator of a chain nests the operands before it one level deeper.
-        let mut chained = 0;
-        loop {
+        // The levels this chain of operators adds, given back when it ends.
+        let mut nested = 0;
+        let result = loop {
             let (op, level) = match self.peek()? {
                 (_, Token::Punct(p)) => match *p {
                     "||" => (BinaryOp::Or, 1),
@@ -616,31 +623,54 @@ impl Parser<'_> {
                     "*" => (BinaryOp::Mul, 6),
                     "/" => (BinaryOp::Div, 6),
                     "%" => (BinaryOp::Rem, 6),
-                    _ => return Ok(left),
+                    _ => break Ok(left),
                 },
                 (_, Token::Name(name)) if name == "in" => {
                     let at = left.at;
-                    return Err(ExprError::new(
+                    break Err(ExprError::new(
                         at,
                         "Rule expressions may not contain 'in' operator.",
                     ));
                 }
-                _ => return Ok(left),
+                _ => break Ok(left),
             };
             if level <= min_level {
-                return Ok(left);
+                break Ok(left);
             }
             self.next()?;
             let right = self.binary(level)?;
-            chained += 1;
-            if self.depth + chained >= MAX_EXPRESSION_DEPTH {
-                return Err(ExprError::new(0, "Rule expression may not be empty."));
+            let associative = matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Add);
+            if associative {
+                if let ExprKind::Chain(chained, operands) = &mut left.kind {
+                    if *chained == op {
+                        operands.push(right);
+                        continue;
+                    }
+                }
             }
+            self.deeper()?;
+            nested += 1;
+            let at = left.at;
             left = Expr {
-                at: left.at,
-                kind: ExprKind::Binary(op, Box::new(left), Box::new(right)),
+                at,
+                kind: if associative {
+                    ExprKind::Chain(op, vec![left, right])
+                } else {
+                    ExprKind::Binary(op, Box::new(left), Box::new(right))
+                },
             };
+        };
+        self.depth -= nested;
+        result
+    }
+
+    /// One level deeper, refused past the bound.
+    fn deeper(&mut self) -> Result<(), ExprError> {
+        self.depth += 1;
+        if self.depth > MAX_EXPRESSION_DEPTH {
+            return Err(ExprError::new(0, "Rule expression may not be empty."));
         }
+        Ok(())
     }
 
     fn unary(&mut self) -> Result<Expr, ExprError> {
@@ -683,7 +713,14 @@ impl Parser<'_> {
 
     fn postfix(&mut self) -> Result<Expr, ExprError> {
         let mut expr = self.primary()?;
+        // Each step (member, index, call) is a level the evaluator recurses through.
+        let mut steps = 0;
         loop {
+            let step = matches!(self.peek()?, (_, Token::Punct("." | "[" | "(")));
+            if step {
+                self.deeper()?;
+                steps += 1;
+            }
             if self.eat(".")? {
                 let (at, token) = self.next()?;
                 let Token::Name(name) = token else {
@@ -722,6 +759,7 @@ impl Parser<'_> {
                     kind: ExprKind::Call(Box::new(expr), arguments),
                 };
             } else {
+                self.depth -= steps;
                 return Ok(expr);
             }
         }

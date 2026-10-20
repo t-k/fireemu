@@ -7524,6 +7524,31 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                 String::new(),
                 Some(format!("`{}", "a".repeat(1499))),
             ),
+            (
+                format!("`\\`{}`", "a".repeat(1498)),
+                format!("`{}", "a".repeat(1498)),
+                None,
+            ),
+            // Multibyte names count bytes, not characters.
+            (quoted(&"あ".repeat(499)), "あ".repeat(499), None),
+            (
+                quoted(&"あ".repeat(500)),
+                String::new(),
+                Some("あ".repeat(500)),
+            ),
+            // Dotted and mixed plain-and-quoted aliases count the joined segments.
+            (format!("a.{}", "b".repeat(1497)), "a".to_owned(), None),
+            (
+                format!("a.{}", "b".repeat(1498)),
+                String::new(),
+                Some(format!("a.{}", "b".repeat(1498))),
+            ),
+            (format!("a.`{}`", "-".repeat(1497)), "a".to_owned(), None),
+            (
+                format!("a.`{}`", "-".repeat(1498)),
+                String::new(),
+                Some(format!("a.{}", "-".repeat(1498))),
+            ),
             // Over the path parser's own limits, the text is still unquoted and joined.
             (
                 format!("`\\`{}`", "a".repeat(1501)),
@@ -7616,6 +7641,153 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
                         .collect(),
                     "{alias}"
                 );
+            }
+        }
+        handle.abort();
+    }
+}
+
+/// Alias maps of the stages the local executor does not run (`add_fields`, `distinct`,
+/// `aggregate`) and empty alias maps. Production has not answered these shapes, so strict
+/// refuses them as unobserved; the emulator profile answers the official emulator's texts
+/// (probed against cloud-firestore-emulator 1.22.0) before the stage itself is refused as
+/// unsupported locally. Production answered an `aggregate` without groups, so both profiles
+/// answer that one with its text.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
+    let map = |fields: Vec<(&str, pb::Value)>| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
+        })),
+    };
+    let stage = |name: &str, args: Vec<pb::Value>| {
+        vec![
+            pipeline_stage("collection", s("alias")),
+            pb::pipeline::Stage {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            },
+        ]
+    };
+    let count = || pipeline_function("count", vec![pipeline_field("n")]);
+    let empty_path = "Invalid empty property path string.";
+    let long = "a".repeat(1500);
+    let long_text = format!("The field reference '{long}' is longer than 1500 bytes.");
+    let regex = r#"Invalid property path "a..b". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#;
+    // (label, stages, the emulator profile's official text, or None when the stage itself is
+    // what the emulator profile refuses as unsupported).
+    let rows: Vec<(&str, Vec<pb::pipeline::Stage>, Option<String>)> = vec![
+        (
+            "add_fields empty alias",
+            stage("add_fields", vec![map(vec![("", pipeline_field("top"))])]),
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "distinct empty alias",
+            stage("distinct", vec![map(vec![("", pipeline_field("top"))])]),
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "aggregate empty accumulator alias",
+            stage("aggregate", vec![map(vec![("", count())]), map(vec![])]),
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "aggregate empty group alias",
+            stage(
+                "aggregate",
+                vec![
+                    map(vec![("c", count())]),
+                    map(vec![("", pipeline_field("top"))]),
+                ],
+            ),
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "select empty map",
+            stage("select", vec![map(vec![])]),
+            Some("The 'select(...)' stage requires at least one field.".to_owned()),
+        ),
+        (
+            "add_fields empty map",
+            stage("add_fields", vec![map(vec![])]),
+            Some("The 'add_fields(...)' stage requires at least one field.".to_owned()),
+        ),
+        (
+            "distinct empty map",
+            stage("distinct", vec![map(vec![])]),
+            Some("The 'distinct(...)' stage requires at least one field.".to_owned()),
+        ),
+        (
+            "aggregate empty accumulators",
+            stage("aggregate", vec![map(vec![]), map(vec![])]),
+            Some("The 'aggregate(...)' stage requires at least one accumulator.".to_owned()),
+        ),
+        (
+            "aggregate without groups",
+            stage("aggregate", vec![map(vec![("c", count())])]),
+            Some(
+                "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1."
+                    .to_owned(),
+            ),
+        ),
+        (
+            "add_fields invalid alias",
+            stage("add_fields", vec![map(vec![("a..b", pipeline_field("top"))])]),
+            Some(regex.to_owned()),
+        ),
+        (
+            "add_fields alias of 1500 bytes",
+            stage("add_fields", vec![map(vec![(long.as_str(), pipeline_field("top"))])]),
+            Some(long_text.clone()),
+        ),
+        (
+            "aggregate accumulator alias of 1500 bytes",
+            stage("aggregate", vec![map(vec![(long.as_str(), count())]), map(vec![])]),
+            Some(long_text.clone()),
+        ),
+        // The official emulator answers these; the local executor does not run the stage.
+        (
+            "aggregate with an empty group map",
+            stage("aggregate", vec![map(vec![("c", count())]), map(vec![])]),
+            None,
+        ),
+        (
+            "add_fields alias of 1499 bytes",
+            stage(
+                "add_fields",
+                vec![map(vec![("a".repeat(1499).as_str(), pipeline_field("top"))])],
+            ),
+            None,
+        ),
+        (
+            "distinct",
+            stage("distinct", vec![map(vec![("t", pipeline_field("top"))])]),
+            None,
+        ),
+    ];
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        for (label, stages, official) in &rows {
+            let err = pipeline_error(&mut client, stages.clone()).await;
+            // Production answered the aggregate arity refusal (O-1 `results/metadata#aggregate`).
+            let recorded = *label == "aggregate without groups";
+            match official {
+                Some(text) if recorded || policy == IndexValidationPolicy::Emulator => {
+                    assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
+                    assert_eq!(err.message(), text, "{label}");
+                }
+                _ => assert_eq!(
+                    err.code(),
+                    tonic::Code::Unimplemented,
+                    "{policy:?} {label}: {err}"
+                ),
             }
         }
         handle.abort();

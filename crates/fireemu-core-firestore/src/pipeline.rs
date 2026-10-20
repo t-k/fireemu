@@ -290,13 +290,10 @@ fn alias_map(
             arg,
         ));
     };
-    if entries.is_empty() {
-        return Err(argument(stage, index, "a non-empty map of aliases", arg));
-    }
-    for (alias, value) in entries {
-        // An empty `select` alias is the adapter's to answer: production has not recorded it,
-        // and the official emulator answers it with its empty-path text.
-        if (alias.is_empty() && stage != "select") || !value.is_expression() {
+    // An empty map and an empty alias are the adapter's to answer: production has not
+    // recorded them, and the official emulator answers each with its own text.
+    for (_, value) in entries {
+        if !value.is_expression() {
             return Err(argument(stage, index, values, value));
         }
         if values == "a map of aliases to aggregate functions"
@@ -543,11 +540,33 @@ mod tests {
         assert!(canonicalize(&[users(), stage("where", vec![Arg::String("x".into())])]).is_ok());
         assert!(canonicalize(&[users(), stage("where", vec![Arg::Pipeline])]).is_err());
         assert!(canonicalize(&[users(), stage("sort", vec![Arg::Field("age".into())])]).is_err());
-        // An empty select alias is left to the adapter, which answers it per profile; an empty
-        // add_fields alias stays a validator refusal.
+        // Empty aliases and empty alias maps are left to the adapter, which answers them per
+        // profile; a value that is no expression stays a validator refusal.
         let empty_alias = || Arg::Map(vec![(String::new(), Arg::Field("age".into()))]);
-        assert!(canonicalize(&[users(), stage("select", vec![empty_alias()])]).is_ok());
-        assert!(canonicalize(&[users(), stage("add_fields", vec![empty_alias()])]).is_err());
+        for name in ["select", "add_fields", "distinct"] {
+            assert!(canonicalize(&[users(), stage(name, vec![empty_alias()])]).is_ok());
+            assert!(canonicalize(&[users(), stage(name, vec![Arg::Map(Vec::new())])]).is_ok());
+        }
+        let count = Arg::Function {
+            name: "count".into(),
+            args: vec![Arg::Field("age".into())],
+        };
+        assert!(canonicalize(&[
+            users(),
+            stage(
+                "aggregate",
+                vec![Arg::Map(vec![(String::new(), count)]), Arg::Map(Vec::new())]
+            )
+        ])
+        .is_ok());
+        assert!(canonicalize(&[
+            users(),
+            stage(
+                "add_fields",
+                vec![Arg::Map(vec![("a".into(), Arg::Pipeline)])]
+            )
+        ])
+        .is_err());
         assert!(canonicalize(&[
             users(),
             stage(

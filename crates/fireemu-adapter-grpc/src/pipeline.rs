@@ -441,6 +441,9 @@ pub fn compile_pipeline(
         (false, false, false, false);
     let mut pushdown = None;
     for stage in pipeline.stages.iter().skip(1) {
+        check_unrun_alias_stage(stage, unrecorded)?;
+    }
+    for stage in pipeline.stages.iter().skip(1) {
         let rank = match stage.name.as_str() {
             "where" | "select" => 1,
             "offset" => 2,
@@ -758,9 +761,12 @@ fn decode_select(
         aliases.push((alias, path, decode_operand(value, unrecorded, true)?));
     }
     if aliases.is_empty() {
-        return Err(Status::invalid_argument(
-            "select requires a non-empty alias map",
-        ));
+        // Production has not answered an empty select; the official emulator names the stage.
+        return Err(if unrecorded == Unrecorded::Refuse {
+            Status::unimplemented("an empty select alias map is not observed locally")
+        } else {
+            Status::invalid_argument("The 'select(...)' stage requires at least one field.")
+        });
     }
     aliases.sort_by(|a, b| a.1.cmp(&b.1));
     for pair in aliases.windows(2) {
@@ -818,6 +824,36 @@ fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status
             "select alias {alias:?}: this alias shape is not observed locally"
         ))
     };
+    let plain = !alias.contains(['.', '`']);
+    let path = parse_alias(alias, unrecorded)?;
+    let reserved = path
+        .segments()
+        .iter()
+        .any(|segment| is_reserved_name(segment));
+    match path.segments() {
+        _ if !reserved => Ok(path),
+        _ if strict && !plain => Err(unobserved()),
+        [name] if name == "__name__" => Err(Status::invalid_argument(format!(
+            "Stage 'select': field name '{name}' is reserved and can not be overwritten."
+        ))),
+        [name] => Err(Status::invalid_argument(format!(
+            "Stage 'select': field name '{name}' is reserved."
+        ))),
+        // A reserved name below another field, as the official emulator answers it.
+        _ => Ok(path),
+    }
+}
+
+/// Reads an alias as a field path with the official emulator's syntax and length checks, in
+/// its order: the empty path, the path syntax, then the joined length. Reserved names are the
+/// caller's.
+fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status> {
+    let strict = unrecorded == Unrecorded::Refuse;
+    let unobserved = || {
+        Status::unimplemented(format!(
+            "select alias {alias:?}: this alias shape is not observed locally"
+        ))
+    };
     let too_long = |reference: &str| {
         if strict {
             unobserved()
@@ -854,22 +890,60 @@ fn decode_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status
     if joined.len() >= ALIAS_LIMIT_BYTES {
         return Err(too_long(&joined));
     }
-    let reserved = path
-        .segments()
-        .iter()
-        .any(|segment| is_reserved_name(segment));
-    match path.segments() {
-        _ if !reserved => Ok(path),
-        _ if strict && !plain => Err(unobserved()),
-        [name] if name == "__name__" => Err(Status::invalid_argument(format!(
-            "Stage 'select': field name '{name}' is reserved and can not be overwritten."
-        ))),
-        [name] => Err(Status::invalid_argument(format!(
-            "Stage 'select': field name '{name}' is reserved."
-        ))),
-        // A reserved name below another field, as the official emulator answers it.
-        _ => Ok(path),
+    Ok(path)
+}
+
+/// The official emulator's argument checks on a stage the local executor does not run
+/// (`add_fields`, `distinct`, `aggregate`), answered before the stage is refused as
+/// unsupported. Production answered an `aggregate` without its groups argument with the
+/// official arity text (FS-ENT-ORACLE O-1, `fs-ent-pipeline/results/metadata#aggregate`), so
+/// both profiles answer it; production has not answered the alias map checks, so strict
+/// leaves those to the unsupported-stage refusal.
+fn check_unrun_alias_stage(
+    stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
+) -> Result<(), Status> {
+    if stage.name == "aggregate" && stage.args.len() == 1 {
+        return Err(Status::invalid_argument(
+            "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+        ));
     }
+    if unrecorded == Unrecorded::Refuse {
+        return Ok(());
+    }
+    let alias_map = |value: &pb::Value| match value.value_type.as_ref() {
+        Some(pb::value::ValueType::MapValue(map)) => {
+            Some(map.fields.keys().cloned().collect::<Vec<_>>())
+        }
+        _ => None,
+    };
+    let name = stage.name.as_str();
+    match name {
+        "aggregate" => {
+            if alias_map(&stage.args[0]).is_some_and(|aliases| aliases.is_empty()) {
+                return Err(Status::invalid_argument(
+                    "The 'aggregate(...)' stage requires at least one accumulator.",
+                ));
+            }
+        }
+        "add_fields" | "distinct" => {
+            if stage
+                .args
+                .iter()
+                .filter_map(alias_map)
+                .any(|aliases| aliases.is_empty())
+            {
+                return Err(Status::invalid_argument(format!(
+                    "The '{name}(...)' stage requires at least one field."
+                )));
+            }
+        }
+        _ => return Ok(()),
+    }
+    for alias in stage.args.iter().filter_map(alias_map).flatten() {
+        parse_alias(&alias, unrecorded)?;
+    }
+    Ok(())
 }
 
 /// The literal select values production answered (FS-ENT-ORACLE O-1

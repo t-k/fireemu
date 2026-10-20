@@ -102,7 +102,6 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("fs-ent-pipeline/px1/where#not-equal-x", "not is outside the subset"),
     ("fs-ent-pipeline/px1/where#sqrt-s-positive", "sqrt is outside the subset"),
     ("fs-ent-pipeline/results/metadata#add-fields", "add_fields is outside the subset"),
-    ("fs-ent-pipeline/results/metadata#aggregate", "aggregate is outside the subset"),
     ("fs-ent-pipeline/results/metadata#distinct", "distinct is outside the subset"),
     ("fs-ent-pipeline/results/metadata#limit", "without a sort production returns another order than document names, so limit keeps other documents (PX2)"),
     ("fs-ent-pipeline/results/metadata#remove-fields", "remove_fields is outside the subset"),

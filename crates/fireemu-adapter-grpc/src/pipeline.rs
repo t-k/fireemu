@@ -429,6 +429,7 @@ pub struct CompiledExecution {
 /// is refused. `unrecorded` decides whether shapes with unrecorded production behavior
 /// (a constant `where` condition, a literal holding expressions) are refused or answered as
 /// the official emulator answers them.
+#[allow(clippy::too_many_lines)]
 pub fn compile_pipeline(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
@@ -440,82 +441,106 @@ pub fn compile_pipeline(
     let (mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
         (false, false, false, false);
     let mut pushdown = None;
-    for stage in pipeline.stages.iter().skip(1) {
-        check_unrun_alias_stage(stage, unrecorded)?;
-    }
-    for stage in pipeline.stages.iter().skip(1) {
-        let rank = match stage.name.as_str() {
-            "where" | "select" => 1,
-            "offset" => 2,
-            "limit" => 3,
-            _ => 4,
-        };
-        if rank < last_rank {
-            return Err(Status::unimplemented(
-                "pipeline stages are out of supported order",
-            ));
+    // An empty alias map, which the official emulator answers only after every stage's own
+    // argument checks.
+    let mut deferred: Option<Status> = None;
+    let compiled = (|| -> Result<(), Status> {
+        for (position, stage) in pipeline.stages.iter().enumerate().skip(1) {
+            let rank = match stage.name.as_str() {
+                "where" | "select" => 1,
+                "offset" => 2,
+                "limit" => 3,
+                _ => 4,
+            };
+            if rank < last_rank {
+                return Err(Status::unimplemented(
+                    "pipeline stages are out of supported order",
+                ));
+            }
+            last_rank = rank;
+            match stage.name.as_str() {
+                "where" => {
+                    if seen_where || seen_select || seen_limit {
+                        return Err(Status::unimplemented("duplicate or misplaced where stage"));
+                    }
+                    seen_where = true;
+                    let (condition, filter) = decode_condition(stage, unrecorded)?;
+                    pushdown = filter;
+                    stages.push(Stage::Where(condition));
+                }
+                "select" => {
+                    if seen_select {
+                        return Err(Status::unimplemented(
+                            "duplicate select stage is unsupported locally",
+                        ));
+                    }
+                    seen_select = true;
+                    if unrecorded != Unrecorded::Refuse
+                        && stage.args.first().is_some_and(is_empty_map)
+                    {
+                        deferred.get_or_insert_with(|| {
+                            Status::invalid_argument(
+                                "The 'select(...)' stage requires at least one field.",
+                            )
+                        });
+                        continue;
+                    }
+                    stages.push(Stage::Select(decode_select(stage, unrecorded)?));
+                }
+                "offset" => {
+                    if seen_offset {
+                        return Err(Status::unimplemented(
+                            "duplicate offset stage is unsupported locally",
+                        ));
+                    }
+                    seen_offset = true;
+                    let Some(pb::value::ValueType::IntegerValue(n)) =
+                        stage.args.first().and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::invalid_argument("offset must be an integer"));
+                    };
+                    let offset = i32::try_from(*n).map_err(|_| {
+                        Status::unimplemented("offset exceeds the finite local execution range")
+                    })?;
+                    let offset = u64::try_from(offset)
+                        .map_err(|_| Status::invalid_argument("offset must not be negative"))?;
+                    stages.push(Stage::Offset(offset));
+                }
+                "limit" => {
+                    if seen_limit {
+                        return Err(Status::unimplemented(
+                            "duplicate limit stage is unsupported locally",
+                        ));
+                    }
+                    seen_limit = true;
+                    let Some(pb::value::ValueType::IntegerValue(n)) =
+                        stage.args.first().and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::invalid_argument("limit must be an integer"));
+                    };
+                    let limit = u32::try_from(*n)
+                        .map_err(|_| Status::invalid_argument("limit is out of range"))?;
+                    stages.push(Stage::Limit(u64::from(limit)));
+                }
+                other => {
+                    // The official emulator checks every stage's arguments before running any.
+                    for (later, rest) in pipeline.stages.iter().enumerate().skip(position) {
+                        check_unrun_alias_stage(rest, later, unrecorded, &mut deferred)?;
+                    }
+                    return Err(Status::unimplemented(format!(
+                        "pipeline stage {other:?} is unsupported locally"
+                    )));
+                }
+            }
         }
-        last_rank = rank;
-        match stage.name.as_str() {
-            "where" => {
-                if seen_where || seen_select || seen_limit {
-                    return Err(Status::unimplemented("duplicate or misplaced where stage"));
-                }
-                seen_where = true;
-                let (condition, filter) = decode_condition(stage, unrecorded)?;
-                pushdown = filter;
-                stages.push(Stage::Where(condition));
-            }
-            "select" => {
-                if seen_select {
-                    return Err(Status::unimplemented(
-                        "duplicate select stage is unsupported locally",
-                    ));
-                }
-                seen_select = true;
-                stages.push(Stage::Select(decode_select(stage, unrecorded)?));
-            }
-            "offset" => {
-                if seen_offset {
-                    return Err(Status::unimplemented(
-                        "duplicate offset stage is unsupported locally",
-                    ));
-                }
-                seen_offset = true;
-                let Some(pb::value::ValueType::IntegerValue(n)) =
-                    stage.args.first().and_then(|v| v.value_type.as_ref())
-                else {
-                    return Err(Status::invalid_argument("offset must be an integer"));
-                };
-                let offset = i32::try_from(*n).map_err(|_| {
-                    Status::unimplemented("offset exceeds the finite local execution range")
-                })?;
-                let offset = u64::try_from(offset)
-                    .map_err(|_| Status::invalid_argument("offset must not be negative"))?;
-                stages.push(Stage::Offset(offset));
-            }
-            "limit" => {
-                if seen_limit {
-                    return Err(Status::unimplemented(
-                        "duplicate limit stage is unsupported locally",
-                    ));
-                }
-                seen_limit = true;
-                let Some(pb::value::ValueType::IntegerValue(n)) =
-                    stage.args.first().and_then(|v| v.value_type.as_ref())
-                else {
-                    return Err(Status::invalid_argument("limit must be an integer"));
-                };
-                let limit = u32::try_from(*n)
-                    .map_err(|_| Status::invalid_argument("limit is out of range"))?;
-                stages.push(Stage::Limit(u64::from(limit)));
-            }
-            other => {
-                return Err(Status::unimplemented(format!(
-                    "pipeline stage {other:?} is unsupported locally"
-                )))
-            }
+        Ok(())
+    })();
+    match (compiled, deferred) {
+        (Err(error), Some(empty)) if error.code() != tonic::Code::InvalidArgument => {
+            return Err(empty)
         }
+        (Ok(()), Some(empty)) => return Err(empty),
+        (result, _) => result?,
     }
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
@@ -895,55 +920,79 @@ fn parse_alias(alias: &str, unrecorded: Unrecorded) -> Result<FieldPath, Status>
 
 /// The official emulator's argument checks on a stage the local executor does not run
 /// (`add_fields`, `distinct`, `aggregate`), answered before the stage is refused as
-/// unsupported. Production answered an `aggregate` without its groups argument with the
-/// official arity text (FS-ENT-ORACLE O-1, `fs-ent-pipeline/results/metadata#aggregate`), so
-/// both profiles answer it; production has not answered the alias map checks, so strict
-/// leaves those to the unsupported-stage refusal.
+/// unsupported, in the official order: the stage's arity, each alias, then an empty map, which
+/// is `deferred` until every stage's other checks are done. Production answered
+/// `aggregate({c: count()})` directly after the collection with the official arity text
+/// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/results/metadata#aggregate`), so strict answers that
+/// text for that shape (a non-empty map of plain valid aliases to functions, at `position` 1)
+/// and leaves every other shape here to the unsupported-stage refusal.
 fn check_unrun_alias_stage(
     stage: &pb::pipeline::Stage,
+    position: usize,
     unrecorded: Unrecorded,
+    deferred: &mut Option<Status>,
 ) -> Result<(), Status> {
+    let strict = unrecorded == Unrecorded::Refuse;
     if stage.name == "aggregate" && stage.args.len() == 1 {
-        return Err(Status::invalid_argument(
-            "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
-        ));
+        let recorded = || {
+            position == 1
+                && map_fields(&stage.args[0]).is_some_and(|fields| {
+                    !fields.is_empty()
+                        && fields.iter().all(|(alias, value)| {
+                            !alias.contains(['.', '`'])
+                                && parse_alias(alias, unrecorded).is_ok()
+                                && matches!(
+                                    value.value_type,
+                                    Some(pb::value::ValueType::FunctionValue(_))
+                                )
+                        })
+                })
+        };
+        if !strict || recorded() {
+            return Err(Status::invalid_argument(
+                "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+            ));
+        }
     }
-    if unrecorded == Unrecorded::Refuse {
+    let name = stage.name.as_str();
+    if strict || !matches!(name, "aggregate" | "add_fields" | "distinct") {
         return Ok(());
     }
-    let alias_map = |value: &pb::Value| match value.value_type.as_ref() {
-        Some(pb::value::ValueType::MapValue(map)) => {
-            Some(map.fields.keys().cloned().collect::<Vec<_>>())
-        }
-        _ => None,
-    };
-    let name = stage.name.as_str();
-    match name {
-        "aggregate" => {
-            if alias_map(&stage.args[0]).is_some_and(|aliases| aliases.is_empty()) {
-                return Err(Status::invalid_argument(
-                    "The 'aggregate(...)' stage requires at least one accumulator.",
-                ));
-            }
-        }
-        "add_fields" | "distinct" => {
-            if stage
-                .args
-                .iter()
-                .filter_map(alias_map)
-                .any(|aliases| aliases.is_empty())
-            {
-                return Err(Status::invalid_argument(format!(
-                    "The '{name}(...)' stage requires at least one field."
-                )));
-            }
-        }
-        _ => return Ok(()),
+    for alias in stage
+        .args
+        .iter()
+        .filter_map(map_fields)
+        .flat_map(|fields| fields.keys())
+    {
+        parse_alias(alias, unrecorded)?;
     }
-    for alias in stage.args.iter().filter_map(alias_map).flatten() {
-        parse_alias(&alias, unrecorded)?;
+    let empty = match name {
+        "aggregate" => map_fields(&stage.args[0])
+            .is_some_and(std::collections::HashMap::is_empty)
+            .then(|| "The 'aggregate(...)' stage requires at least one accumulator.".to_owned()),
+        _ => stage
+            .args
+            .iter()
+            .any(is_empty_map)
+            .then(|| format!("The '{name}(...)' stage requires at least one field.")),
+    };
+    if let Some(text) = empty {
+        deferred.get_or_insert_with(|| Status::invalid_argument(text));
     }
     Ok(())
+}
+
+/// The fields of a wire map value.
+fn map_fields(value: &pb::Value) -> Option<&std::collections::HashMap<String, pb::Value>> {
+    match value.value_type.as_ref() {
+        Some(pb::value::ValueType::MapValue(map)) => Some(&map.fields),
+        _ => None,
+    }
+}
+
+/// Whether a wire value is an empty map.
+fn is_empty_map(value: &pb::Value) -> bool {
+    matches!(&value.value_type, Some(pb::value::ValueType::MapValue(map)) if map.fields.is_empty())
 }
 
 /// The literal select values production answered (FS-ENT-ORACLE O-1

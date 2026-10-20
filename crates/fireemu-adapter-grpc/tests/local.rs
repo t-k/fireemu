@@ -7673,6 +7673,7 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
     };
     let count = || pipeline_function("count", vec![pipeline_field("n")]);
     let empty_path = "Invalid empty property path string.";
+    let arity = "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.";
     let long = "a".repeat(1500);
     let long_text = format!("The field reference '{long}' is longer than 1500 bytes.");
     let regex = r#"Invalid property path "a..b". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#;
@@ -7747,6 +7748,91 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             "aggregate accumulator alias of 1500 bytes",
             stage("aggregate", vec![map(vec![(long.as_str(), count())]), map(vec![])]),
             Some(long_text.clone()),
+        ),
+        // A one-argument aggregate answers the arity text first in the emulator profile;
+        // strict answers it only for the recorded shape (directly after the collection, a
+        // non-empty map of plain valid aliases to functions).
+        (
+            "aggregate without groups, empty accumulators",
+            stage("aggregate", vec![map(vec![])]),
+            Some(arity.to_owned()),
+        ),
+        (
+            "aggregate without groups, empty alias",
+            stage("aggregate", vec![map(vec![("", count())])]),
+            Some(arity.to_owned()),
+        ),
+        (
+            "aggregate without groups, invalid alias",
+            stage("aggregate", vec![map(vec![("a..b", count())])]),
+            Some(arity.to_owned()),
+        ),
+        (
+            "aggregate without groups, alias of 1500 bytes",
+            stage("aggregate", vec![map(vec![(long.as_str(), count())])]),
+            Some(arity.to_owned()),
+        ),
+        (
+            "aggregate without groups, after limit",
+            {
+                let mut stages = stage("aggregate", vec![map(vec![("c", count())])]);
+                stages.insert(1, pipeline_stage("limit", i(1)));
+                stages
+            },
+            Some(arity.to_owned()),
+        ),
+        // Across stages, the official emulator answers every alias check before an empty map.
+        (
+            "select empty map, then add_fields empty alias",
+            {
+                let mut stages = stage("select", vec![map(vec![])]);
+                stages.extend(
+                    stage("add_fields", vec![map(vec![("", pipeline_field("top"))])])
+                        .into_iter()
+                        .skip(1),
+                );
+                stages
+            },
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "add_fields empty alias, then select empty map",
+            {
+                let mut stages = stage("add_fields", vec![map(vec![("", pipeline_field("top"))])]);
+                stages.extend(stage("select", vec![map(vec![])]).into_iter().skip(1));
+                stages
+            },
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "aggregate empty accumulators and an empty group alias",
+            stage(
+                "aggregate",
+                vec![map(vec![]), map(vec![("", pipeline_field("top"))])],
+            ),
+            Some(empty_path.to_owned()),
+        ),
+        (
+            "select empty map, then add_fields",
+            {
+                let mut stages = stage("select", vec![map(vec![])]);
+                stages.extend(
+                    stage("add_fields", vec![map(vec![("t", pipeline_field("top"))])])
+                        .into_iter()
+                        .skip(1),
+                );
+                stages
+            },
+            Some("The 'select(...)' stage requires at least one field.".to_owned()),
+        ),
+        (
+            "select empty map, then limit",
+            {
+                let mut stages = stage("select", vec![map(vec![])]);
+                stages.push(pipeline_stage("limit", i(1)));
+                stages
+            },
+            Some("The 'select(...)' stage requires at least one field.".to_owned()),
         ),
         // The official emulator answers these; the local executor does not run the stage.
         (

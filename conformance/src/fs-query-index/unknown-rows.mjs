@@ -13,7 +13,8 @@
 
 import { readFile } from "node:fs/promises";
 
-const STEP_LINE = /^\S+#\S+ (?:(-?\d+)|grpc (-?\d+))$/;
+/** Ends like a step line; whatever comes before the `#` (a log prefix) does not matter. */
+const STEP_LINE = /#\S+ (?:(-?\d+)|grpc (-?\d+))$/;
 /** gRPC codes that settle an outcome (OK, the client and precondition errors, UNAUTHENTICATED). */
 const DEFINITE_GRPC = new Set([0, 3, 5, 6, 7, 9, 10, 11, 12, 16]);
 

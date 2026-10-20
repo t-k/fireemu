@@ -231,7 +231,13 @@ test("the grep -E pattern the after-steps quote says the same as the check", () 
   const lines = [];
   for (let status = -12; status <= 1200; status += 1) lines.push(`p/a/b#s-1 ${status}`);
   for (let code = -12; code <= 120; code += 1) lines.push(`p/a/b#s-1 grpc ${code}`);
+  // A log prefix before the step and text after the status.
+  for (const status of [200, 404, 429, 500]) {
+    lines.push(`2026-10-20T00:00:00Z p/a/b#s ${status}`, `p/a/b#s ${status} extra`);
+  }
   for (const line of lines) assert.equal(pattern.test(line), isUnknownRow(line), line);
+  assert.equal(isUnknownRow("2026-10-20T00:00:00Z p/a/b#s 500"), true);
+  assert.equal(isUnknownRow("p/a/b#s 500 extra"), false);
   // POSIX ERE has no \d, lazy quantifier or lookahead.
   assert.doesNotMatch(UNKNOWN_ROW_PATTERN, /\\d|\*\?|\(\?/);
 });

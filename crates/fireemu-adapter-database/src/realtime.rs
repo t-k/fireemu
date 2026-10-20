@@ -20,7 +20,7 @@ use fireemu_core_database::{
     Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, QueryParams, ServerValueContext,
 };
 
-use crate::access::{auth_from_claims, Access, WriteOp, OWNER};
+use crate::access::{auth_from_claims, Access, WriteOp};
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{priority_at, render, wire_json, Style};
 use crate::listen::Listen;
@@ -417,7 +417,8 @@ impl Session {
                 None => Json::Null,
             }),
             "auth" => {
-                let (answer, access) = authenticate(arguments)?;
+                let (answer, access) =
+                    authenticate(arguments, db, &self.namespace, context.now_millis)?;
                 self.become_(db, access, context.now_millis);
                 Ok(answer)
             }
@@ -425,9 +426,13 @@ impl Session {
                 let access = match arguments.get("cred") {
                     // The official emulator does not answer a gauth without a credential.
                     None => return Err(Failure::Silent),
-                    Some(Json::String(cred)) if cred == OWNER => Access::Owner,
-                    Some(_) => Access::Admin,
-                };
+                    Some(Json::String(cred)) => {
+                        Access::administrator(cred, &db.options().credentials)
+                    }
+                    Some(_) => Access::administrator("", &db.options().credentials),
+                }
+                // Provisional: the strict profile refuses another credential as a bad token.
+                .map_err(|_| unparsable_token())?;
                 self.become_(db, access, context.now_millis);
                 let expires = context.now_millis / 1000 + 3600;
                 Ok(Json::object([
@@ -970,13 +975,27 @@ fn wire_bound(
 
 /// `auth` with a JWT reads its claims (the official emulator does not verify the
 /// signature, check `exp`, or accept anything else) and becomes that user.
-fn authenticate(arguments: &BTreeMap<String, Json>) -> Result<(Json, Access), Failure> {
-    let unparsable = || Failure::Status("invalid_token", "Could not parse auth token.".to_owned());
+fn authenticate(
+    arguments: &BTreeMap<String, Json>,
+    db: &Database,
+    namespace: &str,
+    now: i64,
+) -> Result<(Json, Access), Failure> {
     let Some(Json::String(cred)) = arguments.get("cred") else {
-        return Err(unparsable());
+        return Err(unparsable_token());
     };
+    let credentials = &db.options().credentials;
+    // A verifier decides alone; without one the claims are read as the official emulator
+    // reads them, and a missing claim is named.
+    if credentials.id_tokens.is_some() {
+        let auth = credentials
+            .user(cred, crate::namespace::project_of(namespace), now)
+            .ok_or_else(unparsable_token)?;
+        let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
+        return Ok((answer, Access::User(auth)));
+    }
     let Some(Json::Object(claims)) = jwt_claims(cred) else {
-        return Err(unparsable());
+        return Err(unparsable_token());
     };
     let auth = auth_from_claims(&claims).map_err(|name| {
         Failure::Status(
@@ -986,6 +1005,10 @@ fn authenticate(arguments: &BTreeMap<String, Json>) -> Result<(Json, Access), Fa
     })?;
     let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
     Ok((answer, Access::User(auth)))
+}
+
+fn unparsable_token() -> Failure {
+    Failure::Status("invalid_token", "Could not parse auth token.".to_owned())
 }
 
 /// The claims of a token shaped as a JWT (three base64url parts, the second a JSON

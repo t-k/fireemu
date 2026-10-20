@@ -833,3 +833,204 @@ fn rules_loaded_outside_a_request_wake_the_flush() {
         .unwrap();
     assert!(woken.load(std::sync::atomic::Ordering::SeqCst) > 0);
 }
+
+/// A credential shape: its name, the path and query, the headers, and the status under the
+/// emulator profile and under strict.
+type Case<'a> = (&'a str, String, Vec<(&'a str, &'a str)>, u16, u16);
+
+/// A verifier that accepts only tokens whose `sub` starts with `ok-` and that are minted for
+/// `demo` (standing in for fireemu's Auth), answering the claims it decoded.
+fn verifier() -> fireemu_adapter_database::rest::IdTokenVerifier {
+    std::sync::Arc::new(|token: &str, project: &str, _now: i64| {
+        let claims = token.split('.').nth(1)?;
+        let text = b64_decode(claims)?;
+        (project == "demo" && text.contains("\"sub\":\"ok-")).then_some(text)
+    })
+}
+
+fn b64_decode(text: &str) -> Option<String> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut bits = 0u32;
+    let mut count = 0;
+    let mut out = Vec::new();
+    for c in text.bytes() {
+        let value = u32::try_from(ALPHABET.iter().position(|a| *a == c)?).ok()?;
+        bits = (bits << 6) | value;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push(u8::try_from((bits >> count) & 0xff).ok()?);
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn with_credentials(strict: bool, verify: bool) -> Database {
+    Database::new(
+        RestOptions {
+            credentials: fireemu_adapter_database::rest::Credentials {
+                strict,
+                id_tokens: verify.then(verifier),
+            },
+            ..RestOptions::default()
+        },
+        7,
+    )
+}
+
+#[test]
+fn each_profile_reads_each_credential_shape_as_the_ruling_says() {
+    let good = token(r#"{"sub":"ok-1","iat":1}"#);
+    let unverified = token(r#"{"sub":"u1","iat":1}"#);
+    // (shape, emulator profile with a verifier, strict profile with a verifier):
+    // 200 allowed as the expected caller, 401 refused or denied.
+    let rules = r#"{"rules":{"admin":{".read":false},"user":{".read":"auth.uid == 'ok-1'"},"anon":{".read":"auth == null"}}}"#;
+    let cases: [Case; 9] = [
+        (
+            "owner bearer",
+            "/admin".to_owned(),
+            vec![("Authorization", "Bearer owner")],
+            200,
+            200,
+        ),
+        (
+            "other bearer",
+            "/admin".to_owned(),
+            vec![("Authorization", "Bearer ya29.x")],
+            200,
+            401,
+        ),
+        (
+            "owner access_token",
+            "/admin?access_token=owner".to_owned(),
+            vec![],
+            200,
+            200,
+        ),
+        (
+            "other access_token",
+            "/admin?access_token=x".to_owned(),
+            vec![],
+            200,
+            401,
+        ),
+        (
+            "verified token",
+            format!("/user?auth={good}"),
+            vec![],
+            200,
+            200,
+        ),
+        (
+            "unverified token",
+            format!("/anon?auth={unverified}"),
+            vec![],
+            200,
+            401,
+        ),
+        (
+            "auth=owner",
+            "/anon?auth=owner".to_owned(),
+            vec![],
+            200,
+            401,
+        ),
+        ("auth=garbage", "/anon?auth=x".to_owned(), vec![], 200, 401),
+        ("no credential", "/anon".to_owned(), vec![], 200, 200),
+    ];
+    for strict in [false, true] {
+        let mut db = with_credentials(strict, true);
+        load(&mut db, "demo-default-rtdb", rules);
+        for (shape, path, headers, emulator, strict_status) in &cases {
+            let (base, query) = path.split_once('?').unwrap_or((path.as_str(), ""));
+            let target = format!("{base}.json?ns=demo-default-rtdb&{query}");
+            let status = call(&mut db, "GET", &target, headers, "").0;
+            let expected = if strict { *strict_status } else { *emulator };
+            assert_eq!(status, expected, "strict {strict}: {shape}");
+        }
+    }
+    // An unverified token under the emulator profile is anonymous, not its user.
+    let mut db = with_credentials(false, true);
+    load(&mut db, "demo-default-rtdb", rules);
+    assert_eq!(
+        call(
+            &mut db,
+            "GET",
+            &format!("/user.json?ns=demo-default-rtdb&auth={unverified}"),
+            &[],
+            ""
+        )
+        .0,
+        401
+    );
+    // A token for another project is no user of this one.
+    assert_eq!(
+        call(
+            &mut db,
+            "GET",
+            &format!("/user.json?ns=other-default-rtdb&auth={good}"),
+            &[],
+            ""
+        )
+        .0,
+        200
+    );
+}
+
+#[test]
+fn the_rules_endpoint_needs_an_administrator_of_the_profile() {
+    let mut db = with_credentials(true, true);
+    assert_eq!(
+        call(
+            &mut db,
+            "GET",
+            "/.settings/rules.json?ns=r1",
+            &[("Authorization", "Bearer ya29.x")],
+            ""
+        )
+        .0,
+        401
+    );
+    assert_eq!(
+        call(&mut db, "GET", "/.settings/rules.json?ns=r1", OWNER, "").0,
+        200
+    );
+}
+
+#[test]
+fn realtime_credentials_follow_the_profile() {
+    let good = token(r#"{"sub":"ok-1","iat":1}"#);
+    let unverified = token(r#"{"sub":"u1","iat":1}"#);
+    let unparsable = reply(1, "invalid_token", r#""Could not parse auth token.""#);
+    for strict in [false, true] {
+        let mut db = with_credentials(strict, true);
+        let mut session = open(&mut db, "demo-default-rtdb");
+        let other = send(&mut db, &mut session, 1, "gauth", r#"{"cred":"ya29.x"}"#);
+        if strict {
+            assert_eq!(other, vec![unparsable.clone()]);
+        } else {
+            assert!(other[0].contains(r#""s":"ok""#), "{other:?}");
+        }
+        let owner = send(&mut db, &mut session, 2, "gauth", r#"{"cred":"owner"}"#);
+        assert!(owner[0].contains(r#""s":"ok""#), "{owner:?}");
+        assert_eq!(
+            send(
+                &mut db,
+                &mut session,
+                1,
+                "auth",
+                &format!(r#"{{"cred":"{unverified}"}}"#)
+            ),
+            vec![unparsable.clone()],
+            "strict {strict}"
+        );
+        let user = send(
+            &mut db,
+            &mut session,
+            3,
+            "auth",
+            &format!(r#"{{"cred":"{good}"}}"#),
+        );
+        assert!(user[0].contains(r#""uid":"ok-1""#), "{user:?}");
+    }
+}

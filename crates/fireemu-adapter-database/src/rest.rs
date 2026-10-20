@@ -23,6 +23,7 @@ use fireemu_core_database::{
 };
 
 use crate::access::{Access, LoadedRules, WriteOp};
+pub use crate::access::{Credentials, IdTokenVerifier};
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{
     output_json, parse, priority_at, render, value_at, written_priority_at, ParseError, Style,
@@ -144,6 +145,8 @@ pub struct RestOptions {
     pub limits: Limits,
     /// The longest realtime message, split frames joined (the SDKs' 16 MB write limit).
     pub realtime_message_bytes: usize,
+    /// How credentials are read (the profile's administrators and ID-token checks).
+    pub credentials: Credentials,
 }
 
 impl Default for RestOptions {
@@ -153,6 +156,7 @@ impl Default for RestOptions {
             rules: RulesMode::AllowAll,
             limits: Limits::default(),
             realtime_message_bytes: 16 * 1024 * 1024,
+            credentials: Credentials::default(),
         }
     }
 }
@@ -339,6 +343,26 @@ impl Database {
     }
 
     /// `/.settings/rules.json`: an administrator reads or loads the rules of the namespace.
+    /// Who a request is. The strict profile refuses a credential that names no one, as a
+    /// denial.
+    fn access(
+        &self,
+        request: &HttpRequest,
+        params: &BTreeMap<String, String>,
+        namespace: &str,
+        streaming: bool,
+        now_millis: i64,
+    ) -> Result<Access, Refusal> {
+        Access::from_rest(
+            request.header("Authorization"),
+            params,
+            &self.options.credentials,
+            namespace,
+            now_millis,
+        )
+        .map_err(|_| read_refused(streaming))
+    }
+
     fn settings(
         &mut self,
         raw_path: &str,
@@ -493,7 +517,10 @@ impl Database {
             return Err(Refusal::new(405, "Unsupported request type"));
         }
         let writing = method != "GET";
-        let access = Access::from_rest(request.header("Authorization"), &params);
+        let streaming = request
+            .header("Accept")
+            .is_some_and(|v| v.contains("text/event-stream"));
+        let access = self.access(request, &params, &namespace, streaming, now_millis)?;
         let path = match request::location(raw_path, writing, &self.options.limits)? {
             Location::Data(path) => path,
             Location::Settings => {
@@ -521,9 +548,6 @@ impl Database {
         if let Some(query) = &query {
             self.check_index(&namespace, &path, query)?;
         }
-        let streaming = request
-            .header("Accept")
-            .is_some_and(|v| v.contains("text/event-stream"));
         if !writing && !self.may_read(&namespace, &path, query.as_ref(), &access, now_millis) {
             return Err(read_refused(streaming));
         }

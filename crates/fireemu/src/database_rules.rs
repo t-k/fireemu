@@ -1,11 +1,50 @@
 //! Realtime Database Security Rules from `firebase.json`, as firebase-tools 15.28.2 loads
 //! them: each file into its instance at startup, where a file that does not load stops the
 //! start, and again whenever the file changes, where a file that does not load keeps the
-//! rules in force and says why.
+//! rules in force and says why. Also the credentials the database reads: the profile's
+//! administrators and the ID tokens fireemu's Auth accepts (coordinator ruling Q-R6).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use fireemu_adapter_database::rest::Database;
+use fireemu_adapter_database::rest::{Credentials, Database};
+use fireemu_core_auth::jwt::{
+    decode_token, verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance,
+};
+use fireemu_core_auth::store::AuthRegistry;
+use fireemu_core_types::time::LogicalInstant;
+
+use crate::config::RuntimeConfig;
+
+/// The credentials of the profile: under `strict` only `owner` is an administrator; an
+/// `auth=` ID token is a user when fireemu's Auth verifies it for the namespace's project
+/// (with `auth.allowUnsignedIdTokens` deciding unsigned tokens), checked against the store
+/// of the project the token names.
+pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> Credentials {
+    let policy = RulesTokenPolicy::new(cfg.token_acceptance, cfg.auth_allow_unsigned_id_tokens);
+    let registry = Arc::clone(registry);
+    Credentials {
+        strict: cfg.token_acceptance == TokenAcceptance::Verified,
+        id_tokens: Some(Arc::new(move |token: &str, project: &str, now: i64| {
+            let default = registry.default_store();
+            let audience = {
+                let store = default.lock().ok()?;
+                let decoded = decode_token(token, store.signer()).ok()?;
+                decoded.payload.get("aud")?.as_str()?.to_owned()
+            };
+            let store = registry.store_for(&audience).unwrap_or(default);
+            let store = store.lock().ok()?;
+            verify_rules_token_for_project(
+                token,
+                &store,
+                LogicalInstant::from_nanos(i128::from(now) * 1_000_000),
+                policy,
+                project,
+            )
+            .ok()
+            .map(|decoded| decoded.payload_json)
+        })),
+    }
+}
 
 /// How often a rules file is looked at for a change.
 const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);

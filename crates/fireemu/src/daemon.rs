@@ -588,6 +588,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                     fireemu_adapter_database::rest::RulesMode::AllowAll
                 }
             },
+            credentials: crate::database_rules::credentials(&cfg, &registry),
             ..fireemu_adapter_database::rest::RestOptions::default()
         },
         cfg.seed ^ 0x5254_4442,

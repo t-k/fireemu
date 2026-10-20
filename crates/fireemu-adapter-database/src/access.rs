@@ -2,14 +2,27 @@
 //! namespace without rules allows everything or, under `productionExact`, only the owner
 //! (`RulesMode`, owner ledger 1471 Q4).
 //!
-//! Credentials follow the official emulator (firebase-database-emulator v4.11.2):
-//! `Authorization: Bearer <token>` and `access_token=<token>` are OAuth access tokens, so
-//! any of them is an administrator that rules do not apply to; `auth=<ID token>` is the
-//! user the token names (`auth.uid` from `sub`, `auth.provider` from
-//! `firebase.sign_in_provider`, `auth.token` its claims); anything else is anonymous. The
-//! emulator's `owner` passes everywhere, `productionExact`'s locked default included.
+//! Credentials are read in one place, [`Access::from_rest`] (and its realtime counterparts),
+//! by [`Credentials`] (coordinator ruling Q-R6):
+//!
+//! - The emulator profile follows the official emulator (firebase-database-emulator
+//!   v4.11.2): `Authorization: Bearer <token>` and `access_token=<token>` are OAuth access
+//!   tokens, so any of them is an administrator that rules do not apply to. That works only
+//!   because the listener is loopback.
+//! - The strict profile admits only the emulator's `owner` as an administrator, as Firestore
+//!   and Storage do; another access token is refused with 401, since production would have
+//!   to verify it and fireemu cannot.
+//! - `auth=<ID token>` is the user the token names ([`auth_from_claims`]). Without a
+//!   verifier its claims are read unverified, as the official emulator reads them; with one
+//!   (fireemu's Auth, which honours `auth.allowUnsignedIdTokens`) only a token it accepts is
+//!   a user. Any other value, `auth=owner` included, is anonymous under the emulator profile,
+//!   as on the official emulator, and refused with 401 under strict.
+//!
+//! The emulator's `owner` passes everywhere, `productionExact`'s locked default included.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
 
 use fireemu_core_database::rules::{Requester, Rules, RulesError};
 use fireemu_core_database::{Json, Path, QueryParams, Tree};
@@ -20,6 +33,47 @@ use crate::rules_file;
 
 /// The credential of the local administrator (firebase-tools sends `Bearer owner`).
 pub(crate) const OWNER: &str = "owner";
+
+/// Checks an `auth=` ID token for a namespace's project at a time (milliseconds), and answers
+/// its claims as JSON text when the token is accepted.
+pub type IdTokenVerifier = Arc<dyn Fn(&str, &str, i64) -> Option<String> + Send + Sync>;
+
+/// How credentials are read.
+#[derive(Clone, Default)]
+pub struct Credentials {
+    /// The strict profile: only `owner` is an administrator, and a credential that names no
+    /// one is refused instead of being anonymous.
+    pub strict: bool,
+    /// The verifier of `auth=` ID tokens; `None` reads their claims unverified.
+    pub id_tokens: Option<IdTokenVerifier>,
+}
+
+impl fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Credentials")
+            .field("strict", &self.strict)
+            .field("id_tokens", &self.id_tokens.is_some())
+            .finish()
+    }
+}
+
+impl Credentials {
+    /// The `auth` of an ID token for `project`, if it names a user.
+    pub(crate) fn user(&self, token: &str, project: &str, now: i64) -> Option<Json> {
+        let claims = match &self.id_tokens {
+            Some(verify) => crate::json_parse::parse(&verify(token, project, now)?).ok()?,
+            None => crate::realtime::jwt_claims(token)?,
+        };
+        let Json::Object(claims) = claims else {
+            return None;
+        };
+        auth_from_claims(&claims).ok()
+    }
+}
+
+/// A credential the strict profile refuses (answered 401).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Refused;
 
 /// Who a request or a realtime connection is.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,23 +89,38 @@ pub(crate) enum Access {
 }
 
 impl Access {
-    /// The access of a REST request: its `Authorization` header, `access_token` or `auth`.
+    /// The access of a REST request to `namespace`: its `Authorization` header,
+    /// `access_token` or `auth`.
     pub(crate) fn from_rest(
         authorization: Option<&str>,
         params: &BTreeMap<String, String>,
-    ) -> Self {
+        credentials: &Credentials,
+        namespace: &str,
+        now: i64,
+    ) -> Result<Self, Refused> {
         let bearer = authorization.and_then(|v| v.strip_prefix("Bearer "));
         if let Some(token) = bearer.or_else(|| params.get("access_token").map(String::as_str)) {
-            return if token == OWNER {
-                Self::Owner
-            } else {
-                Self::Admin
-            };
+            return Self::administrator(token, credentials);
         }
-        match params.get("auth").map(String::as_str) {
-            Some(OWNER) => Self::Owner,
-            Some(token) => user_auth(token).map_or(Self::Anonymous, Self::User),
-            None => Self::Anonymous,
+        let Some(token) = params.get("auth") else {
+            return Ok(Self::Anonymous);
+        };
+        let project = crate::namespace::project_of(namespace);
+        match credentials.user(token, project, now) {
+            Some(auth) => Ok(Self::User(auth)),
+            None if credentials.strict => Err(Refused),
+            None => Ok(Self::Anonymous),
+        }
+    }
+
+    /// The access an OAuth access token (or a realtime `gauth` credential) gives.
+    pub(crate) fn administrator(token: &str, credentials: &Credentials) -> Result<Self, Refused> {
+        if token == OWNER {
+            Ok(Self::Owner)
+        } else if credentials.strict {
+            Err(Refused)
+        } else {
+            Ok(Self::Admin)
         }
     }
 
@@ -62,15 +131,6 @@ impl Access {
             _ => Json::Null,
         }
     }
-}
-
-/// The `auth` value of an ID token: its claims must name the user (`sub`) and its issue
-/// time (`iat`), as the official emulator requires.
-pub(crate) fn user_auth(token: &str) -> Option<Json> {
-    let Json::Object(claims) = crate::realtime::jwt_claims(token)? else {
-        return None;
-    };
-    auth_from_claims(&claims).ok()
 }
 
 /// Claims that stay in `auth.token` only.

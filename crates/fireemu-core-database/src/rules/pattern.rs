@@ -34,7 +34,7 @@ impl Pattern {
         let dialect_only =
             opens_special_group(&text) || text.contains("[[:") || escapes_a_letter(&text);
         let search = (!dialect_only)
-            .then(|| Regex::new(&search_source(&text, &flags)).ok())
+            .then(|| Regex::new(&search_source(&utf16_view(&text), &flags)).ok())
             .flatten()
             .map(Arc::new);
         Self {
@@ -47,8 +47,31 @@ impl Pattern {
     /// Whether `subject` matches; `None` (an error) for a pattern not read, or when the
     /// engine gives up on it.
     pub fn matches(&self, subject: &str) -> Option<bool> {
-        self.search.as_ref()?.is_full_match(subject).ok()
+        self.search
+            .as_ref()?
+            .is_full_match(&utf16_view(subject))
+            .ok()
     }
+}
+
+/// Text as a sequence of UTF-16 units, which is what the official emulator (Java) matches:
+/// a character outside the Basic Multilingual Plane becomes its two surrogates, each written
+/// as a private-use character of its own (U+F0000 plus the surrogate's offset), so `.` and a
+/// class take one surrogate, and a literal takes both. Nothing else in the text is outside
+/// the Basic Multilingual Plane once surrogates are written so, so nothing collides.
+fn utf16_view(text: &str) -> String {
+    if text.chars().all(|c| u32::from(c) <= 0xFFFF) {
+        return text.to_owned();
+    }
+    text.encode_utf16()
+        .map(|unit| {
+            let code = match unit {
+                0xD800..=0xDFFF => 0xF_0000 + u32::from(unit - 0xD800),
+                _ => u32::from(unit),
+            };
+            char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER)
+        })
+        .collect()
 }
 
 /// Whether an escape names a letter or digit other than the classes `\d`, `\D`, `\w` and

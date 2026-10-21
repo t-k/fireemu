@@ -2108,3 +2108,32 @@ fn a_realtime_query_with_an_unknown_or_malformed_field_is_refused() {
         assert_eq!(ok, served, "{query}: {frames:?}");
     }
 }
+
+#[test]
+fn a_value_member_holding_an_object_is_refused() {
+    // Review r11 S29, recorded on the official emulator.
+    let mut db = db();
+    for body in [
+        r#"{".value":{"a":1},".priority":1}"#,
+        r#"{".value":[1]}"#,
+        r#"{"x":{".value":{"a":1}}}"#,
+    ] {
+        let (status, text) = call(&mut db, "PUT", "/a.json?ns=vo", OWNER, body);
+        assert_eq!(status, 400, "{body}: {text}");
+        assert!(
+            text.contains("Invalid data; couldn't parse JSON object, array, or value."),
+            "{text}"
+        );
+    }
+    assert_eq!(
+        call(
+            &mut db,
+            "PUT",
+            "/a.json?ns=vo",
+            OWNER,
+            r#"{".value":1,".priority":1}"#
+        )
+        .0,
+        200
+    );
+}

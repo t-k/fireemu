@@ -227,7 +227,11 @@ impl Node {
             None => None,
         };
         if let Some(value) = map.get(VALUE_KEY) {
-            if map.keys().any(|k| k != VALUE_KEY && k != PRIORITY_KEY) {
+            // `.value` holds a leaf: the official emulator refuses an object or an array
+            // there (review r11 S29).
+            if map.keys().any(|k| k != VALUE_KEY && k != PRIORITY_KEY)
+                || matches!(value, Json::Object(_) | Json::Array(_))
+            {
                 return Err(DatabaseError::new(
                     ErrorKind::InvalidData,
                     "an object with \".value\" may hold only \".priority\" besides it",

@@ -271,9 +271,8 @@ impl Client {
                     }
                 }
                 let mut chunk = [0u8; 4096];
-                let n = match self.stream.read(&mut chunk).await {
-                    Ok(n) => n,
-                    Err(_) => return (RESET, Vec::new()),
+                let Ok(n) = self.stream.read(&mut chunk).await else {
+                    return (RESET, Vec::new());
                 };
                 if n == 0 {
                     return (0xFF, Vec::new());

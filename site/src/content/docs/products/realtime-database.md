@@ -24,10 +24,13 @@ npx fireemu exec --only database -- npm test
 
 Rules are not evaluated yet. A `database` section in `firebase.json` is accepted (its deploy hooks too), the start banner has a `database rules:` line saying what access is in effect, a served database whose `firebase.json` names rules files prints a warning that they are not enforced, and every request is answered as for a database without rules. By default that is open to everyone, as the official emulator serves a database with no rules file. With `database.defaultAccess = "locked"` (the `productionExact` default, strict profile only) only the emulator's `owner` credential, which the Admin SDK sends to an emulator, can read and write.
 
+## Export, import and snapshots
+
+`emulators:export`, `--export-on-exit` and the Hub's export write `database_export/<namespace>.json` for every namespace that holds data or was imported, from the same export format as `GET /.json?format=export` (priorities kept), with the `database` section of `firebase-export-metadata.json` that firebase-tools writes. `--import` writes each file back as the `owner` credential, as firebase-tools does with `disableTriggers=true`, before the command starts; a file named after an invalid namespace or holding invalid JSON refuses the start. `/.inspect/databases.json` lists the namespaces the server knows, as the official emulator does; under the strict profile and with a locked database only the `owner` credential, which firebase-tools sends, may read it. Session snapshots and resets include the namespaces of the session's project (`<project>-default-rtdb` or a namespace named after it); a restore is seen by open listeners and drops the onDisconnect writes registered for those namespaces.
+
 ## Not supported yet
 
 - Security Rules evaluation.
-- Import and export: a `database_export` section is refused on import, and nothing is exported.
 - Realtime Database triggers for Cloud Functions, and a view in the Emulator UI.
 
 Where production has not been observed, Fireemu follows the official emulator (number forms such as `1.0`, a write of an equal value, priorities, refusal texts, long-polling framing). That behavior is provisional and may change once production is observed.

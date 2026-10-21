@@ -130,6 +130,9 @@ pub struct RestOptions {
     pub limits: Limits,
     /// The longest realtime message, split frames joined (the SDKs' 16 MB write limit).
     pub realtime_message_bytes: usize,
+    /// Whether `/.inspect/databases.json` answers only the owner credential (strict and a
+    /// locked database); the official emulator answers anyone.
+    pub inspect_needs_owner: bool,
 }
 
 impl Default for RestOptions {
@@ -139,6 +142,7 @@ impl Default for RestOptions {
             rules: RulesMode::AllowAll,
             limits: Limits::default(),
             realtime_message_bytes: 16 * 1024 * 1024,
+            inspect_needs_owner: false,
         }
     }
 }
@@ -232,6 +236,27 @@ pub(crate) struct Patched {
     pub effective: bool,
 }
 
+/// The namespaces a session owns, as a snapshot captured them: each namespace that held
+/// data, and the ones an import filled (exported even while empty).
+#[derive(Debug, Clone, Default)]
+pub struct NamespacesSnapshot {
+    trees: BTreeMap<String, Tree>,
+    imported: BTreeSet<String>,
+}
+
+impl NamespacesSnapshot {
+    /// A cheap, saturating estimate of the heap bytes the snapshot retains.
+    pub fn retained_bytes(&self) -> u64 {
+        let names = self.trees.keys().chain(&self.imported);
+        names.fold(
+            self.trees.values().fold(0u64, |bytes, tree| {
+                bytes.saturating_add(tree.retained_bytes())
+            }),
+            |bytes, name| bytes.saturating_add(name.len() as u64),
+        )
+    }
+}
+
 /// Every namespace of one emulator.
 #[derive(Debug)]
 pub struct Database {
@@ -239,6 +264,8 @@ pub struct Database {
     /// One generator for the whole server, so push ids increase across namespaces.
     push_ids: PushIdGenerator,
     namespaces: BTreeMap<String, Namespace>,
+    /// The namespaces filled by an import, exported even when they hold nothing.
+    imported: std::collections::BTreeSet<String>,
     indexes: BTreeMap<String, BTreeMap<Path, BTreeSet<String>>>,
     subscriptions: BTreeMap<u64, Subscription>,
     next_subscription: u64,
@@ -282,6 +309,7 @@ impl Database {
             options,
             push_ids: PushIdGenerator::new(seed),
             namespaces: BTreeMap::new(),
+            imported: std::collections::BTreeSet::new(),
             indexes: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             next_subscription: 1,
@@ -374,7 +402,12 @@ impl Database {
         let path = match request::location(raw_path, writing, &self.options.limits)? {
             Location::Data(path) => path,
             Location::Settings => return Err(Refusal::new(403, "Permission denied.")),
+            Location::Inspect(name) => {
+                let owner = credential(request, &params) == Some(OWNER);
+                return self.inspect(&method, &name, &namespace, owner);
+            }
         };
+        request::check_disable_triggers(&params, writing, request.header("Authorization"))?;
         let condition = condition(request, &method)?;
         let output = request::output(&params)?;
         let read_shape = !writing && (output.shallow || request::has_query(&params));
@@ -609,6 +642,85 @@ impl Database {
         Handled::Response { response, events }
     }
 
+    /// `/.inspect/<name>`: `databases.json` lists every namespace a request reached, the one
+    /// asked about included, by name (the official emulator's order is its own). Any other
+    /// name is not found. With [`RestOptions::inspect_needs_owner`] a request without the
+    /// owner credential is refused as a denied read is, before the namespace is created.
+    fn inspect(
+        &mut self,
+        method: &str,
+        name: &str,
+        namespace: &str,
+        owner: bool,
+    ) -> Result<Handled, Refusal> {
+        if method != "GET" {
+            return Err(Refusal::new(405, "Unsupported request type"));
+        }
+        if name != "databases.json" {
+            return Err(Refusal::new(404, "404 Not Found"));
+        }
+        if self.options.inspect_needs_owner && !owner {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
+        self.namespace(namespace);
+        let names: Vec<Json> = self
+            .namespaces
+            .keys()
+            .map(|name| Json::object([("name", Json::String(name.clone()))]))
+            .collect();
+        Ok(respond(HttpResponse {
+            status: 200,
+            headers: json_headers(),
+            body: render(&Json::Array(names), Style::Compact).into_bytes(),
+        }))
+    }
+
+    /// The export of every namespace that holds data or was imported, by name: what
+    /// `GET /.json?format=export` answers for it, as firebase-tools writes it to
+    /// `database_export/<namespace>.json`.
+    pub fn export_texts(&self) -> Vec<(String, String)> {
+        self.namespaces
+            .iter()
+            .filter_map(|(name, namespace)| {
+                let root = namespace.tree.get(&Path::root());
+                (root.is_some() || self.imported.contains(name)).then(|| {
+                    let json = output_json(root, Format::Export);
+                    (name.clone(), render(&json, Style::Compact))
+                })
+            })
+            .collect()
+    }
+
+    /// Imports `text` into `namespace` as firebase-tools does: `PUT /.json` as the owner with
+    /// `disableTriggers=true&writeSizeLimit=unlimited`. The error is the request's.
+    pub fn import_text(&mut self, namespace: &str, text: &str, now: i64) -> Result<(), String> {
+        // A valid name needs no escaping in the query.
+        route(Some(namespace), None, namespace)
+            .map_err(|_| "Invalid Firebase database name".to_owned())?;
+        let request = HttpRequest {
+            method: "PUT".to_owned(),
+            target: format!("/.json?ns={namespace}&disableTriggers=true&writeSizeLimit=unlimited"),
+            headers: vec![("Authorization".to_owned(), format!("Bearer {OWNER}"))],
+            body: text.as_bytes().to_vec(),
+        };
+        let response = match self.handle(&request, now) {
+            Handled::Response { response, .. } => response,
+            Handled::Stream { .. } => return Err("unexpected stream".to_owned()),
+        };
+        if response.status == 200 {
+            self.imported.insert(namespace.to_owned());
+            return Ok(());
+        }
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+        Err(match crate::json_parse::parse(&body) {
+            Ok(Json::Object(map)) => match map.get("error") {
+                Some(Json::String(message)) => message.clone(),
+                _ => body,
+            },
+            _ => body,
+        })
+    }
+
     /// The events a change in `namespace` causes on the open streams.
     pub(crate) fn notify(&mut self, namespace: &str, change: &Change) -> Vec<(u64, SseEvent)> {
         let Some(ns) = self.namespaces.get(namespace) else {
@@ -738,6 +850,8 @@ impl Database {
     pub fn clear_namespaces_where(&mut self, cleared: impl Fn(&str) -> bool) {
         self.on_disconnect
             .retain(|_, (namespace, _)| !cleared(namespace));
+        // A reset session was never imported into, so an export leaves its empty namespaces out.
+        self.imported.retain(|namespace| !cleared(namespace));
         let names: Vec<String> = self
             .namespaces
             .keys()
@@ -750,6 +864,65 @@ impl Database {
         for name in names {
             let limits = self.options.limits;
             self.namespace(&name).tree = Tree::new(limits);
+            let change = Change::Put {
+                path: Path::root(),
+                effective: true,
+            };
+            let events = self.notify(&name, &change);
+            self.events.extend(events);
+        }
+        if let Some(waker) = &self.waker.0 {
+            waker();
+        }
+    }
+
+    /// Copies the namespaces `owned` accepts that hold data or were imported, for a session
+    /// snapshot. Listens, streams and onDisconnect writes belong to connections, not to the
+    /// session's data, and are not captured.
+    pub fn capture_namespaces_where(&self, owned: impl Fn(&str) -> bool) -> NamespacesSnapshot {
+        let trees = self
+            .namespaces
+            .iter()
+            .filter(|(name, namespace)| owned(name) && namespace.tree.root().is_some())
+            .map(|(name, namespace)| (name.clone(), namespace.tree.clone()))
+            .collect();
+        let imported = self
+            .imported
+            .iter()
+            .filter(|name| owned(name))
+            .cloned()
+            .collect();
+        NamespacesSnapshot { trees, imported }
+    }
+
+    /// Puts `snapshot` back for the namespaces `owned` accepts, as a reset followed by an
+    /// import would: an owned namespace the snapshot does not hold is emptied, open streams and
+    /// listens see the restored values through the waker, and the onDisconnect writes
+    /// registered for owned namespaces are dropped. Other namespaces are left as they are.
+    pub fn restore_namespaces_where(
+        &mut self,
+        owned: impl Fn(&str) -> bool,
+        snapshot: &NamespacesSnapshot,
+    ) {
+        self.on_disconnect
+            .retain(|_, (namespace, _)| !owned(namespace));
+        self.imported.retain(|namespace| !owned(namespace));
+        self.imported
+            .extend(snapshot.imported.iter().filter(|name| owned(name)).cloned());
+        let mut names: BTreeSet<String> = self
+            .namespaces
+            .keys()
+            .filter(|name| owned(name))
+            .cloned()
+            .collect();
+        names.extend(snapshot.trees.keys().filter(|name| owned(name)).cloned());
+        for name in names {
+            let limits = self.options.limits;
+            self.namespace(&name).tree = snapshot
+                .trees
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| Tree::new(limits));
             let change = Change::Put {
                 path: Path::root(),
                 effective: true,

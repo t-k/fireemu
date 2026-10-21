@@ -552,6 +552,30 @@ test('opt-in Hub isolates exports, retires credentials and restores creation sna
   assert.ok((await stat(join(surviving,'firebase-export-metadata.json'))).isFile());
 });
 
+test('a database world routes, exports, imports and resets the Realtime Database', {...native,skip:!binary||process.platform==='win32',timeout:60_000}, async t => {
+  const root=await mkdtemp(join(homedir(),'.fireemu-database-export-'));
+  const worlds=[];
+  t.after(async()=>{await Promise.all(worlds.map(world=>world.dispose()));await rm(root,{recursive:true,force:true});});
+  const opts={...options,services:['database'],hub:true};
+  const value=world=>`${world.endpoints.database.url}/item.json?ns=${world.projectId}-default-rtdb`;
+  const headers={authorization:'Bearer owner'};
+  const read=async world=>{const response=await fetch(value(world),{headers});assert.equal(response.status,200);return response.json();};
+  const source=await createTestWorld(opts);worlds.push(source);
+  assert.equal(source.environment.FIREBASE_DATABASE_EMULATOR_HOST,`${source.endpoints.database.host}:${source.endpoints.database.port}`);
+  assert.equal(source.environment.FIRESTORE_EMULATOR_HOST,undefined);
+  assert.equal((await fetch(value(source),{method:'PUT',headers,body:'{"marker":"a"}'})).status,200);
+  const exported=join(root,'export');
+  const result=await source.run(binary,['emulators:export',exported,'--project',source.projectId]);
+  assert.equal(result.code,0,result.stderr);
+  assert.equal(await readFile(join(exported,'database_export',`${source.projectId}-default-rtdb.json`),'utf8'),'{"item":{"marker":"a"}}');
+  const imported=await createTestWorld({...opts,hub:false,import:exported});worlds.push(imported);
+  assert.deepEqual(await read(imported),{marker:'a'});
+  assert.equal((await fetch(value(imported),{method:'PUT',headers,body:'{"marker":"b"}'})).status,200);
+  await rm(exported,{recursive:true});
+  await imported.reset();
+  assert.deepEqual(await read(imported),{marker:'a'});
+});
+
 test('Hub export restores password authentication after import and reset', {...native,skip:!binary||process.platform==='win32',timeout:60_000}, async t => {
   const root=await mkdtemp(join(homedir(),'.fireemu-password-export-'));
   const worlds=[];

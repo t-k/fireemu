@@ -162,7 +162,7 @@ export async function snapshotInputs(options, root) {
     }
   }
   config.daemon={...config.daemon,clockStart:options.clockStart??config.daemon?.clockStart??'2026-01-01T00:00:00Z',seed:options.seed??config.daemon?.seed??1,authProject:options.projectId??config.daemon?.authProject??'demo-test-world'};
-  for(const service of ['firestore','http','storage','functions','eventarc','tasks','pubsub','hub','ui','logging'])config.daemon[`${service}Port`]=0;
+  for(const service of ['firestore','http','storage','functions','eventarc','tasks','pubsub','database','hub','ui','logging'])config.daemon[`${service}Port`]=0;
   config.functions={...config.functions,clock:{date:'virtual',timers:'real',tasks:'virtual',...config.functions?.clock,...options.clock}};
   await writeFile(join(baseline,'fireemu.json'),JSON.stringify(config),{mode:0o600});
   let seed;

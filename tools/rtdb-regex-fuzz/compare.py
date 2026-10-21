@@ -2,8 +2,8 @@
 
 python3 compare.py <jar.json> <fireemu.json> <report.txt> [<interesting.json>]
 
-Each row holds the answers of eight cells (see probe.mjs): ra, ru, qa, qu (reads without and
-with a query), wa, wu (`.write`) and va, vu (`.validate`), signed in (a) and anonymous (u). A
+Each row holds the answers of twelve cells (see probe.mjs): ra, ru, qa, qu (reads without and
+with a query), sa, su (event streams), la, lu (realtime listens), wa, wu (`.write`) and va, vu (`.validate`), signed in (a) and anonymous (u). A
 cell's outcome is its status, or "load<status>" when the rules of its context were refused.
 A cell is fail-open, and the row BLOCKING, when fireemu answers 200 where the official
 emulator does not, except for a pattern the official emulator cannot determinize (its own
@@ -13,7 +13,8 @@ counts both per cell.
 import json
 import sys
 
-CELLS = {"ra": "R", "ru": "R", "qa": "R", "qu": "R", "wa": "W", "wu": "W", "va": "V", "vu": "V"}
+CELLS = {"ra": "R", "ru": "R", "qa": "R", "qu": "R", "sa": "R", "su": "R", "la": "R", "lu": "R",
+         "wa": "W", "wu": "W", "va": "V", "vu": "V"}
 
 jar = json.load(open(sys.argv[1], encoding="utf-8"))
 emu = json.load(open(sys.argv[2], encoding="utf-8"))
@@ -37,7 +38,8 @@ for j, e in zip(jar, emu):
         a, b = outcome(j, cell), outcome(e, cell)
         if a == b:
             continue
-        if b == "200":
+        # fireemu never stops answering; if it did, the cell is not known to be safe.
+        if b == "200" or b in ("503", "gone"):
             opened.append(f"{cell} jar {a} fireemu {b}")
             per_cell[cell]["open"] += 1
         else:

@@ -8,10 +8,13 @@
 //! why the difference is listed; none of them lets a request through that the official
 //! emulator refuses.
 
+use fireemu_adapter_database::realtime::{Opened, Session};
 use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
 
 const NOW: i64 = 1_792_464_733_000;
-const CELLS: [&str; 8] = ["ra", "ru", "qa", "qu", "wa", "wu", "va", "vu"];
+const CELLS: [&str; 12] = [
+    "ra", "ru", "qa", "qu", "sa", "su", "la", "lu", "wa", "wu", "va", "vu",
+];
 const SEED: &str = r#"{"t":{"o":{"s":"Hello","n":5,"d":2.5,"b":true,"z":0,"e":"","num":"5","k":"v","m":1,"o":{"k":"v","m":1,".priority":3},"arr":{"0":"a","1":"b"},".priority":7},"p":{"m":2}},"u":"u1"}"#;
 const WRITTEN: &str = r#"{"k":"w","m":2,"s":"Hi","b":false}"#;
 const QUERY: &str = "orderBy=%22m%22&startAt=0&limitToFirst=2";
@@ -63,6 +66,57 @@ fn status(db: &mut Database, method: &str, target: &str, owner: bool, body: &str
     }
 }
 
+/// The status of an event stream of `/t/o`: 200 when it opens.
+fn stream(db: &mut Database, target: &str) -> u16 {
+    let request = HttpRequest {
+        method: "GET".to_owned(),
+        target: target.to_owned(),
+        headers: vec![("Accept".to_owned(), "text/event-stream".to_owned())],
+        body: Vec::new(),
+    };
+    match db.handle(&request, NOW) {
+        Handled::Stream { .. } => 200,
+        Handled::Response { response, .. } => response.status,
+    }
+}
+
+/// A realtime listen of `/t/o`, signed in with `token` when given: 200 for `ok`, 401 for
+/// `permission_denied`.
+fn listen(db: &mut Database, token: Option<&str>) -> u16 {
+    let Ok(Opened::Session(mut session, _)) =
+        db.open_realtime("/.ws?v=5&ns=c", Some("127.0.0.1:9000"), NOW)
+    else {
+        panic!("no session");
+    };
+    let send = |session: &mut Session, db: &mut Database, frame: String| {
+        session.receive(db, &frame, NOW).replies
+    };
+    if let Some(token) = token {
+        send(
+            &mut session,
+            db,
+            format!(r#"{{"t":"d","d":{{"r":1,"a":"auth","b":{{"cred":"{token}"}}}}}}"#),
+        );
+    }
+    let replies = send(
+        &mut session,
+        db,
+        r#"{"t":"d","d":{"r":2,"a":"q","b":{"p":"/t/o","h":""}}}"#.to_owned(),
+    );
+    let status = if replies.iter().any(|f| f.contains(r#""r":2,"b":{"s":"ok""#)) {
+        200
+    } else if replies
+        .iter()
+        .any(|f| f.contains(r#""s":"permission_denied""#))
+    {
+        401
+    } else {
+        panic!("no listen answer: {replies:?}")
+    };
+    db.close_realtime(session.client(), NOW);
+    status
+}
+
 /// fireemu's answers for `expr`: the load answer and refusal text of each context, and each
 /// cell's status (`None` when its context's rules were refused).
 fn judge(expr: &str) -> (Vec<u16>, Vec<Option<String>>, Vec<Option<u16>>) {
@@ -86,7 +140,7 @@ fn judge(expr: &str) -> (Vec<u16>, Vec<Option<String>>, Vec<Option<u16>>) {
         if load != 200 {
             let error: serde_json::Value = serde_json::from_str(&body).unwrap();
             errors.push(error["error"].as_str().map(str::to_owned));
-            cells.extend(std::iter::repeat_n(None, if i == 0 { 4 } else { 2 }));
+            cells.extend(std::iter::repeat_n(None, if i == 0 { 8 } else { 2 }));
             continue;
         }
         errors.push(None);
@@ -99,6 +153,13 @@ fn judge(expr: &str) -> (Vec<u16>, Vec<Option<String>>, Vec<Option<u16>>) {
             ] {
                 cells.push(Some(status(&mut db, "GET", &target, false, "").0));
             }
+            cells.push(Some(stream(
+                &mut db,
+                &format!("/t/o.json?ns=c&auth={token}"),
+            )));
+            cells.push(Some(stream(&mut db, "/t/o.json?ns=c")));
+            cells.push(Some(listen(&mut db, Some(&token))));
+            cells.push(Some(listen(&mut db, None)));
         } else {
             cells.push(Some(
                 status(
@@ -175,7 +236,7 @@ fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() 
                     .flatten()
                     .any(|error| error.contains("could not determinize efficiently"));
                 for (i, cell) in CELLS.iter().enumerate().filter(|_| !determinize) {
-                    let context = if i < 4 { 0 } else { 1 + (i - 4) / 2 };
+                    let context = if i < 8 { 0 } else { 1 + (i - 8) / 2 };
                     let allowed = |(loads, _, cells): &(Vec<u16>, _, Vec<Option<u16>>)| {
                         loads[context] == 200 && cells[i] == Some(200)
                     };

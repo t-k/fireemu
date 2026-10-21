@@ -5,7 +5,7 @@ python3 cells_fixture.py <out.json> <run dir or interesting-*.json>...
 Each run dir holds jar-<name>.json and emu-<name>.json from run_corpus.sh (probe.mjs rows); an
 interesting-*.json file (from compare.py) adds only the rows that differ.
 The fixture has one row per line: the expression, the official emulator's load answer and
-refusal text per context (R, W, V) and its status per cell (ra ru qa qu wa wu va vu, null
+refusal text per context (R, W, V) and its status per cell (ra ru qa qu sa su la lu wa wu va vu, null
 when the context's rules were refused), and, where fireemu differs, fireemu's statuses and
 load answers with the reason the difference is listed. A difference is listed only when it
 is fail-closed in every cell; a fail-open row stops the build.
@@ -15,8 +15,9 @@ import re
 import sys
 from pathlib import Path
 
-CELLS = ["ra", "ru", "qa", "qu", "wa", "wu", "va", "vu"]
-CONTEXT = {"ra": "R", "ru": "R", "qa": "R", "qu": "R", "wa": "W", "wu": "W", "va": "V", "vu": "V"}
+CELLS = ["ra", "ru", "qa", "qu", "sa", "su", "la", "lu", "wa", "wu", "va", "vu"]
+CONTEXT = {"ra": "R", "ru": "R", "qa": "R", "qu": "R", "sa": "R", "su": "R", "la": "R", "lu": "R",
+           "wa": "W", "wu": "W", "va": "V", "vu": "V"}
 
 
 def compact(row):
@@ -34,8 +35,12 @@ def outcome(loads, cells, i):
 def reason(expr, jar_errors, jar_cells, emu_cells):
     if any("could not determinize efficiently" in str(x) for x in jar_errors):
         return "the official emulator cannot determinize the pattern, its own resource limit (M14)"
-    if 500 in jar_cells:
+    if 500 in jar_cells or 503 in jar_cells or "gone" in jar_cells:
         return "the official emulator answers 500 (an internal error); fireemu denies (ruling 15)"
+    if re.search(r"\b(OrderByKey|OrderByValue|OrderByPriority|http)\b|query\.(orderBy|endBefore|isOrderByChild)\b", expr):
+        return "a query or ordering name the official emulator loads is refused here (listed)"
+    if "getPriority" in expr and re.search(r"x{700}", expr):
+        return "getPriority() near the path length limit is an error here a few bytes before it is one there (fail closed)"
     if re.search(r"\.(contains|beginsWith|endsWith|replace|toLowerCase|toUpperCase|matches)\s*[!=]", expr):
         return "a string method read without a call is an error here, a function there"
     if re.search(r"\bauth\s*[!=]==?\s*auth\b", expr) or (

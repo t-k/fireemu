@@ -21,10 +21,12 @@ for ((from = 0; from < count; from += chunk)); do
   while curl -s -o /dev/null "http://127.0.0.1:$jar_port/.json?ns=x"; do sleep 1; done
   java -Xmx2g -Duser.language=en -jar "$JAR" --port "$jar_port" --host 127.0.0.1 > "$out/jar-$name.$part.log" 2>&1 &
   jar_pid=$!
+  # A probe that stops must not leave the emulator holding the port for the next run.
+  trap 'kill "$jar_pid" 2>/dev/null || true; wait "$jar_pid" 2>/dev/null || true' EXIT
   until curl -s -o /dev/null "http://127.0.0.1:$jar_port/.json?ns=x"; do sleep 1; done
-  node "$here/probe.mjs" "127.0.0.1:$jar_port" "$out/$name.$part.json" "$out/jar-$name.$part.json" &
+  node "$here/probe.mjs" "127.0.0.1:$jar_port" "$out/$name.$part.json" "$out/jar-$name.$part.json" "${PROBE_WORKERS:-4}" &
   probe=$!
-  node "$here/probe.mjs" "$FIREEMU" "$out/$name.$part.json" "$out/emu-$name.$part.json"
+  node "$here/probe.mjs" "$FIREEMU" "$out/$name.$part.json" "$out/emu-$name.$part.json" "${PROBE_WORKERS:-4}"
   wait "$probe"
   kill "$jar_pid"
   wait "$jar_pid" 2>/dev/null || true

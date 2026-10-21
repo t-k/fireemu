@@ -22,11 +22,12 @@ trap 'kill "$jar_pid" 2>/dev/null || true; wait "$jar_pid" 2>/dev/null || true' 
 until curl -s -o /dev/null "http://127.0.0.1:$jar_port/.json?ns=x"; do sleep 1; done
 python3 "$here/gen.py" "$seed" "$count" "$out/corpus-$seed.json" $edges > /dev/null
 python3 "$here/check_coverage.py" "$out/corpus-$seed.coverage.json" "${MIN_COVERAGE:-5}" $edges
-# The second and third, independent generators (the r8 and r9 reviews wrote them without
-# reference to gen.py) add as many expressions each, each with its negation.
+# The second, third and fourth independent generators (the r8, r9 and r10 reviews wrote them
+# without reference to gen.py) add as many expressions each, each with its negation.
 python3 "$here/gen2.py" "$seed" "$count" "$out/gen2-$seed.json" > /dev/null
 python3 "$here/gen9.py" "$seed" "$count" "$out/gen9-$seed.json" > /dev/null
-python3 - "$out/corpus-$seed.json" "$out/gen2-$seed.json" "$out/gen9-$seed.json" <<'PY'
+python3 "$here/gen10.py" "$seed" "$count" "$out/gen10-$seed.json" > /dev/null
+python3 - "$out/corpus-$seed.json" "$out/gen2-$seed.json" "$out/gen9-$seed.json" "$out/gen10-$seed.json" <<'PY'
 import json, sys
 rows = json.load(open(sys.argv[1], encoding="utf-8"))
 for extra in sys.argv[2:]:
@@ -34,9 +35,9 @@ for extra in sys.argv[2:]:
         rows += [expr, f"!({expr})"]
 json.dump(rows, open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False, indent=0)
 PY
-node "$here/probe.mjs" "127.0.0.1:$jar_port" "$out/corpus-$seed.json" "$out/jar-$seed.json" &
+node "$here/probe.mjs" "127.0.0.1:$jar_port" "$out/corpus-$seed.json" "$out/jar-$seed.json" "${PROBE_WORKERS:-4}" &
 probe=$!
-node "$here/probe.mjs" "$FIREEMU" "$out/corpus-$seed.json" "$out/emu-$seed.json"
+node "$here/probe.mjs" "$FIREEMU" "$out/corpus-$seed.json" "$out/emu-$seed.json" "${PROBE_WORKERS:-4}"
 wait "$probe"
 python3 "$here/compare.py" "$out/jar-$seed.json" "$out/emu-$seed.json" "$out/report-$seed.txt" "$out/interesting-$seed.json"
 ! grep -q '^BLOCKING' "$out/report-$seed.txt"

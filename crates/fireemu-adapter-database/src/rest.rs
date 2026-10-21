@@ -642,9 +642,8 @@ impl Database {
             request::query(&params, output.shallow)?
         };
         // The rules come before the index (the official emulator's order, review S6).
-        let kind = read_kind(streaming);
-        if !writing && !self.may_read(&namespace, &path, query.as_ref(), kind, &access, now_millis)
-        {
+        let (kind, judged) = read_kind(streaming, output.shallow, query.as_ref());
+        if !writing && !self.may_read(&namespace, &path, judged, kind, &access, now_millis) {
             return Err(read_refused(streaming));
         }
         if let Some(query) = &query {
@@ -1490,11 +1489,20 @@ fn parse_ordered(text: &str) -> ParsedBody {
 }
 
 /// The kind of a REST read: an event stream, or a plain `GET`.
-fn read_kind(streaming: bool) -> ReadKind {
+/// The kind of a REST read and the query its rules see, as the official emulator judges it
+/// (review r11 M37, M38): an event stream is judged without its query, as a stream; a
+/// `shallow` GET has no ordering; any other GET is a GET with its query.
+fn read_kind(
+    streaming: bool,
+    shallow: bool,
+    query: Option<&QueryParams>,
+) -> (ReadKind, Option<&QueryParams>) {
     if streaming {
-        ReadKind::Stream
+        (ReadKind::Stream, None)
+    } else if shallow {
+        (ReadKind::Check, query)
     } else {
-        ReadKind::Get
+        (ReadKind::Get, query)
     }
 }
 

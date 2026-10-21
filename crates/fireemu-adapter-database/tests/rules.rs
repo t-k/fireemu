@@ -1926,3 +1926,42 @@ fn an_ambiguous_request_is_refused() {
         200
     );
 }
+
+#[test]
+fn a_stream_is_judged_without_its_query_and_a_shallow_read_unordered() {
+    // Review r11 M37 and M38, recorded on the official emulator: an event stream's rules see
+    // the stream kind's `query` whatever its URL asks for, and a `shallow` GET has no ordering.
+    for (rule, stream_allowed, shallow_allowed) in [
+        ("query.orderByPriority", true, false),
+        ("query.orderByKey", false, false),
+        ("query.orderByChild == 'm'", false, false),
+        (
+            "query.orderByChild == null && !query.orderByKey",
+            true,
+            true,
+        ),
+    ] {
+        let mut db = db();
+        load(
+            &mut db,
+            "sq",
+            &format!(r#"{{"rules":{{".read":"{rule}","a":{{".indexOn":["m"]}}}}}}"#),
+        );
+        call(&mut db, "PUT", "/a.json?ns=sq", OWNER, r#"{"x":{"m":1}}"#);
+        for target in [
+            "/a.json?ns=sq&orderBy=%22m%22",
+            "/a.json?ns=sq&orderBy=%22$key%22",
+        ] {
+            let streamed = matches!(
+                db.handle(
+                    &request("GET", target, &[("Accept", "text/event-stream")], ""),
+                    NOW
+                ),
+                Handled::Stream { .. }
+            );
+            assert_eq!(streamed, stream_allowed, "{rule} {target}");
+        }
+        let status = call(&mut db, "GET", "/a.json?ns=sq&shallow=true", &[], "").0;
+        assert_eq!(status == 200, shallow_allowed, "{rule} shallow");
+    }
+}

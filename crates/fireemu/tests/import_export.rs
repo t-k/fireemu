@@ -1575,9 +1575,7 @@ fn a_missing_blob_refuses_the_whole_import() {
     assert_refused(&output, "storage", "blobs");
 }
 
-#[test]
-fn a_realtime_database_section_is_refused_with_the_deferred_status() {
-    let dir = scratch("rtdb");
+fn database_export_dir(dir: &Path, files: &[(&str, &str)]) -> PathBuf {
     let export = dir.join("export");
     std::fs::create_dir_all(export.join("database_export")).unwrap();
     std::fs::write(
@@ -1585,7 +1583,16 @@ fn a_realtime_database_section_is_refused_with_the_deferred_status() {
         r#"{"version":"15.28.2","database":{"version":"4.11.2","path":"database_export"}}"#,
     )
     .unwrap();
-    std::fs::write(export.join("database_export/demo-export.json"), "{}").unwrap();
+    for (name, body) in files {
+        std::fs::write(export.join("database_export").join(name), body).unwrap();
+    }
+    export
+}
+
+#[test]
+fn a_realtime_database_section_is_skipped_when_the_database_is_not_selected() {
+    let dir = scratch("rtdb-skip");
+    let export = database_export_dir(&dir, &[("demo-export.json", "{}")]);
 
     let output = exec()
         .args(["--import"])
@@ -1594,9 +1601,97 @@ fn a_realtime_database_section_is_refused_with_the_deferred_status() {
         .output()
         .unwrap();
     let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(log.contains("carries a database section"), "{log}");
+    assert!(log.contains("skipped"), "{log}");
+}
+
+#[test]
+fn a_realtime_database_file_named_after_an_invalid_namespace_refuses_the_import() {
+    let dir = scratch("rtdb-bad-name");
+    let export = database_export_dir(&dir, &[("Bad$Name.json", "{}")]);
+
+    let output = exec()
+        .args(["--only", "database", "--database-port", "0", "--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
     assert_eq!(output.status.code(), Some(1), "{log}");
-    assert!(log.contains("Realtime Database"), "{log}");
-    assert!(log.contains("deferred"), "{log}");
+    assert!(log.contains("Invalid Firebase database name"), "{log}");
+    assert!(!log.contains("running: "), "{log}");
+}
+
+/// firebase-tools passes the file name as `?ns=`, and the official emulator lowercases it.
+#[cfg(unix)]
+#[test]
+fn a_realtime_database_file_name_is_lowercased_into_its_namespace() {
+    let dir = scratch("rtdb-case");
+    let export = database_export_dir(&dir, &[("Mixed-Case.json", r#"{"a":1}"#)]);
+    let probe = r#"curl -s -H "Authorization: Bearer owner" "http://$FIREBASE_DATABASE_EMULATOR_HOST/.json?ns=mixed-case"; echo"#;
+
+    let output = exec()
+        .args(["--only", "database", "--database-port", "0", "--import"])
+        .arg(&export)
+        .args(["--", "/bin/sh", "-c", probe])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(log.contains(r#"{"a":1}"#), "{log}");
+}
+
+/// An import is a write, so a server timestamp in it takes the suite's clock in milliseconds.
+#[cfg(unix)]
+#[test]
+fn a_realtime_database_import_resolves_server_timestamps_in_milliseconds() {
+    let dir = scratch("rtdb-timestamp");
+    let export = database_export_dir(&dir, &[("stamped.json", r#"{"t":{".sv":"timestamp"}}"#)]);
+    let probe = r#"printf 'stamp '; curl -s -H "Authorization: Bearer owner" "http://$FIREBASE_DATABASE_EMULATOR_HOST/t.json?ns=stamped"; echo"#;
+    let millis = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    };
+
+    let before = millis();
+    let output = exec()
+        .args(["--only", "database", "--database-port", "0", "--import"])
+        .arg(&export)
+        .args(["--", "/bin/sh", "-c", probe])
+        .output()
+        .unwrap();
+    let after = millis();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    let stamp: u128 = log
+        .lines()
+        .find_map(|line| line.strip_prefix("stamp "))
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or_else(|| panic!("{log}"));
+    assert!(
+        (before..=after).contains(&stamp),
+        "{before} <= {stamp} <= {after}"
+    );
+}
+
+#[test]
+fn a_realtime_database_file_that_is_not_json_refuses_the_import() {
+    let dir = scratch("rtdb-bad-json");
+    let export = database_export_dir(&dir, &[("demo-export.json", "{\"a\":")]);
+
+    let output = exec()
+        .args(["--only", "database", "--database-port", "0", "--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(log.contains("database_export/demo-export.json"), "{log}");
+    assert!(log.contains("couldn't parse JSON"), "{log}");
     assert!(!log.contains("running: "), "{log}");
 }
 

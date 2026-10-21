@@ -1,9 +1,9 @@
 """Compares write_probe.mjs runs (the r11 review wrote it).
 python3 -I write_compare.py <jar.json> <emu.json> <report.txt> <interesting.json>
 Per cell (operation x signed in / anonymous): FAIL-OPEN when fireemu allows (200 / "ok") and the
-jar does not, or when both allow but fireemu stored what the jar did not (state differs after a
-jar denial is covered by the first case). FAIL-CLOSED when the jar allows and fireemu does not.
-STATE when the answers agree and the stored trees differ. OTHER for other answer differences
+jar does not. FAIL-CLOSED when the jar allows and fireemu does not. STATE when the answers agree
+and the stored trees differ (an onDisconnect write is answered when registered and made later).
+FAIL-OPEN and STATE are BLOCKING. OTHER for other answer differences
 (e.g. 400 against 401). LOADDIFF when one side refuses the rules at load."""
 import json
 import sys
@@ -58,6 +58,10 @@ with open(sys.argv[3], "w") as f:
     print("cells:", dict(total), file=f)
     if total["FAIL-OPEN"]:
         print("BLOCKING: fail-open cells", total["FAIL-OPEN"], file=f)
+    # The same answer with other data stored: an onDisconnect write made that the official
+    # emulator did not make is a write let through.
+    if total["STATE"]:
+        print("BLOCKING: cells whose stored data differs", total["STATE"], file=f)
     for cell in sorted(per_cell):
         print(f"{cell:16s}", dict(per_cell[cell]), file=f)
 json.dump(interesting, open(sys.argv[4], "w"), ensure_ascii=False, indent=0)

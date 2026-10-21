@@ -10,6 +10,7 @@ pub mod json_text;
 mod listen;
 pub mod long_poll;
 pub mod namespace;
+mod on_disconnect;
 pub mod realtime;
 pub mod request;
 pub mod rest;

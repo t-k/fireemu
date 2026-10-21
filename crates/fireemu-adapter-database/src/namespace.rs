@@ -53,3 +53,13 @@ fn validate(name: &str) -> Result<String, InvalidNamespace> {
         Err(InvalidNamespace)
     }
 }
+
+/// The project a namespace belongs to, for resetting a project's data: the project of the
+/// default instance `<project>-default-rtdb`, else the namespace's own name (an instance
+/// named after its project, or any other name, belongs to the project it spells).
+pub fn project_of(namespace: &str) -> &str {
+    match namespace.strip_suffix("-default-rtdb") {
+        Some(project) if !project.is_empty() => project,
+        _ => namespace,
+    }
+}

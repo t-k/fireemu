@@ -301,7 +301,7 @@ fn other_connections_receive_pushes_and_closing_ends_their_listens() {
     // Another namespace pushes nothing.
     rest(&mut db, "PUT", "/a/c.json?ns=other", "2");
     assert!(db.drain_pushes().is_empty());
-    db.close_realtime(reader.client());
+    db.close_realtime(reader.client(), NOW);
     rest(&mut db, "PUT", "/a/d.json?ns=l6", "3");
     assert!(db.drain_pushes().is_empty());
 }
@@ -603,7 +603,7 @@ fn closing_one_connection_keeps_the_pushes_queued_for_others() {
         &mut writer,
         &request(1, "p", r#"{"p":"/a","d":1}"#),
     );
-    db.close_realtime(writer.client());
+    db.close_realtime(writer.client(), NOW);
     assert_eq!(
         db.drain_pushes(),
         vec![(reader.client(), push("d", "a", "1", None))]
@@ -721,4 +721,29 @@ fn plain_listens_receive_a_write_before_windows() {
             (id, push("m", "s", r#"{"a":1,"c":null}"#, Some(2))),
         ]
     );
+}
+
+#[test]
+fn clearing_namespaces_empties_them_and_tells_their_listeners() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    rest(&mut db, "PUT", "/a.json?ns=demo-default-rtdb", "1");
+    rest(&mut db, "PUT", "/a.json?ns=other", "2");
+    let mut s = open(&mut db, "demo-default-rtdb");
+    send(&mut db, &mut s, &request(1, "q", r#"{"p":"/a","h":""}"#));
+    let id = s.client();
+    let woken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&woken);
+    db.set_waker(std::sync::Arc::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    db.clear_namespaces_where(|ns| fireemu_adapter_database::namespace::project_of(ns) == "demo");
+    assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(db.drain_pushes(), vec![(id, push("d", "a", "null", None))]);
+    assert!(db
+        .tree("demo-default-rtdb")
+        .is_none_or(|t| t.root().is_none()));
+    assert!(db.tree("other").is_some_and(|t| t.root().is_some()));
+    // Nothing matched: nothing to wake for.
+    db.clear_namespaces_where(|_| false);
+    assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

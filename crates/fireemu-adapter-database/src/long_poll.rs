@@ -211,22 +211,40 @@ pub struct Reassembler {
     waiting: BTreeMap<u64, Segment>,
     /// The base64 bytes waiting, and the most that may wait.
     waiting_bytes: usize,
-    limit: usize,
+    byte_limit: usize,
+    /// The most segments that may wait, whatever their size.
+    segment_limit: usize,
 }
 
+/// The most segments that may wait on one connection. The SDK cuts a message into segments
+/// of about 1,800 characters, so a 16 MiB message takes about 12,500; an empty segment costs
+/// no bytes, so without this a client could park any number of them.
+pub const MAX_WAITING_SEGMENTS: usize = 65_536;
+
 /// Segments that cannot be used: bad base64, text that is not UTF-8, or more waiting than
-/// the limit.
+/// the limits. The connection cannot go on after this: segments it numbered are gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BadSegments;
 
 impl Reassembler {
-    /// A reassembler holding at most `limit` bytes of waiting segments.
-    pub fn new(limit: usize) -> Self {
+    /// A reassembler for messages of at most `message_limit` bytes: their base64 may wait
+    /// whole, in at most [`MAX_WAITING_SEGMENTS`] segments.
+    pub fn new(message_limit: usize) -> Self {
+        Self::with_bounds(
+            message_limit.div_ceil(3).saturating_mul(4),
+            MAX_WAITING_SEGMENTS,
+        )
+    }
+
+    /// A reassembler holding at most `byte_limit` bytes of base64 in at most
+    /// `segment_limit` waiting segments.
+    pub fn with_bounds(byte_limit: usize, segment_limit: usize) -> Self {
         Self {
             next: 0,
             waiting: BTreeMap::new(),
             waiting_bytes: 0,
-            limit,
+            byte_limit,
+            segment_limit,
         }
     }
 
@@ -236,10 +254,11 @@ impl Reassembler {
             if segment.number < self.next || self.waiting.contains_key(&segment.number) {
                 continue;
             }
-            self.waiting_bytes += segment.data.len();
-            if self.waiting_bytes > self.limit {
+            let bytes = self.waiting_bytes.saturating_add(segment.data.len());
+            if bytes > self.byte_limit || self.waiting.len() >= self.segment_limit {
                 return Err(BadSegments);
             }
+            self.waiting_bytes = bytes;
             self.waiting.insert(segment.number, segment);
         }
         let mut messages = Vec::new();

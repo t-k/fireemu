@@ -16,8 +16,8 @@ enum Write {
     /// Set the priority of the node at a path, if it exists.
     Priority(Path, Option<Priority>),
     /// A write of what is already stored: the official emulator keeps the stored form
-    /// (1.0 written over 1 leaves 1).
-    Unchanged,
+    /// (1.0 written over 1 leaves 1). Holds the value as written, for its answer.
+    Unchanged(Option<Node>),
 }
 
 /// The data of one namespace.
@@ -64,10 +64,23 @@ impl Tree {
 
     /// Replaces the value at `path` with `value` (`null` deletes). A path ending in
     /// `.priority` sets the priority of an existing parent.
-    pub fn set(&mut self, path: &Path, value: &Json, context: ServerValueContext) -> Result<()> {
+    ///
+    /// Returns the node as written, its server values resolved: what a write answers, even
+    /// when an equal value stays stored in its own form. `None` for a deletion and for a
+    /// `.priority` path.
+    pub fn set(
+        &mut self,
+        path: &Path,
+        value: &Json,
+        context: ServerValueContext,
+    ) -> Result<Option<Node>> {
         let write = self.prepare(path, value, context)?;
+        let written = match &write {
+            Write::Value(_, node) | Write::Unchanged(node) => node.clone(),
+            Write::Priority(..) => None,
+        };
         self.apply(write);
-        Ok(())
+        Ok(written)
     }
 
     /// Applies a multipath update at `base`: each key of `entries` is a path relative to
@@ -128,14 +141,14 @@ impl Tree {
             let resolved = resolve(value, stored_priority(Some(node)).as_ref(), context)?;
             let priority = Priority::from_json(&resolved)?;
             if priority == node.priority {
-                return Ok(Write::Unchanged);
+                return Ok(Write::Unchanged(None));
             }
             return Ok(Write::Priority(parent, priority));
         }
         let resolved = resolve(value, self.get(path), context)?;
         let node = Node::from_json(&resolved, path, &self.limits)?;
         if node.as_ref() == self.get(path) {
-            return Ok(Write::Unchanged);
+            return Ok(Write::Unchanged(node));
         }
         Ok(Write::Value(path.clone(), node))
     }
@@ -150,7 +163,7 @@ impl Tree {
                     node.priority = priority;
                 }
             }
-            Write::Unchanged => {}
+            Write::Unchanged(_) => {}
         }
     }
 

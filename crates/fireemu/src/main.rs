@@ -75,7 +75,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,database,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--database-port <n>] [--functions <dir>] [--ui-port <n|auto>] [--hub-port <n|auto>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
@@ -466,6 +466,7 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
             "daemon.eventarcPort" => "/emulators/eventarc/port",
             "daemon.tasksPort" => "/emulators/tasks/port",
             "daemon.pubsubPort" => "/emulators/pubsub/port",
+            "daemon.databasePort" => "/emulators/database/port",
             "daemon.loggingPort" => "/emulators/logging/port",
             "rules.source" | "firestore.indexFile" => "/firestore",
             "storage.rules" => "/storage",
@@ -707,6 +708,19 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
             .unwrap_or(response);
         return Err(CliError::refused(format!("export failed: {message}")));
     }
+    for warning in serde_json::from_str::<serde_json::Value>(&response)
+        .ok()
+        .and_then(|v| {
+            v.get("warnings")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+    {
+        if let Some(warning) = warning.as_str() {
+            eprintln!("warning: {warning}");
+        }
+    }
     println!("exported {project} to {}", absolute.display());
     Ok(())
 }
@@ -851,6 +865,7 @@ struct RawOptions {
     eventarc_port: Option<u16>,
     tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
+    database_port: Option<u16>,
     hub_port: Option<AuxiliaryPort>,
     context: OptionContext,
     ui_port: Option<AuxiliaryPort>,
@@ -972,6 +987,10 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--pubsub-port" => {
                 raw.pubsub_port = Some(port_arg(args, i, "--pubsub-port")?);
+                i += 2;
+            }
+            "--database-port" => {
+                raw.database_port = Some(port_arg(args, i, "--database-port")?);
                 i += 2;
             }
             "--functions-port" => {
@@ -1341,6 +1360,10 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
         cfg.pubsub_addr = with_port(&cfg.pubsub_addr, p);
         cfg.pubsub_enabled = true;
     }
+    if let Some(p) = raw.database_port {
+        cfg.database_addr = with_port(&cfg.database_addr, p);
+        cfg.database_enabled = true;
+    }
     if let Some(selection) = raw.hub_port {
         let port = match selection {
             AuxiliaryPort::Auto => 0,
@@ -1703,6 +1726,7 @@ fn parse_options(
         || only.storage
         || only.functions
         || only.pubsub
+        || only.database
         || only.appcheck;
     let configured_support_selected =
         (only.eventarc && cfg.eventarc_enabled) || (only.tasks && cfg.tasks_enabled);
@@ -1872,6 +1896,8 @@ struct BoundAddrs {
     tasks: Option<std::net::SocketAddr>,
     /// Pub/Sub gRPC.
     pubsub: Option<std::net::SocketAddr>,
+    /// Realtime Database (REST, WebSocket and long polling on one port).
+    database: Option<std::net::SocketAddr>,
     /// The Emulator Hub, when its port could be bound.
     hub: Option<std::net::SocketAddr>,
     /// The Emulator UI, when it is enabled and its port could be bound.
@@ -1891,9 +1917,8 @@ struct BoundAddrs {
 /// `src/emulator/env.ts` (`setEnvVarsForEmulators`): `FIRESTORE_EMULATOR_HOST` and its
 /// `FIREBASE_FIRESTORE_EMULATOR_ADDRESS` alias, `FIREBASE_AUTH_EMULATOR_HOST`,
 /// `FIREBASE_STORAGE_EMULATOR_HOST` **without** a scheme next to `STORAGE_EMULATOR_HOST`
-/// **with** one, and `FIREBASE_EMULATOR_HUB` as a bare `host:port`.
-/// `FIREBASE_DATABASE_EMULATOR_HOST` is deliberately absent: it names a Realtime Database
-/// emulator, and fireemu has none to point it at.
+/// **with** one, `FIREBASE_DATABASE_EMULATOR_HOST` as a bare `host:port` when the Realtime
+/// Database runs, and `FIREBASE_EMULATOR_HUB` as a bare `host:port`.
 ///
 /// Like the official CLI, selected endpoints override inherited values; endpoints for other
 /// emulators remain inherited so removing a routing variable cannot send a SDK to production.
@@ -1967,6 +1992,13 @@ fn child_environment(
         // The canonical variable the Google client libraries read to reach a Pub/Sub emulator;
         // it carries host:port with no scheme (`emulator.ts` `PUBSUB_EMULATOR_HOST`).
         env.push(("PUBSUB_EMULATOR_HOST".to_owned(), addr.to_string()));
+    }
+    if let Some(addr) = addrs.database {
+        // A bare host:port, as `firebase emulators:exec` writes it and the SDKs read it.
+        env.push((
+            "FIREBASE_DATABASE_EMULATOR_HOST".to_owned(),
+            addr.to_string(),
+        ));
     }
     if let Some(addr) = addrs.hub {
         env.push(("FIREBASE_EMULATOR_HUB".to_owned(), addr.to_string()));
@@ -2769,6 +2801,7 @@ struct Listeners {
     eventarc: Option<tokio::net::TcpListener>,
     tasks: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
+    database: Option<tokio::net::TcpListener>,
     hub: Option<tokio::net::TcpListener>,
     /// The Logging emulator WebSocket, when its port could be bound. Best effort like the Hub
     /// and UI: it is not a `--only` service, so it is attempted on every run unless disabled.
@@ -2880,6 +2913,12 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
+    // The Realtime Database follows the same rule as Pub/Sub: configured or asked for.
+    let database = if only.database && (cfg.database_enabled || only.explicit) {
+        Some(bind_listener(&cfg.database_addr).await?)
+    } else {
+        None
+    };
     let hub = if cfg.hub_addr_explicit {
         prebound_hub
     } else {
@@ -2902,6 +2941,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         eventarc,
         tasks,
         pubsub,
+        database,
         hub,
         logging,
     })
@@ -2939,6 +2979,7 @@ fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("eventarc", addrs.eventarc),
         ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
+        ("database", addrs.database),
         ("hub", addrs.hub),
         ("ui", addrs.ui),
         ("logging", addrs.logging),
@@ -2989,6 +3030,42 @@ fn pubsub_project_numbers(cfg: &RuntimeConfig) -> std::collections::BTreeMap<Str
         numbers.insert(cfg.auth_project.clone(), number.to_string());
     }
     numbers
+}
+
+/// What every Realtime Database request is answered with while rules are not evaluated, and
+/// why: `database.defaultAccess` and where its value came from.
+pub fn database_access(cfg: &RuntimeConfig) -> String {
+    let source = cfg
+        .development_defaults
+        .iter()
+        .find(|entry| entry["key"] == "database.defaultAccess")
+        .and_then(|entry| entry["source"].as_str())
+        .unwrap_or("default");
+    match cfg.database_default_access {
+        config::DatabaseDefaultAccess::Open => {
+            format!("every request is allowed (database.defaultAccess = open, {source})")
+        }
+        config::DatabaseDefaultAccess::Locked => format!(
+            "only the owner credential reads and writes (database.defaultAccess = locked, {source})"
+        ),
+    }
+}
+
+/// The banner lines of the Realtime Database: where it listens, and the access in effect
+/// while its rules are not evaluated.
+fn print_database_lines(cfg: &RuntimeConfig, addrs: &BoundAddrs) {
+    match addrs.database {
+        Some(a) => {
+            println!("  database:         {a}   FIREBASE_DATABASE_EMULATOR_HOST={a}");
+            println!(
+                "  database rules:   not evaluated yet, so {}",
+                database_access(cfg)
+            );
+        }
+        None => println!(
+            "  database:         not started (configure emulators.database / --database-port, or --only database)"
+        ),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -3092,6 +3169,7 @@ fn print_banner(
             "  pubsub:           not started (configure emulators.pubsub / --pubsub-port, or --only pubsub)"
         ),
     }
+    print_database_lines(cfg, addrs);
     match addrs.hub {
         Some(a) => println!(
             "  emulator hub:     {a}   FIREBASE_EMULATOR_HUB={a}   (GET /emulators discovers the suite)"
@@ -3162,6 +3240,8 @@ struct Exporter {
     products: import_export::Products,
     blocking: Option<Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>>,
     auth_operation_gate: Arc<Mutex<()>>,
+    /// Whether the Realtime Database is served, whose data no export carries yet.
+    database_served: bool,
 }
 
 impl Exporter {
@@ -3179,10 +3259,20 @@ impl Exporter {
 }
 
 impl hub::ExportRunner for Exporter {
-    fn export(&self, path: &Path, initiated_by: &str) -> Result<(), String> {
+    fn export(&self, path: &Path, initiated_by: &str) -> Result<Vec<String>, String> {
+        let mut warnings = Vec::new();
+        if self.database_served {
+            let warning = format!(
+                "Realtime Database data is not exported (an open gap): the export to {} leaves it out",
+                path.display()
+            );
+            eprintln!("warning: {warning}");
+            warnings.push(warning);
+        }
         import_export::may_overwrite(path)?;
         import_export::export(path, self.products, &self.endpoints(), initiated_by)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(warnings)
     }
 }
 
@@ -3446,6 +3536,7 @@ fn control_state(
     pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
     pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
+    realtime_database: &Arc<Mutex<fireemu_adapter_database::rest::Database>>,
     listen_expiry: Option<fireemu_adapter_grpc::rules::ListenExpiry>,
     missing_indexes_reported: bool,
 ) -> fireemu_adapter_http::control::ControlState {
@@ -3540,6 +3631,7 @@ fn control_state(
             app_check: app_check.clone(),
             pubsub: pubsub.clone(),
             pubsub_handle: pubsub_handle.clone(),
+            realtime_database: realtime_database.clone(),
         })),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))
@@ -4104,6 +4196,7 @@ mod config_reload_tests {
             eventarc: false,
             tasks: false,
             pubsub: false,
+            database: false,
             appcheck: false,
             explicit: true,
             functions_codebase: None,
@@ -5149,6 +5242,7 @@ mod storage_endpoint_tests {
             eventarc: None,
             tasks: None,
             pubsub: None,
+            database: None,
             hub: None,
             ui: None,
             logging: None,

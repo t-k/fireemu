@@ -1187,6 +1187,12 @@ pub struct RuntimeConfig {
     /// Like the official suite, the Pub/Sub emulator starts only when it is configured or when
     /// `--only pubsub` asks for it, rather than binding port 8085 on every run.
     pub pubsub_enabled: bool,
+    /// Realtime Database bind address (`emulators.database`, `daemon.databasePort`,
+    /// `--database-port`). The official emulator default port is 9000.
+    pub database_addr: String,
+    /// Whether the Realtime Database was configured. Like Pub/Sub, it starts only when it is
+    /// configured or when `--only database` asks for it.
+    pub database_enabled: bool,
     /// Emulator Hub bind address (`emulators.hub`, `--hub-port`). The official default port
     /// is 4400; binding it is best effort unless it was asked for explicitly.
     pub hub_addr: String,
@@ -1263,6 +1269,11 @@ pub struct RuntimeConfig {
     /// `pubsub.deadLetterAuthorization`: whether strict dead-letter forwarding needs the service
     /// agent's grants. Default: `implicit` unless `productionExact` or the key asks for `iam`.
     pub pubsub_dead_letter_authorization: DeadLetterAuthorization,
+    /// `database.defaultAccess`: what a Realtime Database without rules allows.
+    pub database_default_access: DatabaseDefaultAccess,
+    /// The rules files the `database` section of `firebase.json` names, which are not
+    /// evaluated yet (a warning says so when the database is served).
+    pub database_rules: Vec<String>,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -1359,6 +1370,43 @@ impl AppCheckDebugTokens {
         match self {
             Self::Any => "any",
             Self::Registered => "registered",
+        }
+    }
+}
+
+/// `database.defaultAccess`: what a Realtime Database without a rules file allows.
+///
+/// The official emulator allows everything without rules, and fireemu does not evaluate rules
+/// files yet (RTDB-03), so both profiles default to `open`. A new production database in
+/// locked mode refuses everyone but administrators; `productionExact` asks for that
+/// (`locked`): only the emulator's `owner` credential, the administrator the official tooling
+/// uses, gets through (owner decision Q4, ledger 1471).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DatabaseDefaultAccess {
+    /// Every request is allowed.
+    #[default]
+    Open,
+    /// Only the `owner` credential is allowed.
+    Locked,
+}
+
+impl DatabaseDefaultAccess {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "open" => Some(Self::Open),
+            "locked" => Some(Self::Locked),
+            _ => None,
+        }
+    }
+
+    /// The configuration spelling.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Locked => "locked",
         }
     }
 }
@@ -1615,6 +1663,8 @@ impl Default for RuntimeConfig {
             tasks_addr_explicit: false,
             pubsub_addr: "127.0.0.1:8085".to_owned(),
             pubsub_enabled: false,
+            database_addr: "127.0.0.1:9000".to_owned(),
+            database_enabled: false,
             hub_addr: format!("127.0.0.1:{DEFAULT_HUB_PORT}"),
             hub_addr_explicit: false,
             hub_auto_port: false,
@@ -1642,6 +1692,8 @@ impl Default for RuntimeConfig {
             pubsub_project_numbers: BTreeMap::new(),
             pubsub_local_bearer_token: None,
             pubsub_dead_letter_authorization: DeadLetterAuthorization::Implicit,
+            database_default_access: DatabaseDefaultAccess::Open,
+            database_rules: Vec::new(),
             pubsub_push_minimum_redelivery_interval_millis:
                 fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
@@ -1921,7 +1973,7 @@ impl RuntimeConfig {
             "daemon.seed" => Some(json!(self.seed)),
             "daemon.authProject" => Some(json!(self.auth_project)),
             "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
-            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
+            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.databasePort" | "daemon.loggingPort" | "daemon.hubPort" | "daemon.uiPort" => {
                 let addr = match key {
                     "daemon.firestorePort" => &self.firestore_addr,
                     "daemon.httpPort" => &self.http_addr,
@@ -1930,6 +1982,7 @@ impl RuntimeConfig {
                     "daemon.eventarcPort" => &self.eventarc_addr,
                     "daemon.tasksPort" => &self.tasks_addr,
                     "daemon.pubsubPort" => &self.pubsub_addr,
+                    "daemon.databasePort" => &self.database_addr,
                     "daemon.hubPort" => &self.hub_addr,
                     "daemon.uiPort" => &self.ui_addr,
                     _ => &self.logging_addr,
@@ -2001,7 +2054,7 @@ impl RuntimeConfig {
 }
 
 /// The keys of the `daemon` section (spec/config/fireemu.schema.json).
-pub(crate) const DAEMON_KEYS: [&str; 14] = [
+pub(crate) const DAEMON_KEYS: [&str; 15] = [
     "firestorePort",
     "storagePort",
     "httpPort",
@@ -2009,6 +2062,7 @@ pub(crate) const DAEMON_KEYS: [&str; 14] = [
     "eventarcPort",
     "tasksPort",
     "pubsubPort",
+    "databasePort",
     "hubPort",
     "uiPort",
     "loggingPort",
@@ -2028,6 +2082,9 @@ pub(crate) const PUBSUB_KEYS: [&str; 4] = [
     "authentication",
     "deadLetterAuthorization",
 ];
+
+/// The keys of the `database` section.
+pub(crate) const DATABASE_KEYS: [&str; 1] = ["defaultAccess"];
 
 /// The keys of the `scheduler` section.
 pub(crate) const SCHEDULER_KEYS: [&str; 5] = [
@@ -2085,7 +2142,7 @@ pub(crate) const AUTH_KEYS: [&str; 28] = [
 pub struct ConfigError(pub String);
 
 /// The service emulators fireemu serves, in `--only` spelling.
-pub const SERVED_SERVICES: [&str; 8] = [
+pub const SERVED_SERVICES: [&str; 9] = [
     "auth",
     "firestore",
     "storage",
@@ -2093,6 +2150,7 @@ pub const SERVED_SERVICES: [&str; 8] = [
     "eventarc",
     "tasks",
     "pubsub",
+    "database",
     "appcheck",
 ];
 
@@ -2102,11 +2160,7 @@ pub const SERVED_SERVICES: [&str; 8] = [
 ///
 /// `deferred` products have an open compatibility issue and no implementation; `planned`
 /// products are on the active list; `not planned` is a closed product decision.
-pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 5] = [
-    (
-        "database",
-        "deferred: the Realtime Database emulator is not in the active supported surface",
-    ),
+pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 4] = [
     (
         "hosting",
         "deferred: the Firebase Hosting emulator is not in the active supported surface",
@@ -2157,6 +2211,9 @@ pub struct Selection {
     pub tasks: bool,
     /// The Pub/Sub gRPC emulator is served and `PUBSUB_EMULATOR_HOST` exported.
     pub pubsub: bool,
+    /// The Realtime Database emulator is served and `FIREBASE_DATABASE_EMULATOR_HOST`
+    /// exported (when it was configured or named in `--only`).
+    pub database: bool,
     /// App Check: a logical selection, because the exchange and the JWKS share the
     /// Auth/control listener. Exports `FIREEMU_APP_CHECK_EMULATOR_HOST` and
     /// `FIREEMU_APP_CHECK_JWKS_URL`.
@@ -2180,6 +2237,7 @@ impl Default for Selection {
             eventarc: false,
             tasks: false,
             pubsub: true,
+            database: true,
             appcheck: true,
             explicit: false,
             functions_codebase: None,
@@ -2202,6 +2260,7 @@ impl Selection {
             eventarc: false,
             tasks: false,
             pubsub: false,
+            database: false,
             appcheck: false,
             explicit: true,
             functions_codebase: None,
@@ -2245,6 +2304,7 @@ impl Selection {
                 "eventarc" => sel.eventarc = true,
                 "tasks" => sel.tasks = true,
                 "pubsub" => sel.pubsub = true,
+                "database" => sel.database = true,
                 "appcheck" => sel.appcheck = true,
                 other => {
                     if let Some(why) = unserved_official_service(other) {
@@ -2369,6 +2429,12 @@ const FIRESTORE_ENTRY_KEYS: [&str; 4] = ["database", "rules", "indexes", "index"
 /// The official keys of one Cloud Storage configuration entry.
 const STORAGE_ENTRY_KEYS: [&str; 2] = ["target", "rules"];
 
+/// The official keys of one Realtime Database configuration entry: `rules` for every
+/// instance, or `instance` / `target` naming the instance an entry of the array form serves.
+/// The deploy hooks (`predeploy`, `postdeploy`) belong to `firebase deploy`; firebase-tools
+/// 15.28.2 accepts them here, so they are accepted and ignored, as for Functions.
+const DATABASE_ENTRY_KEYS: [&str; 5] = ["rules", "instance", "target", "predeploy", "postdeploy"];
+
 /// The `firebase.json` keys of one Functions codebase that fireemu reads; the deploy hooks
 /// (`predeploy`, `postdeploy`) belong to `firebase deploy` and are not emulator settings.
 const FUNCTIONS_ENTRY_KEYS: [&str; 6] = [
@@ -2408,6 +2474,7 @@ const NETWORK_EXPOSABLE_EMULATORS: &[&str] = &[
     "eventarc",
     "tasks",
     "pubsub",
+    "database",
 ];
 
 /// The host of `emulators.<name>.host`: loopback always, and an IP address of any interface
@@ -3006,6 +3073,7 @@ impl RuntimeConfig {
         };
         self.apply_firestore(obj.get("firestore"), &file, &mut report)?;
         self.apply_storage(obj.get("storage"), &file, &mut report)?;
+        self.database_rules = Self::apply_database(obj.get("database"))?;
         self.apply_functions(obj.get("functions"), base, only, &mut report)?;
         if let Some(emulators) = obj.get("emulators") {
             let emulators = emulators.as_object().ok_or_else(|| {
@@ -3085,6 +3153,15 @@ impl RuntimeConfig {
                             self.allow_non_loopback_hosts,
                         )?;
                         self.pubsub_enabled = true;
+                    }
+                    "database" => {
+                        self.database_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.database_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
+                        self.database_enabled = true;
                     }
                     "hub" => {
                         self.hub_addr = emulator_addr(
@@ -3228,6 +3305,79 @@ impl RuntimeConfig {
     }
 
     /// `storage`, in object or array (multi-bucket) form.
+    /// Checks the `database` section (one entry, or an array of entries naming their
+    /// `instance` or `target`). The rules files it names are not evaluated yet (RTDB-03):
+    /// requests are answered as without rules, which the startup notice says.
+    /// Checks the `database` section and returns the rules files it names.
+    fn apply_database(section: Option<&Value>) -> Result<Vec<String>, ConfigError> {
+        let entries: Vec<(&serde_json::Map<String, Value>, String)> = match section {
+            None => return Ok(Vec::new()),
+            Some(Value::Object(o)) => vec![(o, "database".to_owned())],
+            Some(Value::Array(a)) if !a.is_empty() => a
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    e.as_object()
+                        .map(|o| (o, format!("database[{i}]")))
+                        .ok_or_else(|| {
+                            ConfigError(format!("firebase.json: database[{i}] must be an object"))
+                        })
+                })
+                .collect::<Result<_, _>>()?,
+            Some(Value::Array(_)) => {
+                return Err(ConfigError(
+                    "firebase.json: database must contain at least one entry".to_owned(),
+                ))
+            }
+            Some(_) => {
+                return Err(ConfigError(
+                    "firebase.json: database must be an object or an array".to_owned(),
+                ))
+            }
+        };
+        let array_form = section.is_some_and(Value::is_array);
+        let mut rules = Vec::new();
+        for (entry, path) in entries {
+            if let Some(key) = entry
+                .keys()
+                .find(|key| !DATABASE_ENTRY_KEYS.contains(&key.as_str()))
+            {
+                return Err(ConfigError(format!(
+                    "firebase.json: unknown key {path}.{key}"
+                )));
+            }
+            match entry.get("rules") {
+                Some(Value::String(file)) => rules.push(file.clone()),
+                Some(_) => {
+                    return Err(ConfigError(format!(
+                        "firebase.json: {path}.rules must be a string"
+                    )))
+                }
+                None => {
+                    return Err(ConfigError(format!(
+                        "firebase.json: {path}.rules is required"
+                    )))
+                }
+            }
+            if entry.get("instance").is_some_and(|v| !v.is_string()) {
+                return Err(ConfigError(format!(
+                    "firebase.json: {path}.instance must be a string"
+                )));
+            }
+            if entry.get("target").is_some_and(|v| !v.is_string()) {
+                return Err(ConfigError(format!(
+                    "firebase.json: {path}.target must be a string"
+                )));
+            }
+            if array_form && !entry.contains_key("instance") && !entry.contains_key("target") {
+                return Err(ConfigError(format!(
+                    "firebase.json: {path} must name an instance or a target"
+                )));
+            }
+        }
+        Ok(rules)
+    }
+
     fn apply_storage(
         &mut self,
         section: Option<&Value>,
@@ -3679,6 +3829,7 @@ pub(crate) const KNOWN_TOP_LEVEL: &[&str] = &[
     "storage",
     "events",
     "pubsub",
+    "database",
     "eventarc",
     "scheduler",
     "functions",
@@ -3835,6 +3986,11 @@ impl RuntimeConfig {
         } else {
             DeadLetterAuthorization::Implicit
         };
+        self.database_default_access = if exact {
+            DatabaseDefaultAccess::Locked
+        } else {
+            DatabaseDefaultAccess::Open
+        };
         self.app_check.debug_tokens = if !exact && self.profile == CompatibilityProfile::Strict {
             AppCheckDebugTokens::Any
         } else {
@@ -3920,6 +4076,10 @@ impl RuntimeConfig {
             (
                 "appCheck.debugTokens",
                 self.app_check.debug_tokens.as_config_str(),
+            ),
+            (
+                "database.defaultAccess",
+                self.database_default_access.as_config_str(),
             ),
         ];
         self.development_defaults = values
@@ -4082,6 +4242,10 @@ impl RuntimeConfig {
         if let Some(port) = d.get("pubsubPort").and_then(Value::as_u64) {
             cfg.pubsub_addr = format!("127.0.0.1:{port}");
             cfg.pubsub_enabled = true;
+        }
+        if let Some(port) = d.get("databasePort").and_then(Value::as_u64) {
+            cfg.database_addr = format!("127.0.0.1:{port}");
+            cfg.database_enabled = true;
         }
         if let Some(start) = d.get("clockStart") {
             let start = start.as_str().ok_or_else(|| {
@@ -4274,6 +4438,36 @@ impl RuntimeConfig {
             catalog.insert(key, grants);
         }
         cfg.eventarc_oauth_credentials = Some(catalog);
+        Ok(())
+    }
+
+    /// Reads the `database` section. `locked` refuses what the official emulator allows, so
+    /// it requires the strict profile.
+    fn parse_database(
+        d: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        for key in d.keys() {
+            if !DATABASE_KEYS.contains(&key.as_str()) {
+                return Err(ConfigError(format!("database: unknown key {key:?}")));
+            }
+        }
+        if let Some(value) = d.get("defaultAccess") {
+            let access = value
+                .as_str()
+                .and_then(DatabaseDefaultAccess::parse_config)
+                .ok_or_else(|| {
+                    ConfigError("database.defaultAccess must be \"open\" or \"locked\"".to_owned())
+                })?;
+            if access == DatabaseDefaultAccess::Locked
+                && cfg.profile != CompatibilityProfile::Strict
+            {
+                return Err(ConfigError(
+                    "database.defaultAccess \"locked\" requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.database_default_access = access;
+        }
         Ok(())
     }
 
@@ -5005,6 +5199,12 @@ impl RuntimeConfig {
         if let Some(pubsub) = obj.get("pubsub").and_then(Value::as_object) {
             Self::parse_pubsub(pubsub, &mut cfg)?;
         }
+        if let Some(database) = obj.get("database") {
+            let database = database
+                .as_object()
+                .ok_or_else(|| ConfigError("database must be an object".to_owned()))?;
+            Self::parse_database(database, &mut cfg)?;
+        }
         if let Some(scheduler) = obj.get("scheduler") {
             let scheduler = scheduler
                 .as_object()
@@ -5687,6 +5887,7 @@ mod tests {
             ("daemon.eventarcPort", json!(9299), "default"),
             ("daemon.tasksPort", json!(9499), "default"),
             ("daemon.pubsubPort", json!(8085), "default"),
+            ("daemon.databasePort", json!(9000), "default"),
             ("daemon.loggingPort", json!(4500), "default"),
             ("daemon.clockStart", json!(null), "unset"),
             ("daemon.seed", json!(42), "default"),
@@ -6080,6 +6281,10 @@ mod tests {
                     json!(cfg.pubsub_dead_letter_authorization.as_config_str()),
                 ),
                 (
+                    "database.defaultAccess",
+                    json!(cfg.database_default_access.as_config_str()),
+                ),
+                (
                     "functions.clock.date",
                     json!(if cfg.functions_clock.date_virtual {
                         "virtual"
@@ -6128,6 +6333,7 @@ mod tests {
                         json!("registered")
                     }
                     ("pubsub.deadLetterAuthorization", true) => json!("iam"),
+                    ("database.defaultAccess", true) => json!("locked"),
                     ("eventarc.authentication", true) => json!("production"),
                     // The key only matters to the strict profile; the emulator profile
                     // runs the query (Report is its inert value).
@@ -8372,6 +8578,79 @@ mod tests {
     }
 
     #[test]
+    fn the_database_section_is_checked_and_announced_and_its_emulator_configured() {
+        let base = std::path::Path::new("/proj");
+        let mut cfg = RuntimeConfig::default();
+        let report = cfg
+            .apply_firebase_json(
+                &json!({
+                    "database": {"rules": "database.rules.json"},
+                    "emulators": {"database": {"port": 9010}}
+                }),
+                base,
+                &Selection::default(),
+            )
+            .unwrap();
+        assert!(cfg.database_enabled);
+        assert_eq!(cfg.database_addr, "127.0.0.1:9010");
+        assert_eq!(cfg.database_rules, vec!["database.rules.json".to_owned()]);
+        assert!(report.notices.is_empty(), "{:?}", report.notices);
+        // The deploy hooks firebase-tools 15.28.2 accepts belong to `firebase deploy`.
+        for ok in [
+            json!({"database": [
+                {"instance": "demo-default-rtdb", "rules": "a.json", "predeploy": ["echo a"]},
+                {"target": "main", "rules": "b.json", "postdeploy": "echo b"}
+            ]}),
+            json!({"database": {"rules": "r", "predeploy": "echo", "postdeploy": ["x", "y"]}}),
+        ] {
+            assert!(
+                RuntimeConfig::default()
+                    .apply_firebase_json(&ok, base, &Selection::default())
+                    .is_ok(),
+                "{ok}"
+            );
+        }
+        for (bad, message) in [
+            (
+                json!({"database": 1}),
+                "database must be an object or an array",
+            ),
+            (
+                json!({"database": []}),
+                "database must contain at least one entry",
+            ),
+            (json!({"database": [1]}), "database[0] must be an object"),
+            (json!({"database": {}}), "database.rules is required"),
+            (
+                json!({"database": {"rules": 1}}),
+                "database.rules must be a string",
+            ),
+            (
+                json!({"database": {"rules": "r", "x": 1}}),
+                "unknown key database.x",
+            ),
+            (
+                json!({"database": {"rules": "r", "instance": 1}}),
+                "database.instance must be a string",
+            ),
+            (
+                json!({"database": [{"rules": "r"}]}),
+                "database[0] must name an instance or a target",
+            ),
+        ] {
+            let err = RuntimeConfig::default()
+                .apply_firebase_json(&bad, base, &Selection::default())
+                .unwrap_err();
+            assert!(err.0.contains(message), "{bad}: {}", err.0);
+        }
+        // Without the section, nothing is announced.
+        let quiet = RuntimeConfig::default()
+            .apply_firebase_json(&json!({}), base, &Selection::default())
+            .unwrap();
+        assert!(quiet.notices.is_empty(), "{:?}", quiet.notices);
+    }
+
+    #[test]
     fn firebase_json_maps_rules_indexes_ports_and_the_selected_functions() {
         let json = json!({
             "firestore": {"rules": "firestore.rules", "index": "firestore.indexes.json"},
@@ -8456,7 +8735,10 @@ mod tests {
             cfg.firestore_databases["staging"].indexes.as_deref(),
             Some(under_proj("staging.indexes.json").as_str())
         );
-        assert!(Selection::parse("auth,database").is_err());
+        assert!(
+            Selection::parse("auth,database").is_ok_and(|s| s.auth && s.database && !s.firestore)
+        );
+        assert!(Selection::parse("auth,hosting").is_err());
         assert_eq!(
             cfg.apply_firebase_json(&json!({"firestore": {"rules": 1}}), base, &only),
             Err(ConfigError(
@@ -9115,6 +9397,68 @@ mod tests {
     /// Naming a Pub/Sub project number is how a configuration asks for production's dead-letter
     /// grants, and the report says so; an empty map, the emulator profile and an explicit key
     /// say something else.
+    #[test]
+    fn the_database_default_access_is_open_unless_production_exact_or_declared() {
+        let access = |input: Value| {
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let entry = cfg
+                .development_defaults
+                .iter()
+                .find(|entry| entry["key"] == "database.defaultAccess")
+                .unwrap()
+                .clone();
+            (
+                cfg.database_default_access,
+                entry["source"].as_str().unwrap().to_owned(),
+            )
+        };
+        assert_eq!(
+            access(json!({"schemaVersion": 1, "profile": "emulator"})),
+            (DatabaseDefaultAccess::Open, "default".to_owned())
+        );
+        assert_eq!(
+            access(json!({"schemaVersion": 1, "profile": "strict"})),
+            (DatabaseDefaultAccess::Open, "default".to_owned())
+        );
+        assert_eq!(
+            access(json!({"schemaVersion": 1, "profile": "strict", "productionExact": true})),
+            (DatabaseDefaultAccess::Locked, "productionExact".to_owned())
+        );
+        assert_eq!(
+            access(
+                json!({"schemaVersion": 1, "profile": "strict", "productionExact": true, "database": {"defaultAccess": "open"}})
+            ),
+            (DatabaseDefaultAccess::Open, "explicit".to_owned())
+        );
+        assert_eq!(
+            access(
+                json!({"schemaVersion": 1, "profile": "strict", "database": {"defaultAccess": "locked"}})
+            ),
+            (DatabaseDefaultAccess::Locked, "explicit".to_owned())
+        );
+        for (bad, message) in [
+            (
+                json!({"schemaVersion": 1, "profile": "emulator", "database": {"defaultAccess": "locked"}}),
+                "requires the strict profile",
+            ),
+            (
+                json!({"schemaVersion": 1, "database": {"defaultAccess": "closed"}}),
+                "must be \"open\" or \"locked\"",
+            ),
+            (
+                json!({"schemaVersion": 1, "database": {"other": 1}}),
+                "unknown key",
+            ),
+            (
+                json!({"schemaVersion": 1, "database": 1}),
+                "database must be an object",
+            ),
+        ] {
+            let error = RuntimeConfig::from_json(&bad).unwrap_err();
+            assert!(error.0.contains(message), "{bad}: {}", error.0);
+        }
+    }
+
     #[test]
     fn the_dead_letter_default_reports_the_project_numbers_that_selected_it() {
         let report = |config: Value| {

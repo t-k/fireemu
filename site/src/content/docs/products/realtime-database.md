@@ -3,7 +3,7 @@ title: Realtime Database
 description: The Firebase Realtime Database with Security Rules, export and import, served without a compatibility claim yet.
 ---
 
-Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs). Production has not been observed yet, so the [compatibility contract](../../compatibility/) lists it as an open gap with no compatibility claim, and behavior copied from the official emulator may change once production is observed (see [Provisional behavior](#provisional-behavior)).
+Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs). It has no parity claim yet: production has not been observed, and rules coverage reports and Functions triggers are not implemented, so the [compatibility contract](../../compatibility/) lists it as an open gap, and behavior copied from the official emulator may change once production is observed (see [Provisional behavior](#provisional-behavior)).
 
 ## Start it
 

@@ -1011,7 +1011,7 @@ pub struct RuntimeConfig {
     /// (`firestore.enforceLimits`; profile default). When it does not, each violation is
     /// reported as an `FS_LIMIT_OBSERVED:<id>` warning and the query runs.
     pub enforce_limits: bool,
-    /// How a caller's ID token is verified on the Firestore and Storage Rules surfaces
+    /// How a caller's ID token is verified on the Firestore, Storage and Realtime Database Rules surfaces
     /// (profile-derived; there is no key of its own).
     pub token_acceptance: TokenAcceptance,
     /// Whether a Firestore data-plane request materializes a database nothing created, the
@@ -1299,7 +1299,7 @@ pub struct RuntimeConfig {
     /// production's generated shape, `"generated"` (owner decision 2026-10-13).
     pub auth_tenant_id_format: fireemu_adapter_http::identity_toolkit::TenantIdFormat,
     /// Admit unsigned emulator ID tokens (`alg: none`, empty signature; the `mockUserToken` of
-    /// `@firebase/rules-unit-testing`) on the Firestore and Storage Security Rules surfaces in
+    /// `@firebase/rules-unit-testing`) on the Firestore, Storage and Realtime Database Security Rules surfaces in
     /// either profile (`auth.allowUnsignedIdTokens`, default true, owner ledger 1393). Signed
     /// tokens are verified as before, and a session that signs its own tokens
     /// (`auth.idTokenSigning: session-rsa`) admits no unsigned token.

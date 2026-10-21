@@ -254,7 +254,7 @@ pub fn run() -> std::process::ExitCode {
 /// Inspects an export destination without starting a daemon or modifying the filesystem.
 pub fn run_export_dir(path: &Path) -> std::process::ExitCode {
     let result = fireemu_export_publication::preflight(path)
-        .and_then(|()| crate::import_export::may_overwrite(path));
+        .and_then(|_| crate::import_export::may_overwrite(path));
     match result {
         Ok(()) => {
             println!(

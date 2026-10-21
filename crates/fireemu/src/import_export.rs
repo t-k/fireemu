@@ -376,13 +376,25 @@ pub fn nothing_to_import(dir: &Path, export_on_exit: Option<&Path>) -> Option<St
         Ok(_) => directory_is_empty(dir)
             .then(|| "the directory is empty, so the suite starts with no data".to_owned()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let absolute = std::path::absolute(dir).ok()?;
-            (export_on_exit == Some(absolute.as_path())).then(|| {
+            is_export_on_exit(dir, export_on_exit).then(|| {
                 "the directory does not exist yet, so the suite starts with no data (--export-on-exit creates it)".to_owned()
             })
         }
         _ => None,
     }
+}
+
+/// Whether `dir` names the `--export-on-exit` directory, which the preflight keeps with every
+/// symlink on it resolved (`/tmp/x` is `/private/tmp/x` on macOS).
+pub fn is_export_on_exit(dir: &Path, export_on_exit: Option<&Path>) -> bool {
+    let Some(export_on_exit) = export_on_exit else {
+        return false;
+    };
+    std::path::absolute(dir).is_ok_and(|absolute| {
+        absolute == export_on_exit
+            || fireemu_export_publication::resolve(&absolute)
+                .is_ok_and(|resolved| resolved == export_on_exit)
+    })
 }
 
 /// Whether `dir` is a directory with no entry. The directory is opened once, without following
@@ -4572,6 +4584,31 @@ mod tests {
         assert!(!super::directory_is_empty(&hidden));
         assert!(!super::directory_is_empty(&root.join("missing")));
         assert!(super::nothing_to_import(&empty, None).is_some());
+    }
+
+    /// A missing import directory is the first run of the `--export-on-exit` directory whether
+    /// that one is kept as typed or with its symlinks resolved, as the preflight keeps it.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_import_matches_the_resolved_export_on_exit_directory() {
+        let root = TrustedTempDir::new("import-first-run");
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let typed = link.join("data");
+        let resolved = fireemu_export_publication::preflight(&typed).unwrap();
+        assert_eq!(resolved, std::fs::canonicalize(&real).unwrap().join("data"));
+        for export_on_exit in [&typed, &resolved] {
+            assert!(super::is_export_on_exit(&typed, Some(export_on_exit)));
+            assert!(super::nothing_to_import(&typed, Some(export_on_exit)).is_some());
+        }
+        assert!(!super::is_export_on_exit(&typed, None));
+        assert!(!super::is_export_on_exit(
+            &root.join("other"),
+            Some(&resolved)
+        ));
+        assert!(super::nothing_to_import(&root.join("other"), Some(&resolved)).is_none());
     }
 
     /// A directory an interrupted mount-point export left without a manifest is refused, and the

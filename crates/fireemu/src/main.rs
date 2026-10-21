@@ -1762,8 +1762,7 @@ fn parse_options(
     if let Some(dir) = &raw.import {
         // A missing directory that `--export-on-exit` writes is the first run of a persisted
         // directory: the daemon starts it with no data (`import_export::nothing_to_import`).
-        let first_run = std::path::absolute(dir)
-            .is_ok_and(|absolute| export_on_exit.as_deref() == Some(absolute.as_path()));
+        let first_run = import_export::is_export_on_exit(dir, export_on_exit.as_deref());
         if !dir.is_dir() && (!first_run || dir.exists()) {
             return Err(CliError::refused(format!(
                 "--import {}: no such directory",
@@ -1825,9 +1824,12 @@ fn resolve_export_on_exit(
             )));
         }
     }
-    fireemu_export_publication::preflight(&absolute).map_err(CliError::refused)?;
-    import_export::may_overwrite(&absolute).map_err(CliError::refused)?;
-    Ok(Some(absolute))
+    // The export at exit uses the path the preflight resolved, so a symlink made on the way
+    // while the suite runs is never followed.
+    let export_path =
+        fireemu_export_publication::preflight(&absolute).map_err(CliError::refused)?;
+    import_export::may_overwrite(&export_path).map_err(CliError::refused)?;
+    Ok(Some(export_path))
 }
 
 /// `--inspect-functions [port]`: the bundled runner is a Node script, so the inspector is

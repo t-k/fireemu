@@ -806,19 +806,31 @@ fn a_stage_that_cannot_be_created_is_reported_with_its_reason() {
 
 #[cfg(unix)]
 #[test]
-fn symlinked_parent_is_refused_without_creating_a_stage() {
-    use std::os::unix::fs::symlink;
+fn a_symlinked_parent_is_followed_only_from_a_directory_no_one_else_can_write() {
+    use std::os::unix::fs::{symlink, PermissionsExt as _};
 
     let root = TestRoot::new("parent-symlink");
     let real = root.0.join("real-parent");
-    let linked = root.0.join("linked-parent");
+    let holder = root.0.join("holder");
+    let linked = holder.join("linked-parent");
     std::fs::create_dir(&real).expect("create real parent");
+    create_private_dir(&holder);
     symlink(&real, &linked).expect("create parent symlink");
 
+    // The user's own link in a directory others can write: refused, nothing made.
+    std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o777)).unwrap();
     let error = PublicationStage::create(&linked.join("export"), |_| Ok(())).unwrap_err();
-
-    assert!(error.contains("parent is a symlink"), "{error}");
+    std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(error.contains("symlink"), "{error}");
     assert!(std::fs::read_dir(&real).unwrap().next().is_none());
+
+    // In a private directory of the user's own it is followed: the stage is made in the
+    // directory it points to.
+    let stage = PublicationStage::create(&linked.join("export"), |_| Ok(())).unwrap();
+    assert_eq!(
+        stage.root().parent().unwrap(),
+        std::fs::canonicalize(&real).unwrap()
+    );
 }
 
 /// EXPREL-2: a one-element relative target has the empty path as its parent.
@@ -988,9 +1000,12 @@ fn preflight_refuses_symlink_target_and_parent_and_non_directory() {
     assert!(fireemu_export_publication::preflight(&link)
         .unwrap_err()
         .contains("symlink"));
-    assert!(fireemu_export_publication::preflight(&link.join("export"))
-        .unwrap_err()
-        .contains("symlink"));
+    // The user's own link in a private directory is followed; preflight returns the path
+    // with the link resolved.
+    assert_eq!(
+        fireemu_export_publication::preflight(&link.join("export")).unwrap(),
+        std::fs::canonicalize(&real).unwrap().join("export")
+    );
     let file = root.0.join("file");
     std::fs::write(&file, "unchanged").unwrap();
     assert!(fireemu_export_publication::preflight(&file)

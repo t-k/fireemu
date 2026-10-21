@@ -12,8 +12,12 @@
 //! anyone else (except a root-owned directory with the sticky bit, such as `/tmp`, where other
 //! users can add entries but cannot rename or remove the ones the export makes; they can only
 //! take a name first, which refuses the export), free of ACL entries for anyone else, and on a
-//! volume that enforces ownership. An export parent that is a symlink is followed only when root
-//! owns it and the directory holding it is trusted (macOS `/tmp`). It
+//! volume that enforces ownership. The path is walked from `/` one component at a time, and a
+//! symlink on it (anywhere, and at every hop of a chain) is followed only when the directory
+//! holding it is trusted and root owns the link, or the user owns it and no one else can write
+//! that directory (macOS `/tmp` → `private/tmp`); in `/tmp` a link anyone could have made is
+//! never followed. Below a directory others can write, an export directory that already exists
+//! must be the user's (or root's) and private, since another user could have made it first. It
 //! does not defend against the exporting user's own processes, or root, changing the namespace
 //! concurrently: such a process can rename a directory away and put another directory of the same
 //! owner in its place (the descriptor reopen accepts any directory that user owns), and the
@@ -80,69 +84,138 @@ pub(crate) fn prepare_and_validate_parent_with(
     result
 }
 
-/// Inspects the existing namespace without creating missing components.
+/// Inspects the existing namespace without creating missing components: the physical existing
+/// prefix of `parent`, validated, and the components below it that do not exist yet.
 pub(crate) fn inspect_parent(
     parent: &Path,
     volume_check: VolumeCheck<'_>,
 ) -> Result<(PathBuf, Vec<OsString>), String> {
-    match std::fs::symlink_metadata(parent) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            // Followed only when root owns the link and the directory holding it is trusted
-            // (macOS `/tmp` → `private/tmp`); the canonical chain is validated below.
-            let holder = parent.parent().unwrap_or(Path::new("/"));
-            let holder_error = std::fs::symlink_metadata(holder).map_or_else(
-                |error| {
-                    Some(format!(
-                        "cannot inspect the directory holding the export parent: {error}"
-                    ))
-                },
-                |held| {
-                    ancestor_error(
-                        holder,
-                        held.uid(),
-                        held.mode(),
-                        rustix::process::geteuid().as_raw(),
-                    )
-                },
-            );
-            if let Some(error) = parent_link_error(parent, metadata.uid(), holder_error) {
-                return Err(error);
-            }
-        }
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            return Err("the export parent is not a directory".to_owned());
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("cannot inspect the export parent: {error}")),
-    }
-    let (existing, missing) = split_existing(parent)?;
+    let (existing, missing) = walk(parent)?;
     let existing = trusted_ancestors(&existing, volume_check)?;
     Ok((existing, missing))
 }
 
-/// The longest existing prefix of `parent` and the components below it that do not exist yet.
-/// A `..` below the existing prefix is refused: it has no meaning before the components exist.
-fn split_existing(parent: &Path) -> Result<(PathBuf, Vec<OsString>), String> {
-    let mut existing = parent.to_path_buf();
+/// One component of a path being walked; `Root` restarts at `/` (an absolute link target).
+enum Step {
+    Root,
+    Parent,
+    Name(OsString),
+}
+
+/// The components of `path` as steps, the first one last (a stack).
+fn steps(path: &Path) -> Vec<Step> {
+    use std::path::Component;
+    let mut steps: Vec<Step> = path
+        .components()
+        .filter_map(|component| match component {
+            Component::RootDir => Some(Step::Root),
+            Component::ParentDir => Some(Step::Parent),
+            Component::Normal(name) => Some(Step::Name(name.to_owned())),
+            Component::CurDir | Component::Prefix(_) => None,
+        })
+        .collect();
+    steps.reverse();
+    steps
+}
+
+/// The most symlinks one walk expands (the kernel's own bound is of the same order).
+const MAX_LINK_HOPS: usize = 40;
+
+/// Walks the absolute path `parent` from `/`, one component at a time, with `lstat`: the
+/// physical (link-free) existing prefix, and the components of `parent` below it that do not
+/// exist yet. Every symlink met, in `parent` or in a link's target, is judged by [`link_error`]
+/// against the physical directory holding it, then expanded one hop at a time, so every hop of
+/// a chain is judged. A `..` right after a symlink of `parent` is refused; a `..` inside a link's
+/// target goes to the physical parent, as the kernel does. A dangling link is refused, and so is
+/// a `..` below the existing prefix.
+pub(crate) fn walk(parent: &Path) -> Result<(PathBuf, Vec<OsString>), String> {
+    let parent = std::path::absolute(parent)
+        .map_err(|error| format!("cannot resolve the export parent: {error}"))?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+    // The steps still to take, the next one last; `true` marks a step of `parent` itself.
+    let mut pending: Vec<(Step, bool)> = steps(&parent)
+        .into_iter()
+        .map(|step| (step, true))
+        .collect();
+    let mut current = PathBuf::from("/");
     let mut missing = Vec::new();
-    loop {
-        match std::fs::symlink_metadata(&existing) {
-            Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let Some(name) = existing.file_name() else {
+    let mut hops = 0;
+    let mut after_link = false;
+    while let Some((step, own)) = pending.pop() {
+        let mut was_link = false;
+        match step {
+            Step::Root => current = PathBuf::from("/"),
+            Step::Parent => {
+                if !missing.is_empty() {
                     return Err(
                         "cannot create the export parent through `..` or from the root".to_owned(),
                     );
-                };
-                missing.push(name.to_owned());
-                existing.pop();
+                }
+                if own && after_link {
+                    return Err(format!(
+                        "the export path {} has `..` right after a symlink; name the directory itself",
+                        parent.display()
+                    ));
+                }
+                current.pop();
             }
-            Err(error) => return Err(format!("cannot inspect the export parent: {error}")),
+            Step::Name(name) if !missing.is_empty() => missing.push(name),
+            Step::Name(name) => {
+                let next = current.join(&name);
+                match std::fs::symlink_metadata(&next) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound && own => {
+                        missing.push(name);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Err(format!(
+                            "the export path goes through a symlink whose target {} does not exist",
+                            next.display()
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "cannot inspect the export parent {}: {error}",
+                            next.display()
+                        ));
+                    }
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        hops += 1;
+                        if hops > MAX_LINK_HOPS {
+                            return Err(format!(
+                                "the export path {} goes through more than {MAX_LINK_HOPS} symlinks",
+                                parent.display()
+                            ));
+                        }
+                        let holder = std::fs::symlink_metadata(&current).map_err(|error| {
+                            format!(
+                                "cannot inspect the directory holding the symlink {}: {error}",
+                                next.display()
+                            )
+                        })?;
+                        if let Some(error) = link_error(
+                            &next,
+                            metadata.uid(),
+                            holder.uid(),
+                            holder.mode(),
+                            effective_uid,
+                        ) {
+                            return Err(error);
+                        }
+                        let target = std::fs::read_link(&next).map_err(|error| {
+                            format!("cannot read the symlink {}: {error}", next.display())
+                        })?;
+                        pending.extend(steps(&target).into_iter().map(|step| (step, false)));
+                        was_link = true;
+                    }
+                    Ok(_) => current = next,
+                }
+            }
+        }
+        if own {
+            after_link = was_link;
         }
     }
-    missing.reverse();
-    Ok((existing, missing))
+    Ok((current, missing))
 }
 
 /// Makes each missing component below `base` (a validated canonical directory), private to the
@@ -258,7 +331,7 @@ pub(crate) fn ancestor_error(
 ) -> Option<String> {
     if uid != 0 && uid != effective_uid {
         return Some(format!(
-            "export namespace ancestor {} is not owned by the current user or root",
+            "export namespace ancestor {} is not owned by the current user or root; on a shared machine another user can take a name first (in /tmp too), so choose another name or a directory of your own",
             path.display()
         ));
     }
@@ -272,26 +345,84 @@ pub(crate) fn ancestor_error(
     })
 }
 
-/// Why an export parent that is a symlink is not followed: unless root owns the link and the
-/// directory holding it is trusted (`holder_error` is that directory's refusal), another user
-/// could point it elsewhere.
-pub(crate) fn parent_link_error(
-    parent: &Path,
+/// Why a symlink on the export path is not followed. The directory holding it (`holder_*`,
+/// the physical directory, never a link) must pass [`ancestor_error`], and the link must be
+/// owned by root, or by the exporting user when no one else can write the holder: a link
+/// cannot be changed, only replaced by someone who can write its directory, and in a directory
+/// others can write (`/tmp`) anyone can make one, so only root's are followed there.
+pub(crate) fn link_error(
+    link: &Path,
     link_uid: u32,
-    holder_error: Option<String>,
+    holder_uid: u32,
+    holder_mode: u32,
+    effective_uid: u32,
 ) -> Option<String> {
-    if link_uid != 0 {
+    let holder = link.parent().unwrap_or(Path::new("/"));
+    if let Some(error) = ancestor_error(holder, holder_uid, holder_mode, effective_uid) {
         return Some(format!(
-            "the export parent {} is a symlink not owned by root, which an export never follows",
-            parent.display()
+            "the export path goes through the symlink {}, in a directory that cannot be trusted: {error}",
+            link.display()
         ));
     }
-    holder_error.map(|error| {
+    let shared = holder_mode & 0o022 != 0;
+    let trusted = link_uid == 0 || (link_uid == effective_uid && !shared);
+    (!trusted).then(|| {
+        let whose = if link_uid == effective_uid {
+            "is yours but sits in a directory other users can write, where anyone can make such a link"
+        } else {
+            "belongs to another user"
+        };
         format!(
-            "the export parent {} is a symlink in an untrusted directory: {error}",
-            parent.display()
+            "the export path goes through the symlink {}, which {whose}; an export follows a symlink only when root owns it, or when you own it in a directory only you (or root) can write; use the directory it points to, or a directory of your own",
+            link.display()
         )
     })
+}
+
+/// Why an export directory that already exists is not used, from its owner and mode. Below a
+/// directory other users can write (`below_shared`: only a root-owned sticky one, such as
+/// `/tmp`, passes [`ancestor_error`]), anyone could have made it first, so it must be the user's
+/// (or root's) and not writable by anyone else; elsewhere only the user or root could have
+/// made it.
+pub(crate) fn target_error(
+    target: &Path,
+    uid: u32,
+    mode: u32,
+    below_shared: bool,
+    effective_uid: u32,
+) -> Option<String> {
+    if !below_shared {
+        return None;
+    }
+    if uid != 0 && uid != effective_uid {
+        return Some(format!(
+            "the export directory {} belongs to another user, so an export neither reads nor replaces it: in a directory other users can write, such as /tmp, another user can take a name first; remove or rename it, or choose a directory of your own",
+            target.display()
+        ));
+    }
+    (mode & 0o022 != 0).then(|| {
+        format!(
+            "the export directory {} is writable by other users in a directory other users can write, such as /tmp; make it private (chmod 700) or choose a directory of your own",
+            target.display()
+        )
+    })
+}
+
+/// Whether a directory of the canonical chain of `parent` is writable by others (after
+/// [`trusted_ancestors`], only a root-owned sticky one can be).
+pub(crate) fn below_shared(parent: &Path) -> Result<bool, String> {
+    for ancestor in parent.ancestors() {
+        let metadata = std::fs::symlink_metadata(ancestor).map_err(|error| {
+            format!(
+                "cannot inspect export namespace ancestor {}: {error}",
+                ancestor.display()
+            )
+        })?;
+        if metadata.mode() & 0o022 != 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -617,6 +748,83 @@ mod tests {
         assert_eq!(made, existing.join("a"));
     }
 
+    #[test]
+    fn the_walk_follows_own_links_hop_by_hop_and_keeps_missing_components() {
+        let root = TrustedTempDir::new("walk-own-links");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir_all(base.join("real/sub")).unwrap();
+        std::fs::create_dir(base.join("other")).unwrap();
+        symlink(base.join("real"), base.join("link")).unwrap();
+        // A relative target with `..` inside it follows the physical directory, as the kernel.
+        symlink("../real", base.join("other/up")).unwrap();
+        symlink(base.join("link"), base.join("chain")).unwrap();
+        for route in ["link/sub", "other/up/sub", "chain/sub", "./link/./sub"] {
+            let (existing, missing) = walk(&base.join(route).join("x/y")).unwrap();
+            assert_eq!(existing, base.join("real/sub"), "{route}");
+            assert_eq!(
+                missing,
+                [OsString::from("x"), OsString::from("y")],
+                "{route}"
+            );
+        }
+        // The walk's result has no link left in it.
+        let (existing, _) = walk(&base.join("chain")).unwrap();
+        assert_eq!(existing, std::fs::canonicalize(base.join("real")).unwrap());
+    }
+
+    #[test]
+    fn the_walk_refuses_dot_dot_after_a_link_a_dangling_link_a_loop_and_an_untrusted_holder() {
+        let root = TrustedTempDir::new("walk-refusals");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir(base.join("real")).unwrap();
+        symlink(base.join("real"), base.join("link")).unwrap();
+        let after = walk(&base.join("link/../real/x")).unwrap_err();
+        assert!(after.contains("`..` right after a symlink"), "{after}");
+        // `..` before any link is resolved physically, as before.
+        assert_eq!(
+            walk(&base.join("real/../real")).unwrap().0,
+            base.join("real")
+        );
+        symlink(base.join("nowhere"), base.join("dangling")).unwrap();
+        let dangling = walk(&base.join("dangling/x")).unwrap_err();
+        assert!(dangling.contains("does not exist"), "{dangling}");
+        symlink(base.join("loop"), base.join("loop")).unwrap();
+        let looped = walk(&base.join("loop/x")).unwrap_err();
+        assert!(looped.contains("more than 40 symlinks"), "{looped}");
+        // The user's own link in a directory others in the group can write.
+        let open = base.join("open");
+        std::fs::create_dir(&open).unwrap();
+        symlink(base.join("real"), open.join("link")).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let held = walk(&open.join("link/x"));
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let held = held.unwrap_err();
+        assert!(held.contains("cannot be trusted"), "{held}");
+        // A link to a file with more below it.
+        std::fs::write(base.join("file"), b"x").unwrap();
+        symlink(base.join("file"), base.join("to-file")).unwrap();
+        assert!(walk(&base.join("to-file/x")).is_err());
+    }
+
+    #[test]
+    fn inspect_parent_judges_a_link_by_its_holder_through_the_walk() {
+        // The holder verdict inside the walk, reached through inspect_parent (review S3).
+        let root = TrustedTempDir::new("inspect-holder");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir(base.join("real")).unwrap();
+        let open = base.join("open");
+        std::fs::create_dir(&open).unwrap();
+        symlink(base.join("real"), open.join("parent")).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let refused = inspect_parent(&open.join("parent"), &accept);
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let refused = refused.unwrap_err();
+        assert!(refused.contains("symlink"), "{refused}");
+        assert!(refused.contains("writable by other users"), "{refused}");
+        let followed = inspect_parent(&open.join("parent"), &accept).unwrap();
+        assert_eq!(followed.0, base.join("real"));
+    }
+
     const OTHER: u32 = 4242;
     const ME: u32 = 501;
 
@@ -654,15 +862,94 @@ mod tests {
     }
 
     #[test]
-    fn a_parent_symlink_is_followed_only_when_root_owns_it_in_a_trusted_directory() {
-        assert_eq!(parent_link_error(Path::new("/tmp"), 0, None), None);
-        let theirs = parent_link_error(Path::new("/x"), ME, None).unwrap();
-        assert!(theirs.contains("symlink"), "{theirs}");
-        let held = parent_link_error(Path::new("/x"), 0, Some("held".to_owned())).unwrap();
-        assert!(held.contains("held"), "{held}");
+    fn a_symlink_is_followed_only_when_root_or_the_user_owns_it_in_a_trusted_directory() {
+        let link = Path::new("/h/link");
+        // Root's link in /tmp (root, 1777) or in / (root, 0755): macOS /tmp and /var.
+        assert_eq!(link_error(link, 0, 0, 0o41777, ME), None);
+        assert_eq!(link_error(link, 0, 0, 0o40755, ME), None);
+        // The user's own link in a directory only the user (or root) can write.
+        assert_eq!(link_error(link, ME, ME, 0o40700, ME), None);
+        assert_eq!(link_error(link, ME, 0, 0o40755, ME), None);
+        // The user's own link in /tmp: anyone could have made a link there.
+        let shared = link_error(link, ME, 0, 0o41777, ME).unwrap();
+        assert!(shared.contains("other users can write"), "{shared}");
+        assert!(shared.contains("a directory of your own"), "{shared}");
+        // Another user's link, anywhere.
+        for (holder_uid, holder_mode) in [(0, 0o41777), (0, 0o40755), (ME, 0o40700)] {
+            let theirs = link_error(link, OTHER, holder_uid, holder_mode, ME).unwrap();
+            assert!(theirs.contains("another user"), "{theirs}");
+            assert!(theirs.contains("/h/link"), "{theirs}");
+        }
+        // Root's link in a directory that fails the ancestor rule.
+        for (holder_uid, holder_mode) in [(0, 0o40777), (ME, 0o40770), (OTHER, 0o40755)] {
+            let held = link_error(link, 0, holder_uid, holder_mode, ME).unwrap();
+            assert!(held.contains("cannot be trusted"), "{held}");
+            assert!(held.contains("/h"), "{held}");
+        }
+    }
+
+    #[test]
+    fn an_existing_target_below_a_shared_directory_must_be_private_to_the_user_or_root() {
+        let target = Path::new("/tmp/data");
+        // Not below a shared directory: only the user or root could have made it.
+        assert_eq!(target_error(target, OTHER, 0o40777, false, ME), None);
+        // Below /tmp: the user's or root's, not writable by others.
+        assert_eq!(target_error(target, ME, 0o40700, true, ME), None);
+        assert_eq!(target_error(target, ME, 0o40755, true, ME), None);
+        assert_eq!(target_error(target, 0, 0o40755, true, ME), None);
+        // Another user made it first (a directory pre-created by another uid).
+        let theirs = target_error(target, OTHER, 0o40700, true, ME).unwrap();
+        assert!(theirs.contains("belongs to another user"), "{theirs}");
+        assert!(theirs.contains("remove or rename it"), "{theirs}");
+        // The user's, but writable by others, even with the sticky bit.
+        for mode in [0o40777, 0o40770, 0o40702, 0o41777] {
+            let open = target_error(target, ME, mode, true, ME).unwrap();
+            assert!(open.contains("chmod 700"), "{mode:o}: {open}");
+        }
+    }
+
+    #[test]
+    fn another_users_ancestor_is_refused_with_a_remedy() {
+        let error = ancestor_error(Path::new("/tmp/taken"), OTHER, 0o40755, ME).unwrap();
+        assert!(error.contains("take a name first"), "{error}");
+        assert!(error.contains("a directory of your own"), "{error}");
     }
 
     proptest::proptest! {
+        /// A link is followed exactly when its directory is trusted and root owns it, or the
+        /// user owns it and no one else can write that directory.
+        #[test]
+        fn a_link_is_followed_by_owner_and_holder(
+            link_owner in 0usize..3,
+            holder_owner in 0usize..3,
+            holder_mode in 0u32..0o10000,
+        ) {
+            let link_uid = [0, ME, OTHER][link_owner];
+            let holder_uid = [0, ME, OTHER][holder_owner];
+            let verdict = link_error(Path::new("/h/l"), link_uid, holder_uid, 0o40000 | holder_mode, ME);
+            let holder_trusted = ancestor_error(Path::new("/h"), holder_uid, 0o40000 | holder_mode, ME).is_none();
+            let shared = holder_mode & 0o022 != 0;
+            let followed = holder_trusted && (link_uid == 0 || (link_uid == ME && !shared));
+            proptest::prop_assert_eq!(verdict.is_none(), followed, "{} {} {:o}", link_uid, holder_uid, holder_mode);
+        }
+
+        /// A present target is refused exactly when it sits below a shared directory and is
+        /// another user's or writable by others; every refusal names a remedy.
+        #[test]
+        fn a_present_target_is_judged_by_owner_and_mode_below_a_shared_directory(
+            owner in 0usize..3,
+            mode in 0u32..0o10000,
+            below_shared: bool,
+        ) {
+            let uid = [0, ME, OTHER][owner];
+            let verdict = target_error(Path::new("/tmp/t"), uid, 0o40000 | mode, below_shared, ME);
+            let refused = below_shared && (uid == OTHER || mode & 0o022 != 0);
+            proptest::prop_assert_eq!(verdict.is_some(), refused, "{} {:o} {}", uid, mode, below_shared);
+            if let Some(error) = verdict {
+                proptest::prop_assert!(error.contains("a directory of your own"), "{}", error);
+            }
+        }
+
         /// Over every permission bit and three owners: never another user's directory, never one
         /// others can write unless root owns it with the sticky bit.
         #[test]
@@ -734,15 +1021,16 @@ mod tests {
     }
 
     #[test]
-    fn a_parent_that_is_a_symlink_or_a_file_is_refused() {
+    fn a_parent_that_is_a_file_is_refused_and_an_own_link_is_followed() {
         let root = TrustedTempDir::new("parent-leaf");
         let existing = std::fs::canonicalize(root.path()).unwrap();
         std::fs::create_dir(existing.join("real")).unwrap();
         symlink(existing.join("real"), existing.join("link")).unwrap();
         std::fs::write(existing.join("file"), b"x").unwrap();
+        // The user's own link in a private directory is followed to its directory.
         let link =
-            prepare_and_validate_parent_with(&existing.join("link"), &accept, &|_| {}).unwrap_err();
-        assert!(link.contains("symlink"), "{link}");
+            prepare_and_validate_parent_with(&existing.join("link"), &accept, &|_| {}).unwrap();
+        assert_eq!(link, existing.join("real"));
         let file =
             prepare_and_validate_parent_with(&existing.join("file"), &accept, &|_| {}).unwrap_err();
         assert!(file.contains("not a directory"), "{file}");

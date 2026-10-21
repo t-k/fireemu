@@ -15,7 +15,9 @@
 //! Unix cleanup requires every canonical namespace ancestor to be root/current-user owned and
 //! not group/world writable, or root-owned with the sticky bit (`/tmp`); on macOS an ACL entry that lets another principal change an ancestor
 //! (every `allow` entry of a principal but the owner, root and the user running the export) is refused,
-//! and a `deny` entry is accepted; the stage's own ACL is cleared when it is created. Staged export publication is
+//! and a `deny` entry is accepted; the stage's own ACL is cleared when it is created. Below a sticky directory an
+//! export target that already exists must be the user's (or root's) and not writable by others,
+//! and every symlink on the export path is judged where it is met (see `parent`). Staged export publication is
 //! unavailable on Windows and fails before creating or modifying any export path.
 
 use std::path::{Path, PathBuf};
@@ -69,16 +71,68 @@ struct TargetIdentity {
 /// Missing parent components are inspected through their nearest existing ancestor. This is
 /// only an early diagnostic: stage creation and publication must still revalidate the namespace.
 /// The caller must separately check its export overwrite/content policy.
+///
+/// Returns the export path with every symlink on it resolved (each one judged as the export
+/// judges it): a caller that exports later (`--export-on-exit`) keeps this path, so a link made
+/// on the way after the preflight is never followed.
 #[cfg(unix)]
-pub fn preflight(target: &Path) -> Result<(), String> {
+pub fn preflight(target: &Path) -> Result<PathBuf, String> {
     preflight_with(target, &is_mount_root)
+}
+
+/// The export path with every symlink on it resolved, each one judged as an export judges it,
+/// without checking anything else; components that do not exist yet are kept as given.
+#[cfg(unix)]
+pub fn resolve(target: &Path) -> Result<PathBuf, String> {
+    let target = std::path::absolute(target)
+        .map_err(|error| format!("cannot resolve the export path: {error}"))?;
+    let parent = target
+        .parent()
+        .ok_or("the export path has no parent directory")?;
+    let name = target
+        .file_name()
+        .ok_or("the export path has no directory name")?;
+    let (existing, missing) = parent::walk(parent)?;
+    Ok(missing
+        .iter()
+        .fold(existing, |path, component| path.join(component))
+        .join(name))
+}
+
+/// Resolution is unsupported on Windows, as publication is.
+#[cfg(not(unix))]
+pub fn resolve(_target: &Path) -> Result<PathBuf, String> {
+    Err(
+        "safe atomic export publication is unavailable on Windows; no export was written"
+            .to_owned(),
+    )
+}
+
+/// Refuses a present export target that another user could have made (see
+/// [`parent::target_error`]).
+#[cfg(unix)]
+fn check_present_target(target: &Path, parent: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = std::fs::symlink_metadata(target)
+        .map_err(|error| format!("cannot inspect the export target: {error}"))?;
+    match parent::target_error(
+        target,
+        metadata.uid(),
+        metadata.mode(),
+        parent::below_shared(parent)?,
+        rustix::process::geteuid().as_raw(),
+    ) {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 #[cfg(unix)]
 fn preflight_with(
     target: &Path,
     mount_root: &dyn Fn(&Path, &Path) -> Result<bool, String>,
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
     let target = std::path::absolute(target)
         .map_err(|error| format!("cannot resolve the export path: {error}"))?;
     let parent = target
@@ -88,10 +142,15 @@ fn preflight_with(
     let name = target
         .file_name()
         .ok_or("the export path has no directory name")?;
+    let resolved = missing
+        .iter()
+        .fold(existing.clone(), |path, component| path.join(component))
+        .join(name);
     if missing.is_empty() {
         let target = existing.join(name);
         let identity = target_identity(&target)?;
         if identity.present {
+            check_present_target(&target, &existing)?;
             parent::system_volume_check(&target)?;
             if mount_root(&target, &existing)? {
                 parent::trusted_ancestors(&target, &parent::system_volume_check)?;
@@ -107,7 +166,7 @@ fn preflight_with(
                         target.display()
                     )
                 })?;
-                return Ok(());
+                return Ok(resolved);
             }
         }
     }
@@ -129,12 +188,12 @@ fn preflight_with(
             existing.display()
         )
     })?;
-    Ok(())
+    Ok(resolved)
 }
 
 /// Export publication is unsupported on Windows; inspection never changes the destination.
 #[cfg(not(unix))]
-pub fn preflight(_target: &Path) -> Result<(), String> {
+pub fn preflight(_target: &Path) -> Result<PathBuf, String> {
     Err(
         "safe atomic export publication is unavailable on Windows; no export was written"
             .to_owned(),
@@ -189,6 +248,10 @@ impl PublicationStage {
             .ok_or_else(|| "the export path has no directory name".to_owned())?;
         let target = parent.join(target_name);
         let expected_target = target_identity(&target)?;
+        // Before the overwrite policy reads anything in it.
+        if expected_target.present {
+            check_present_target(&target, &parent)?;
+        }
         // An existing destination can itself be a mount point (a volume mounted at the export path).
         #[cfg(target_os = "macos")]
         if expected_target.present {
@@ -646,6 +709,10 @@ fn publication_error(error: rustix::io::Errno) -> String {
     if error == rustix::io::Errno::NOTSUP || error == rustix::io::Errno::OPNOTSUPP {
         format!(
             "atomic export publication is unavailable or failed: {error}; this volume does not support atomic directory rename, so export to a directory on an APFS volume (macOS) or on a local filesystem that supports it"
+        )
+    } else if error == rustix::io::Errno::PERM {
+        format!(
+            "atomic export publication is unavailable or failed: {error}; in a directory with the sticky bit, such as /tmp, only the owner of an entry can replace it, so remove the existing export directory or choose a directory of your own"
         )
     } else {
         format!("atomic export publication is unavailable or failed: {error}")

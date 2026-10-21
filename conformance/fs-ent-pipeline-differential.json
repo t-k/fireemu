@@ -1529,8 +1529,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-21T03:59:51.774584Z",
-      "updateTime": "2026-10-21T03:59:51.774584Z"
+      "createTime": "2026-10-21T07:28:31.873988Z",
+      "updateTime": "2026-10-21T07:28:31.873988Z"
      }
     ]
    }
@@ -7080,8 +7080,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-21T03:59:51.774584Z",
-      "updateTime": "2026-10-21T03:59:51.774584Z"
+      "createTime": "2026-10-21T07:28:31.873988Z",
+      "updateTime": "2026-10-21T07:28:31.873988Z"
      }
     ]
    }
@@ -12472,10 +12472,10 @@
            "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
           },
           "__create_time__": {
-           "timestampValue": "2026-10-21T03:59:51.774584Z"
+           "timestampValue": "2026-10-21T07:28:31.873988Z"
           },
           "__update_time__": {
-           "timestampValue": "2026-10-21T03:59:51.774584Z"
+           "timestampValue": "2026-10-21T07:28:31.873988Z"
           },
           "i": {
            "integerValue": "1"
@@ -400953,8 +400953,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-21T03:59:51.774584Z",
-      "updateTime": "2026-10-21T03:59:51.774584Z"
+      "createTime": "2026-10-21T07:28:31.873988Z",
+      "updateTime": "2026-10-21T07:28:31.873988Z"
      }
     ]
    }
@@ -407816,6 +407816,1379 @@
    "official": {
     "status": 400,
     "message": "map key must be of type STRING, given type is MAP"
+   }
+  },
+  {
+   "id": "R9 reference constant: database root",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "v": {
+        "referenceValue": "projects/demo-app/databases/(default)/documents"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "R9 reference constant: another database root",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/o/databases/zz"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "v": {
+        "referenceValue": "projects/o/databases/zz/documents"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "R9 reference constant: id ____",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/____"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "v": {
+        "referenceValue": "projects/demo-app/databases/(default)/documents/c/____"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "R9 reference constant: 200 segments",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "v": {
+        "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "R9 reference constant: 202 segments",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "A key path cannot have more than 100 elements."
+   }
+  },
+  {
+   "id": "R9 reference constant: 201 segments then a long id",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "A key path cannot have more than 100 elements."
+   }
+  },
+  {
+   "id": "R9 reference constant: reserved collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/__x__/d"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection id \"__x__\" is invalid because it is reserved."
+   }
+  },
+  {
+   "id": "R9 reference constant: reserved document",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/__x__"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Resource id \"__x__\" is invalid because it is reserved."
+   }
+  },
+  {
+   "id": "R9 reference constant: dot collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/./d"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/./d\" contains a collection id \".\" at index 48."
+   }
+  },
+  {
+   "id": "R9 reference constant: dotdot document",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/.."
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c/..\" contains a resource id \"..\" at index 50."
+   }
+  },
+  {
+   "id": "R9 reference constant: long document id",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Path element can be at most 1,500 bytes."
+   }
+  },
+  {
+   "id": "R9 reference constant: long collection id",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/d"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The kind / collection group can be at most 1,500 bytes."
+   }
+  },
+  {
+   "id": "R9 reference constant: long collection id alone",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" lacks \"/\" at index 1549."
+   }
+  },
+  {
+   "id": "R9 reference constant: projects/",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/\" has invalid trailing \"/\"."
+   }
+  },
+  {
+   "id": "R9 reference constant: projects//",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects//"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects//\" lacks a project id at index 9."
+   }
+  },
+  {
+   "id": "R9 reference constant: projects/p",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/p"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/p\" lacks \"/\" at index 10."
+   }
+  },
+  {
+   "id": "R9 reference constant: no databases",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/x/"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/x/\" lacks \"databases\" at index 18."
+   }
+  },
+  {
+   "id": "R9 reference constant: databases alone",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases\" lacks \"/\" at index 27."
+   }
+  },
+  {
+   "id": "R9 reference constant: databases/",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/\" has invalid trailing \"/\"."
+   }
+  },
+  {
+   "id": "R9 reference constant: databases//",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases//"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases//\" lacks a database id at index 28."
+   }
+  },
+  {
+   "id": "R9 reference constant: database root/",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/\" has invalid trailing \"/\"."
+   }
+  },
+  {
+   "id": "R9 reference constant: database root//",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)//"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)//\" lacks \"documents\" at index 38."
+   }
+  },
+  {
+   "id": "R9 reference constant: documentsx",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documentsx/c"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documentsx/c\" lacks \"/\" at index 47."
+   }
+  },
+  {
+   "id": "R9 reference constant: documents//",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents//"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents//\" lacks a collection id at index 48."
+   }
+  },
+  {
+   "id": "R9 reference constant: c/d//",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d//"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c/d//\" lacks a collection id at index 52."
+   }
+  },
+  {
+   "id": "R9 reference constant: ./",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/./"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/./\" contains a collection id \".\" at index 48."
+   }
+  },
+  {
+   "id": "R9 reference constant: __x__/",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/__x__/"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection id \"__x__\" is invalid because it is reserved."
+   }
+  },
+  {
+   "id": "R9 reference constant: c/./__x__/e",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/./__x__/e"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c/./__x__/e\" contains a resource id \".\" at index 50."
+   }
+  },
+  {
+   "id": "R9 reference constant: long id//d",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa//d"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa//d\" lacks a resource id at index 1550."
+   }
+  },
+  {
+   "id": "R9 reference constant: long id/",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/\" has invalid trailing \"/\"."
+   }
+  },
+  {
+   "id": "R9 reference constant: database root equals its documents root",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "referenceValue": "projects/demo-app/databases/(default)"
+            },
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "v": {
+        "booleanValue": true
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "R9 reference constant: 202 segments on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "referenceValue": "projects/demo-app/databases/(default)/documents/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "A key path cannot have more than 100 elements."
+   }
+  },
+  {
+   "id": "R9 collection reference: /.",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/."
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection name \"/.\" contains a collection id \".\" at index 1."
+   }
+  },
+  {
+   "id": "R9 collection reference: /..",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/.."
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection name \"/..\" contains a collection id \"..\" at index 1."
+   }
+  },
+  {
+   "id": "R9 collection reference: /__c__",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/__c__"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection id \"__c__\" is invalid because it is reserved."
+   }
+  },
+  {
+   "id": "R9 collection reference: /c/./s",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c/./s"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection name \"/c/./s\" contains a resource id \".\" at index 3."
+   }
+  },
+  {
+   "id": "R9 collection reference: /c/__d__/s",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c/__d__/s"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Resource id \"__d__\" is invalid because it is reserved."
+   }
+  },
+  {
+   "id": "R9 collection reference: /.//d",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/.//d"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection name \"/.//d\" contains a collection id \".\" at index 1."
+   }
+  },
+  {
+   "id": "R9 collection reference: /c//.",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c//."
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection name \"/c//.\" lacks a resource id at index 3."
+   }
+  },
+  {
+   "id": "R9 collection reference: long",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The kind / collection group can be at most 1,500 bytes."
+   }
+  },
+  {
+   "id": "R9 collection reference: long resource",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/s"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Path element can be at most 1,500 bytes."
+   }
+  },
+  {
+   "id": "R9 collection reference: 201 segments",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": []
+   }
+  },
+  {
+   "id": "R9 collection reference: 203 segments",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "A key path cannot have more than 100 elements."
+   }
+  },
+  {
+   "id": "R9 collection reference: _____",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/_____"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection id \"_____\" is invalid because it is reserved."
+   }
+  },
+  {
+   "id": "R9 map key constant: 1500 bytes",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "mapValue": {
+           "fields": {
+            "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": {
+             "integerValue": "1"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "v": {
+        "mapValue": {
+         "fields": {
+          "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": {
+           "integerValue": "1"
+          }
+         }
+        }
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "R9 map key constant: 1501 bytes",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "mapValue": {
+           "fields": {
+            "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": {
+             "integerValue": "1"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Field name 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk' can be at most 1,500 bytes."
+   }
+  },
+  {
+   "id": "R9 timestamp constant: nanoseconds",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "timestampValue": "2020-01-01T00:00:00.123456789Z"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": [
+     {
+      "fields": {
+       "v": {
+        "timestampValue": "2020-01-01T00:00:00.123456Z"
+       }
+      }
+     }
+    ]
    }
   }
  ]

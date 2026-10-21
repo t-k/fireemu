@@ -496,6 +496,13 @@ fn snapshot_call<'a>(
                 return None;
             }
             Some(match &located {
+                // A priority written through a `.priority` path keeps an integer's type: the
+                // official emulator holds it as a `Long`, equal to its number but no number to
+                // `<`, `+` or `-` (review r11 M40). One inside an object body is a double.
+                Located::Node(Node {
+                    priority: Some(Priority::Number(crate::number::Number::Int(n))),
+                    ..
+                }) => Value::Long(*n),
                 Located::Node(Node {
                     priority: Some(Priority::Number(n)),
                     ..

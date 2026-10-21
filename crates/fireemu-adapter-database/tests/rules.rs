@@ -2007,3 +2007,70 @@ fn an_on_disconnect_merge_is_judged_as_its_entries_when_registered() {
         vec![reply(2, "ok", r#""""#)]
     );
 }
+
+#[test]
+fn a_priority_written_through_its_path_is_no_number_to_order_or_add() {
+    // Review r11 M40, recorded on the official emulator: a priority written through a
+    // `.priority` path equals its number, but `<`, `>`, `+` and `-` fail on it, in the write
+    // and in later reads; one written inside an object body is a number.
+    for (rule, path_write, body_write) in [
+        ("newData.getPriority() > 1", false, true),
+        ("newData.getPriority() - 5 == 0", false, true),
+        ("newData.getPriority() + '' == '5'", false, true),
+        ("newData.getPriority() == 5", true, true),
+        ("newData.getPriority() === 5", true, true),
+        ("newData.child('.priority').val() > 1", true, true),
+    ] {
+        let mut db = db();
+        load(
+            &mut db,
+            "pp",
+            &format!(
+                r#"{{"rules":{{".read":true,"t":{{"$k":{{".write":true,".validate":"{rule}"}}}}}}}}"#
+            ),
+        );
+        call(&mut db, "PUT", "/t/o.json?ns=pp", OWNER, r#"{"a":1}"#);
+        let expect = |allowed: bool| if allowed { 200 } else { 401 };
+        assert_eq!(
+            call(&mut db, "PUT", "/t/o/.priority.json?ns=pp", &[], "5").0,
+            expect(path_write),
+            "{rule} path"
+        );
+        assert_eq!(
+            call(
+                &mut db,
+                "PUT",
+                "/t/o.json?ns=pp",
+                &[],
+                r#"{"a":1,".priority":5}"#
+            )
+            .0,
+            expect(body_write),
+            "{rule} body"
+        );
+    }
+    let mut db = db();
+    load(
+        &mut db,
+        "pr",
+        r#"{"rules":{".read":"data.getPriority() > 1"}}"#,
+    );
+    call(&mut db, "PUT", "/a.json?ns=pr", OWNER, "1");
+    call(&mut db, "PUT", "/.priority.json?ns=pr", OWNER, "5");
+    assert_eq!(call(&mut db, "GET", "/.json?ns=pr", &[], "").0, 401);
+    // A fresh database: an equal value written over it would keep the stored form.
+    let mut db = self::db();
+    load(
+        &mut db,
+        "pr",
+        r#"{"rules":{".read":"data.getPriority() > 1"}}"#,
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/.json?ns=pr",
+        OWNER,
+        r#"{"a":1,".priority":5}"#,
+    );
+    assert_eq!(call(&mut db, "GET", "/.json?ns=pr", &[], "").0, 200);
+}

@@ -318,17 +318,30 @@ fn java_int(text: &str) -> Option<i32> {
     i32::try_from(if negative { -value } else { value }).ok()
 }
 
-/// Code units whose case Java 21 leaves as they are and Rust's newer Unicode tables map (or
-/// the other way round); a case change of a string holding one is an error, so the rule is
-/// false (the r11 case-map comparison).
-const CASE_DIFFERS: [char; 16] = [
-    '\u{019B}', '\u{0264}', '\u{1C89}', '\u{1C8A}', '\u{A7CB}', '\u{A7CC}', '\u{A7CD}', '\u{A7CE}',
-    '\u{A7CF}', '\u{A7D2}', '\u{A7D3}', '\u{A7D4}', '\u{A7D5}', '\u{A7DA}', '\u{A7DB}', '\u{A7DC}',
+/// Code points whose case Java 21 maps otherwise than Rust's newer Unicode tables, over every
+/// plane (the r11 JVM case-map comparison and review r11 M41). A case change of a string
+/// holding one is an error, so the rule is false.
+const CASE_DIFFERS: [(char, char); 10] = [
+    ('\u{019B}', '\u{019B}'),
+    ('\u{0264}', '\u{0264}'),
+    ('\u{1C89}', '\u{1C8A}'),
+    ('\u{A7CB}', '\u{A7CF}'),
+    ('\u{A7D2}', '\u{A7D5}'),
+    ('\u{A7DA}', '\u{A7DC}'),
+    ('\u{10D50}', '\u{10D65}'),
+    ('\u{10D70}', '\u{10D85}'),
+    ('\u{16EA0}', '\u{16EB8}'),
+    ('\u{16EBB}', '\u{16ED3}'),
 ];
 
-/// `s.toLowerCase()` or `s.toUpperCase()` as Java 21 gives it.
+/// `s.toLowerCase()` or `s.toUpperCase()` as Java 21 gives it. A lowercase of a string holding
+/// `Σ` is an error too: whether it becomes the final `ς` depends on its neighbours as Java 21
+/// reads them, which is not reproduced (review r11 M41).
 pub(crate) fn java_case(s: &str, lower: bool) -> Option<String> {
-    if s.chars().any(|c| CASE_DIFFERS.contains(&c)) {
+    if s.chars()
+        .any(|c| CASE_DIFFERS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)))
+        || (lower && s.contains('\u{03A3}'))
+    {
         return None;
     }
     Some(if lower {

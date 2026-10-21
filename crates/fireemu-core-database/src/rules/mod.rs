@@ -513,7 +513,7 @@ mod java_chars_tests {
                 let unit = |hex: &str| u16::from_str_radix(hex, 16).unwrap();
                 let to: Vec<u16> = to.split(',').map(unit).collect();
                 (
-                    char::from_u32(u32::from(unit(from))).unwrap(),
+                    char::from_u32(u32::from_str_radix(from, 16).unwrap()).unwrap(),
                     String::from_utf16(&to).unwrap(),
                 )
             })
@@ -521,11 +521,11 @@ mod java_chars_tests {
     }
 
     #[test]
-    fn every_bmp_code_unit_changes_case_as_java_21_changes_it() {
+    fn every_code_point_changes_case_as_java_21_changes_it() {
         for (name, lower) in [("lower_map", true), ("upper_map", false)] {
             let java = case_map(name);
             let mut differ = Vec::new();
-            for code in 0..=0xFFFF_u32 {
+            for code in 0..=0x10_FFFF_u32 {
                 let Some(c) = char::from_u32(code) else {
                     continue;
                 };
@@ -535,8 +535,9 @@ mod java_chars_tests {
                     None => differ.push(c),
                 }
             }
-            // The code units refused are those Rust's tables and Java 21's map differently.
-            for c in differ {
+            // The code points refused are those Rust's tables and Java 21's map differently,
+            // and `Σ` in a lowercase, whose result depends on its neighbours.
+            for c in differ.into_iter().filter(|&c| !(lower && c == '\u{03A3}')) {
                 let rust = if lower {
                     c.to_lowercase().collect::<String>()
                 } else {
@@ -559,6 +560,23 @@ mod java_chars_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_lowercase_holding_capital_sigma_is_refused() {
+        for text in [
+            "\u{03A3}",
+            "\u{0391}\u{03A3}",
+            "\u{0391}:\u{03A3}",
+            "a\u{03A3}b",
+        ] {
+            assert_eq!(super::eval::java_case(text, true), None, "{text}");
+            assert!(super::eval::java_case(text, false).is_some(), "{text}");
+        }
+        assert_eq!(
+            super::eval::java_case("\u{03C3}", true).as_deref(),
+            Some("\u{03C3}")
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // Prints the character classes the official database emulator's JavaScript reader (Rhino on
 // Java) uses, for every code unit of the Basic Multilingual Plane, as ranges; the decimal
 // digits `Integer.parseInt` reads; and the case mappings `toLowerCase` and `toUpperCase` give
-// for each code unit they change.
+// for each code point (every plane) they change.
 public class JavaChars {
   interface Test { boolean test(char c); }
   static void ranges(String name, Test t) {
@@ -26,9 +26,9 @@ public class JavaChars {
   }
   static void mapping(String name, boolean lower) {
     StringBuilder out = new StringBuilder(name);
-    for (int c = 0; c <= 0xFFFF; c++) {
+    for (int c = 0; c <= 0x10FFFF; c++) {
       if (c >= 0xD800 && c <= 0xDFFF) continue;
-      String s = String.valueOf((char) c);
+      String s = new String(Character.toChars(c));
       String m = lower ? s.toLowerCase() : s.toUpperCase();
       if (m.equals(s)) continue;
       out.append(String.format(" %04X>", c));

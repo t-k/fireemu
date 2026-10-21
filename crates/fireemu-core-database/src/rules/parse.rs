@@ -601,6 +601,12 @@ impl Lexer<'_> {
                     };
                     pattern.push(next);
                     self.at += 1;
+                    // The reader reads CR LF as one line terminator (a LF).
+                    if next == '\r' && self.chars.get(self.at) == Some(&'\n') {
+                        pattern.pop();
+                        pattern.push('\n');
+                        self.at += 1;
+                    }
                 }
                 '[' => {
                     in_class = true;

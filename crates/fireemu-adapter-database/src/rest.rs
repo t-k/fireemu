@@ -592,6 +592,7 @@ impl Database {
         now_millis: i64,
     ) -> Result<Handled, Refusal> {
         request::check_escapes(&request.target)?;
+        request::check_ambiguity(&request.target, request.header("Authorization").is_some())?;
         let method = request
             .header("X-HTTP-Method-Override")
             .unwrap_or(&request.method)

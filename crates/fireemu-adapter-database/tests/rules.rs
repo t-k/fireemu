@@ -1652,7 +1652,7 @@ fn a_write_has_no_key_ordering() {
     // Review r9 M24, recorded on the official emulator: `query.orderByKey` is true for a read
     // without a query and false in `.write` and `.validate`, over REST and the realtime
     // protocol, onDisconnect writes included.
-    let user = format!("auth={}", token(r#"{"sub":"u1","uid":"u1"}"#));
+    let user = format!("auth={}", token(r#"{"sub":"u1","uid":"u1","iat":1}"#));
     for (rules, allowed) in [
         (
             r#"{"rules":{".read":true,".write":"query.orderByKey"}}"#,
@@ -1882,4 +1882,47 @@ fn a_remote_peer_is_refused_the_rules_route_however_its_path_is_written() {
         };
         assert_eq!(response.status, 200, "{profile} loopback");
     }
+}
+
+#[test]
+fn an_ambiguous_request_is_refused() {
+    // Review r11 M35/M36 and ruling 18: the official emulator takes the first of a repeated
+    // parameter and prefers `auth` among credentials; a request that could mean two things is
+    // refused here, before the rules (a listed difference).
+    let mut db = db();
+    load(&mut db, "am", r#"{"rules":{".read":"auth.uid == 'u2'"}}"#);
+    let one = format!("auth={}", token(r#"{"sub":"u1","uid":"u1","iat":1}"#));
+    let two = format!("auth={}", token(r#"{"sub":"u2","uid":"u2","iat":1}"#));
+    for (target, headers) in [
+        (format!("/a.json?ns=am&{one}&{two}"), &[][..]),
+        (format!("/a.json?ns=am&{two}&access_token=x"), &[][..]),
+        (
+            format!("/a.json?ns=am&{two}"),
+            &[("Authorization", "Bearer x")][..],
+        ),
+        (
+            "/a.json?ns=am&access_token=x".to_owned(),
+            &[("Authorization", "Bearer owner")][..],
+        ),
+        ("/a.json?ns=am&ns=am".to_owned(), &[][..]),
+        (
+            "/a.json?ns=am&orderBy=%22$key%22&orderBy=%22$key%22".to_owned(),
+            &[][..],
+        ),
+        (
+            "/a.json?ns=am&print=pretty&print=silent".to_owned(),
+            &[][..],
+        ),
+    ] {
+        for method in ["GET", "PUT"] {
+            let (status, body) = call(&mut db, method, &target, headers, "1");
+            assert_eq!(status, 400, "{method} {target}: {body}");
+            assert!(body.contains("Ambiguous request"), "{body}");
+        }
+    }
+    // One credential, one of each parameter: served.
+    assert_eq!(
+        call(&mut db, "GET", &format!("/a.json?ns=am&{two}"), &[], "").0,
+        200
+    );
 }

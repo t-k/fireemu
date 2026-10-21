@@ -67,6 +67,32 @@ pub fn split_target(target: &str) -> (&str, BTreeMap<String, String>) {
     (path, params)
 }
 
+/// The refusal of an ambiguous request (review r11 M35, M36, ruling 18): a query parameter
+/// given more than once, or more than one credential (`auth`, `access_token`, an
+/// `Authorization` header). The official emulator takes the first value and prefers `auth`;
+/// a request that could mean two things is refused here instead (a listed difference).
+pub fn check_ambiguity(target: &str, authorization: bool) -> Result<(), Refusal> {
+    let query = target.split_once('?').map_or("", |(_, query)| query);
+    let mut seen = std::collections::BTreeSet::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let name = percent_decode(pair.split_once('=').map_or(pair, |(name, _)| name));
+        if !seen.insert(name.clone()) {
+            return Err(Refusal::bad(format!(
+                "Ambiguous request: the query parameter '{name}' is given more than once."
+            )));
+        }
+    }
+    let credentials = usize::from(seen.contains("auth"))
+        + usize::from(seen.contains("access_token"))
+        + usize::from(authorization);
+    if credentials > 1 {
+        return Err(Refusal::bad(
+            "Ambiguous request: more than one credential (auth, access_token or an Authorization header).",
+        ));
+    }
+    Ok(())
+}
+
 /// Decodes `%XX` escapes; a malformed escape stays as it is. `+` is not a space.
 ///
 /// A target with a malformed escape is refused first ([`check_escapes`]), so the literal

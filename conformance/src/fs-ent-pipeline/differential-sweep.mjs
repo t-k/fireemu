@@ -758,6 +758,40 @@ export function matrix() {
     domain[`array-depth-${depth}`] = array;
   }
   domain["timestamp-nanos"] = { timestampValue: "2020-01-01T00:00:00.123456789Z" };
+  // The field path inside a literal: keys joined with `.`, at most 1500 bytes (review r9 M1).
+  const nest = (keys) =>
+    keys.reduceRight((inner, key) => ({ mapValue: { fields: { [key]: inner } } }), int(1));
+  for (const inner of [1498, 1499, 1500]) {
+    domain[`path-a-${inner}`] = nest(["a", "a".repeat(inner)]);
+  }
+  domain["path-long-then-b"] = nest(["a".repeat(1499), "b"]);
+  domain["path-three-levels"] = nest(["a", "b", "a".repeat(1497)]);
+  domain["path-dotted-key"] = nest(["x.y", "a".repeat(1497)]);
+  domain["path-fifteen-keys"] = nest(Array.from({ length: 15 }, () => "a".repeat(100)));
+  domain["path-through-array"] = nest(["a"]);
+  domain["path-through-array"].mapValue.fields.a = {
+    arrayValue: { values: [nest(["a".repeat(1499)])] },
+  };
+  // Base64 with line breaks (review r9 M2).
+  for (const [name, text] of [
+    ["lf", "QUJD\nQUJD"],
+    ["cr", "QUJD\rQUJD"],
+    ["crlf", "QUJD\r\nQUJD"],
+    ["leading-lf", "\nQUJD"],
+    ["trailing-lf", "QUJD\n"],
+    ["mime", `${"QUJD".repeat(19)}\r\nQUJD`],
+  ]) {
+    domain[`bytes-${name}`] = { bytesValue: text };
+  }
+  // Document functions of a root (review r9 M3).
+  for (const [name, root] of [
+    ["documents-root", DOCS],
+    ["database-root", DOCS.replace(/\/documents$/, "")],
+  ]) {
+    for (const f of ["parent", "document_id", "collection_id"]) {
+      domain[`${f}-${name}`] = fn(f, ref(root));
+    }
+  }
   domain["equal-int-int"] = fn("equal", int(1), int(1));
   domain["equal-int-string"] = fn("equal", int(1), { stringValue: "a" });
   domain["less-than-ref-ref"] = fn("less_than", ref(`${DOCS}/c/d`), ref(`${DOCS}/c/d`));

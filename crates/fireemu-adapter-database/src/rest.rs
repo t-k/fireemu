@@ -554,10 +554,7 @@ impl Database {
             Location::Settings => {
                 return self.settings(raw_path, &method, &namespace, &access, request, now_millis);
             }
-            Location::Inspect(name) => {
-                let owner = access == Access::Owner;
-                return self.inspect(&method, &name, &namespace, owner);
-            }
+            Location::Inspect(name) => return self.inspect(&method, &name, &namespace, &access),
         };
         request::check_disable_triggers(&params, writing, request.header("Authorization"))?;
         let condition = condition(request, &method)?;
@@ -863,7 +860,7 @@ impl Database {
         method: &str,
         name: &str,
         namespace: &str,
-        owner: bool,
+        access: &Access,
     ) -> Result<Handled, Refusal> {
         if method != "GET" {
             return Err(Refusal::new(405, "Unsupported request type"));
@@ -871,7 +868,7 @@ impl Database {
         if name != "databases.json" {
             return Err(Refusal::new(404, "404 Not Found"));
         }
-        if self.options.inspect_needs_owner && !owner {
+        if self.options.inspect_needs_owner && *access != Access::Owner {
             return Err(Refusal::new(401, "Permission denied"));
         }
         self.namespace(namespace);

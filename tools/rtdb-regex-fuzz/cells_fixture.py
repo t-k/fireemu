@@ -37,6 +37,8 @@ def reason(expr, jar_errors, jar_cells, emu_cells):
         return "the official emulator cannot determinize the pattern, its own resource limit (M14)"
     if 500 in jar_cells or 503 in jar_cells or "gone" in jar_cells:
         return "the official emulator answers 500 (an internal error); fireemu denies (ruling 15)"
+    if ".replace(''" in expr:
+        return "replace('', ...) of text beyond the Basic Multilingual Plane is an error here; Java splits its surrogate pairs"
     if re.search(r"\b(OrderByKey|OrderByValue|OrderByPriority|http)\b|query\.(orderBy|endBefore|isOrderByChild)\b", expr):
         return "a query or ordering name the official emulator loads is refused here (listed)"
     if "getPriority" in expr and re.search(r"x{700}", expr):

@@ -1793,3 +1793,22 @@ fn a_read_without_a_query_is_ordered_as_its_kind_is_read() {
         );
     }
 }
+
+#[test]
+fn get_priority_answers_a_string_priority() {
+    // The r10 review's seed (`c` with priority `'p'`), recorded on the official emulator.
+    let mut db = db();
+    load(
+        &mut db,
+        "gp",
+        r#"{"rules":{"c":{".read":"data.getPriority() == 'p' && data.child('.priority').val() == 'p'"}}}"#,
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/c.json?ns=gp",
+        OWNER,
+        r#"{".value":1,".priority":"p"}"#,
+    );
+    assert_eq!(call(&mut db, "GET", "/c.json?ns=gp", &[], "").0, 200);
+}

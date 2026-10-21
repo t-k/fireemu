@@ -589,6 +589,10 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 }
             },
             credentials: crate::database_rules::credentials(&cfg, &registry),
+            // Only the owner lists the namespaces under strict and a locked database (review
+            // RTDB-04 S1); the emulator profile answers anyone, as the official emulator.
+            inspect_needs_owner: cfg.profile == crate::config::CompatibilityProfile::Strict
+                || cfg.database_default_access == crate::config::DatabaseDefaultAccess::Locked,
             ..fireemu_adapter_database::rest::RestOptions::default()
         },
         cfg.seed ^ 0x5254_4442,
@@ -1194,10 +1198,14 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         storage: storage.clone(),
         clock: clock.clone(),
         project: cfg.auth_project.clone(),
-        products: import_export::Products::from(&only),
+        // The Realtime Database is exported and imported only while it is served.
+        products: import_export::Products {
+            database: addrs.database.is_some(),
+            ..import_export::Products::from(&only)
+        },
         blocking: auth.blocking.clone(),
         auth_operation_gate,
-        database_served: addrs.database.is_some(),
+        database: realtime_database.clone(),
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.

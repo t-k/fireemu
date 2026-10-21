@@ -2034,7 +2034,8 @@ fn rule_json(r: &fireemu_core_session::fault::FaultRule) -> Value {
 
 /// `snapshots` (POST `{"name"}` captures, GET lists), `snapshots/{name}:restore`,
 /// `snapshots/{name}` (DELETE). Snapshots belong to the session that took them and hold
-/// what it owns: its Firestore databases, buckets, users, fault plan and text indexes;
+/// what it owns: its Firestore databases, buckets, Realtime Database namespaces, users,
+/// fault plan and text indexes;
 /// the default session's also carry the shared parts (clock, rules, the auto-ID generator)
 /// and reset the functions runtime on restore. Capture and restore hold the exclusive
 /// session barrier, so a snapshot never straddles a request and a restore is atomic

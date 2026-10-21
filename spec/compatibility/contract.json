@@ -2268,7 +2268,7 @@
       ],
       "notes": [],
       "gaps": [
-        "an export carries the Firestore, Auth and Storage sections only: Realtime Database import and export are an open gap and SQL Connect is deferred, so their sections are refused rather than written"
+        "an export carries the Firestore, Auth, Storage and Realtime Database sections only: SQL Connect is deferred, so its section is refused rather than written"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -2346,7 +2346,7 @@
               "an_empty_import_directory_starts_with_no_data",
               "a_missing_import_directory_is_refused_unless_it_is_the_export_target",
               "a_corrupt_firestore_section_refuses_the_whole_import",
-              "a_realtime_database_section_is_refused_with_the_deferred_status",
+              "a_data_connect_section_is_refused_with_the_deferred_status",
               "the_export_runs_when_the_daemon_is_interrupted",
               "every_exported_directory_and_file_is_owner_only"
             ],
@@ -2807,7 +2807,7 @@
         "useEmulator"
       ],
       "state": "gap",
-      "decision": "Served, without a parity claim yet. `--only database`, `emulators.database` and `--database-port` start it on 9000; the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, onDisconnect writes, and namespace routing are implemented and compared with the official emulator (firebase-database-emulator v4.11.2) through the pinned SDKs in tools/sdk-smoke-database. Behaviour taken from that emulator where production has not been observed (number forms, equal-value writes, priorities, refusal texts, long-polling framing, how onDisconnect writes combine) is provisional. Security rules are evaluated as that emulator evaluates them and loaded from firebase.json as firebase-tools loads them. Rules coverage reports, import and export, and Functions triggers are open, so the surface stays a gap until they land and production is observed.",
+      "decision": "Served, without a parity claim yet. `--only database`, `emulators.database` and `--database-port` start it on 9000; the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, onDisconnect writes, and namespace routing are implemented and compared with the official emulator (firebase-database-emulator v4.11.2) through the pinned SDKs in tools/sdk-smoke-database. Behaviour taken from that emulator where production has not been observed (number forms, equal-value writes, priorities, refusal texts, long-polling framing, how onDisconnect writes combine) is provisional. Export and import use the firebase-tools database_export format. Security rules are evaluated as that emulator evaluates them and loaded from firebase.json as firebase-tools loads them. Rules coverage reports and Functions triggers are open, so the surface stays a gap until they land and production is observed.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_rtdb"
       ],
@@ -2821,7 +2821,6 @@
       ],
       "gaps": [
         "security rules coverage reports (/.inspect/coverage) are not served",
-        "database_export sections are refused on import and nothing is exported",
         "Realtime Database Functions triggers and the Emulator UI database view are not wired",
         "Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope"
       ],

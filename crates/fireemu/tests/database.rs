@@ -543,34 +543,90 @@ fn export_parent(label: &str) -> trusted_temp::TrustedTempDir {
 
 #[cfg(unix)]
 #[test]
-fn an_export_with_the_database_served_warns_that_its_data_is_not_exported() {
-    let dir = export_parent("database-export-warning");
-    let run = |only: &str| {
-        let export = dir.path().join(format!("export-{only}"));
-        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+fn an_export_carries_the_database_and_an_import_restores_it() {
+    let dir = export_parent("database-export-import");
+    let export = dir.path().join("export");
+    let exec = |extra: &[&str], script: &str| {
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args(["exec", "--no-config-discovery", "--project", PROJECT])
-            .args(["--only", only, "--database-port", "0", "--http-port", "0"])
-            .args(["--firestore-port", "0", "--hub-port", "0"])
-            .arg("--export-on-exit")
-            .arg(&export)
-            .args(["--", "true"])
+            .args(["--only", "database,firestore", "--database-port", "0"])
+            .args([
+                "--http-port",
+                "0",
+                "--firestore-port",
+                "0",
+                "--hub-port",
+                "0",
+            ])
+            .args(extra)
+            .args(["--", "/bin/sh", "-c", script])
             .stdin(Stdio::null())
             .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stderr).unwrap()
+            .unwrap()
     };
-    let stderr = run("database,firestore");
+    let owner = r#"-H "Authorization: Bearer owner""#;
+    let url = |ns: &str, query: &str| {
+        format!(r#""http://$FIREBASE_DATABASE_EMULATOR_HOST/.json?ns={ns}{query}""#)
+    };
+    let ns = format!("{PROJECT}-default-rtdb");
+    let write = format!(
+        r#"curl -sf -X PUT {owner} {} -d '{{"a":{{"b":1,".priority":3}},"s":"x"}}' >/dev/null && curl -sf -X PUT {owner} {} -d '{{"z":1}}' >/dev/null"#,
+        url(&ns, ""),
+        url("named", "")
+    );
+    let output = exec(&["--export-on-exit", export.to_str().unwrap()], &write);
     assert!(
-        stderr.contains("warning: Realtime Database data is not exported"),
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The section firebase-tools writes: one file per namespace, as format=export answers.
+    let section = export.join("database_export");
+    assert_eq!(
+        std::fs::read_to_string(section.join(format!("{ns}.json"))).unwrap(),
+        r#"{"a":{".priority":3.0,"b":1},"s":"x"}"#
+    );
+    assert_eq!(
+        std::fs::read_to_string(section.join("named.json")).unwrap(),
+        r#"{"z":1}"#
+    );
+    let metadata: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(export.join("firebase-export-metadata.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        metadata["database"],
+        serde_json::json!({"version": "4.11.2", "path": "database_export"})
+    );
+    // An import puts every namespace back.
+    let read = format!(
+        "curl -sf {owner} {} && echo && curl -sf {owner} {}",
+        url(&ns, "&format=export"),
+        url("named", "")
+    );
+    let output = exec(&["--import", export.to_str().unwrap()], &read);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The command's output follows the banner.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim().ends_with(
+            "running command\n{\"a\":{\".priority\":3.0,\"b\":1},\"s\":\"x\"}\n{\"z\":1}"
+        ),
+        "{stdout}"
+    );
+    // A file the official emulator would refuse stops the start.
+    std::fs::write(section.join("bad.name.json"), "1").unwrap();
+    let output = exec(&["--import", export.to_str().unwrap()], "true");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Invalid Firebase database name"),
         "{stderr}"
     );
-    let stderr = run("firestore");
-    assert!(!stderr.contains("Realtime Database"), "{stderr}");
 }
 
 /// One long-polling request: the body.
@@ -648,8 +704,8 @@ fn production_exact_holds_the_realtime_protocol_to_the_owner_too() {
 
 #[cfg(unix)]
 #[test]
-fn emulators_export_prints_the_database_warning_the_hub_answers() {
-    let export_dir = export_parent("database-hub-export-warning");
+fn emulators_export_writes_the_database_section_without_a_warning() {
+    let export_dir = export_parent("database-hub-export");
     let export = export_dir.path().join("export");
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(["exec", "--no-config-discovery", "--project", PROJECT])
@@ -672,15 +728,89 @@ fn emulators_export_prints_the_database_warning_the_hub_answers() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    // Once from the suite's own log, once from the command that asked, which read it from
-    // the Hub's answer.
-    assert_eq!(
-        stderr
-            .matches("warning: Realtime Database data is not exported")
-            .count(),
-        2,
+    assert!(
+        !stderr.contains("Realtime Database data is not exported"),
         "{stderr}"
     );
+    let metadata = std::fs::read_to_string(export.join("firebase-export-metadata.json")).unwrap();
+    assert!(metadata.contains(r#""database""#), "{metadata}");
+}
+
+#[test]
+fn a_session_snapshot_restores_the_database() {
+    let probe = r#"auth="Authorization: Bearer $FIREEMU_CONTROL_TOKEN"
+db="http://$FIREBASE_DATABASE_EMULATOR_HOST/.json?ns=demo-rtdb-default-rtdb"
+owner="Authorization: Bearer owner"
+curl -s -o /dev/null -X PUT -H "$owner" "$db" -d '{"kept":1}'
+curl -s -o /dev/null -w 'capture %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots" -d '{"name": "held"}'
+curl -s -o /dev/null -X PUT -H "$owner" "$db" -d '{"later":2}'
+curl -s -o /dev/null -w 'restore %{http_code}\n' -X POST -H "$auth" -H 'Content-Type: application/json' "${FIREEMU_CONTROL_URL}sessions/default/snapshots/held:restore" -d '{}'
+printf 'value '
+curl -s -H "$owner" "$db"
+echo"#;
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["exec", "--no-config-discovery", "--project", PROJECT])
+        .args([
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+            "--http-port",
+            "0",
+        ])
+        .args(["--", "/bin/sh", "-c", probe])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let log = format!("{stdout}{}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{log}");
+    assert!(stdout.contains("capture 200"), "{log}");
+    assert!(stdout.contains("restore 200"), "{log}");
+    assert!(stdout.contains(r#"value {"kept":1}"#), "{log}");
+}
+
+#[test]
+fn the_inspect_route_needs_the_owner_except_under_the_emulator_profile() {
+    let dir = Scratch::new("database", "inspect");
+    for (name, config, open) in [
+        (
+            "emulator",
+            r#"{"schemaVersion":1,"profile":"emulator"}"#,
+            true,
+        ),
+        ("strict", r#"{"schemaVersion":1,"profile":"strict"}"#, false),
+        (
+            "exact",
+            r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+            false,
+        ),
+    ] {
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path, config).unwrap();
+        let daemon = Daemon::start(&[
+            "--config",
+            path.to_str().unwrap(),
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+        ]);
+        let port = daemon.database_port();
+        let inspect = "/.inspect/databases.json?ns=probe";
+        let (status, _) = request(port, "GET", inspect, &[], "");
+        assert_eq!(status, if open { 200 } else { 401 }, "{name}");
+        let (status, body) = request(
+            port,
+            "GET",
+            "/.inspect/databases.json?ns=owner-asked",
+            &["Authorization: Bearer owner"],
+            "",
+        );
+        assert_eq!(status, 200, "{name}");
+        // A refused request created no namespace.
+        assert_eq!(body.contains(r#""probe""#), open, "{name}: {body}");
+    }
 }
 
 /// The unsigned ID token `@firebase/rules-unit-testing` mints for `uid` of the test project

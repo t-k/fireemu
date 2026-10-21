@@ -43,6 +43,12 @@ impl Tree {
         self.root.as_ref()
     }
 
+    /// A cheap, saturating estimate of the heap bytes the tree retains (see
+    /// [`Node::retained_bytes`]); 0 when it holds nothing.
+    pub fn retained_bytes(&self) -> u64 {
+        self.root.as_ref().map_or(0, Node::retained_bytes)
+    }
+
     /// The node at `path`.
     pub fn get(&self, path: &Path) -> Option<&Node> {
         self.root.as_ref()?.descendant(path)

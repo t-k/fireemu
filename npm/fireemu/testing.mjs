@@ -10,7 +10,7 @@ import { resolveBinary, ensureExecutable } from './binary.mjs';
 import { snapshotInputs, prepareGeneration } from './testing-snapshot.mjs';
 import { createControlClient } from './control.mjs';
 
-const endpointVariables = {firestore:'FIRESTORE_EMULATOR_HOST',auth:'FIREBASE_AUTH_EMULATOR_HOST',storage:'FIREBASE_STORAGE_EMULATOR_HOST',functions:'FIREEMU_FUNCTIONS_HOST',eventarc:'CLOUD_EVENTARC_EMULATOR_HOST',tasks:'CLOUD_TASKS_EMULATOR_HOST',pubsub:'PUBSUB_EMULATOR_HOST',hub:'FIREBASE_EMULATOR_HUB',logging:'FIREBASE_LOGGING_EMULATOR_HOST'};
+const endpointVariables = {firestore:'FIRESTORE_EMULATOR_HOST',auth:'FIREBASE_AUTH_EMULATOR_HOST',storage:'FIREBASE_STORAGE_EMULATOR_HOST',functions:'FIREEMU_FUNCTIONS_HOST',eventarc:'CLOUD_EVENTARC_EMULATOR_HOST',tasks:'CLOUD_TASKS_EMULATOR_HOST',pubsub:'PUBSUB_EMULATOR_HOST',database:'FIREBASE_DATABASE_EMULATOR_HOST',hub:'FIREBASE_EMULATOR_HUB',logging:'FIREBASE_LOGGING_EMULATOR_HOST'};
 const emulatorVariables = new Set([...Object.values(endpointVariables),'FIREBASE_CONFIG','NODE_PATH','FIREBASE_FIRESTORE_EMULATOR_ADDRESS','STORAGE_EMULATOR_HOST','FIREEMU_CONTROL_TOKEN','FIREEMU_CONTROL_URL','FIREEMU_APP_CHECK_EMULATOR_HOST','FIREEMU_APP_CHECK_JWKS_URL','FIREEMU_APP_CHECK_DEBUG_TOKEN_URL','FIREBASE_DATABASE_EMULATOR_HOST']);
 const emptyEnvironment=base=>Object.fromEntries(Object.entries(base).filter(([name])=>!emulatorVariables.has(name)));
 
@@ -62,7 +62,7 @@ export async function createTestWorld(options={}){
   const timeout=options.startupTimeoutMs??60_000;
   if(!Number.isSafeInteger(timeout)||timeout<=0)throw TypeError('startupTimeoutMs must be a positive integer');
   let services=options.services;
-  if(services&&(!Array.isArray(services)||!services.length||services.some(name=>typeof name!=='string'||! /^(auth|firestore|storage|functions(?::[A-Za-z0-9_-]+)?|pubsub|appcheck)$/.test(name))))throw TypeError('services must name supported test-world services');
+  if(services&&(!Array.isArray(services)||!services.length||services.some(name=>typeof name!=='string'||! /^(auth|firestore|storage|functions(?::[A-Za-z0-9_-]+)?|pubsub|database|appcheck)$/.test(name))))throw TypeError('services must name supported test-world services');
   const id=randomUUID();
   const directory=await mkdtemp(join(resolve(options.tempRoot??tmpdir()),'fireemu-world-'));
   let snapshot,current,tail=Promise.resolve(),closing=false,disposed=false,generation=0;
@@ -95,7 +95,7 @@ export async function createTestWorld(options={}){
     const prepared=await prepareGeneration(snapshot,generationDirectory);
     const readyFile=join(generationDirectory,'ready.json');
     const args=['up','--config',prepared.configPath,'--project',snapshot.config.daemon.authProject,'--only',services.join(','),'--ready-file',readyFile,'--owner-stdin','--log-verbosity','quiet'];
-    for(const name of ['firestore','http','storage','functions','eventarc','tasks','pubsub','logging'])args.push(`--${name}-port`,'0');
+    for(const name of ['firestore','http','storage','functions','eventarc','tasks','pubsub','database','logging'])args.push(`--${name}-port`,'0');
     args.push('--hub-port',options.hub?'auto':'0');
     args.push('--ui-port',options.ui?'auto':'0');
     if(prepared.seed)args.push('--import',prepared.seed);

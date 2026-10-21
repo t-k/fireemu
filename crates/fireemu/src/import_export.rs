@@ -52,8 +52,8 @@ use fireemu_core_export::firestore::{
     PartitionMetadata, EXPORT_NAME, OUTPUT_FILE, PARTITION_DIR, PARTITION_METADATA,
 };
 use fireemu_core_export::metadata::{
-    ExportMetadata, Product, Section, AUTH_PATH, FIRESTORE_OVERALL_METADATA, FIRESTORE_PATH,
-    METADATA_FILE_NAME, STORAGE_PATH,
+    ExportMetadata, Product, Section, AUTH_PATH, DATABASE_PATH, FIRESTORE_OVERALL_METADATA,
+    FIRESTORE_PATH, METADATA_FILE_NAME, STORAGE_PATH,
 };
 use fireemu_core_export::storage::{
     blob_id, BucketsFile, ObjectMetadata as ExportedObject, BLOBS_DIR, BUCKETS_FILE, METADATA_DIR,
@@ -145,6 +145,8 @@ pub struct Endpoints<'a> {
     pub storage: &'a Arc<fireemu_adapter_http::storage::StorageState>,
     /// The virtual clock: an import that carries no time of its own uses it.
     pub clock: &'a Arc<Mutex<VirtualClock>>,
+    /// The Realtime Database namespaces.
+    pub database: &'a Arc<Mutex<fireemu_adapter_database::rest::Database>>,
     /// The project the run serves.
     pub project: &'a str,
     /// The optional runtime-owned Blocking Auth bridge. Only its logical project settings cross
@@ -265,6 +267,8 @@ pub struct Prepared {
     auth: Option<PreparedAuth>,
     /// The Storage objects and buckets.
     storage: Option<PreparedStorage>,
+    /// The Realtime Database namespaces and the text of each.
+    database: Option<Vec<(String, String)>>,
     /// The Firestore time-to-live field configuration, from the fireemu-only sidecar. The
     /// official export format has no equivalent section, so an artifact without the sidecar
     /// leaves the running configuration unchanged.
@@ -285,6 +289,9 @@ impl Prepared {
                 "firestore: {documents} document(s) in {} database(s)",
                 databases.len()
             ));
+        }
+        if let Some(namespaces) = &self.database {
+            parts.push(format!("database: {} namespace(s)", namespaces.len()));
         }
         if let Some(auth) = &self.auth {
             let accounts = auth
@@ -317,6 +324,7 @@ impl Prepared {
 
 /// Which products an import or export covers, from `--only`.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)] // one switch per product
 pub struct Products {
     /// Cloud Firestore.
     pub firestore: bool,
@@ -324,6 +332,8 @@ pub struct Products {
     pub auth: bool,
     /// Cloud Storage for Firebase.
     pub storage: bool,
+    /// Firebase Realtime Database (the daemon sets it only while the database is served).
+    pub database: bool,
 }
 
 impl From<&Selection> for Products {
@@ -332,6 +342,7 @@ impl From<&Selection> for Products {
             firestore: only.firestore,
             auth: only.auth,
             storage: only.storage,
+            database: only.database,
         }
     }
 }
@@ -342,7 +353,8 @@ impl Products {
             Product::Firestore => self.firestore,
             Product::Auth => self.auth,
             Product::Storage => self.storage,
-            Product::Database | Product::DataConnect => false,
+            Product::Database => self.database,
+            Product::DataConnect => false,
         }
     }
 }
@@ -423,9 +435,9 @@ fn directory_is_empty(dir: &Path) -> bool {
 ///
 /// A section of a product `--only` did not select is skipped with a notice rather than an
 /// error: a run that asked for Auth alone should still start from a multi-product fixture.
-/// A section of a product fireemu does not serve at all -- Realtime Database, SQL Connect --
-/// is a failure, because ignoring it would start a suite that silently holds less state than
-/// the artifact recorded.
+/// A section of a product fireemu does not serve at all -- SQL Connect -- is a failure,
+/// because ignoring it would start a suite that silently holds less state than the artifact
+/// recorded.
 pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared, ArtifactError> {
     ensure_directory_inside(dir, dir).map_err(|e| ArtifactError::new("import", dir, e))?;
     let manifest_path = dir.join(METADATA_FILE_NAME);
@@ -440,7 +452,7 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
             "import",
             &manifest_path,
             format!(
-                "the export carries a {} section, which fireemu cannot import (Realtime Database import is an open gap, SQL Connect is deferred), so importing the rest would start a suite holding less state than the artifact records",
+                "the export carries a {} section, which fireemu cannot import (SQL Connect is deferred), so importing the rest would start a suite holding less state than the artifact records",
                 product.cli_name()
             ),
         ));
@@ -482,7 +494,8 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
             }
             Product::Auth => prepared.auth = Some(read_auth_section(dir, section, project)?),
             Product::Storage => prepared.storage = Some(read_storage_section(dir, section)?),
-            Product::Database | Product::DataConnect => unreachable!("refused above"),
+            Product::Database => prepared.database = Some(read_database_section(dir, section)?),
+            Product::DataConnect => unreachable!("refused above"),
         }
     }
     Ok(prepared)
@@ -540,6 +553,28 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
 
     if let Some(auth) = prepared.auth.take() {
         apply_auth(&auth, endpoints)?;
+    }
+
+    if let Some(namespaces) = prepared.database.take() {
+        let now_millis = i64::try_from(now.as_nanos() / 1_000_000).unwrap_or(i64::MAX);
+        let mut database = endpoints.database.lock().map_err(|_| {
+            ArtifactError::new(
+                "database",
+                PathBuf::from(DATABASE_PATH),
+                "the Realtime Database is poisoned",
+            )
+        })?;
+        for (namespace, text) in namespaces {
+            database
+                .import_text(&namespace, &text, now_millis)
+                .map_err(|e| {
+                    ArtifactError::new(
+                        "database",
+                        PathBuf::from(DATABASE_PATH).join(format!("{namespace}.json")),
+                        e,
+                    )
+                })?;
+        }
     }
 
     if let Some((objects, _)) = prepared.storage.take() {
@@ -2734,6 +2769,82 @@ fn read_storage_blob(
     Ok(bytes)
 }
 
+/// The largest Realtime Database section an import reads, all files together.
+const IMPORT_DATABASE_BYTES_LIMIT: u64 = 1024 * 1024 * 1024;
+
+/// Reads `database_export`: every `<namespace>.json` in it, as firebase-tools imports it (the
+/// file name less `.json` is the namespace; other files are ignored). The texts are checked
+/// when they are installed, as the import request checks them; a name the official emulator
+/// would refuse is refused here, before anything is installed.
+fn read_database_section(
+    dir: &Path,
+    section: &Section,
+) -> Result<Vec<(String, String)>, ArtifactError> {
+    read_database_section_within(dir, section, IMPORT_DATABASE_BYTES_LIMIT)
+}
+
+/// [`read_database_section`] with `limit` bytes for all files together.
+fn read_database_section_within(
+    dir: &Path,
+    section: &Section,
+    limit: u64,
+) -> Result<Vec<(String, String)>, ArtifactError> {
+    let section_dir = dir.join(&section.path);
+    ensure_directory_inside(dir, &section_dir)
+        .map_err(|e| ArtifactError::new("database", &section_dir, e))?;
+    let entries = std::fs::read_dir(&section_dir).map_err(|e| {
+        ArtifactError::new("database", &section_dir, format!("cannot read it: {e}"))
+    })?;
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| ArtifactError::new("database", &section_dir, e.to_string()))?;
+        refuse_symlink("database", &entry)?;
+        let path = entry.path();
+        let Some(namespace) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        // firebase-tools passes the file name as `?ns=`, which the server lowercases.
+        let Ok(namespace) = fireemu_adapter_database::namespace::route(Some(namespace), None, "")
+        else {
+            return Err(ArtifactError::new(
+                "database",
+                &path,
+                "Invalid Firebase database name",
+            ));
+        };
+        files.push((namespace, path));
+    }
+    files.sort();
+    let mut remaining_bytes = limit;
+    let mut namespaces = Vec::with_capacity(files.len());
+    for (namespace, path) in files {
+        let text = read_text_inside_budgeted(
+            dir,
+            &path,
+            &mut remaining_bytes,
+            limit,
+            limit,
+            "Realtime Database files",
+        )
+        .map_err(|e| ArtifactError::new("database", &path, e))?;
+        // Written into a scratch database first, so a file the import would refuse stops the
+        // start before any section is installed (review RTDB-04 S4).
+        fireemu_adapter_database::rest::Database::new(
+            fireemu_adapter_database::rest::RestOptions::default(),
+            0,
+        )
+        .import_text(&namespace, &text, 0)
+        .map_err(|e| ArtifactError::new("database", &path, e))?;
+        namespaces.push((namespace, text));
+    }
+    Ok(namespaces)
+}
+
 fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_storage_import_tree(dir, &section_dir)?;
@@ -3032,6 +3143,9 @@ fn write_export_tree(
     }
     if products.storage {
         export_storage(dir, endpoints, &mut manifest)?;
+    }
+    if products.database {
+        export_database(dir, endpoints, &mut manifest)?;
     }
     write_private_file(&dir.join(METADATA_FILE_NAME), manifest.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("export", dir.join(METADATA_FILE_NAME), e))?;
@@ -3751,6 +3865,46 @@ fn exported_providers(
         screen_name: None,
     }));
     providers
+}
+
+/// The version of the official database emulator whose export files these are.
+const DATABASE_EMULATOR_VERSION: &str = "4.11.2";
+
+/// Writes `database_export/<namespace>.json` for every namespace that holds data or was
+/// imported, with what `format=export` answers for it, as firebase-tools does.
+fn export_database(
+    dir: &Path,
+    endpoints: &Endpoints,
+    manifest: &mut ExportMetadata,
+) -> Result<(), ArtifactError> {
+    let section_dir = dir.join(DATABASE_PATH);
+    let texts = endpoints
+        .database
+        .lock()
+        .map_err(|_| {
+            ArtifactError::new(
+                "database",
+                &section_dir,
+                "the Realtime Database is poisoned",
+            )
+        })?
+        .export_texts();
+    create_private_dir(&section_dir)
+        .map_err(|e| ArtifactError::new("database", &section_dir, e))?;
+    for (namespace, text) in texts {
+        let path = section_dir.join(format!("{namespace}.json"));
+        write_private_file(&path, text.as_bytes())
+            .map_err(|e| ArtifactError::new("database", &path, e))?;
+    }
+    manifest.set(
+        Product::Database,
+        Section {
+            version: DATABASE_EMULATOR_VERSION.to_owned(),
+            path: DATABASE_PATH.to_owned(),
+            metadata_file: None,
+        },
+    );
+    Ok(())
 }
 
 fn export_storage(
@@ -4514,6 +4668,12 @@ mod tests {
             auth: &auth,
             storage: &storage,
             clock: &clock,
+            database: &std::sync::Arc::new(std::sync::Mutex::new(
+                fireemu_adapter_database::rest::Database::new(
+                    fireemu_adapter_database::rest::RestOptions::default(),
+                    1,
+                ),
+            )),
             project: "demo-app",
             blocking: None,
             auth_operation_gate: None,
@@ -4531,6 +4691,7 @@ mod tests {
                 firestore: false,
                 auth: false,
                 storage: false,
+                database: false,
             },
             &endpoints,
             "test",
@@ -5060,6 +5221,69 @@ mod tests {
         TrustedTempDir::new(&format!("import-budget-{name}"))
     }
 
+    /// A database file the import would refuse (an invalid key, too deep, a bad server value)
+    /// is refused while the import is prepared, before any section is installed (review
+    /// RTDB-04 S4), with the official emulator's text.
+    #[cfg(unix)]
+    #[test]
+    fn a_database_file_the_import_would_refuse_is_refused_while_preparing() {
+        let root = budget_dir("database-prepare");
+        let section_dir = root.path().join("database_export");
+        std::fs::create_dir_all(&section_dir).unwrap();
+        std::fs::write(section_dir.join("good.json"), r#"{"x":1}"#).unwrap();
+        std::fs::write(section_dir.join("bad.json"), r#"{"a.b":1}"#).unwrap();
+        let section = fireemu_core_export::metadata::Section {
+            version: "4.11.2".to_owned(),
+            path: "database_export".to_owned(),
+            metadata_file: None,
+        };
+        let refused = super::read_database_section(root.path(), &section)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("database_export/bad.json"), "{refused}");
+        assert!(refused.contains("Invalid data"), "{refused}");
+        std::fs::remove_file(section_dir.join("bad.json")).unwrap();
+        assert_eq!(
+            super::read_database_section(root.path(), &section).unwrap(),
+            vec![("good".to_owned(), r#"{"x":1}"#.to_owned())]
+        );
+    }
+
+    /// The Realtime Database files share one budget: 1 GiB, as the Storage and Firestore
+    /// sections do. A budget the files fit is read; one byte less refuses the section.
+    #[cfg(unix)]
+    #[test]
+    fn the_realtime_database_files_share_one_byte_budget() {
+        assert_eq!(super::IMPORT_DATABASE_BYTES_LIMIT, 1 << 30);
+        let root = budget_dir("database");
+        let section_dir = root.path().join("database_export");
+        std::fs::create_dir_all(&section_dir).unwrap();
+        std::fs::write(section_dir.join("a.json"), r#"{"x":1}"#).unwrap();
+        std::fs::write(section_dir.join("b.json"), r#"{"y":2}"#).unwrap();
+        std::fs::write(section_dir.join("notes.txt"), "ignored").unwrap();
+        let section = fireemu_core_export::metadata::Section {
+            version: "4.11.2".to_owned(),
+            path: "database_export".to_owned(),
+            metadata_file: None,
+        };
+        let read = super::read_database_section_within(root.path(), &section, 14).unwrap();
+        assert_eq!(
+            read,
+            vec![
+                ("a".to_owned(), r#"{"x":1}"#.to_owned()),
+                ("b".to_owned(), r#"{"y":2}"#.to_owned())
+            ]
+        );
+        let refused = super::read_database_section_within(root.path(), &section, 13)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused
+                .contains("the Realtime Database files exceed the 13 byte cumulative import limit"),
+            "{refused}"
+        );
+    }
+
     #[test]
     fn auth_settings_quota_conversion_preserves_the_config_without_usage() {
         use fireemu_core_auth::signup_quota::{
@@ -5292,6 +5516,12 @@ mod tests {
             auth: &source_auth,
             storage: &source_storage,
             clock: &source_clock,
+            database: &std::sync::Arc::new(std::sync::Mutex::new(
+                fireemu_adapter_database::rest::Database::new(
+                    fireemu_adapter_database::rest::RestOptions::default(),
+                    1,
+                ),
+            )),
             project: "demo-app",
             blocking: None,
             auth_operation_gate: None,
@@ -5305,6 +5535,7 @@ mod tests {
                 firestore: false,
                 auth: true,
                 storage: false,
+                database: false,
             },
             &source_endpoints,
             "test",
@@ -5348,6 +5579,12 @@ mod tests {
             auth: &destination_auth,
             storage: &destination_storage,
             clock: &destination_clock,
+            database: &std::sync::Arc::new(std::sync::Mutex::new(
+                fireemu_adapter_database::rest::Database::new(
+                    fireemu_adapter_database::rest::RestOptions::default(),
+                    1,
+                ),
+            )),
             project: "demo-app",
             blocking: None,
             auth_operation_gate: None,
@@ -5358,6 +5595,7 @@ mod tests {
                 firestore: false,
                 auth: true,
                 storage: false,
+                database: false,
             },
             "demo-app",
         )
@@ -5892,6 +6130,12 @@ mod tests {
             auth: &auth,
             storage: &storage,
             clock: &clock,
+            database: &std::sync::Arc::new(std::sync::Mutex::new(
+                fireemu_adapter_database::rest::Database::new(
+                    fireemu_adapter_database::rest::RestOptions::default(),
+                    1,
+                ),
+            )),
             project: "demo-app",
             blocking: Some(&blocking),
             auth_operation_gate: None,

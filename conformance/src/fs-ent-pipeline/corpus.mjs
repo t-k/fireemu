@@ -281,6 +281,36 @@ const resultProgram = {
   ]),
 };
 
+/**
+ * A seed written by a recorded commit step rather than by the harness: the request and
+ * production's answer become rows of the fixture, and a refusal is that step's row instead of a
+ * fatal harness error that ends the recording. New programs seed vectors this way.
+ */
+export function seedCommit(id, path, fields) {
+  if (path.startsWith("/")) throw new Error(`${id}: a seed path is relative to {docs}`);
+  const segments = path.split("/");
+  if (segments.length % 2 !== 0 || segments.includes("")) {
+    throw new Error(`${id}: ${path} is not a document path`);
+  }
+  return { id, rpc: "commit", body: { writes: [{ update: { name: `{docs}/${path}`, fields } }] } };
+}
+
+const holdsVector = (value) =>
+  value !== null &&
+  typeof value === "object" &&
+  (value.mapValue?.fields?.__type__?.stringValue === "__vector__" ||
+    Object.values(value).some(holdsVector));
+
+/** Whether a program's harness seed holds a vector anywhere. */
+export const seedHoldsVector = (program) =>
+  (program.seed ?? []).some(([, fields]) => holdsVector(fields));
+
+/** The programs recorded with a vector in their harness seed, before seedCommit existed. */
+export const HARNESS_VECTOR_SEEDS = [
+  "fs-ent-pipeline/o3/comparisons",
+  "fs-ent-pipeline/o4/comparisons",
+];
+
 const put = (path) => ({
   update: { name: `{docs}/${path}`, fields: { n: int(path.length) } },
 });
@@ -902,7 +932,10 @@ export const O4_FUNCTIONS = [
   ["map-repeat-first-missing", fn("map", str("k"), fld("x"), str("k"), fld("i"))],
   ["map-repeat-second-missing", fn("map", str("k"), fld("i"), str("k"), fld("x"))],
   ["map-repeat-both-missing", fn("map", str("k"), fld("x"), str("k"), fld("x"))],
-  ["map-repeat-around-missing", fn("map", str("k"), fld("i"), str("k"), fld("x"), str("k"), fld("s"))],
+  [
+    "map-repeat-around-missing",
+    fn("map", str("k"), fld("i"), str("k"), fld("x"), str("k"), fld("s")),
+  ],
 ];
 
 const o4FunctionProgram = {
@@ -928,15 +961,17 @@ const o4DocumentProgram = {
       id: `write-${label}`,
       rpc: "commit",
       body: {
-        writes: [{ update: { name: `{docs}/geo4/${label}`, fields: { g: { geoPointValue: point } } } }],
+        writes: [
+          { update: { name: `{docs}/geo4/${label}`, fields: { g: { geoPointValue: point } } } },
+        ],
       },
     },
     { id: `get-${label}`, rpc: "get", parent: `geo4/${label}` },
   ]),
 };
 
-/** Vectors of different lengths, under every comparison, both ways (last: a refused vector
- * seed costs only this program). */
+/** Vectors of different lengths, under every comparison, both ways. The program runs last, so a
+ * refused vector seed ends the recording after every other program has finished. */
 export const O4_CELLS = OPS.flatMap((op) =>
   [
     ["v", "v3"],

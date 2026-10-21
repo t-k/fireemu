@@ -11,13 +11,18 @@
 //                                                       fireemu-oracle-query/(default) and update
 //                                                       fs-query-index-production.json
 //   node src/fs-query-index/run.mjs rebuild-fixture <runDir> [--skip-changed]
+//   node src/fs-query-index/unknown-rows.mjs <log> --expect <n>
+//                                                       (packets pass 2 x the planned steps)
+//                                                       the run-close check: step lines whose
+//                                                       outcome production did not settle
 //   node src/fs-query-index/run.mjs check               run the corpus against fireemu and
 //                                                       compare with the saved production rows
 //   node src/fs-query-index/run.mjs export-comparison <out.json>
 //
 // `record-production` needs owner ADC (`gcloud auth application-default`),
 // FIREEMU_SANDBOX_LEDGER (the private append-only run ledger) and FIREEMU_FS_QUERY_PRIVATE_DIR
-// (a git-ignored directory for the raw recordings). FS_QUERY_INDEX_PROGRAMS limits a run to
+// (a git-ignored directory for the raw recordings). A run that stops leaves the programs it
+// finished in that directory as recording-N.partial.json and fixture.partial.json. FS_QUERY_INDEX_PROGRAMS limits a run to
 // programs whose id starts with one of its comma-separated prefixes (FS_QUERY_INDEX_PROGRAMS_EXACT=1
 // for exact ids); recorded programs replace their previous entries and the others are kept.
 // `check` uses FIREEMU_BIN (or the workspace build) and writes .runs/fs-query-index/comparison.json.
@@ -39,8 +44,9 @@ import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
-import { scanFixture } from "./fixture-scan.mjs";
+import { assertCompleteFixture, loadCommittedFixture, scanFixture } from "./fixture-scan.mjs";
 import { LANES, selectLane } from "./lanes.mjs";
+import { isMainModule } from "./main-module.mjs";
 
 const execFileAsync = promisify(execFile);
 const LANE = selectLane();
@@ -450,6 +456,32 @@ async function recordOnce(programs, run, token, projectNumber) {
   });
 }
 
+const recordedAgainst = (lane) => ({
+  target:
+    lane.target ??
+    "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
+  project: RECORDED_PROJECT,
+  ...(lane.indexes ? { indexes: `conformance/${lane.indexes}` } : {}),
+  note: `Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as ${RECORDED_PROJECT} in every lane. Missing-index links keep their encoded index with the project id replaced. \`second\` holds the other recording of rows that differed.`,
+});
+
+/** One program's fixture entry; `two` is absent when only one recording finished it. */
+function fixtureEntry(program, meta, one, two) {
+  const differing = Object.fromEntries(
+    Object.entries(two?.steps ?? {}).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
+  );
+  return {
+    corpusDigest: programDigest(program),
+    harnessDigest: meta.harness,
+    recordedAt: meta.startedAt,
+    gitSha: meta.sha,
+    steps: one.steps,
+    ...(Object.keys(differing).length ? { second: differing } : {}),
+  };
+}
+
+export { assertCompleteFixture };
+
 /**
  * Writes the committed fixture from two recordings. Kept separate from recording so that a
  * refusal here (for example by the secret scan) never loses a production run: the recordings
@@ -465,31 +497,14 @@ export async function writeFixture({
 }) {
   const [first, second] = recordings;
   const fixture = existsSync(fixturePath)
-    ? JSON.parse(await readFile(fixturePath, "utf8"))
+    ? assertCompleteFixture(JSON.parse(await readFile(fixturePath, "utf8")), fixturePath)
     : { version: 1, recordedAgainst: {}, programs: {} };
-  fixture.recordedAgainst = {
-    target:
-      lane.target ??
-      "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
-    project: RECORDED_PROJECT,
-    ...(lane.indexes ? { indexes: `conformance/${lane.indexes}` } : {}),
-    note: `Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as ${RECORDED_PROJECT} in every lane. Missing-index links keep their encoded index with the project id replaced. \`second\` holds the other recording of rows that differed.`,
-  };
+  fixture.recordedAgainst = recordedAgainst(lane);
   for (const program of programs) {
     const one = first.results[program.id];
     const two = second.results[program.id];
     if (!one || !two) continue;
-    const differing = Object.fromEntries(
-      Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
-    );
-    fixture.programs[program.id] = {
-      corpusDigest: programDigest(program),
-      harnessDigest: meta.harness,
-      recordedAt: meta.startedAt,
-      gitSha: meta.sha,
-      steps: one.steps,
-      ...(Object.keys(differing).length ? { second: differing } : {}),
-    };
+    fixture.programs[program.id] = fixtureEntry(program, meta, one, two);
   }
   fixture.programs = Object.fromEntries(
     Object.entries(fixture.programs).toSorted(([a], [b]) => a.localeCompare(b)),
@@ -527,6 +542,125 @@ export async function withRecordingLock(ledger, lane, record) {
   }
 }
 
+/**
+ * Runs the preflight and records the corpus twice, saving each finished recording privately in
+ * `runDir`. A recording that throws ends the run (the second never starts). When the error
+ * carries the programs that recording finished (`partial`, as runCorpus throws a fatal error),
+ * they are saved as `recording-N.partial.json`, and every program either recording finished
+ * goes into `fixture.partial.json`: a private, readable fixture of the stopped run that is never
+ * the committed one. A refused seed then costs only the programs after it.
+ */
+export async function recordRecordings({
+  programs,
+  runDir,
+  meta,
+  secrets,
+  record,
+  preflightCheck = async () => {},
+  lane = LANE,
+  write = writeFile,
+}) {
+  const recordings = [];
+  let outcome = "recorded";
+  let error;
+  let partial;
+  try {
+    await preflightCheck();
+    for (const offset of [0, 1]) {
+      const recording = await record(offset);
+      recordings.push(recording);
+      await write(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
+        mode: 0o600,
+      });
+    }
+  } catch (caught) {
+    outcome = caught.fatal ? "aborted-fatal" : "aborted";
+    error = String(caught.message ?? caught);
+    if (caught.partial) {
+      const file = `recording-${recordings.length + 1}.partial.json`;
+      recordings.push(caught.partial);
+      // Nothing here may throw: the caller still writes meta.json and the ledger row of a run
+      // that has sent requests.
+      try {
+        await write(join(runDir, file), JSON.stringify(caught.partial), { mode: 0o600 });
+        partial = { file };
+      } catch (failed) {
+        error = `${error} (partial recording not written: ${String(failed.message ?? failed)})`;
+      }
+      if (partial) {
+        try {
+          partial = {
+            ...partial,
+            ...(await writePartialFixture({
+              programs,
+              recordings,
+              meta,
+              outcome,
+              secrets: secrets(),
+              lane,
+              fixturePath: join(runDir, "fixture.partial.json"),
+              write,
+            })),
+          };
+        } catch (refused) {
+          error = `${error} (partial fixture not written: ${String(refused.message ?? refused)})`;
+        }
+      }
+    }
+  }
+  return { recordings, outcome, error, partial };
+}
+
+/**
+ * Writes the run's meta.json and returns the outcome and error for the ledger row: a failure is
+ * added to the error, never thrown (the caller still appends the row of a run that has sent
+ * requests), and a recorded run whose meta.json failed is `not-written`, as its fixture is not
+ * written either.
+ */
+export async function writeMeta({ runDir, meta, outcome, error, partial, write = writeFile }) {
+  try {
+    await write(
+      join(runDir, "meta.json"),
+      JSON.stringify({ ...meta, outcome, error, ...(partial ? { partial } : {}) }, null, 2),
+      { mode: 0o600 },
+    );
+    return { outcome, error };
+  } catch (failed) {
+    const reason = `meta.json not written: ${String(failed.message ?? failed)}`;
+    return {
+      outcome: outcome === "recorded" ? "not-written" : outcome,
+      error: error ? `${error} (${reason})` : reason,
+    };
+  }
+}
+
+/** The private fixture of a stopped run: each program with the recordings that finished it. */
+async function writePartialFixture({
+  programs,
+  recordings,
+  meta,
+  outcome,
+  secrets,
+  lane,
+  fixturePath,
+  write,
+}) {
+  const fixture = { version: 1, partial: true, outcome, recordedAgainst: recordedAgainst(lane) };
+  fixture.programs = {};
+  for (const program of programs) {
+    const [one, two] = recordings.map((recording) => recording.results[program.id]).filter(Boolean);
+    if (!one) continue;
+    fixture.programs[program.id] = {
+      ...fixtureEntry(program, meta, one, two),
+      recordings: two ? 2 : 1,
+    };
+  }
+  const text = `${JSON.stringify(fixture, null, 2)}\n`;
+  scanFixture(text, secrets);
+  await write(fixturePath, text, { mode: 0o600 });
+  return { fixture: "fixture.partial.json", programs: Object.keys(fixture.programs) };
+}
+
 async function recordProduction() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
@@ -554,34 +688,28 @@ async function recordProductionLocked() {
   await assertIgnored(dirname(ledger));
   const runDir = join(privateRoot, `${LANE.id}-production-${meta.startedAt.replaceAll(":", "")}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
-  const recordings = [];
-  let outcome = "recorded";
-  let error;
   const tokens = [];
-  try {
-    await preflight(await accessToken());
-    for (const offset of [0, 1]) {
+  const recorded = await recordRecordings({
+    programs,
+    runDir,
+    meta,
+    secrets: () => [...tokens, ...secrets],
+    preflightCheck: async () => preflight(await accessToken()),
+    record: async (offset) => {
       const token = await accessToken();
       tokens.push(token);
-      const recording = await recordOnce(
+      return recordOnce(
         programs,
         String(Date.now() + offset),
         token,
         process.env.FIREEMU_SANDBOX_PROJECT_NUMBER,
       );
-      recordings.push(recording);
-      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
-        mode: 0o600,
-      });
-    }
-  } catch (caught) {
-    outcome = caught.fatal ? "aborted-fatal" : "aborted";
-    error = String(caught.message ?? caught);
-    if (caught.partial) recordings.push(caught.partial);
-  }
-  await writeFile(join(runDir, "meta.json"), JSON.stringify({ ...meta, outcome, error }, null, 2), {
-    mode: 0o600,
+    },
   });
+  const { recordings, partial } = recorded;
+  let { outcome, error } = recorded;
+  // writeMeta never throws, so the ledger row below always lands.
+  ({ outcome, error } = await writeMeta({ runDir, meta, outcome, error, partial }));
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const failures = recordings.flatMap((r) => r.failures);
   try {
@@ -801,7 +929,7 @@ export function classify({ stale, production, alternative, fireemu }) {
 
 async function check() {
   const fixture = existsSync(FIXTURE)
-    ? JSON.parse(await readFile(FIXTURE, "utf8"))
+    ? (await loadCommittedFixture(FIXTURE)).fixture
     : { programs: {} };
   const selected = selectPrograms(PROGRAMS);
   const harness = await harnessDigest();
@@ -890,7 +1018,8 @@ export function differencePaths(production, fireemu) {
 async function exportComparison(out) {
   if (!out) throw new Error("usage: export-comparison <output.json>");
   const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
-  const fixtureSha256 = sha256(await readFile(FIXTURE, "utf8"));
+  const { text: fixtureText } = await loadCommittedFixture(FIXTURE);
+  const fixtureSha256 = sha256(fixtureText);
   const evidence = {
     kind: `${LANE.id}-comparison-v1`,
     artifactSha256: comparison.artifactSha256,
@@ -913,7 +1042,8 @@ async function exportComparison(out) {
 }
 
 const mode = process.argv[2];
-if (import.meta.url === `file://${process.argv[1]}`) {
+// `isMainModule`: a launch through a symlink or an escaped path still runs the mode.
+if (isMainModule(import.meta)) {
   if (mode === "verify-indexes") await verifyIndexes();
   else if (mode === "preflight") await preflight(await accessToken());
   else if (mode === "record-production") await recordProduction();

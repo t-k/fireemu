@@ -6114,9 +6114,11 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
         })
         .await
         .unwrap_err();
+    // fireemu's own text, in no shape production refused: strict refuses it as unobserved.
+    assert_eq!(empty.code(), tonic::Code::Unimplemented, "{empty}");
     assert_eq!(
         empty.metadata().get("fireemu-code").unwrap(),
-        "FS_PIPE_DECODE"
+        "FS_PIPE_UNSUPPORTED_STAGE"
     );
     // Strict: argument shapes, option keys, the database name and the consistency
     // selector are checked, not only stage names and arities.
@@ -6177,22 +6179,12 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
         ),
     ] {
         let err = client.execute_pipeline(bad).await.unwrap_err();
-        // The stage registry's own texts are unobserved in production, so strict refuses those
-        // pipelines; the request envelope's checks keep INVALID_ARGUMENT.
-        let registry = [
-            "collection(null)",
-            "collection(document path)",
-            "unknown option",
-        ];
-        let (code, fireemu_code) = if registry.contains(&what) {
-            (tonic::Code::Unimplemented, "FS_PIPE_UNSUPPORTED_STAGE")
-        } else {
-            (tonic::Code::InvalidArgument, "FS_PIPE_INVALID")
-        };
-        assert_eq!(err.code(), code, "{what}: {err}");
+        // The stage registry's and the request envelope's texts are fireemu's own, in no shape
+        // production refused, so strict refuses each as unobserved (`pipeline_shape`).
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{what}: {err}");
         assert_eq!(
             err.metadata().get("fireemu-code").unwrap(),
-            fireemu_code,
+            "FS_PIPE_UNSUPPORTED_STAGE",
             "{what}"
         );
     }
@@ -6818,9 +6810,10 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         [("label".to_owned(), s("b"))].into_iter().collect()
     );
     // Refusals: unrecorded inputs at run time, unknown or misplaced functions and literal
-    // arguments as unsupported, malformed calls as invalid.
+    // arguments as unsupported. Strict answers malformed calls as invalid only in a shape
+    // production refused (`pipeline_shape`), which this string-named collection is not.
     let unsupported = tonic::Code::Unimplemented;
-    let invalid = tonic::Code::InvalidArgument;
+    let invalid = tonic::Code::Unimplemented;
     let mut options = pipeline_function("document_id", vec![name()]);
     let Some(pb::value::ValueType::FunctionValue(function)) = options.value_type.as_mut() else {
         unreachable!()
@@ -7017,6 +7010,12 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
         for function in ["document_id", "collection_id", "parent"] {
             let err =
                 pipeline_error(&mut client, select(call(function, pipeline_field("name")))).await;
+            // Strict answers it only in a shape production refused (`pipeline_shape`), which
+            // this string-named collection is not.
+            if policy == IndexValidationPolicy::Production {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+                continue;
+            }
             assert_eq!(
                 err.code(),
                 tonic::Code::InvalidArgument,
@@ -7037,13 +7036,20 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
                 "{policy:?} {function}"
             );
         }
-        // document_id of a top-level collection names the reference and its length.
+        // document_id of a top-level collection names the reference and its length. Strict
+        // answers it only in a shape production refused (`pipeline_shape`), which this
+        // string-named collection is not.
         let collection = format!("{DOCS}/fns");
         let err = pipeline_error(
             &mut client,
             select(call("document_id", reference(&collection))),
         )
         .await;
+        if policy == IndexValidationPolicy::Production {
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+            handle.abort();
+            continue;
+        }
         assert_eq!(
             err.code(),
             tonic::Code::InvalidArgument,
@@ -7171,7 +7177,16 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
         value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
     };
     let f = pipeline_field;
-    let collection = || pipeline_stage("collection", s("recorded"));
+    // The collection as the recorded requests name it (a reference), so that strict sees the
+    // recorded shapes.
+    let collection = || {
+        pipeline_stage(
+            "collection",
+            pb::Value {
+                value_type: Some(V::ReferenceValue("/recorded".to_owned())),
+            },
+        )
+    };
     let path_text = |alias: &str| {
         format!(
             r#"Invalid property path "{alias}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
@@ -7255,11 +7270,16 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
             ],
         )
         .await;
-        assert_eq!(recorded.code(), tonic::Code::InvalidArgument, "{policy:?}");
-        assert_eq!(
-            recorded.message(),
-            "Value type is not supported: FIELD_REFERENCE_VALUE"
-        );
+        // Two entries: a decoded gRPC map keeps no wire order, so strict sees no shape.
+        if policy == IndexValidationPolicy::Production {
+            assert_eq!(recorded.code(), tonic::Code::Unimplemented, "{recorded}");
+        } else {
+            assert_eq!(recorded.code(), tonic::Code::InvalidArgument, "{policy:?}");
+            assert_eq!(
+                recorded.message(),
+                "Value type is not supported: FIELD_REFERENCE_VALUE"
+            );
+        }
         // The literal shapes O-1 and O-3 recorded: a map of fields and literals, a map holding
         // one map of fields, a map holding one function and an array holding one field.
         for (label, value, kind) in [
@@ -7289,6 +7309,13 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
                 vec![collection(), pipeline_select_map(vec![("v", value)])],
             )
             .await;
+            // Two entries: a decoded gRPC map keeps no wire order, so strict sees no shape.
+            if policy == IndexValidationPolicy::Production
+                && label == "map mixing a field and a literal"
+            {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                continue;
+            }
             assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
             assert_eq!(
                 err.message(),
@@ -7393,8 +7420,17 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
             // order (O-4 `literals#*`, `#argument-map-of-field`).
             let err = pipeline_error(&mut client, stages).await;
             // Production recorded this refusal in a select only: in a where condition strict
-            // refuses it as unobserved (coordinator ruling of 2026-10-21).
-            if policy == IndexValidationPolicy::Production && label == "map literal as an argument"
+            // refuses it as unobserved (coordinator ruling of 2026-10-21). A map of two
+            // entries has no shape over gRPC, which keeps no wire order, and production
+            // recorded the array with its function first.
+            if policy == IndexValidationPolicy::Production
+                && matches!(
+                    label,
+                    "map literal as an argument"
+                        | "map of two functions"
+                        | "map mixing a field and a function"
+                        | "array mixing a field and a function"
+                )
             {
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
                 continue;
@@ -7431,11 +7467,16 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
         .await;
         assert_eq!(docs[0].fields.len(), 64, "{policy:?}");
         let err = pipeline_error(&mut client, wide(65)).await;
-        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{policy:?}");
-        assert_eq!(
-            err.message(),
-            "The 'select(...)' stage is limited to 64 fields but this stage has 65."
-        );
+        // 65 entries have no shape over gRPC, which keeps no wire order (REST answers it).
+        if policy == IndexValidationPolicy::Production {
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+        } else {
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{policy:?}");
+            assert_eq!(
+                err.message(),
+                "The 'select(...)' stage is limited to 64 fields but this stage has 65."
+            );
+        }
         // document_id of the documents root, refused at run time as production refuses it.
         let root = pipeline_error(
             &mut client,
@@ -7481,7 +7522,13 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
     };
     let stages = |aliases: Vec<(&str, pb::Value)>| {
         vec![
-            pipeline_stage("collection", s("alias")),
+            // A reference, as production's recorded requests name the collection.
+            pipeline_stage(
+                "collection",
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::ReferenceValue("/alias".to_owned())),
+                },
+            ),
             pipeline_select_map(aliases),
         ]
     };
@@ -7594,9 +7641,8 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         );
         for (label, refused) in invalid.clone() {
             let err = pipeline_error(&mut client, refused).await;
-            // A repeated path answers fireemu's own text, which strict refuses as unobserved.
-            // An alias inside another names the later alias of the request's map, an order
-            // strict cannot see.
+            // A repeated path answers fireemu's own text, which strict refuses as unobserved,
+            // and two aliases have no shape over gRPC, which keeps no wire order.
             if policy == IndexValidationPolicy::Production
                 && (label == "same path twice" || label == "alias inside another")
             {
@@ -7631,6 +7677,15 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         let b1497 = format!("`a`.{}", "b".repeat(1497));
         let b1498 = format!("`a`.{}", "b".repeat(1498));
         let escaped = format!("`\\`{}`", "a".repeat(1499));
+        // The refused long aliases O-3 and O-4 recorded.
+        let recorded_long = [
+            a1500.clone(),
+            quoted(&a1500),
+            b1498.clone(),
+            escaped.clone(),
+            quoted(&"あ".repeat(500)),
+            format!("a.{}", "b".repeat(1498)),
+        ];
         for (alias, key, refused) in [
             (a1499.clone(), a1499.clone(), None),
             (a1500.clone(), String::new(), Some(a1500.clone())),
@@ -7687,6 +7742,11 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             let request = stages(vec![(alias.as_str(), pipeline_field("top"))]);
             if let Some(reference) = refused {
                 let err = pipeline_error(&mut client, request).await;
+                // Strict answers only the aliases production refused (the text names them).
+                if policy == IndexValidationPolicy::Production && !recorded_long.contains(&alias) {
+                    assert_eq!(err.code(), tonic::Code::Unimplemented, "{}", alias.len());
+                    continue;
+                }
                 // Bytes, whatever the characters (O-4 `aliases#multibyte-*`).
                 {
                     assert_eq!(err.code(), tonic::Code::InvalidArgument, "{}", alias.len());
@@ -7752,6 +7812,11 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
             let request = stages(vec![(alias, pipeline_field("top"))]);
             if let Some(text) = official {
                 let err = pipeline_error(&mut client, request).await;
+                // Production refused 1500 dashes, not 1501 (the text names them).
+                if policy == IndexValidationPolicy::Production && alias == dashes {
+                    assert_eq!(err.code(), tonic::Code::Unimplemented, "{alias}: {err}");
+                    continue;
+                }
                 assert_eq!(err.code(), tonic::Code::InvalidArgument, "{alias}: {err}");
                 assert!(err.message().starts_with(text), "{alias}: {err}");
             } else {
@@ -8240,33 +8305,11 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 assert!(docs.is_empty());
             }
         }
-        // Unrecorded in production: a non-ASCII collection name, a key that is not plain in a
-        // literal holding an expression, a limit or offset of another type than an integer or
-        // a string, a negative offset, and the key __name__ (only the official emulator
-        // answered these).
-        let unrecorded = [
-            // Recorded in a select only (coordinator ruling of 2026-10-21).
-            "map key from a field in where",
-            "a where condition literal holding a field",
-            "limit of a double",
-            "limit of null",
-            "limit of a field",
-            "limit of a boolean",
-            "offset of a double",
-            "negative offset",
-            "a literal map with the key __name__",
-            "document_id of a non-ASCII collection",
-            "document_id of a collection outside the BMP",
-            "an array of a map with a reserved key holding a field",
-            "an expression literal with a reserved key",
-            "an expression literal with a reserved inner key",
-            "an expression literal with an empty key",
-            "an expression literal with a __type__ key",
-            "an expression literal with a dotted key",
-        ];
+        // Strict answers a refusal only for a request of a shape production refused
+        // (`pipeline_shape`), which these string-named collections are not.
         for (label, stages, text) in &refused {
             let err = pipeline_error(&mut client, stages.clone()).await;
-            if strict && unrecorded.contains(label) {
+            if strict {
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
             } else {
                 assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
@@ -8278,9 +8321,10 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
 }
 
 /// Alias maps of the stages the local executor does not run (`add_fields`, `distinct`,
-/// `aggregate`) and empty alias maps: production answered them as the official emulator
-/// (1.22.0, probed locally) does (FS-ENT-ORACLE O-4), so both profiles answer its texts before
-/// the stage itself is refused as unsupported locally.
+/// `aggregate`) and empty alias maps: the emulator profile answers the official emulator's
+/// (1.22.0, probed locally) texts before the stage itself is refused as unsupported locally.
+/// Strict answers a refusal only for a request of a shape production refused (FS-ENT-ORACLE
+/// O-4; `pipeline_shape`), which these string-named collections are not.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
@@ -8570,24 +8614,11 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
         for (label, stages, official) in &rows {
             let err = pipeline_error(&mut client, stages.clone()).await;
-            // Production answered every one of these as the official emulator does
-            // (FS-ENT-ORACLE O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`), so both
-            // profiles answer them; the stages themselves are not run locally.
-            // Two refusals whose order production has not answered: strict refuses them.
-            let unrecorded_order = [
-                "distinct empty map, then select empty map",
-                "aggregate empty accumulators and an empty group alias",
-                // Production recorded the length text for add_fields and select only.
-                "aggregate accumulator alias of 1500 bytes",
-                // Production recorded an empty select map before a later empty alias only.
-                "add_fields empty map, then add_fields empty alias",
-                "add_fields empty alias, then select empty map",
-            ];
+            // The emulator profile answers each as the official emulator does; the stages
+            // themselves are not run locally. The collection is named by a string here, in no
+            // shape production refused, so strict answers none of these refusals.
             match official {
-                Some(_)
-                    if policy == IndexValidationPolicy::Production
-                        && unrecorded_order.contains(label) =>
-                {
+                Some(_) if policy == IndexValidationPolicy::Production => {
                     assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
                 }
                 Some(text) => {
@@ -8871,12 +8902,18 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
             (err.code(), err.message().to_owned())
         };
         for value in [map(&[("k", f("i"))]), array(vec![f("i")])] {
+            let (code, message) =
+                refused(vec![collection(), pipeline_select_map(vec![("v", value)])]).await;
+            // Strict answers only the shapes production refused, which name the collection by
+            // a reference (`pipeline_shape`).
+            if policy == IndexValidationPolicy::Production {
+                assert_eq!(code, tonic::Code::Unimplemented, "{message}");
+                continue;
+            }
+            assert_eq!(code, tonic::Code::InvalidArgument);
             assert_eq!(
-                refused(vec![collection(), pipeline_select_map(vec![("v", value)])]).await,
-                (
-                    tonic::Code::InvalidArgument,
-                    "Value type is not supported: FIELD_REFERENCE_VALUE".to_owned()
-                )
+                message,
+                "Value type is not supported: FIELD_REFERENCE_VALUE"
             );
         }
         let constant_where = run(vec![collection(), pipeline_stage("where", boolean(true))]).await;
@@ -9321,10 +9358,14 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         ]))
         .await
         .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error}");
-    assert_eq!(
-        error.message(),
-        "Expected offset to be INTEGER_VALUE, but was STRING_VALUE."
+    // Production refused `offset("x")` of a collection named by a reference; this one is
+    // named by a string, a shape it has not refused.
+    assert_eq!(error.code(), tonic::Code::Unimplemented, "{error}");
+    assert!(
+        error
+            .message()
+            .starts_with("Expected offset to be INTEGER_VALUE, but was STRING_VALUE."),
+        "{error}"
     );
     for (label, offset) in [
         (
@@ -11894,6 +11935,7 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
                     app_check: Vec::new(),
                     body: serde_json::json!({"writes": writes}),
                     batch_field_order: Vec::new(),
+                    key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
                     origin: None,
                     remote_peer: false,
                     browser_metadata: false,

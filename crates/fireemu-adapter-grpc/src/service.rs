@@ -665,7 +665,18 @@ impl Firestore for GatewayService {
         } else {
             fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
         };
-        let ast = crate::pipeline::validate_pipeline(request.get_ref(), registry_unrecorded)?;
+        // Strict answers a refusal only for a request of a shape production refused, with
+        // production's text (coordinator ruling of 2026-10-21); a decoded gRPC map keeps no
+        // wire order.
+        let gate = if self.gateway.production_refusals() {
+            crate::pipeline_shape::RefusalGate::Recorded(crate::pipeline_shape::shape_of_request(
+                request.get_ref(),
+            ))
+        } else {
+            crate::pipeline_shape::RefusalGate::Open
+        };
+        let ast = crate::pipeline::validate_pipeline(request.get_ref(), registry_unrecorded)
+            .map_err(|error| gate.answer(error))?;
         if self.local_backend().is_some() {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -679,11 +690,11 @@ impl Firestore for GatewayService {
             };
             let compiled =
                 crate::pipeline::compile_pipeline(request.get_ref(), &parent, unrecorded)
-                    .map_err(|error| pipeline_status(error, &canonical))?;
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
             let response = self
                 .run_query_with_caller(caller, compiled.input)
                 .await
-                .map_err(|error| pipeline_status(error, &canonical))?;
+                .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
             let whole_documents =
                 fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages)
                     .is_none();
@@ -696,6 +707,7 @@ impl Firestore for GatewayService {
                     unrecorded,
                 ),
                 canonical,
+                gate,
                 emitted: false,
             })));
         }
@@ -1074,6 +1086,8 @@ struct PipelineResponseStream {
     /// The input snapshot's read time, sent as every response's execution time.
     read_time: Option<prost_types::Timestamp>,
     canonical: String,
+    /// Which refusals the stream may answer.
+    gate: crate::pipeline_shape::RefusalGate,
     emitted: bool,
 }
 
@@ -1105,7 +1119,10 @@ impl tokio_stream::Stream for PipelineResponseStream {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(Err(error))) => {
                     this.inner = None;
-                    return Poll::Ready(Some(Err(pipeline_status(error, &this.canonical))));
+                    return Poll::Ready(Some(Err(pipeline_status(
+                        this.gate.answer(error),
+                        &this.canonical,
+                    ))));
                 }
                 Poll::Ready(None) => {
                     this.inner = None;
@@ -1132,7 +1149,10 @@ impl tokio_stream::Stream for PipelineResponseStream {
                         Ok(None) => continue,
                         Err(error) => {
                             this.inner = None;
-                            return Poll::Ready(Some(Err(pipeline_status(error, &this.canonical))));
+                            return Poll::Ready(Some(Err(pipeline_status(
+                                this.gate.answer(error),
+                                &this.canonical,
+                            ))));
                         }
                     };
                     this.emitted = true;
@@ -1803,6 +1823,7 @@ mod tests {
             whole_documents: false,
             read_time: None,
             canonical: "collection(items)".to_owned(),
+            gate: crate::pipeline_shape::RefusalGate::Open,
             emitted: false,
         };
         for _ in 0..3 {
@@ -1819,6 +1840,7 @@ mod tests {
             whole_documents: false,
             read_time: None,
             canonical: "collection(items)".to_owned(),
+            gate: crate::pipeline_shape::RefusalGate::Open,
             emitted: false,
         };
         assert_eq!(
@@ -1834,6 +1856,7 @@ mod tests {
             whole_documents: false,
             read_time: None,
             canonical: "collection(items)".to_owned(),
+            gate: crate::pipeline_shape::RefusalGate::Open,
             emitted: false,
         };
         assert_eq!(

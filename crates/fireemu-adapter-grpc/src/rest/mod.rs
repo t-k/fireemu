@@ -87,6 +87,9 @@ pub struct RestRequest {
     pub body: Value,
     /// Source order of each `BatchWrite` update document's top-level `fields` map.
     pub batch_field_order: Vec<Vec<String>>,
+    /// Source order of the keys of an `executePipeline` body's objects (empty when the body
+    /// was not read from its text).
+    pub key_order: json_syntax::KeyOrder,
 }
 
 /// HTTP status + JSON body.
@@ -1197,7 +1200,14 @@ impl RestState {
             if req.method != "POST" {
                 return Ok(not_found_text());
             }
-            return self.custom_method(&principal, path, action, &req.body, &req.batch_field_order);
+            return self.custom_method(
+                &principal,
+                path,
+                action,
+                &req.body,
+                &req.batch_field_order,
+                &req.key_order,
+            );
         }
         match (req.method.as_str(), classify(path)?) {
             ("GET", Target::Resource(name)) => self.get(&principal, &name, &params),
@@ -1427,6 +1437,7 @@ impl RestState {
         action: &str,
         body: &Value,
         batch_field_order: &[Vec<String>],
+        key_order: &json_syntax::KeyOrder,
     ) -> Result<RestResponse, Status> {
         match action {
             "commit" => self.commit(principal, resource, body),
@@ -1465,7 +1476,7 @@ impl RestState {
                         if enterprise || self.gateway.production_refusals() =>
                     {
                         let database = format!("projects/{project}/databases/{database}");
-                        stream_errors(self.execute_pipeline(principal, &database, body))
+                        stream_errors(self.execute_pipeline(principal, &database, body, key_order))
                     }
                     _ => Ok(not_found_text()),
                 }
@@ -1555,6 +1566,7 @@ impl RestState {
         principal: &Caller,
         database: &str,
         body: &Value,
+        key_order: &json_syntax::KeyOrder,
     ) -> Result<RestResponse, Status> {
         // Owner first, as over gRPC.
         if let Some(rules) = &self.rules {
@@ -1583,15 +1595,30 @@ impl RestState {
             }
         };
         let body = self.transcoded("executePipeline", body).map_err(nesting)?;
-        let request =
-            pipeline_json::request_from_json(database, &body).map_err(|e| nesting(bad(&e)))?;
-        let ast = crate::pipeline::validate_pipeline(&request, unrecorded)?;
+        // Strict answers a refusal only for a request of a shape production refused, with
+        // production's text (coordinator ruling of 2026-10-21).
+        let gate = if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
+            crate::pipeline_shape::RefusalGate::Recorded(crate::pipeline_shape::shape_of_json(
+                &body, key_order,
+            ))
+        } else {
+            crate::pipeline_shape::RefusalGate::Open
+        };
+        let request = pipeline_json::request_from_json(database, &body)
+            .map_err(|e| gate.answer(nesting(bad(&e))))?;
+        let ast = crate::pipeline::validate_pipeline(&request, unrecorded)
+            .map_err(|error| gate.answer(error))?;
         let canonical = ast.canonical_text();
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let refuse = |error| crate::service::pipeline_status(error, &canonical);
-        let compiled =
-            crate::pipeline::compile_pipeline(&request, &parent, unrecorded).map_err(refuse)?;
+        let refuse = |error| crate::service::pipeline_status(gate.answer(error), &canonical);
+        let compiled = crate::pipeline::compile_pipeline_in_order(
+            &request,
+            &parent,
+            unrecorded,
+            Some(key_order),
+        )
+        .map_err(refuse)?;
         let guard = self.read_guard(principal);
         let (responses, _warnings) = self
             .local

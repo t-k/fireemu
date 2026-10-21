@@ -54,7 +54,7 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 
 A `where` keeps a row only when its condition (a comparison, a field or another supported function) is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and every answer carries the execution time. A stored `-0.0` reads back as `-0.0`, as in production; the official emulator stores it as `0.0`.
 
-The answers follow production as recorded by fireemu's production observations (comparisons across value types, vectors and missing fields, integer and double values compared exactly, conditions of every kind, literal values and map keys, select alias rules and the alias length limit, document functions, `map(...)`, `limit` and `offset` arguments, and the refusal texts and orders production returned). Where production has not been observed, the profiles differ:
+The answers follow production as recorded by fireemu's production observations (comparisons across value types, vectors and missing fields, integer and double values compared exactly, conditions of every kind, literal values and map keys, select alias rules and the alias length limit, document functions, `map(...)`, `limit` and `offset` arguments, and the refusal texts and orders production returned). Under `strict`, a refusal is answered only when the request has the shape of a request production refused, with that request's text, and is `UNIMPLEMENTED` otherwise. A shape keeps the stages, function names, value kinds and every map's entries in order, and replaces only plain field names and values of the same kind, so `select({total: documentId(field)})` is answered like the recorded `select({v: documentId(field)})`. A REST body keeps its key order; over gRPC a map of two or more entries has no order, so `strict` answers no refusal of such a request there. Where production has not been observed, the profiles differ:
 
 | Input | `strict` | `emulator` |
 |---|---|---|
@@ -72,7 +72,7 @@ The answers follow production as recorded by fireemu's production observations (
 | A `limit` of another type than an integer or string; an `offset` that is negative or of another type than an integer or string | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
 | A `limit` of 0, or an `offset` of 0 up to 2147483647 (production answered only larger offsets) | `UNIMPLEMENTED` | The rows |
 | A refusal after a stage `strict` does not run past, such as an empty `select` after an `aggregate` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
-| A `select` alias inside another, such as `{a, a.b}` (production names the alias that comes later in the request) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the child alias |
+| A `select` alias inside another in another order than production's `{m, m.r}`, such as `{a.b, a}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the later alias over REST (as the official emulator does) and the child over gRPC |
 | Two `select` fields that both fail when evaluated, such as `{a: documentId("s"), b: parent(true)}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the first in key order |
 | A vector inside an array, or a `__type__` key beside other keys in a literal | `UNIMPLEMENTED` | The official answer |
 | The wrong number of arguments for a supported function | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |

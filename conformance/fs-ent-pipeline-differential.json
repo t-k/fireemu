@@ -1529,8 +1529,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-20T19:02:06.430549Z",
-      "updateTime": "2026-10-20T19:02:06.430549Z"
+      "createTime": "2026-10-21T00:13:42.578928Z",
+      "updateTime": "2026-10-21T00:13:42.578928Z"
      }
     ]
    }
@@ -7080,8 +7080,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-20T19:02:06.430549Z",
-      "updateTime": "2026-10-20T19:02:06.430549Z"
+      "createTime": "2026-10-21T00:13:42.578928Z",
+      "updateTime": "2026-10-21T00:13:42.578928Z"
      }
     ]
    }
@@ -12472,10 +12472,10 @@
            "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
           },
           "__create_time__": {
-           "timestampValue": "2026-10-20T19:02:06.430549Z"
+           "timestampValue": "2026-10-21T00:13:42.578928Z"
           },
           "__update_time__": {
-           "timestampValue": "2026-10-20T19:02:06.430549Z"
+           "timestampValue": "2026-10-21T00:13:42.578928Z"
           },
           "i": {
            "integerValue": "1"
@@ -400953,8 +400953,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-20T19:02:06.430549Z",
-      "updateTime": "2026-10-20T19:02:06.430549Z"
+      "createTime": "2026-10-21T00:13:42.578928Z",
+      "updateTime": "2026-10-21T00:13:42.578928Z"
      }
     ]
    }
@@ -405348,6 +405348,696 @@
       }
      }
     ]
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-4",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+          "fieldReferenceValue": "n"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The field reference 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is longer than 1500 bytes."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-171",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "c": {
+          "functionValue": {
+           "name": "nope_fn",
+           "args": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-281",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "distinct",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The 'distinct(...)' stage requires at least one field."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-287",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "stringValue": "x"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-321",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "fieldReferenceValue": "top"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid empty property path string."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-815",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "c": {
+          "functionValue": {
+           "name": "count",
+           "args": []
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-1176",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+          "fieldReferenceValue": "x"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The field reference 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is longer than 1500 bytes."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-1618",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "fieldReferenceValue": "top"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'select': field name '__name__' is reserved and can not be overwritten."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-1826",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__name__": {
+          "fieldReferenceValue": "dbl"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'select': field name '__name__' is reserved and can not be overwritten."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-2578",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a..b": {
+          "fieldReferenceValue": "dbl"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-2026-2748",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a..b": {
+          "fieldReferenceValue": "i"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-20261021-500",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "": {
+          "fieldReferenceValue": "dbl"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid empty property path string."
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-20261021-2626",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a..b": {
+          "fieldReferenceValue": "top"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r5 strict-refusal sweep-42-1230",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "fieldReferenceValue": "i.j"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Stage 'select': field name '__x__' is reserved."
+   }
+  },
+  {
+   "id": "r5 strict-refusal g20261021-00647",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "aggregate",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      },
+      {
+       "mapValue": {
+        "fields": {}
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The 'aggregate(...)' stage requires at least one accumulator."
+   }
+  },
+  {
+   "id": "r5 strict-refusal m4242-00210",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function document_id(...) requires `Reference` but got `LONG`."
+   }
+  },
+  {
+   "id": "r5 strict-refusal m4242-00421",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "a": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function document_id(...) requires `Reference` but got `LONG`."
+   }
+  },
+  {
+   "id": "r5 strict-refusal m4242-00505",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "_z": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function document_id(...) requires `Reference` but got `LONG`."
+   }
+  },
+  {
+   "id": "r5 strict-refusal m4242-00813",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "_z": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function collection_id(...) requires `Reference` but got `STRING`."
+   }
+  },
+  {
+   "id": "r5 strict-refusal m4242-01210",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "_z": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function parent(...) requires `Reference` but got `STRING`."
+   }
+  },
+  {
+   "id": "r5 strict-refusal m4242-01311",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "b": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "fieldReferenceValue": "top"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function collection_id(...) requires `Reference` but got `STRING`."
    }
   }
  ]

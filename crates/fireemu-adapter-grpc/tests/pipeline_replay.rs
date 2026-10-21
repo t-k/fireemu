@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
+use fireemu_adapter_grpc::rest::json_syntax::KeyOrder;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_session::clock::VirtualClock;
@@ -22,14 +23,6 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
-/// Recorded rows strict answers with UNIMPLEMENTED although production answered them, because
-/// production's answer depends on a part of the request the decoded request no longer holds
-/// (the emulator profile still answers them as production did).
-const STRICT_UNIMPLEMENTED: &[(&str, &str)] = &[(
-    "fs-ent-pipeline/px0/aliases#overlap",
-    "the text names the later of the two aliases in the request's map, whose order is not kept",
-)];
-
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("fs-ent-pipeline/px1/select#and-false-null", "and is outside the subset"),
     ("fs-ent-pipeline/px1/select#and-false-x", "and is outside the subset"),
@@ -119,6 +112,13 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ),
 ];
 
+/// A fixture with the key order of its objects as written.
+fn read_ordered(name: &str) -> (Value, KeyOrder) {
+    let path = format!("{}/../../conformance/{name}", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(&text).unwrap()
+}
+
 fn read(name: &str) -> Value {
     let path = format!("{}/../../conformance/{name}", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}")))
@@ -152,6 +152,17 @@ fn state(strict: bool) -> RestState {
 }
 
 fn call(s: &RestState, method: &str, path: &str, body: &Value) -> (u16, Value) {
+    call_ordered(s, method, path, body, &KeyOrder::default())
+}
+
+/// A request whose body keeps the key order it was written in.
+fn call_ordered(
+    s: &RestState,
+    method: &str,
+    path: &str,
+    body: &Value,
+    key_order: &KeyOrder,
+) -> (u16, Value) {
     let r = s.handle(&RestRequest {
         method: method.to_owned(),
         path: format!("/v1/{path}"),
@@ -163,6 +174,7 @@ fn call(s: &RestState, method: &str, path: &str, body: &Value) -> (u16, Value) {
         app_check: Vec::new(),
         body: body.clone(),
         batch_field_order: Vec::new(),
+        key_order: key_order.clone(),
     });
     (r.status, r.body)
 }
@@ -290,7 +302,7 @@ fn answer(status: u16, body: &Value) -> Value {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn the_pipeline_corpus_replays_as_production_answered() {
-    let requests = read("fs-ent-pipeline-requests.json");
+    let (requests, order) = read_ordered("fs-ent-pipeline-requests.json");
     let production = read("fs-ent-pipeline-production.json");
     // A stopped run's private fixture (`fixture.partial.json`) is never replayed as production:
     // it holds programs finished by one recording, without the second recording's rows.
@@ -305,7 +317,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         let s = state(strict);
         let mut differing = Vec::new();
         let mut compared = 0;
-        for program in requests["programs"].as_array().unwrap() {
+        for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
             let id = program["id"].as_str().unwrap();
             for seed in program["seed"].as_array().unwrap() {
                 let (status, body) = call(
@@ -317,7 +329,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 assert_eq!(status, 200, "{id} seed: {body}");
             }
             let recorded = &production["programs"][id]["steps"];
-            for step in program["steps"].as_array().unwrap() {
+            for (n, step) in program["steps"].as_array().unwrap().iter().enumerate() {
                 let step_id = step["id"].as_str().unwrap();
                 let row = format!("{id}#{step_id}");
                 let rpc = step["rpc"].as_str().unwrap();
@@ -325,7 +337,13 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     let parent = step["parent"].as_str().unwrap();
                     call(&s, "GET", &format!("{DOCS}/{parent}"), &Value::Null)
                 } else {
-                    call(&s, "POST", &format!("{DOCS}:{rpc}"), &fill(&step["body"]))
+                    call_ordered(
+                        &s,
+                        "POST",
+                        &format!("{DOCS}:{rpc}"),
+                        &fill(&step["body"]),
+                        &order.rebased(&format!("/programs/{p}/steps/{n}/body"), ""),
+                    )
                 };
                 let expected = &recorded[step_id];
                 assert!(!expected.is_null(), "{row} has no production row");
@@ -356,10 +374,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             }
         }
         assert!(compared > 200, "{compared}");
-        let known = |row: &str| {
-            KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known)
-                || (strict && STRICT_UNIMPLEMENTED.iter().any(|(known, _)| row == *known))
-        };
+        let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
         let unexpected: Vec<_> = differing.iter().filter(|(row, _, _)| !known(row)).collect();
         assert!(
             unexpected.is_empty(),
@@ -374,12 +389,6 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         // order row with two of the three documents, the unknown function after an empty
         // select with the empty select's text under the emulator profile, every other row
         // (that one under strict too) with UNIMPLEMENTED.
-        for (known, reason) in STRICT_UNIMPLEMENTED.iter().filter(|_| strict) {
-            let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
-                panic!("{known} ({reason}) matches production under strict now; remove it");
-            };
-            assert_eq!(got["status"], 501, "{known}: {got}");
-        }
         for (known, reason) in KNOWN_DIFFERENCES {
             let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
                 panic!("strict={strict}: {known} ({reason}) matches production now; remove it");

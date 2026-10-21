@@ -56,6 +56,7 @@ fn call(state: &RestState, method: &str, path: &str, body: &Value) -> (u16, Valu
         app_check: Vec::new(),
         body: body.clone(),
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
     });
     (response.status, response.body)
 }
@@ -296,7 +297,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                 ),
                 empty(),
             ],
-            strict: Some((400, EMPTY_SELECT)),
+            strict: None,
             emulator: (400, EMPTY_SELECT),
         },
         Case {
@@ -330,7 +331,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                 "aggregate",
                 vec![map(vec![("", func("count", vec![]))]), map(vec![])],
             )],
-            strict: Some((400, "Invalid empty property path string.")),
+            strict: None,
             emulator: (400, "Invalid empty property path string."),
         },
         Case {
@@ -372,33 +373,44 @@ fn strict_answers_only_the_argument_types_production_recorded() {
         format!("The function {function}(...) requires `Reference` but got `{got}`.")
     };
     let mut cases = Vec::new();
-    // Recorded per function, since the text names it: document_id of a string (O-3) and an
-    // integer (O-4), collection_id of a string (O-3) and a map (O-4), parent of a string (O-3)
-    // and a boolean (O-4). Every other pair is unrecorded.
+    // Production refused each function of a field per runtime type, since the text names it:
+    // document_id of a string (O-3) and an integer (O-4), collection_id of a string (O-3) and a
+    // map (O-4), parent of a string (O-3) and a boolean (O-4). A constant where production read
+    // a field is another shape, so strict answers none of these (ruling of 2026-10-21).
     let call_of = |function: &str, arg: Value| select(func(function, vec![arg]));
-    for (function, arg, got, recorded) in [
-        ("document_id", string("s"), "STRING", true),
-        ("document_id", int(1), "LONG", true),
-        ("document_id", map(vec![("a", int(1))]), "MAP", false),
-        (
-            "document_id",
-            json!({ "booleanValue": true }),
-            "BOOLEAN",
-            false,
-        ),
-        ("collection_id", string("s"), "STRING", true),
-        ("collection_id", map(vec![("a", int(1))]), "MAP", true),
-        ("collection_id", int(1), "LONG", false),
-        ("parent", string("s"), "STRING", true),
-        ("parent", json!({ "booleanValue": true }), "BOOLEAN", true),
-        ("parent", int(1), "LONG", false),
+    for (function, field_name, got) in [
+        ("document_id", "top", "STRING"),
+        ("document_id", "i", "LONG"),
+        ("collection_id", "top", "STRING"),
+        ("parent", "top", "STRING"),
+    ] {
+        let label: &'static str = Box::leak(format!("{function}(field {got})").into_boxed_str());
+        let text: &'static str = Box::leak(wrong(function, got).into_boxed_str());
+        cases.push(Case {
+            label,
+            stages: vec![call_of(function, field(field_name))],
+            strict: Some((400, text)),
+            emulator: (400, text),
+        });
+    }
+    for (function, arg, got) in [
+        ("document_id", string("s"), "STRING"),
+        ("document_id", int(1), "LONG"),
+        ("document_id", map(vec![("a", int(1))]), "MAP"),
+        ("document_id", json!({ "booleanValue": true }), "BOOLEAN"),
+        ("collection_id", string("s"), "STRING"),
+        ("collection_id", map(vec![("a", int(1))]), "MAP"),
+        ("collection_id", int(1), "LONG"),
+        ("parent", string("s"), "STRING"),
+        ("parent", json!({ "booleanValue": true }), "BOOLEAN"),
+        ("parent", int(1), "LONG"),
     ] {
         let label: &'static str = Box::leak(format!("{function}({got})").into_boxed_str());
         let text: &'static str = Box::leak(wrong(function, got).into_boxed_str());
         cases.push(Case {
             label,
             stages: vec![call_of(function, arg)],
-            strict: recorded.then_some((400, text)),
+            strict: None,
             emulator: (400, text),
         });
     }
@@ -589,10 +601,7 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
                 stage("add_fields", vec![map(vec![("t", field("top"))])]),
                 stage("limit", vec![string("x")]),
             ],
-            strict: Some((
-                400,
-                "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
-            )),
+            strict: None,
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
@@ -1028,7 +1037,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: Some((400, EMPTY_SELECT)),
+            strict: None,
             emulator: (400, EMPTY_SELECT),
         },
         // A constant that evaluates fine does not change the answer.
@@ -1041,7 +1050,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: Some((400, EMPTY_SELECT)),
+            strict: None,
             emulator: (400, EMPTY_SELECT),
         },
         // Alone, a failing constant is answered at evaluation as recorded (O-4
@@ -1049,10 +1058,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
         Case {
             label: "select {v: document_id(1)} alone",
             stages: vec![select(func("document_id", vec![int(1)]))],
-            strict: Some((
-                400,
-                "The function document_id(...) requires `Reference` but got `LONG`.",
-            )),
+            strict: None,
             emulator: (
                 400,
                 "The function document_id(...) requires `Reference` but got `LONG`.",
@@ -1214,7 +1220,7 @@ fn strict_answers_a_refusal_only_when_no_other_part_is_unobserved() {
                 "aggregate",
                 vec![map(vec![("c", func("document_id", vec![int(1)]))])],
             )],
-            strict: Some((400, AGGREGATE_ARITY)),
+            strict: None,
             emulator: (400, AGGREGATE_ARITY),
         },
         // Recorded orders stay answered (O-1 `results/metadata#aggregate`, O-4 `o4/stages#*`).
@@ -1236,7 +1242,7 @@ fn strict_answers_a_refusal_only_when_no_other_part_is_unobserved() {
                 stage("limit", vec![int(1)]),
                 stage("aggregate", vec![map(vec![("c", func("count", vec![]))])]),
             ],
-            strict: Some((400, AGGREGATE_ARITY)),
+            strict: None,
             emulator: (400, AGGREGATE_ARITY),
         },
         Case {
@@ -1589,7 +1595,7 @@ fn the_round_four_checks_hold_in_every_position() {
         Case {
             label: "add_fields {t: top} then select {__x__: i}",
             stages: vec![stage("add_fields", vec![map(vec![("t", field("top"))])]), stage("select", vec![map(vec![("__x__", field("i"))])])],
-            strict: Some((400, "Stage 'select': field name '__x__' is reserved.")),
+            strict: None,
             emulator: (400, "Stage 'select': field name '__x__' is reserved."),
         },
         // A function's own refusal inside a literal holding it, at any depth.

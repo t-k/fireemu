@@ -3,6 +3,7 @@
 //! the REST JSON API share the Firestore port, as the official Emulator does. Browser
 //! requests get permissive CORS answers (loopback test runtime).
 
+use crate::rest::json_syntax::KeyOrder;
 use std::convert::Infallible;
 use std::sync::{Arc, OnceLock};
 
@@ -480,7 +481,7 @@ async fn rest_call(
             return Ok(json(&body_rejection_response(rejection)));
         }
     };
-    let (body, batch_field_order) =
+    let (body, batch_field_order, key_order) =
         match request_body(&bytes, &path, state.gateway.production_refusals()) {
             Ok(body) => body,
             Err(response) => return Ok(json(&response)),
@@ -500,6 +501,7 @@ async fn rest_call(
             app_check,
             body,
             batch_field_order,
+            key_order,
         },
         _payload_permit: payload_permit,
     };
@@ -714,27 +716,35 @@ fn is_prost_recursion(status: &Status) -> bool {
 /// array for a streaming method. Without `production_refusals` (the emulator profile) a body
 /// that grammar refuses but standard JSON admits (one nested deeper than its limit) is read as
 /// standard JSON, as fireemu read every body before, so the profile adds no rejection.
+/// A pipeline body also keeps the wire order of its maps, which production's answers can
+/// depend on.
 fn request_body(
     bytes: &[u8],
     path: &str,
     production_refusals: bool,
-) -> Result<(serde_json::Value, Vec<Vec<String>>), crate::rest::RestResponse> {
+) -> Result<(serde_json::Value, Vec<Vec<String>>, KeyOrder), crate::rest::RestResponse> {
     if bytes.is_empty() {
         return Ok((
             serde_json::Value::Object(serde_json::Map::new()),
             Vec::new(),
+            KeyOrder::default(),
         ));
     }
     let parsed = if path.ends_with(":batchWrite") {
         crate::rest::json_syntax::parse_with_batch_field_order(bytes)
+            .map(|(value, order)| (value, order, KeyOrder::default()))
+    } else if path.ends_with(":executePipeline") {
+        crate::rest::json_syntax::parse_with_key_order(bytes)
+            .map(|(value, order)| (value, Vec::new(), order))
     } else {
-        crate::rest::transcode::parse_body(bytes).map(|value| (value, Vec::new()))
+        crate::rest::transcode::parse_body(bytes)
+            .map(|value| (value, Vec::new(), KeyOrder::default()))
     };
     parsed
         .or_else(|error| {
             if !production_refusals {
                 if let Ok(value) = serde_json::from_slice(bytes) {
-                    return Ok((value, Vec::new()));
+                    return Ok((value, Vec::new(), KeyOrder::default()));
                 }
             }
             Err(error)
@@ -1021,13 +1031,22 @@ mod tests {
         );
         assert_eq!(super::request_body(b"", commit, true).unwrap().0, json!({}));
         let batch = "/v1/projects/p/databases/(default)/documents:batchWrite";
-        let (_, field_order) = super::request_body(
+        let (_, field_order, _) = super::request_body(
             br"{writes:[{update:{fields:{z:{stringValue:'ok'},a:{integerValue:'bad'}}}}]}",
             batch,
             true,
         )
         .unwrap();
         assert_eq!(field_order, vec![vec!["z".to_owned(), "a".to_owned()]]);
+        let pipeline = "/v1/projects/p/databases/(default)/documents:executePipeline";
+        let (_, _, key_order) =
+            super::request_body(br#"{"b": 1, "a": 2}"#, pipeline, true).unwrap();
+        assert_eq!(
+            key_order.keys(""),
+            Some(&["b".to_owned(), "a".to_owned()][..])
+        );
+        let (_, _, key_order) = super::request_body(br#"{"b": 1, "a": 2}"#, batch, true).unwrap();
+        assert_eq!(key_order.keys(""), None);
         let truncated = super::request_body(br#"{"structuredQuery":"#, query, true).unwrap_err();
         assert_eq!(truncated.status, 400);
         assert_eq!(
@@ -1797,6 +1816,7 @@ mod tests {
                 app_check: Vec::new(),
                 body: serde_json::Value::Object(serde_json::Map::new()),
                 batch_field_order: Vec::new(),
+                key_order: crate::rest::json_syntax::KeyOrder::default(),
             },
             _payload_permit: Some(permit),
         }
@@ -3237,6 +3257,7 @@ mod document_not_found_layout_tests {
             app_check: Vec::new(),
             body: serde_json::json!({}),
             batch_field_order: Vec::new(),
+            key_order: crate::rest::json_syntax::KeyOrder::default(),
         }
     }
 

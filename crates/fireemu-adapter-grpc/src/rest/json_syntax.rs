@@ -20,6 +20,42 @@ const CONTEXT: usize = 20;
 /// How deeply objects and arrays may nest.
 const MAX_DEPTH: usize = 100;
 
+/// The source order of the keys of each object of a body with two or more keys, by the object's
+/// JSON pointer (RFC 6901). An object that repeats a key has no entry (its order is unknown).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyOrder(std::collections::BTreeMap<String, Vec<String>>);
+
+impl KeyOrder {
+    /// The keys of the object at `pointer` in source order, when it has two or more and none
+    /// repeats.
+    #[must_use]
+    pub fn keys(&self, pointer: &str) -> Option<&[String]> {
+        self.0.get(pointer).map(Vec::as_slice)
+    }
+
+    /// The order of the objects under `from`, with their pointers moved under `to` (an object
+    /// of a larger document seen as a body of its own).
+    #[must_use]
+    pub fn rebased(&self, from: &str, to: &str) -> Self {
+        Self(
+            self.0
+                .iter()
+                .filter_map(|(pointer, keys)| {
+                    let rest = pointer.strip_prefix(from)?;
+                    (rest.is_empty() || rest.starts_with('/'))
+                        .then(|| (format!("{to}{rest}"), keys.clone()))
+                })
+                .collect(),
+        )
+    }
+}
+
+/// `key` as a JSON pointer segment (RFC 6901: `~` is `~0`, `/` is `~1`).
+#[must_use]
+pub fn pointer_segment(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
+}
+
 /// A body the parser refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntaxError {
@@ -101,6 +137,9 @@ struct Parser<'a> {
     /// Where the second pass started: its refusals quote from here on.
     leftover: usize,
     batch_field_order: Vec<Vec<String>>,
+    /// The pointer of the value being read and the key order found so far, when the caller
+    /// asked for the key order.
+    key_order: Option<(String, KeyOrder)>,
 }
 
 const fn is_letter(byte: u8) -> bool {
@@ -221,12 +260,16 @@ impl Parser<'_> {
             self.batch_field_order[at].clear();
         }
         let mut out = Map::new();
+        // The keys in source order, and whether one repeated.
+        let mut keys: Vec<String> = Vec::new();
+        let mut repeated = false;
         loop {
             let key = match self.next_token() {
                 Token::Unknown => return Err(self.unknown("Expected an object key or }.")),
                 // A comma may trail the last member.
                 Token::EndObject => {
                     self.at += 1;
+                    self.record_keys(keys, repeated);
                     return Ok(Value::Object(out));
                 }
                 Token::String => self.string()?,
@@ -247,7 +290,14 @@ impl Parser<'_> {
                 Token::Colon => self.at += 1,
                 _ => return Err(self.fail("Expected : between key:value pair.", self.at)),
             }
-            let value = self.value(depth, &key, location.member(&key))?;
+            let value = self.member_value(depth, &key, location)?;
+            if self.key_order.is_some() {
+                if keys.contains(&key) {
+                    repeated = true;
+                } else {
+                    keys.push(key.clone());
+                }
+            }
             if let Location::Fields(at) = location {
                 let order = &mut self.batch_field_order[at];
                 if !out.contains_key(&key) {
@@ -261,6 +311,7 @@ impl Parser<'_> {
                 }
                 Token::EndObject => {
                     self.at += 1;
+                    self.record_keys(keys, repeated);
                     return Ok(Value::Object(out));
                 }
                 Token::Comma => self.at += 1,
@@ -284,7 +335,10 @@ impl Parser<'_> {
                     self.at += 1;
                     return Ok(Value::Array(out));
                 }
-                _ => out.push(self.value(depth, key, location.element(out.len()))?),
+                _ => {
+                    let element = self.element_value(depth, key, location, out.len())?;
+                    out.push(element);
+                }
             }
             match self.next_token() {
                 Token::Unknown => return Err(self.unknown("Expected , or ] after array value.")),
@@ -294,6 +348,61 @@ impl Parser<'_> {
                 }
                 Token::Comma => self.at += 1,
                 _ => return Err(self.fail("Expected , or ] after array value.", self.at)),
+            }
+        }
+    }
+
+    /// Reads a member's value with its pointer pushed.
+    fn member_value(
+        &mut self,
+        depth: usize,
+        key: &str,
+        location: Location,
+    ) -> Result<Value, SyntaxError> {
+        let len = self.push_pointer(&pointer_segment(key));
+        let value = self.value(depth, key, location.member(key));
+        self.pop_pointer(len);
+        value
+    }
+
+    /// Reads an array element with its pointer pushed.
+    fn element_value(
+        &mut self,
+        depth: usize,
+        key: &str,
+        location: Location,
+        at: usize,
+    ) -> Result<Value, SyntaxError> {
+        let len = self.push_pointer(&at.to_string());
+        let value = self.value(depth, key, location.element(at));
+        self.pop_pointer(len);
+        value
+    }
+
+    /// Appends a segment to the current pointer and returns its previous length.
+    fn push_pointer(&mut self, segment: &str) -> usize {
+        match &mut self.key_order {
+            Some((pointer, _)) => {
+                let len = pointer.len();
+                pointer.push('/');
+                pointer.push_str(segment);
+                len
+            }
+            None => 0,
+        }
+    }
+
+    fn pop_pointer(&mut self, len: usize) {
+        if let Some((pointer, _)) = &mut self.key_order {
+            pointer.truncate(len);
+        }
+    }
+
+    /// Keeps the key order of the object just read, when it has two or more keys.
+    fn record_keys(&mut self, keys: Vec<String>, repeated: bool) {
+        if let Some((pointer, order)) = &mut self.key_order {
+            if !repeated && keys.len() > 1 {
+                order.0.insert(pointer.clone(), keys);
             }
         }
     }
@@ -453,24 +562,32 @@ impl Parser<'_> {
 
 /// Parses a request body as production's front end does.
 pub fn parse(body: &[u8]) -> Result<Value, SyntaxError> {
-    parse_internal(body, false).map(|(value, _)| value)
+    parse_internal(body, false, false).map(|(value, _, _)| value)
 }
 
 /// Parses a request and retains the source order of top-level `BatchWrite` document fields.
 pub fn parse_with_batch_field_order(body: &[u8]) -> Result<(Value, Vec<Vec<String>>), SyntaxError> {
-    parse_internal(body, true)
+    parse_internal(body, true, false).map(|(value, order, _)| (value, order))
+}
+
+/// Parses a request and retains the source order of the keys of every object (the wire order
+/// of a pipeline's maps, which production's answers can depend on).
+pub fn parse_with_key_order(body: &[u8]) -> Result<(Value, KeyOrder), SyntaxError> {
+    parse_internal(body, false, true).map(|(value, _, order)| (value, order))
 }
 
 fn parse_internal(
     body: &[u8],
     collect_batch_order: bool,
-) -> Result<(Value, Vec<Vec<String>>), SyntaxError> {
+    collect_key_order: bool,
+) -> Result<(Value, Vec<Vec<String>>, KeyOrder), SyntaxError> {
     let mut parser = Parser {
         body,
         at: 0,
         finishing: false,
         leftover: 0,
         batch_field_order: Vec::new(),
+        key_order: collect_key_order.then(|| (String::new(), KeyOrder::default())),
     };
     let location = if collect_batch_order {
         Location::Root
@@ -484,12 +601,91 @@ fn parse_internal(
     if parser.at < body.len() {
         return Err(parser.fail("Parsing terminated before end of input.", parser.at));
     }
-    Ok((value, parser.batch_field_order))
+    let key_order = parser.key_order.map(|(_, order)| order).unwrap_or_default();
+    Ok((value, parser.batch_field_order, key_order))
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn key_order_names_each_object_of_two_or_more_keys_by_its_pointer() {
+        let (body, order) = super::parse_with_key_order(
+            br#"{"b": 1, "a": {"y/x": [{"z": 1, "~": 2}], "only": {"k": 1}}, c: 'x'}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            body,
+            super::parse(
+                br#"{"b": 1, "a": {"y/x": [{"z": 1, "~": 2}], "only": {"k": 1}}, c: 'x'}"#
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            order.keys(""),
+            Some(&["b".to_owned(), "a".to_owned(), "c".to_owned()][..])
+        );
+        assert_eq!(
+            order.keys("/a"),
+            Some(&["y/x".to_owned(), "only".to_owned()][..])
+        );
+        assert_eq!(
+            order.keys("/a/y~1x/0"),
+            Some(&["z".to_owned(), "~".to_owned()][..])
+        );
+        // One key has no order to keep.
+        assert_eq!(order.keys("/a/only"), None);
+        assert_eq!(
+            order.rebased("/a", "/q").keys("/q/y~1x/0"),
+            Some(&["z".to_owned(), "~".to_owned()][..])
+        );
+        assert_eq!(order.rebased("/a/y", "").keys(""), None);
+    }
+
+    #[test]
+    fn a_repeated_key_leaves_its_object_without_an_order() {
+        let (_, order) = super::parse_with_key_order(
+            br#"{"m": {"a": 1, "b": 2, "a": 3}, "n": {"a": 1, "b": 2}}"#,
+        )
+        .unwrap();
+        assert_eq!(order.keys("/m"), None);
+        assert_eq!(
+            order.keys("/n"),
+            Some(&["a".to_owned(), "b".to_owned()][..])
+        );
+        assert_eq!(
+            super::parse_with_batch_field_order(br#"{"a": 1, "b": 2}"#)
+                .unwrap()
+                .1,
+            Vec::<Vec<String>>::new()
+        );
+    }
+
+    proptest::proptest! {
+        /// Keys come back in the order they were written, at any depth.
+        #[test]
+        fn key_order_is_the_written_order(keys in proptest::collection::vec("[a-z/~]{1,3}", 2..6)) {
+            let mut unique = Vec::new();
+            for key in keys {
+                if !unique.contains(&key) {
+                    unique.push(key);
+                }
+            }
+            let members: Vec<String> = unique.iter().map(|k| format!("{}: {{\"x\": [1, {{\"p\": 1, \"q\": 2}}]}}", serde_json::to_string(k).unwrap())).collect();
+            let text = format!("{{\"outer\": {{{}}}}}", members.join(", "));
+            let (_, order) = super::parse_with_key_order(text.as_bytes()).unwrap();
+            if unique.len() > 1 {
+                proptest::prop_assert_eq!(order.keys("/outer"), Some(&unique[..]));
+            } else {
+                proptest::prop_assert_eq!(order.keys("/outer"), None);
+            }
+            for key in &unique {
+                let pointer = format!("/outer/{}/x/1", super::pointer_segment(key));
+                proptest::prop_assert_eq!(order.keys(&pointer), Some(&["p".to_owned(), "q".to_owned()][..]));
+            }
+        }
+    }
 
     #[test]
     fn batch_field_order_uses_decoded_keys_and_last_duplicate_map() {

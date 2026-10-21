@@ -485,8 +485,8 @@ async fn malformed_parent_and_unknown_operator_are_invalid_argument() {
 async fn pipeline_and_listen_are_explicitly_unimplemented() {
     let (url, handle) = start(FirestoreEdition::Enterprise, IndexSet::default()).await;
     let mut client = connect(&url).await;
-    // Strict validation only: an undecodable request is refused as such, a valid pipeline
-    // is answered with UNIMPLEMENTED (never forwarded or executed).
+    // Strict validation only: an undecodable request and a valid pipeline are both answered
+    // with UNIMPLEMENTED (never forwarded or executed).
     let status = client
         .execute_pipeline(pb::ExecutePipelineRequest {
             database: "projects/demo-app/databases/(default)".to_owned(),
@@ -494,10 +494,11 @@ async fn pipeline_and_listen_are_explicitly_unimplemented() {
         })
         .await
         .unwrap_err();
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    // fireemu's own text, in no shape production refused: strict refuses it as unobserved.
+    assert_eq!(status.code(), tonic::Code::Unimplemented, "{status}");
     assert_eq!(
         status.metadata().get("fireemu-code").unwrap(),
-        "FS_PIPE_DECODE"
+        "FS_PIPE_UNSUPPORTED_STAGE"
     );
     let status = client
         .execute_pipeline(pb::ExecutePipelineRequest {

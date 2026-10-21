@@ -638,6 +638,9 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
         .unwrap();
     let mut gateway = test_gateway();
     gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    // The emulator profile answers the run-time refusal (strict answers it only in a shape
+    // production refused).
+    gateway.ctx.policy = fireemu_core_firestore::index::IndexValidationPolicy::Emulator;
     let service = GatewayService::local(gateway, backend);
     let request = |limit: Option<i64>| {
         let mut stages = vec![

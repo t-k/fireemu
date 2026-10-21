@@ -986,6 +986,7 @@ fn select_aliases_are_field_paths() {
 /// production has not answered, so strict refuses it as unobserved.
 #[test]
 fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profile() {
+    type Aliases = Vec<(FieldPath, Expr)>;
     let input = vec![row("c/x", &[("top", s("t"))])];
     let map = |entries: &[(&str, Value)]| {
         Value::Map(
@@ -996,7 +997,7 @@ fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profil
         )
     };
     let empty = || Value::Map(BTreeMap::new());
-    let cases: Vec<(Vec<(FieldPath, Expr)>, Vec<(&str, Value)>)> = vec![
+    let cases: Vec<(Aliases, Vec<(&str, Value)>)> = vec![
         (
             vec![(alias("a.b.c"), field("missing"))],
             vec![("a", map(&[("b", empty())]))],

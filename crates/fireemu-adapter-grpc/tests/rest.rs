@@ -136,6 +136,27 @@ fn call_as(
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
+        origin: None,
+        remote_peer: false,
+        browser_metadata: false,
+    });
+    (r.status, r.body)
+}
+
+/// A request whose body is JSON text, read with its key order as the server reads it.
+fn call_text(s: &RestState, method: &str, path: &str, text: &str) -> (u16, Value) {
+    let (body, key_order) =
+        fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(text.as_bytes()).unwrap();
+    let r = s.handle(&RestRequest {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        query: String::new(),
+        authorization: Some("Bearer owner".to_owned()),
+        app_check: Vec::new(),
+        body,
+        batch_field_order: Vec::new(),
+        key_order,
         origin: None,
         remote_peer: false,
         browser_metadata: false,
@@ -5587,6 +5608,7 @@ fn the_security_rules_route_needs_the_control_token_from_a_browser() {
             app_check: Vec::new(),
             body: json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}}),
             batch_field_order: Vec::new(),
+            key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
         });
         (r.status, r.body)
     };
@@ -5657,6 +5679,7 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
                 app_check: Vec::new(),
                 body: json!({}),
                 batch_field_order: Vec::new(),
+                key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
             });
             (r.status, r.body)
         };
@@ -6895,6 +6918,7 @@ fn the_privileged_emulator_routes_refuse_a_remote_peer() {
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
     };
     let rules = json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}});
     for remote_peer in [true, false] {
@@ -7097,7 +7121,17 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                     "INVALID_ARGUMENT"
                 },
             ),
-            ("no pipeline", json!({}), 400, "INVALID_ARGUMENT"),
+            // fireemu's own text, in no shape production refused.
+            (
+                "no pipeline",
+                json!({}),
+                if strict { 501 } else { 400 },
+                if strict {
+                    "UNIMPLEMENTED"
+                } else {
+                    "INVALID_ARGUMENT"
+                },
+            ),
             (
                 "transaction selector",
                 json!({"structuredPipeline": {"pipeline": {"stages": [collection]}}, "readTime": "2026-08-29T12:00:00Z"}),
@@ -7151,55 +7185,52 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
 
 /// Over REST, the recorded select refusals answer production's bodies: the one-element error
 /// array, the text, and the overlap's `ErrorInfo` (FS-ENT-ORACLE O-1,
-/// `fs-ent-pipeline/px0/aliases#overlap`).
+/// `fs-ent-pipeline/px0/aliases#overlap`). The body keeps its key order: an alias inside another
+/// names the later of the two, as the official emulator does, and strict answers only the
+/// order production refused.
 #[test]
 fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
+    let overlap = |child: &str| {
+        json!([{"error": {
+            "code": 400,
+            "message": format!("The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of '{child}' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."),
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {"field": child},
+                "reason": "OVERLAPPING_PROPERTY_PATHS",
+            }],
+        }}])
+    };
     for strict in [true, false] {
         let s = enterprise_state(strict, None);
         seed_nest(&s);
-        let select = |fields: Value| {
-            pipeline_body(&json!([
-                {"name": "collection", "args": [{"referenceValue": "/nest"}]},
-                {"name": "select", "args": [{"mapValue": {"fields": fields}}]},
-            ]))
+        let select = |fields: &str| {
+            let (status, body) = call_text(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                &format!(
+                    r#"{{"structuredPipeline": {{"pipeline": {{"stages": [{{"name": "collection", "args": [{{"referenceValue": "/nest"}}]}}, {{"name": "select", "args": [{{"mapValue": {{"fields": {{{fields}}}}}}}]}}]}}}}}}"#
+                ),
+            );
+            (status, body)
         };
-        let field = json!({"fieldReferenceValue": "name"});
-        let (status, body) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:executePipeline"),
-            select(json!({"m": field, "m.r": field})),
-        );
-        // The text names the later alias of the request's map, an order strict cannot see.
+        let field = r#"{"fieldReferenceValue": "name"}"#;
+        let (status, body) = select(&format!(r#""m": {field}, "m.r": {field}"#));
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body, overlap("m.r"), "strict={strict}");
+        // The other order: the official emulator names the later alias; production has not
+        // refused it.
+        let (status, body) = select(&format!(r#""m.r": {field}, "m": {field}"#));
         if strict {
             assert_eq!(status, 501, "{body}");
         } else {
-            assert_eq!(status, 400, "{body}");
-            assert_eq!(
-                body,
-                json!([{"error": {
-                    "code": 400,
-                    "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
-                    "status": "INVALID_ARGUMENT",
-                    "details": [{
-                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                        "domain": "firestore.googleapis.com",
-                        "metadata": {"field": "m.r"},
-                        "reason": "OVERLAPPING_PROPERTY_PATHS",
-                    }],
-                }}]),
-                "strict={strict}"
-            );
+            assert_eq!(body, overlap("m"), "{body}");
         }
-        let wide: serde_json::Map<String, Value> = (0..65)
-            .map(|k| (format!("a{k:02}"), field.clone()))
-            .collect();
-        let (status, body) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:executePipeline"),
-            select(Value::Object(wide)),
-        );
+        let wide: Vec<String> = (0..65).map(|k| format!(r#""a{k:02}": {field}"#)).collect();
+        let (status, body) = select(&wide.join(", "));
         assert_eq!(status, 400, "{body}");
         assert_eq!(
             body,
@@ -7210,12 +7241,7 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
             }}]),
             "strict={strict}"
         );
-        let (status, body) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:executePipeline"),
-            select(json!({"__x__": field})),
-        );
+        let (status, body) = select(&format!(r#""__x__": {field}"#));
         assert_eq!(status, 400, "{body}");
         assert_eq!(
             body,
@@ -7467,6 +7493,9 @@ fn rest_execute_pipeline_transcodes_every_request_field() {
         let s = enterprise_state(strict, None);
         seed_nest(&s);
         for (label, body, status) in cases.clone() {
+            // fireemu's own text, in no shape production refused: strict refuses it as
+            // unobserved.
+            let status = if strict && status == 400 { 501 } else { status };
             let (got, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
             assert_eq!(got, status, "strict={strict} {label}: {body}");
             assert!(

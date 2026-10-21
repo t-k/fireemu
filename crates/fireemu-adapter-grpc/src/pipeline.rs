@@ -8,6 +8,7 @@
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
+use crate::rest::json_syntax::KeyOrder;
 use fireemu_core_firestore::field_path::{FieldPath, FieldPathError};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
@@ -474,11 +475,23 @@ pub struct CompiledExecution {
 /// is refused. `unrecorded` decides whether shapes with unrecorded production behavior
 /// (a constant `where` condition, a literal holding expressions) are refused or answered as
 /// the official emulator answers them.
-#[allow(clippy::too_many_lines)]
 pub fn compile_pipeline(
     req: &pb::ExecutePipelineRequest,
     parent: &Parent,
     unrecorded: Unrecorded,
+) -> Result<CompiledExecution, Status> {
+    compile_pipeline_in_order(req, parent, unrecorded, None)
+}
+
+/// [`compile_pipeline`] with the wire order of the request's maps, where the transport kept it
+/// (a REST body): a `select` stage checks its aliases in that order, as the official emulator
+/// does, so an alias inside another names the later one.
+#[allow(clippy::too_many_lines)]
+pub fn compile_pipeline_in_order(
+    req: &pb::ExecutePipelineRequest,
+    parent: &Parent,
+    unrecorded: Unrecorded,
+    order: Option<&KeyOrder>,
 ) -> Result<CompiledExecution, Status> {
     let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
     let mut stages = Vec::new();
@@ -526,7 +539,8 @@ pub fn compile_pipeline(
                         });
                         continue;
                     }
-                    stages.push(Stage::Select(decode_select(stage, unrecorded)?));
+                    let aliases = select_wire_order(order, position);
+                    stages.push(Stage::Select(decode_select(stage, unrecorded, aliases)?));
                 }
                 "offset" => {
                     if seen_offset {
@@ -570,7 +584,8 @@ pub fn compile_pipeline(
     // (O-4 `#select-empty-then-unknown-function`); where it puts other checks fireemu does
     // not make is unrecorded, so under strict the empty map wins only when every part passed
     // fireemu's checks.
-    let outcome = match (compiled, deferred) {
+    // Under strict, the request's shape then decides which refusal is answered (`pipeline_shape`).
+    match (compiled, deferred) {
         (Err(error), Some(empty))
             if error.code() != tonic::Code::InvalidArgument
                 && (validated_unrun || unrecorded == Unrecorded::OfficialEmulator) =>
@@ -579,24 +594,7 @@ pub fn compile_pipeline(
         }
         (Ok(()), Some(empty)) => Err(empty),
         (result, _) => result,
-    };
-    // Under strict a refusal is answered only when every other part of the pipeline passes
-    // strict's own checks, since production's order between that refusal and an unobserved
-    // part is unrecorded (coordinator rulings of 2026-10-20: option (a) for a call that fails
-    // on its constants, and the general strict gate). The exceptions are the orders O-1 to O-4
-    // recorded, which `holds_unobserved_part` leaves out.
-    if let Err(error) = outcome {
-        if unrecorded == Unrecorded::Refuse
-            && error.code() == tonic::Code::InvalidArgument
-            && (holds_unobserved_part(&pipeline.stages)
-                || !refusals_recorded(&refusals(&pipeline.stages), &pipeline.stages))
-        {
-            return Err(Status::unimplemented(
-                "a refusal beside a part whose order production has not answered is not observed locally",
-            ));
-        }
-        return Err(error);
-    }
+    }?;
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
         pipeline_exec::referenced_fields(&stages).map(|paths| pb::structured_query::Projection {
@@ -1169,6 +1167,7 @@ fn decode_condition(
 fn decode_select(
     stage: &pb::pipeline::Stage,
     unrecorded: Unrecorded,
+    wire_order: Option<&[String]>,
 ) -> Result<Vec<(FieldPath, Expr)>, Status> {
     let Some(pb::value::ValueType::MapValue(map)) =
         stage.args.first().and_then(|v| v.value_type.as_ref())
@@ -1196,10 +1195,17 @@ fn decode_select(
             "selecting __name__ as itself is not observed locally",
         ));
     }
-    // Every alias is checked before any value, as the official emulator does, in key order (the
-    // wire map keeps no order).
+    // Every alias is checked before any value, as the official emulator does, in the request's
+    // order where the transport kept it, else in key order (a decoded gRPC map keeps none).
     let mut entries: Vec<_> = map.fields.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
+    let mut in_wire_order = false;
+    if let Some(order) = wire_order.filter(|order| {
+        order.len() == entries.len() && order.iter().all(|k| map.fields.contains_key(k))
+    }) {
+        entries.sort_by_key(|(alias, _)| order.iter().position(|k| k == *alias));
+        in_wire_order = true;
+    }
     let mut paths = Vec::with_capacity(map.fields.len());
     for (alias, value) in entries {
         if value.value_type.is_none() {
@@ -1219,24 +1225,36 @@ fn decode_select(
             "The 'select(...)' stage requires at least one field.",
         ));
     }
-    aliases.sort_by(|a, b| a.1.cmp(&b.1));
-    for pair in aliases.windows(2) {
-        if pair[0].1 == pair[1].1 {
-            return Err(Status::invalid_argument(format!(
-                "select aliases {:?} and {:?} set the same field",
-                pair[0].0, pair[1].0
-            )));
-        }
-        if pair[0].1.is_prefix_of(&pair[1].1) {
-            return Err(crate::production_status::select_overlapping_paths(
-                pair[1].0,
-            ));
+    // Without the request's order the aliases are set in path order.
+    if !in_wire_order {
+        aliases.sort_by(|a, b| a.1.cmp(&b.1));
+    }
+    // An alias inside another names the alias set later, which is the child in path order
+    // (FS-ENT-ORACLE O-1 `px0/aliases#overlap`, `{m, m.r}`) and, in the request's order, the
+    // later of the two (the official emulator 1.22.0: `{a.b, a}` names `a`).
+    for (at, (alias, path, _)) in aliases.iter().enumerate() {
+        for (earlier_alias, earlier, _) in &aliases[..at] {
+            if earlier == path {
+                return Err(Status::invalid_argument(format!(
+                    "select aliases {earlier_alias:?} and {alias:?} set the same field"
+                )));
+            }
+            if earlier.is_prefix_of(path) || path.is_prefix_of(earlier) {
+                return Err(crate::production_status::select_overlapping_paths(alias));
+            }
         }
     }
     Ok(aliases
         .into_iter()
         .map(|(_, path, expr)| (path, expr))
         .collect())
+}
+
+/// The wire order of the aliases of the `select` stage at `position`, where the body kept it.
+fn select_wire_order(order: Option<&KeyOrder>, position: usize) -> Option<&[String]> {
+    order?.keys(&format!(
+        "/structuredPipeline/pipeline/stages/{position}/args/0/mapValue/fields"
+    ))
 }
 
 /// The official emulator refuses a select alias whose unquoted segments, joined with '.', reach
@@ -1369,433 +1387,6 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
     }
 }
 
-/// Whether a stage after the collection input fails strict's own checks with `UNIMPLEMENTED`
-/// (an unknown or unrun function, an unrecorded literal or argument, a stage out of the
-/// subset's order, a call that fails on its constants), checked through the whole pipeline
-/// however an earlier stage was refused. The recorded orders are left out: an unrun
-/// `add_fields`, `distinct`, `aggregate` or `select` whose values pass fireemu's checks (its
-/// own arity, alias and empty-map checks were answered before such a stage, O-4
-/// `o4/stages#*`), and the whole of a one-argument `aggregate`, whose arity was answered over
-/// anything it holds (O-1 `results/metadata#aggregate`, O-4 `#aggregate-one-*`).
-fn holds_unobserved_part(stages: &[pb::pipeline::Stage]) -> bool {
-    let unobserved = |result: Result<(), Status>| matches!(result, Err(e) if e.code() == tonic::Code::Unimplemented);
-    let strict = Unrecorded::Refuse;
-    let mut last_rank = 0u8;
-    let mut seen = std::collections::BTreeSet::new();
-    for (position, stage) in stages.iter().enumerate().skip(1) {
-        let rank = stage_rank(&stage.name);
-        // A stage out of the subset's order, or a repeated one (a where after a select too).
-        if rank < last_rank
-            || !seen.insert(stage.name.as_str())
-            || (stage.name == "where" && seen.contains("select"))
-        {
-            return true;
-        }
-        last_rank = rank;
-        let part_unobserved = match stage.name.as_str() {
-            "where" => {
-                unobserved(decode_condition(stage, strict).map(|_| ()))
-                    || stage.args.iter().any(subtree_unobserved)
-            }
-            "select" => {
-                !stage.args.first().is_some_and(is_empty_map)
-                    && (unobserved(decode_select(stage, strict).map(|_| ()))
-                        || stage
-                            .args
-                            .iter()
-                            .filter_map(map_fields)
-                            .flat_map(|fields| fields.values())
-                            .any(subtree_unobserved))
-            }
-            "offset" | "limit" => unobserved(count_argument(stage, strict).map(|_| ())),
-            _ => {
-                return stages[position..].iter().any(|rest| {
-                    let name = rest.name.as_str();
-                    if name == "aggregate" && rest.args.len() == 1 {
-                        return false;
-                    }
-                    constant_call_fails(rest)
-                        || match name {
-                            "limit" | "offset" => {
-                                unobserved(count_argument(rest, strict).map(|_| ()))
-                            }
-                            "add_fields" | "distinct" | "aggregate" | "select" => {
-                                !unrun_values_validated(rest, strict)
-                            }
-                            _ => true,
-                        }
-                })
-            }
-        };
-        if part_unobserved || constant_call_fails(stage) {
-            return true;
-        }
-    }
-    false
-}
-
-/// The check behind a refusal, as far as the recorded rows tell checks apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Check {
-    /// An empty alias map (or no accumulator).
-    EmptyMap,
-    /// A `limit` or `offset` argument that is no integer.
-    CountType,
-    /// A negative `limit` or `offset`.
-    CountNegative,
-    /// An empty alias.
-    AliasEmpty,
-    /// An alias that is no valid path.
-    AliasInvalid,
-    /// An alias of 1500 bytes or more.
-    AliasLength,
-    /// An alias whose first segment is reserved.
-    AliasReserved,
-    /// A select alias inside another.
-    AliasOverlap,
-    /// A select of more than 64 fields.
-    Width,
-    /// A one-argument `aggregate`.
-    AggregateArity,
-    /// A field or function inside a literal.
-    LiteralExpression,
-    /// An empty map key in a literal.
-    LiteralKeyEmpty,
-    /// A reserved map key in a literal.
-    LiteralKeyReserved,
-    /// A `map(...)` key that is no literal.
-    MapKeyNotLiteral,
-    /// Any other.
-    Other,
-}
-
-/// A part of the pipeline that would be refused with `INVALID_ARGUMENT` on its own: its stage's
-/// position and name, and its check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Refusal {
-    position: usize,
-    stage: String,
-    check: Check,
-}
-
-/// The refusals production recorded, each alone in its pipeline, by stage and check (a trace
-/// generalizes only within the same check and stage; coordinator ruling of 2026-10-21):
-/// - `select`: the alias checks (O-1 `px0/aliases#*`, O-3 `o3/aliases#*`, O-4
-///   `o4/aliases#*`), more than 64 fields (O-2 `o2/select-width#select-65`), the empty map (O-4 `o4/stages#select-empty-map`), a
-///   field or function inside a literal and a literal's empty or reserved key (O-1, O-3, O-4
-///   `literals#*`, `functions#*-literal-*`), a `map(...)` key that is no literal (O-4
-///   `functions#map-key-*-field`);
-/// - `add_fields`: an empty, invalid or long alias and the empty map (O-4
-///   `o4/stages#add-fields-*`);
-/// - `distinct`: an empty alias and the empty map (O-4 `o4/stages#distinct-*`);
-/// - `aggregate`: an empty alias, no accumulator and one argument (O-1
-///   `results/metadata#aggregate`, O-4 `o4/stages#aggregate-*`);
-/// - `limit`: a string and a negative value; `offset`: a string (O-4 `o4/stages#limit-*`,
-///   `#offset-string`).
-///
-/// An alias inside another (O-1 `px0/aliases#overlap`) is not here: its text names the alias
-/// that comes later in the request's map, an order the decoded request no longer holds (the
-/// official emulator names `a` for `{a.b, a}` and `a.b` for `{a, a.b}`), so strict answers it
-/// with UNIMPLEMENTED.
-const RECORDED_REFUSALS: &[(&str, Check)] = &[
-    ("select", Check::AliasEmpty),
-    ("select", Check::AliasInvalid),
-    ("select", Check::AliasLength),
-    ("select", Check::AliasReserved),
-    ("select", Check::Width),
-    ("select", Check::EmptyMap),
-    ("select", Check::LiteralExpression),
-    ("select", Check::LiteralKeyEmpty),
-    ("select", Check::LiteralKeyReserved),
-    ("select", Check::MapKeyNotLiteral),
-    ("add_fields", Check::AliasEmpty),
-    ("add_fields", Check::AliasInvalid),
-    ("add_fields", Check::AliasLength),
-    ("add_fields", Check::EmptyMap),
-    ("distinct", Check::AliasEmpty),
-    ("distinct", Check::EmptyMap),
-    ("aggregate", Check::AliasEmpty),
-    ("aggregate", Check::EmptyMap),
-    ("aggregate", Check::AggregateArity),
-    ("limit", Check::CountType),
-    ("limit", Check::CountNegative),
-    ("offset", Check::CountType),
-];
-
-/// The check an alias refusal comes from, by its text.
-fn alias_check(error: &Status) -> Check {
-    let message = error.message();
-    if message.starts_with("Invalid empty property path") {
-        Check::AliasEmpty
-    } else if message.starts_with("Invalid property path") {
-        Check::AliasInvalid
-    } else if message.starts_with("The field reference '") {
-        Check::AliasLength
-    } else if message.starts_with("Stage '") {
-        Check::AliasReserved
-    } else {
-        Check::Other
-    }
-}
-
-/// The check a value refusal comes from, by its text.
-fn value_check(error: &Status) -> Check {
-    let message = error.message();
-    if message.starts_with("Value type is not supported: ") {
-        Check::LiteralExpression
-    } else if message == "Property names cannot be empty." {
-        Check::LiteralKeyEmpty
-    } else if message.starts_with("field name '") {
-        Check::LiteralKeyReserved
-    } else if message == "map keys must be constants/literals" {
-        Check::MapKeyNotLiteral
-    } else {
-        Check::Other
-    }
-}
-
-/// The parts of the pipeline that would each be refused with `INVALID_ARGUMENT` on their own,
-/// checked independently (each alias, each value and each check inside it, each empty map,
-/// each run stage's argument; a one-argument `aggregate` as one part).
-#[allow(clippy::too_many_lines)]
-fn refusals(stages: &[pb::pipeline::Stage]) -> Vec<Refusal> {
-    fn values(stage: &pb::pipeline::Stage) -> Vec<&pb::Value> {
-        let mut entries: Vec<(&String, &pb::Value)> = stage
-            .args
-            .iter()
-            .filter_map(map_fields)
-            .flat_map(|fields| fields.iter())
-            .collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
-        entries.into_iter().map(|(_, value)| value).collect()
-    }
-    fn aliases(stage: &pb::pipeline::Stage) -> Vec<&String> {
-        let mut keys: Vec<&String> = stage
-            .args
-            .iter()
-            .filter_map(map_fields)
-            .flat_map(|fields| fields.keys())
-            .collect();
-        keys.sort();
-        keys
-    }
-    let strict = Unrecorded::Refuse;
-    let mut out = Vec::new();
-    for (position, stage) in stages.iter().enumerate().skip(1) {
-        let name = stage.name.as_str();
-        let mut found: Vec<Check> = Vec::new();
-        match name {
-            "aggregate" if stage.args.len() == 1 => found.push(Check::AggregateArity),
-            "where" => {
-                for check in stage.args.iter().flat_map(value_checks) {
-                    found.push(check);
-                }
-            }
-            "limit" | "offset" => {
-                if let Err(error) = count_argument(stage, strict) {
-                    if error.code() == tonic::Code::InvalidArgument {
-                        found.push(if error.message().starts_with("Expected ") {
-                            Check::CountType
-                        } else {
-                            Check::CountNegative
-                        });
-                    }
-                }
-            }
-            "select" | "add_fields" | "distinct" | "aggregate" => {
-                if stage.args.iter().any(is_empty_map)
-                    && !(name == "aggregate"
-                        && stage.args.get(1).is_some_and(is_empty_map)
-                        && !stage.args.first().is_some_and(is_empty_map))
-                {
-                    found.push(Check::EmptyMap);
-                }
-                if name == "select"
-                    && stage
-                        .args
-                        .first()
-                        .and_then(map_fields)
-                        .is_some_and(|fields| fields.len() > MAX_SELECT_FIELDS)
-                {
-                    found.push(Check::Width);
-                }
-                for alias in aliases(stage) {
-                    let result = if name == "select" {
-                        decode_alias(alias).map(|_| ())
-                    } else {
-                        parse_alias(alias).map(|_| ())
-                    };
-                    if let Err(error) = &result {
-                        if error.code() == tonic::Code::InvalidArgument {
-                            found.push(alias_check(error));
-                        }
-                    } else if name != "select" && reserved_alias(name, alias).is_some() {
-                        // A reserved alias of a stage fireemu does not run (strict refuses it
-                        // alone; beside another refusal it is a second one).
-                        found.push(Check::Other);
-                    }
-                }
-                for value in values(stage) {
-                    for check in value_checks(value) {
-                        found.push(check);
-                    }
-                }
-                if unrun_stage_name_error(stage).is_some() {
-                    found.push(Check::Other);
-                }
-                // The checks of the whole select once each part passed: an alias inside
-                // another, a repeated one.
-                let parts_found = !found.is_empty();
-                if name == "select" && !parts_found && !stage.args.iter().any(is_empty_map) {
-                    if let Err(error) = decode_select(stage, strict) {
-                        // (More than 64 fields was counted above, so it never reaches here.)
-                        if error.code() == tonic::Code::InvalidArgument {
-                            found.push(
-                                if error
-                                    .message()
-                                    .starts_with("The request is invalid because")
-                                {
-                                    Check::AliasOverlap
-                                } else {
-                                    Check::Other
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        out.extend(found.into_iter().map(|check| Refusal {
-            position,
-            stage: name.to_owned(),
-            check,
-        }));
-    }
-    out
-}
-
-/// Whether production answered this refusal set: one recorded refusal alone, or an empty
-/// select map and, in a later stage, a string `limit` or an empty `add_fields` alias, which
-/// production answered before the empty map (O-4 `o4/stages#select-empty-then-limit-string`,
-/// `#select-empty-then-add-fields-empty-alias`).
-fn refusals_recorded(refusals: &[Refusal], stages: &[pb::pipeline::Stage]) -> bool {
-    let recorded = |r: &Refusal| {
-        RECORDED_REFUSALS
-            .iter()
-            .any(|(stage, check)| r.stage == *stage && r.check == *check)
-    };
-    // Production answered a refusal past a stage before it only where a recorded row shows the
-    // checks running past that kind of stage: a where, a select, a limit or offset, an
-    // add_fields (O-4 `o4/stages#add-fields-then-select-empty`, `#aggregate-one-after-limit`);
-    // past a distinct or an aggregate it is unrecorded.
-    let passable_before = |position: usize| {
-        stages[1..position].iter().all(|stage| {
-            matches!(
-                stage.name.as_str(),
-                "where" | "select" | "limit" | "offset" | "add_fields"
-            )
-        })
-    };
-    match refusals {
-        // No classified refusal (fireemu's own check refused) falls to the last arm.
-        [one] => recorded(one) && passable_before(one.position),
-        // The two pairs recorded exactly: an empty select map as the first stage, then a
-        // string limit or an empty add_fields alias as the second and last (O-4
-        // `o4/stages#select-empty-then-limit-string`, `#select-empty-then-add-fields-empty-alias`).
-        [first, second] => {
-            stages.len() == 3
-                && first.position == 1
-                && first.stage == "select"
-                && first.check == Check::EmptyMap
-                && ((second.stage == "limit" && second.check == Check::CountType)
-                    || (second.stage == "add_fields" && second.check == Check::AliasEmpty))
-        }
-        _ => false,
-    }
-}
-
-/// The checks inside a value that would each refuse it with `INVALID_ARGUMENT`: a function's
-/// own checks (its argument count, a `map(...)` key that is no literal) with its arguments put
-/// aside, a literal holding an expression (once, however deep), a malformed literal of
-/// literals, an invalid field path, at every depth.
-fn value_checks(value: &pb::Value) -> Vec<Check> {
-    use pb::value::ValueType as V;
-    let strict = Unrecorded::Refuse;
-    let refused = |result: Result<Expr, Status>| match result {
-        Err(e) if e.code() == tonic::Code::InvalidArgument => vec![value_check(&e)],
-        _ => Vec::new(),
-    };
-    match value.value_type.as_ref() {
-        Some(V::FunctionValue(function)) => {
-            // The arguments put aside: a field where one stood that is no literal, null for a
-            // literal, so only the function's own checks remain.
-            let mut alone = function.clone();
-            for arg in &mut alone.args {
-                *arg = if is_literal(arg) {
-                    pb::Value {
-                        value_type: Some(V::NullValue(0)),
-                    }
-                } else {
-                    pb::Value {
-                        value_type: Some(V::FieldReferenceValue("p".to_owned())),
-                    }
-                };
-            }
-            let mut out = refused(decode_operand(
-                &pb::Value {
-                    value_type: Some(V::FunctionValue(alone)),
-                },
-                strict,
-            ));
-            out.extend(function.args.iter().flat_map(value_checks));
-            out
-        }
-        // A literal holding an expression is one refusal however deep the expressions sit
-        // (production named the first, O-4 `literals#*`); the functions inside it keep their
-        // own checks.
-        Some(V::ArrayValue(_) | V::MapValue(_)) if expression_kind(value).is_some() => {
-            fn functions_inside(value: &pb::Value) -> Vec<Check> {
-                match value.value_type.as_ref() {
-                    Some(V::FunctionValue(_)) => value_checks(value),
-                    Some(V::ArrayValue(array)) => {
-                        array.values.iter().flat_map(functions_inside).collect()
-                    }
-                    Some(V::MapValue(map)) => {
-                        let mut keys: Vec<&String> = map.fields.keys().collect();
-                        keys.sort();
-                        keys.into_iter()
-                            .flat_map(|key| functions_inside(&map.fields[key]))
-                            .collect()
-                    }
-                    _ => Vec::new(),
-                }
-            }
-            let mut out = refused(decode_operand(value, strict));
-            if out.is_empty() {
-                out.push(Check::LiteralExpression);
-            }
-            out.extend(functions_inside(value));
-            out
-        }
-        _ => refused(decode_operand(value, strict)),
-    }
-}
-
-/// Whether a value, or any function call or literal inside it, is refused by strict as
-/// unobserved on its own: an alias or other check of the same stage must not answer past it,
-/// since production's order between the two is unrecorded.
-fn subtree_unobserved(value: &pb::Value) -> bool {
-    use pb::value::ValueType as V;
-    matches!(decode_operand(value, Unrecorded::Refuse), Err(e) if e.code() == tonic::Code::Unimplemented)
-        || match value.value_type.as_ref() {
-            Some(V::FunctionValue(function)) => function.args.iter().any(subtree_unobserved),
-            Some(V::ArrayValue(array)) => array.values.iter().any(subtree_unobserved),
-            Some(V::MapValue(map)) => map.fields.values().any(subtree_unobserved),
-            _ => false,
-        }
-}
-
 /// The subset's order of stages after the input: `where` and `select`, then `offset`, then
 /// `limit` (which shares the last rank with the stages fireemu does not run: the checks end
 /// at the first such stage, and a second `limit` is refused as repeated).
@@ -1805,41 +1396,6 @@ fn stage_rank(name: &str) -> u8 {
         "offset" => 2,
         _ => 3,
     }
-}
-
-/// Whether a function call a stage holds (at any depth of its arguments and alias maps) fails
-/// when evaluated with every field absent: under strict, as decoded for the executor, so the
-/// error can only come from the call's constants (a missing value gives null or leaves its
-/// entry out, and a `map(...)` key from a field is refused before). `__name__` is the
-/// top-level document `constants/row` of `(default)`, so a call that depends on the document's
-/// depth may fail here and not per row, or the other way; both directions are accepted, as for
-/// a type that depends on the data.
-fn constant_call_fails(stage: &pb::pipeline::Stage) -> bool {
-    use pb::value::ValueType as V;
-    fn fails(value: &pb::Value, row: &pipeline_exec::Row) -> bool {
-        match value.value_type.as_ref() {
-            Some(V::FunctionValue(function)) => {
-                matches!(
-                    decode_operand(value, Unrecorded::Refuse)
-                        .map(|expr| expr.eval_in(row, Unrecorded::Refuse)),
-                    Ok(pipeline_exec::Eval::Error(_))
-                ) || function.args.iter().any(|arg| fails(arg, row))
-            }
-            Some(V::ArrayValue(array)) => array.values.iter().any(|v| fails(v, row)),
-            Some(V::MapValue(map)) => map.fields.values().any(|v| fails(v, row)),
-            _ => false,
-        }
-    }
-    let Some(path) =
-        DocumentPath::from_resource_name("projects/p/databases/(default)/documents/constants/row")
-    else {
-        return false;
-    };
-    let row = pipeline_exec::Row {
-        path,
-        fields: std::collections::BTreeMap::new(),
-    };
-    stage.args.iter().any(|arg| fails(arg, &row))
 }
 
 /// The official emulator's argument checks on a stage the local executor does not run
@@ -2311,6 +1867,48 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wire order that does not name the select's aliases (a body whose map the transcoder
+    /// changed) is not used: the aliases are checked in key order and set in path order.
+    #[test]
+    fn a_select_uses_only_a_wire_order_that_names_its_aliases() {
+        let field = |name: &str| pb::Value {
+            value_type: Some(pb::value::ValueType::FieldReferenceValue(name.to_owned())),
+        };
+        let stage = pb::pipeline::Stage {
+            name: "select".to_owned(),
+            args: vec![pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: [("m".to_owned(), field("i")), ("m.r".to_owned(), field("i"))]
+                        .into_iter()
+                        .collect(),
+                })),
+            }],
+            ..Default::default()
+        };
+        let overlap = |order: Option<&[String]>| {
+            decode_select(&stage, Unrecorded::OfficialEmulator, order)
+                .unwrap_err()
+                .details()
+                .to_vec()
+        };
+        let named = |child: &str| {
+            crate::production_status::select_overlapping_paths(child)
+                .details()
+                .to_vec()
+        };
+        let wire = ["m.r".to_owned(), "m".to_owned()];
+        assert_eq!(overlap(Some(&wire)), named("m"));
+        assert_eq!(overlap(None), named("m.r"));
+        // Another length or other names: not this map's order.
+        for order in [
+            vec!["x".to_owned(), "m".to_owned()],
+            vec!["m".to_owned()],
+            vec!["m.r".to_owned(), "m".to_owned(), "x".to_owned()],
+        ] {
+            assert_eq!(overlap(Some(&order)), named("m.r"), "{order:?}");
+        }
+    }
 
     fn request(value: pb::Value) -> pb::ExecutePipelineRequest {
         let function = pb::Value {

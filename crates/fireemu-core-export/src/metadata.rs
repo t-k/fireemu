@@ -55,7 +55,7 @@ pub enum Product {
     Auth,
     /// Cloud Storage for Firebase.
     Storage,
-    /// Realtime Database: a deferred product fireemu does not serve.
+    /// Realtime Database: served, but its export section is not imported or written yet.
     Database,
     /// SQL Connect (Data Connect): a deferred product fireemu does not serve.
     DataConnect,

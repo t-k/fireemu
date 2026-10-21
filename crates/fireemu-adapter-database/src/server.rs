@@ -129,11 +129,14 @@ fn push_queue(messages: usize) -> (PushQueue, Pushes) {
 }
 
 impl PushQueue {
-    /// Queues a message; `false` when the queue is full in messages or in bytes.
+    /// Queues a message; `false` when the queue is full in messages or in bytes. An empty
+    /// queue takes any one message, so a single write larger than the budget reaches its
+    /// listeners, as on the official emulator.
     fn offer(&self, message: String, budget: usize) -> bool {
         let size = message.len();
         let before = self.bytes.fetch_add(size, AtomicOrdering::SeqCst);
-        if before.saturating_add(size) > budget || self.sender.try_send(message).is_err() {
+        let over = before > 0 && before.saturating_add(size) > budget;
+        if over || self.sender.try_send(message).is_err() {
             self.bytes.fetch_sub(size, AtomicOrdering::SeqCst);
             return false;
         }
@@ -163,6 +166,15 @@ struct Shared {
     config: ServerConfig,
 }
 
+/// Aborts a task when dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Serves `database` on `listener` until the task is dropped.
 pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config: ServerConfig) {
     let shared = Arc::new(Shared {
@@ -171,6 +183,32 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
         listeners: Mutex::new(BTreeMap::new()),
         long_polls: long_polling::Connections::default(),
         config,
+    });
+    // Messages caused outside a request (a session reset) are delivered as soon as the
+    // database wakes this task.
+    let wake = Arc::new(tokio::sync::Notify::new());
+    {
+        let wake = Arc::clone(&wake);
+        shared
+            .database
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_waker(Arc::new(move || wake.notify_one()));
+    }
+    // The task ends with this server (the guard aborts it when `serve` is dropped).
+    let _flusher = AbortOnDrop({
+        let shared = Arc::clone(&shared);
+        tokio::spawn(async move {
+            loop {
+                wake.notified().await;
+                let mut database = shared
+                    .database
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let events = database.drain_events();
+                deliver(&shared, &mut database, events);
+            }
+        })
     });
     loop {
         let Ok((socket, _)) = listener.accept().await else {
@@ -295,7 +333,7 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
         });
         if !delivered {
             listeners.remove(&client);
-            database.close_realtime(client);
+            database.close_realtime(client, (shared.config.clock)());
         }
     }
 }
@@ -481,7 +519,7 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&client);
-    database.close_realtime(client);
+    database.close_realtime(client, (shared.config.clock)());
 }
 
 /// Answers one prepared message under the database lock. Pushes already queued for the
@@ -498,6 +536,19 @@ fn answer_text(
         .database
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
+    // A connection `deliver` dropped for falling behind has ended: its onDisconnect writes
+    // have fired, so nothing it still sends may be answered or applied after them.
+    let registered = shared
+        .listeners
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains_key(&session.client());
+    if !registered {
+        return Received {
+            drop_connection: true,
+            ..Received::default()
+        };
+    }
     let mut earlier = Vec::new();
     while let Some(message) = pushes.try_recv() {
         earlier.extend(split_frames(message));
@@ -626,6 +677,23 @@ mod tests {
     use super::*;
     use crate::rest::RestOptions;
 
+    #[tokio::test]
+    async fn an_empty_queue_takes_any_one_message_and_then_the_byte_budget_holds() {
+        let (queue, mut pushes) = push_queue(10);
+        let big = "x".repeat(100);
+        assert!(queue.offer(big.clone(), 10));
+        // Something waits: one more byte passes the budget.
+        assert!(!queue.offer("1".to_owned(), 10));
+        assert_eq!(pushes.recv().await.as_deref(), Some(big.as_str()));
+        // Emptied again, it takes the next message whatever its size.
+        assert!(queue.offer(big.clone(), 10));
+        assert_eq!(pushes.recv().await.as_deref(), Some(big.as_str()));
+        // Within the budget, messages wait together up to it, inclusive.
+        assert!(queue.offer("12345".to_owned(), 10));
+        assert!(queue.offer("67890".to_owned(), 10));
+        assert!(!queue.offer("a".to_owned(), 10));
+    }
+
     fn shared() -> Shared {
         Shared {
             database: Arc::new(Mutex::new(Database::new(RestOptions::default(), 1))),
@@ -663,6 +731,54 @@ mod tests {
     ) -> Vec<String> {
         let prepared = session.prepare(frame).unwrap();
         answer_text(shared, session, pushes, prepared).replies
+    }
+
+    #[test]
+    fn a_connection_dropped_for_falling_behind_answers_nothing_more() {
+        let shared = shared();
+        let (mut session, mut pushes) = connect(&shared);
+        let frame = |r: u64, action: &str, body: &str| {
+            format!(r#"{{"t":"d","d":{{"r":{r},"a":"{action}","b":{body}}}}}"#)
+        };
+        send(
+            &shared,
+            &mut session,
+            &mut pushes,
+            &frame(1, "o", r#"{"p":"/state","d":"offline"}"#),
+        );
+        // `deliver` drops a connection whose queue is full: its listener goes and its
+        // onDisconnect writes fire, from another connection's task.
+        {
+            let mut database = shared.database.lock().unwrap();
+            shared.listeners.lock().unwrap().remove(&session.client());
+            database.close_realtime(session.client(), 1);
+        }
+        // Frames the dropped connection still reads are not answered or applied.
+        let received = {
+            let prepared = session
+                .prepare(&frame(2, "p", r#"{"p":"/state","d":"online"}"#))
+                .unwrap();
+            answer_text(&shared, &mut session, &mut pushes, prepared)
+        };
+        assert!(received.replies.is_empty());
+        assert!(received.drop_connection);
+        let prepared = session
+            .prepare(&frame(3, "o", r#"{"p":"/again","d":1}"#))
+            .unwrap();
+        assert!(answer_text(&shared, &mut session, &mut pushes, prepared).drop_connection);
+        let mut database = shared.database.lock().unwrap();
+        database.close_realtime(session.client(), 2);
+        let tree = database.tree("o").unwrap();
+        assert_eq!(
+            tree.get_json(
+                &fireemu_core_database::Path::root(),
+                fireemu_core_database::Format::Export
+            ),
+            fireemu_core_database::Json::object([(
+                "state",
+                fireemu_core_database::Json::string("offline")
+            )])
+        );
     }
 
     #[test]

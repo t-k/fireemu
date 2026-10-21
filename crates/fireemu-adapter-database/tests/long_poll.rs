@@ -192,7 +192,7 @@ fn packets_are_joined_in_segment_order() {
 
 #[test]
 fn waiting_segments_are_bounded() {
-    let mut r = Reassembler::new(16);
+    let mut r = Reassembler::with_bounds(16, 100);
     let used: Vec<Segment> = (0..4).map(|n| seg(n, 1, "YQ..")).collect();
     assert_eq!(r.add(used.clone()).unwrap().len(), 4);
     // Segments already used do not wait again.
@@ -201,6 +201,66 @@ fn waiting_segments_are_bounded() {
     // Up to the limit may wait; one byte more may not.
     assert!(r.add(vec![seg(7, 1, "aaaaaaaa")]).is_ok());
     assert!(r.add(vec![seg(8, 1, "a")]).is_err());
+}
+
+#[test]
+fn waiting_segments_are_bounded_in_number_too() {
+    // Empty segments cost no bytes, so only the count stops them.
+    let mut r = Reassembler::with_bounds(16, 3);
+    assert!(r.add((10..13).map(|n| seg(n, 1, "")).collect()).is_ok());
+    assert!(r.add(vec![seg(20, 1, "")]).is_err());
+    // A segment already waiting is not counted twice.
+    let mut r = Reassembler::with_bounds(16, 3);
+    assert!(r
+        .add(vec![seg(10, 1, ""), seg(10, 1, ""), seg(11, 1, "")])
+        .is_ok());
+    assert!(r.add(vec![seg(11, 1, ""), seg(12, 1, "")]).is_ok());
+    // Used segments leave room.
+    let mut r = Reassembler::with_bounds(16, 1);
+    assert_eq!(
+        r.add(vec![seg(0, 1, "YQ..")]).unwrap(),
+        vec!["a".to_owned()]
+    );
+    assert!(r.add(vec![seg(5, 1, "")]).is_ok());
+}
+
+#[test]
+fn a_refused_segment_leaves_nothing_counted() {
+    let mut r = Reassembler::with_bounds(8, 4);
+    assert!(r.add(vec![seg(3, 1, "aaaaaaaaa")]).is_err());
+    // The refused bytes were not kept: the whole budget is still there.
+    assert!(r.add(vec![seg(4, 1, "aaaaaaaa")]).is_ok());
+}
+
+#[test]
+fn the_default_bounds_let_a_whole_message_at_the_limit_wait() {
+    // A message of `limit` bytes is longer once in base64, and the SDK splits it into
+    // segments of about 1,800 characters; all of them may wait.
+    let limit = 3000;
+    let message = format!("\"{}\"", "x".repeat(limit - 2));
+    let encoded = fireemu_core_database::hash::base64(message.as_bytes())
+        .replace('+', "-")
+        .replace('/', "_")
+        .replace('=', ".");
+    let pieces: Vec<&str> = encoded
+        .as_bytes()
+        .chunks(100)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    let total = pieces.len() as u64;
+    let mut r = Reassembler::new(limit);
+    // Every segment but the first arrives ahead of it.
+    let ahead = pieces
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(n, d)| seg(n as u64, total, d))
+        .collect();
+    assert_eq!(r.add(ahead).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        r.add(vec![seg(0, total, pieces[0])]).unwrap(),
+        vec![message]
+    );
 }
 
 proptest! {

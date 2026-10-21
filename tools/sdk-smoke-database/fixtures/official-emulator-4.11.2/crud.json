@@ -1,0 +1,113 @@
+[
+ [
+  "set",
+  "ok"
+ ],
+ [
+  "get",
+  {
+   "x": 1,
+   "y": "two",
+   "z": [
+    1,
+    2
+   ]
+  }
+ ],
+ [
+  "update",
+  "ok"
+ ],
+ [
+  "get after update",
+  {
+   "nested": {
+    "k": true
+   },
+   "x": 2,
+   "z": {
+    "0": 1,
+    "1": 2
+   }
+  }
+ ],
+ [
+  "push",
+  20
+ ],
+ [
+  "server values",
+  "ok"
+ ],
+ [
+  "get server values",
+  {
+   "n": 5,
+   "t": "<TS>"
+  }
+ ],
+ [
+  "priority",
+  "ok"
+ ],
+ [
+  "get priority",
+  {
+   ".value": "v",
+   ".priority": 3
+  }
+ ],
+ [
+  "query",
+  {
+   "nested": {
+    "k": true
+   }
+  }
+ ],
+ [
+  "query by child without index",
+  {
+   "error": "Index not defined, add \".indexOn\": \"k\", for path \"/a\", to the rules"
+  }
+ ],
+ [
+  "transaction",
+  1
+ ],
+ [
+  "remove",
+  "ok"
+ ],
+ [
+  "get removed",
+  null
+ ],
+ [
+  "admin set",
+  "ok"
+ ],
+ [
+  "admin update",
+  "ok"
+ ],
+ [
+  "admin get",
+  {
+   "q": 1,
+   "r": 2
+  }
+ ],
+ [
+  "admin push",
+  20
+ ],
+ [
+  "admin remove",
+  "ok"
+ ],
+ [
+  "admin get removed",
+  null
+ ]
+]

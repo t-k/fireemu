@@ -1002,7 +1002,7 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     let daemon = Daemon::start("demo-hub-export", &[]);
     let port = daemon.hub_port();
     let token = daemon.control_token();
-    let send = |origin: Option<&str>, authorization: Option<&str>| -> u16 {
+    let send = |origin: Option<&str>, authorization: Option<&str>| -> (u16, String) {
         let body = format!(
             "{{\"path\": {:?}, \"initiatedBy\": \"test\"}}",
             dir.display().to_string()
@@ -1039,21 +1039,29 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
                 "the Hub response failed before it was complete: {error}; {raw}"
             );
         }
-        status
+        let body = raw
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_owned())
+            .unwrap_or_default();
+        (status, body)
     };
     // A page (any Origin, loopback included) is refused and writes nothing.
     let bearer = format!("Bearer {token}");
-    assert_eq!(send(Some("http://127.0.0.1:4000"), Some(&bearer)), 403);
+    assert_eq!(send(Some("http://127.0.0.1:4000"), Some(&bearer)).0, 403);
     assert!(
         !dir.exists(),
         "a refused export must not create the directory"
     );
-    assert_eq!(send(None, None), 403);
+    assert_eq!(send(None, None).0, 403);
     assert!(
         !dir.exists(),
         "an export without the control capability must not create the directory"
     );
-    assert_eq!(send(None, Some(&bearer)), 200);
+    // The official answer, with no `warnings` member when nothing was left out.
+    assert_eq!(
+        send(None, Some(&bearer)),
+        (200, "{\n  \"message\": \"OK\"\n}".to_owned())
+    );
     assert!(dir.join("firebase-export-metadata.json").is_file());
     drop(daemon);
     #[cfg(not(unix))]

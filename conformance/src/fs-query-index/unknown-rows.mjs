@@ -22,6 +22,7 @@
 // harness digest: a stricter check never makes saved rows stale.
 
 import { readFile } from "node:fs/promises";
+import { isMainModule } from "./main-module.mjs";
 
 /** A `#<step>` token followed by whitespace: the shape of every step line. */
 const STEP_SHAPED = /#[^\s#]+\s/;
@@ -67,9 +68,9 @@ export function scanLog(log) {
 /** The unknown rows of a log, with 1-based line numbers. */
 export const unknownRows = (log) => scanLog(log).unknown;
 
-// `import.meta.main`, not a comparison of URLs: a launch through a symlink or a path that needs
+// `isMainModule`, not a comparison of URLs: a launch through a symlink or a path that needs
 // escaping must still run the check (a skipped check would exit 0).
-if (import.meta.main) {
+if (isMainModule(import.meta)) {
   const [path, flag, value, ...rest] = process.argv.slice(2);
   const expect = /^[1-9]\d*$/.test(value ?? "") ? Number(value) : undefined;
   if (!path || rest.length || flag !== "--expect" || !Number.isSafeInteger(expect)) {

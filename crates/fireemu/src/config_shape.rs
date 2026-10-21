@@ -903,6 +903,7 @@ mod tests {
                         ("parse_eventarc", "section") => "/eventarc",
                         ("parse_eventarc", "entry") => "/eventarc/oauthCredentials/*",
                         ("parse_pubsub", "p") => "/pubsub",
+                        ("parse_database", "d") => "/database",
                         ("parse_pubsub", "authentication") => "/pubsub/authentication",
                         ("parse_scheduler", "s") => "/scheduler",
                         ("parse_functions", "f") => "/functions",
@@ -911,6 +912,7 @@ mod tests {
                         ("parse_sign_in_providers", "phone") => "/auth/signIn/phoneNumber",
                         ("apply_firestore", "entry") => "/firestore/*",
                         ("apply_storage", "entry") => "/storage/*",
+                        ("apply_database", "entry") => "/database/*",
                         ("apply_functions", "entry") => "/functions/*",
                         ("emulator_addr", "obj") => "/emulators/firestore",
                         ("apply_firebase_json", "entry") => {
@@ -949,6 +951,7 @@ mod tests {
                         }
                         ("apply_firestore", "entry") => &["/firestore"],
                         ("apply_storage", "entry") if key != "target" => &["/storage"],
+                        ("apply_database", "entry") => &["/database"],
                         ("apply_functions", "entry") => &["/functions"],
                         ("emulator_addr", "obj") => &[
                             "/emulators/auth",
@@ -957,6 +960,7 @@ mod tests {
                             "/emulators/eventarc",
                             "/emulators/tasks",
                             "/emulators/pubsub",
+                            "/emulators/database",
                             "/emulators/hub",
                             "/emulators/ui",
                             "/emulators/logging",
@@ -1069,8 +1073,8 @@ mod tests {
     #[test]
     fn the_loader_s_key_lists_are_the_schema_s_properties() {
         use crate::config::{
-            AUTH_KEYS, DAEMON_KEYS, EVENTS_KEYS, FUNCTIONS_KEYS, KNOWN_TOP_LEVEL, PUBSUB_KEYS,
-            SCHEDULER_KEYS,
+            AUTH_KEYS, DAEMON_KEYS, DATABASE_KEYS, EVENTS_KEYS, FUNCTIONS_KEYS, KNOWN_TOP_LEVEL,
+            PUBSUB_KEYS, SCHEDULER_KEYS,
         };
         let schema = schema();
         let declared = |pointer: &str| -> std::collections::BTreeSet<String> {
@@ -1093,6 +1097,7 @@ mod tests {
             ("events", &EVENTS_KEYS[..]),
             ("functions", &FUNCTIONS_KEYS[..]),
             ("pubsub", &PUBSUB_KEYS[..]),
+            ("database", &DATABASE_KEYS[..]),
             ("scheduler", &SCHEDULER_KEYS[..]),
         ] {
             assert_eq!(

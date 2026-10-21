@@ -4,6 +4,10 @@
 //! Every answer and refusal follows what the official emulator (firebase-database-emulator
 //! v4.11.2, the jar firebase-tools 15.28.2 runs) answers to the same request; the lane's
 //! exploration logs hold those answers. Production has not been observed yet.
+//!
+//! Not followed: the official emulator streams null written to an absent child to a query
+//! stream whose range holds the child's key; a query stream here receives such a null only
+//! when its view changes, which matches the official emulator for a full limit window.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,6 +28,7 @@ use crate::json_text::{
 };
 use crate::listen::Listen;
 use crate::namespace::route;
+use crate::on_disconnect::Pending;
 use crate::request::{self, Location, Output, Refusal};
 
 /// An HTTP request as the REST layer sees it.
@@ -248,6 +253,26 @@ pub struct Database {
     errors: u64,
     /// The `SplitMix64` state realtime session ids are drawn from.
     session_rng: u64,
+    /// Stream events caused outside a request (a reset), not yet delivered.
+    events: Vec<(u64, SseEvent)>,
+    /// Called when pushes or events wait outside a request, so the server delivers them.
+    waker: Waker,
+    /// The writes each realtime connection registered for its end, with its namespace.
+    on_disconnect: BTreeMap<u64, (String, Pending)>,
+}
+
+/// The server's callback for messages that wait outside a request.
+#[derive(Clone, Default)]
+struct Waker(Option<std::sync::Arc<dyn Fn() + Send + Sync>>);
+
+impl std::fmt::Debug for Waker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "Waker(set)"
+        } else {
+            "Waker(none)"
+        })
+    }
 }
 
 impl Database {
@@ -266,6 +291,9 @@ impl Database {
             clients: 0,
             errors: 0,
             session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
+            events: Vec::new(),
+            waker: Waker::default(),
+            on_disconnect: BTreeMap::new(),
         }
     }
 
@@ -435,9 +463,17 @@ impl Database {
             _ => {}
         }
         let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
-        tree.set(&call.path, &value, call.context)
+        let node = tree
+            .set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
-        let response = written(tree, &call.path, &value, &call.output, call.want_etag);
+        let response = written(
+            tree,
+            &call.path,
+            &value,
+            node.as_ref(),
+            &call.output,
+            call.want_etag,
+        );
         let [path] = written_paths;
         let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
         Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
@@ -589,12 +625,17 @@ impl Database {
                 subscription.query.as_ref(),
                 subscription.format,
             );
-            if fresh == subscription.last {
-                continue;
-            }
-            let event = stream_event(&ns.tree, subscription, change, &fresh);
+            let event = match patch_listing(&ns.tree, subscription, change) {
+                Listing::Entries(event) => event,
+                // Views compare by form: a number rewritten as 1.0 inside a larger write
+                // is an event, as on the official emulator.
+                Listing::Whole { counts } => (counts || !fresh.same_form(&subscription.last))
+                    .then(|| stream_event(&ns.tree, subscription, change, &fresh)),
+            };
             subscription.last = fresh;
-            events.push((*id, event));
+            if let Some(event) = event {
+                events.push((*id, event));
+            }
         }
         // Plain listens go first: an SDK holding the whole location (a query served without
         // its index) then sees each write there before the windows built from it, as the
@@ -626,6 +667,10 @@ impl Database {
             .listens
             .values()
             .any(|listen| listen.namespace == namespace)
+            && !self
+                .subscriptions
+                .values()
+                .any(|subscription| subscription.namespace == namespace)
         {
             return None;
         }
@@ -681,6 +726,47 @@ impl Database {
         });
     }
 
+    /// Sets what to call when messages wait outside a request (the server delivers them).
+    pub fn set_waker(&mut self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.waker = Waker(Some(waker));
+    }
+
+    /// Empties every namespace `cleared` accepts, as a session reset does: their streams and
+    /// listens see the data go, through the waker, and the onDisconnect writes registered for
+    /// them are dropped, so a connection from before the reset never writes into the new
+    /// session when it ends.
+    pub fn clear_namespaces_where(&mut self, cleared: impl Fn(&str) -> bool) {
+        self.on_disconnect
+            .retain(|_, (namespace, _)| !cleared(namespace));
+        let names: Vec<String> = self
+            .namespaces
+            .keys()
+            .filter(|name| cleared(name))
+            .cloned()
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        for name in names {
+            let limits = self.options.limits;
+            self.namespace(&name).tree = Tree::new(limits);
+            let change = Change::Put {
+                path: Path::root(),
+                effective: true,
+            };
+            let events = self.notify(&name, &change);
+            self.events.extend(events);
+        }
+        if let Some(waker) = &self.waker.0 {
+            waker();
+        }
+    }
+
+    /// Takes the stream events caused outside a request, in order.
+    pub fn drain_events(&mut self) -> Vec<(u64, SseEvent)> {
+        std::mem::take(&mut self.events)
+    }
+
     /// Takes the queued data messages of every realtime connection, in order.
     pub fn drain_pushes(&mut self) -> Vec<(u64, String)> {
         std::mem::take(&mut self.pushes)
@@ -695,10 +781,93 @@ impl Database {
         own.into_iter().map(|(_, frame)| frame).collect()
     }
 
-    /// Ends a realtime connection: its listens and undelivered messages go.
-    pub fn close_realtime(&mut self, client: u64) {
+    /// Ends a realtime connection at `now_millis`: its listens and undelivered messages go,
+    /// then the writes it registered for its end are applied as one update at the root (a
+    /// value registered at the root is written as a put there). An update the tree refuses
+    /// (a priority for a node that is not there) writes nothing, as on the official
+    /// emulator. What the writes cause waits for the server, which the waker calls.
+    pub fn close_realtime(&mut self, client: u64, now_millis: i64) {
         self.listens.retain(|_, listen| listen.client != client);
         self.pushes.retain(|(to, _)| *to != client);
+        let Some((namespace, pending)) = self.on_disconnect.remove(&client) else {
+            return;
+        };
+        let entries = pending.entries();
+        if entries.is_empty() {
+            return;
+        }
+        let context = ServerValueContext { now_millis };
+        let root_value = match entries.as_slice() {
+            [(keys, value)] if keys.is_empty() => Some(value.clone()),
+            _ => None,
+        };
+        let change = if let Some(value) = root_value {
+            let paths = [Path::root()];
+            let before = self.before_write(&namespace, &paths);
+            if self
+                .tree_mut(&namespace)
+                .set(&paths[0], &value, context)
+                .is_err()
+            {
+                return;
+            }
+            let effective = self.effective(&namespace, &paths, before)[0];
+            let [path] = paths;
+            Change::Put { path, effective }
+        } else {
+            let paths: Vec<Path> = entries
+                .iter()
+                .map(|(keys, _)| Path::from_keys(keys.iter().cloned()))
+                .collect();
+            let wire: Vec<(String, Json)> = entries
+                .into_iter()
+                .map(|(keys, value)| (keys.join("/"), value))
+                .collect();
+            let before = self.before_write(&namespace, &paths);
+            if self
+                .tree_mut(&namespace)
+                .update(&Path::root(), &wire, context)
+                .is_err()
+            {
+                return;
+            }
+            let effective = self.effective(&namespace, &paths, before);
+            Change::Patch {
+                base: Path::root(),
+                entries: paths
+                    .into_iter()
+                    .zip(effective)
+                    .map(|(path, effective)| Patched { path, effective })
+                    .collect(),
+            }
+        };
+        let events = self.notify(&namespace, &change);
+        self.events.extend(events);
+        if let Some(waker) = &self.waker.0 {
+            waker();
+        }
+    }
+
+    /// Registers `value` to be written at `path` when `client`'s connection ends.
+    pub(crate) fn remember_on_disconnect(
+        &mut self,
+        client: u64,
+        namespace: &str,
+        path: &Path,
+        value: Json,
+    ) {
+        self.on_disconnect
+            .entry(client)
+            .or_insert_with(|| (namespace.to_owned(), Pending::default()))
+            .1
+            .remember(path.keys(), value);
+    }
+
+    /// Cancels what `client` registered at and below `path`.
+    pub(crate) fn forget_on_disconnect(&mut self, client: u64, path: &Path) {
+        if let Some((_, pending)) = self.on_disconnect.get_mut(&client) {
+            pending.forget(path.keys());
+        }
     }
 
     /// The number of realtime listens.
@@ -737,12 +906,6 @@ impl Database {
     pub(crate) fn next_client(&mut self) -> (u64, String) {
         self.clients += 1;
         (self.clients, self.token(32))
-    }
-
-    /// A long-polling connection's password: ten letters and digits, as the official
-    /// emulator's.
-    pub(crate) fn long_poll_password(&mut self) -> String {
-        self.token(10)
     }
 
     /// `length` letters and digits drawn from the session generator.
@@ -1064,22 +1227,22 @@ fn written(
     tree: &Tree,
     path: &Path,
     value: &Json,
+    node: Option<&Node>,
     output: &Output,
     want_etag: bool,
 ) -> HttpResponse {
-    let json = if path.is_priority() {
-        match Priority::from_json(value) {
+    if path.is_priority() {
+        let json = match Priority::from_json(value) {
             Ok(Some(priority)) => priority.to_json(),
             _ => written_priority_at(tree, path),
-        }
-    } else {
-        match Node::from_json(value, path, tree.limits()) {
-            Ok(node) => output_json(node.as_ref(), Format::Export),
-            Err(_) => output_json(tree.get(path), Format::Export),
-        }
-    };
-    let tag = want_etag.then(|| tag_at(tree, path));
-    json_response(&json, output, tag)
+        };
+        let tag = want_etag.then(|| tag_at(tree, path));
+        return json_response(&json, output, tag);
+    }
+    // The node as written, server values resolved: an equal value stays stored in its own
+    // form, but the answer and its ETag are what was written, as the official emulator's.
+    let tag = want_etag.then(|| etag(node));
+    json_response(&output_json(node, Format::Export), output, tag)
 }
 
 /// The refusal for a write the tree did not accept: the official emulator's own text for a
@@ -1201,6 +1364,68 @@ fn relative_to(outer: &Path, inner: &Path) -> Path {
     Path::from_keys(inner.keys()[outer.depth()..].iter().cloned())
 }
 
+/// How a change reaches a stream.
+enum Listing {
+    /// A patch event of the entries inside the streamed location, or nothing when none of
+    /// them counts.
+    Entries(Option<SseEvent>),
+    /// The stream's event for the whole change, sent when the view changed or when
+    /// `counts` (a write inside the location that counts even without changing it: null).
+    Whole { counts: bool },
+}
+
+/// How `change` reaches `subscription`. The official emulator lists in a patch event only
+/// the entries that count (see [`Database::effective`]), relative to the streamed location;
+/// an entry at or above that location sends the whole value instead.
+fn patch_listing(tree: &Tree, subscription: &Subscription, change: &Change) -> Listing {
+    let location = &subscription.path;
+    let (base, entries) = match change {
+        Change::Put { path, effective } => {
+            return Listing::Whole {
+                counts: *effective && subscription.query.is_none() && location.contains(path),
+            };
+        }
+        Change::Patch { base, entries } => (base, entries),
+    };
+    if subscription.query.is_some() {
+        return Listing::Whole { counts: false };
+    }
+    let counting: Vec<(&Patched, Path)> = entries
+        .iter()
+        .filter(|entry| entry.effective)
+        .map(|entry| (entry, base.join(&entry.path)))
+        .collect();
+    if counting.iter().any(|(_, target)| target.contains(location)) {
+        return Listing::Whole { counts: false };
+    }
+    let mut data = BTreeMap::new();
+    for (entry, target) in counting.iter().filter(|(_, t)| location.contains(t)) {
+        let key = if location.contains(base) {
+            entry.path.clone()
+        } else {
+            relative_to(location, target)
+        };
+        let value = if target.is_priority() {
+            written_priority_at(tree, target)
+        } else {
+            output_json(tree.get(target), subscription.format)
+        };
+        data.insert(key.keys().join("/"), value);
+    }
+    if data.is_empty() {
+        return Listing::Entries(None);
+    }
+    let path = if location.contains(base) {
+        relative_to(location, base)
+    } else {
+        Path::root()
+    };
+    Listing::Entries(Some(SseEvent {
+        event: "patch".to_owned(),
+        data: event_data(&path, &Json::Object(data)),
+    }))
+}
+
 /// The event a stream receives for a change that altered its view: the changed location
 /// when it lies inside the streamed location, the whole view otherwise. A query stream gets
 /// the changed location only while the change stays inside one child it already shows.
@@ -1233,24 +1458,6 @@ fn stream_event(
                 return put_event(&relative, &data);
             }
             put_event(&Path::root(), fresh)
-        }
-        Change::Patch { base, entries }
-            if subscription.query.is_none() && location.contains(base) =>
-        {
-            let mut data = BTreeMap::new();
-            for entry in entries.iter().map(|entry| &entry.path) {
-                let target = base.join(entry);
-                let value = if target.is_priority() {
-                    written_priority_at(tree, &target)
-                } else {
-                    output_json(tree.get(&target), subscription.format)
-                };
-                data.insert(entry.keys().join("/"), value);
-            }
-            SseEvent {
-                event: "patch".to_owned(),
-                data: event_data(&relative_to(location, base), &Json::Object(data)),
-            }
         }
         _ => put_event(&Path::root(), fresh),
     }

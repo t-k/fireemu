@@ -64,7 +64,7 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--only"],
         Value::Required("<list>"),
-        "Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port).",
+        "Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).",
     ),
     opt(
         &["--firestore-port"],
@@ -100,6 +100,11 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
         &["--pubsub-port"],
         Value::Required("<n>"),
         "Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.",
+    ),
+    opt(
+        &["--database-port"],
+        Value::Required("<n>"),
+        "Realtime Database port. Without --only, giving it also starts the Realtime Database; with --only, it starts only when the list names database. Default: 9000.",
     ),
     opt(
         &["--functions"],
@@ -634,6 +639,7 @@ mod tests {
             ("--eventarc-port", &cfg.eventarc_addr),
             ("--tasks-port", &cfg.tasks_addr),
             ("--pubsub-port", &cfg.pubsub_addr),
+            ("--database-port", &cfg.database_addr),
             ("--ui-port", &cfg.ui_addr),
             ("--hub-port", &cfg.hub_addr),
             ("--logging-port", &cfg.logging_addr),

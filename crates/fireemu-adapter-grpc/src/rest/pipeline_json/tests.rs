@@ -263,3 +263,68 @@ fn responses_render_results_transaction_and_execution_time() {
         })
     );
 }
+
+/// Every row of the base64 domain table recorded from the official emulator 1.22.0 (each code
+/// point U+0000..U+00FF at each position of a group, every padding variant, both alphabets
+/// mixed): `official_base64` accepts exactly what it accepts, with the same bytes.
+#[test]
+fn bytes_are_read_as_the_official_emulator_reads_them_over_the_whole_table() {
+    let table: Value = serde_json::from_str(include_str!(
+        "../../../../../conformance/fs-ent-pipeline-base64.json"
+    ))
+    .unwrap();
+    let rows = table["rows"].as_array().unwrap();
+    assert!(rows.len() > 2000, "{}", rows.len());
+    for row in rows {
+        let text = row["text"].as_str().unwrap();
+        let read = official_base64(text);
+        assert_eq!(read.is_some(), row["status"] == 200, "{text:?}");
+        if let (Some(bytes), Some(answered)) = (read, row["value"].as_str()) {
+            assert_eq!(
+                bytes,
+                super::super::json::base64_decode(answered).unwrap(),
+                "{text:?}"
+            );
+        }
+    }
+}
+
+proptest! {
+    /// Any bytes, written in either alphabet with or without padding (and with extra trailing
+    /// `=`), read back as those bytes; the two alphabets mixed are refused.
+    #[test]
+    fn any_bytes_in_one_alphabet_read_back(
+        bytes in proptest::collection::vec(any::<u8>(), 0..64),
+        url_safe: bool,
+        padding in 0usize..5,
+    ) {
+        let standard = super::super::json::base64_encode(&bytes);
+        let unpadded = standard.trim_end_matches('=');
+        let text = if url_safe {
+            unpadded.replace('+', "-").replace('/', "_")
+        } else {
+            unpadded.to_owned()
+        };
+        let padded = format!("{text}{}", "=".repeat(padding));
+        prop_assert_eq!(official_base64(&padded), Some(bytes.clone()));
+        let mixed = format!("{text}+-AA");
+        prop_assert_eq!(official_base64(&mixed), None);
+    }
+}
+
+/// The body is rewritten with canonical base64 for both spellings' normalized form, and refused
+/// as a whole when one value is not read.
+#[test]
+fn a_body_is_rewritten_with_canonical_bytes_or_refused() {
+    let body = json!({"a": [{"bytesValue": "-_8"}], "b": {"bytesValue": "QQ==="}});
+    assert_eq!(
+        official_bytes(&body).unwrap(),
+        json!({"a": [{"bytesValue": "+/8="}], "b": {"bytesValue": "QQ=="}})
+    );
+    for bad in ["+_AA", "QUJD\nQUJD", "QU JD", "Q", "QQ==QUJD"] {
+        assert!(
+            official_bytes(&json!({"x": [{"bytesValue": bad}]})).is_err(),
+            "{bad:?}"
+        );
+    }
+}

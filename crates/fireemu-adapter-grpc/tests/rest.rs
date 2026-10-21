@@ -7488,11 +7488,15 @@ fn rest_execute_pipeline_refuses_base64_the_official_emulator_does_not_read() {
             "QU JD",
             "QUJD!",
             "Q",
+            "+_AA",
+            "-/AA",
+            "QQ==QUJD",
         ] {
             for literal in [
                 json!({"bytesValue": text}),
+                json!({"bytes_value": text}),
                 json!({"arrayValue": {"values": [{"bytesValue": text}]}}),
-                json!({"mapValue": {"fields": {"k": {"bytesValue": text}}}}),
+                json!({"mapValue": {"fields": {"k": {"bytes_value": text}}}}),
             ] {
                 let stages = json!([
                     {"name": "collection", "args": [{"referenceValue": "/nest"}]},
@@ -7516,18 +7520,25 @@ fn rest_execute_pipeline_refuses_base64_the_official_emulator_does_not_read() {
                 }
             }
         }
-        // Without a line break the bytes are answered.
-        let stages = json!([
-            {"name": "collection", "args": [{"referenceValue": "/nest"}]},
-            {"name": "select", "args": [{"mapValue": {"fields": {"v": {"bytesValue": "QUJDQUJD"}}}}]}
-        ]);
-        let (status, body) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:executePipeline"),
-            pipeline_body(&stages),
-        );
-        assert_eq!(status, 200, "strict={strict}: {body}");
+        // What the official emulator reads is answered, in either spelling: one alphabet, any
+        // number of trailing `=`.
+        for text in [
+            "QUJDQUJD", "+/+/", "-_-_", "-_8", "-_8=", "QQ===", "QUI==", "====", "",
+        ] {
+            for key in ["bytesValue", "bytes_value"] {
+                let stages = json!([
+                    {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+                    {"name": "select", "args": [{"mapValue": {"fields": {"v": {key: text}}}}]}
+                ]);
+                let (status, body) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:executePipeline"),
+                    pipeline_body(&stages),
+                );
+                assert_eq!(status, 200, "strict={strict} {key} {text:?}: {body}");
+            }
+        }
         // A commit still reads a line break as the shared decoder does (no production row yet).
         let (status, body) = call(
             &s,

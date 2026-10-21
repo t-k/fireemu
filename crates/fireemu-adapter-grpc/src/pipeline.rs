@@ -890,13 +890,10 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
         // before its other keys; production recorded well-formed vectors and a string
         // `__type__` only, so strict refuses the rest.
         Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
+            let error = literal_value_error(value).unwrap_or_default();
             match unrecorded {
-                Unrecorded::Refuse => Err(Status::unimplemented(
-                    "a malformed vector or __type__ is not observed locally",
-                )),
-                Unrecorded::OfficialEmulator => Err(Status::invalid_argument(
-                    literal_value_error(value).unwrap_or_default(),
-                )),
+                Unrecorded::Refuse => Err(Status::unimplemented(unobserved_literal(&error))),
+                Unrecorded::OfficialEmulator => Err(Status::invalid_argument(error)),
             }
         }
         Some(_) => match expression_kind(value) {
@@ -1126,6 +1123,34 @@ fn decode_official_literal(
     }
 }
 
+/// Strict's answer for a literal the official emulator refuses (`error` is its text): it names
+/// the limit or the form that fails, since production recorded none of them (review r10 S3).
+fn unobserved_literal(error: &str) -> &'static str {
+    if error.starts_with("Field name '") {
+        "a literal field path over 1500 bytes is not observed locally"
+    } else if error.starts_with("String values can be at most")
+        || error.starts_with("Bytes values can be at most")
+    {
+        "a literal string or bytes value over 1,048,487 bytes is not observed locally"
+    } else if error.starts_with("Vectors must be at most") {
+        "a vector over 2048 dimensions is not observed locally"
+    } else if [
+        "Document parent",
+        "Collection id",
+        "Resource id",
+        "Path element",
+        "The kind / collection group",
+        "A key path",
+    ]
+    .iter()
+    .any(|prefix| error.starts_with(prefix))
+    {
+        "a reference constant that is not a valid document name is not observed locally"
+    } else {
+        "a malformed vector or __type__ is not observed locally"
+    }
+}
+
 /// The official emulator's refusal of the first malformed vector or `__type__` key a literal of
 /// literals holds (arrays in order, maps in key order: the wire map keeps no order), in its
 /// order of checks: a `__type__` that is no string, then for a vector a missing `value`, a
@@ -1167,16 +1192,15 @@ fn literal_value_error_below(value: &pb::Value, path_bytes: Option<usize>) -> Op
             if is_vector_literal(value) {
                 return vector_error(map).map(str::to_owned);
             }
+            // Depth first, in key order: a key, then what is under it, then the next key
+            // (review r10 S2: the official emulator names the first crossing key so).
             let below = |key: &str| path_bytes.map_or(key.len(), |bytes| bytes + 1 + key.len());
-            if let Some(key) = ordered_keys(&map.fields)
-                .into_iter()
-                .find(|key| below(key) > MAX_ID_BYTES)
-            {
-                return Some(format!("Field name '{key}' can be at most 1,500 bytes."));
-            }
-            let keys = ordered_keys(&map.fields);
-            keys.into_iter()
-                .find_map(|key| literal_value_error_below(&map.fields[key], Some(below(key))))
+            ordered_keys(&map.fields).into_iter().find_map(|key| {
+                if below(key) > MAX_ID_BYTES {
+                    return Some(format!("Field name '{key}' can be at most 1,500 bytes."));
+                }
+                literal_value_error_below(&map.fields[key], Some(below(key)))
+            })
         }
         _ => None,
     }
@@ -2810,6 +2834,14 @@ mod tests {
             (array(vec![map(vec![(a(1500), one())])]), None),
             (nested("a", a(1498), vector()), None),
             (map(vec![(a(1500), one()), ("b".to_owned(), one())]), None),
+            // Depth first: the key under `a` is named before the long sibling `b...`.
+            (
+                map(vec![
+                    ("a".to_owned(), map(vec![(a(1499), one())])),
+                    (format!("b{}", a(1500)), one()),
+                ]),
+                too_long(&a(1499)),
+            ),
         ] {
             assert_eq!(literal_value_error(&literal), want, "{literal:.200?}");
         }
@@ -2819,6 +2851,59 @@ mod tests {
             deep = map(vec![(a(100), deep)]);
         }
         assert_eq!(literal_value_error(&deep), too_long(&a(100)));
+    }
+
+    /// Strict names the limit or the form a refused literal fails (review r10 S3).
+    #[test]
+    fn strict_names_the_literal_limit_it_refuses() {
+        for (error, want) in [
+            (
+                "Field name 'x' can be at most 1,500 bytes.",
+                "field path over 1500 bytes",
+            ),
+            (
+                "String values can be at most 1,048,487 bytes.",
+                "over 1,048,487 bytes",
+            ),
+            (
+                "Bytes values can be at most 1,048,487 bytes.",
+                "over 1,048,487 bytes",
+            ),
+            (
+                "Vectors must be at most 2048 dimensions.",
+                "over 2048 dimensions",
+            ),
+            (
+                "Document parent name \"x\" lacks \"/\" at index 1.",
+                "valid document name",
+            ),
+            (
+                "Collection id \"__x__\" is invalid because it is reserved.",
+                "valid document name",
+            ),
+            (
+                "Resource id \"__x__\" is invalid because it is reserved.",
+                "valid document name",
+            ),
+            (
+                "Path element can be at most 1,500 bytes.",
+                "valid document name",
+            ),
+            (
+                "The kind / collection group can be at most 1,500 bytes.",
+                "valid document name",
+            ),
+            (
+                "A key path cannot have more than 100 elements.",
+                "valid document name",
+            ),
+            (
+                "Field __type__ must be a string; founds LONG.",
+                "malformed vector or __type__",
+            ),
+        ] {
+            assert!(unobserved_literal(error).contains(want), "{error}");
+        }
     }
 
     /// Value limits of production, as the official emulator 1.22.0 answers them.

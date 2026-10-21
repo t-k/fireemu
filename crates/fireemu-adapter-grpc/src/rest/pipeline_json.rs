@@ -31,22 +31,67 @@ const REQUEST_KEYS: &[&str] = &[
     "requestOptions",
 ];
 
-/// Whether a `bytesValue` anywhere in an `:executePipeline` body is base64 the official
-/// emulator 1.22.0 does not read: one with a line break (CR or LF, which the shared REST decoder
-/// skips; review r9 M2), or one the decoder refuses (a space, a tab, `!`, a lone sextet). It
-/// refuses the body with `Payload isn't valid for request.`; production is unrecorded, so only
-/// this method checks it, before the transcoder.
-pub fn malformed_bytes(body: &Value) -> bool {
+/// The bytes the official emulator 1.22.0 reads from a `bytesValue`, or `None` when it refuses
+/// the body (`Payload isn't valid for request.`; review r10 ruling, table
+/// conformance/fs-ent-pipeline-base64.json): every trailing `=` is dropped, then the rest must use
+/// one alphabet (standard `+/` or URL-safe `-_`, never both), hold no other character (no line
+/// break, space, `=` or anything else) and not leave a lone sextet (length mod 4 is not 1). Bits
+/// past the last whole byte are ignored, as the official decoder ignores them.
+pub fn official_base64(text: &str) -> Option<Vec<u8>> {
+    let body = text.trim_end_matches('=');
+    let standard = body.contains(['+', '/']);
+    let url_safe = body.contains(['-', '_']);
+    if (standard && url_safe) || body.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(body.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in body.bytes() {
+        let sextet = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(sextet);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((acc >> bits) & 0xFF).unwrap_or(0));
+        }
+    }
+    Some(out)
+}
+
+/// An `:executePipeline` body (its field names already normalized by the transcoder, so
+/// `bytes_value` reads as `bytesValue`) with every `bytesValue` decoded as the official emulator
+/// decodes it and written back as canonical base64, or `Err` when one is base64 the official
+/// emulator refuses. Production is unrecorded for these forms, so only this method reads bytes
+/// this way; the other methods keep the shared decoder (see
+/// docs.local/issues/open/rest-base64-skips-line-breaks-outside-execute-pipeline.md).
+pub fn official_bytes(body: &Value) -> Result<Value, ()> {
     match body {
-        Value::Object(object) => object.iter().any(|(key, inner)| {
-            (key == "bytesValue"
-                && inner.as_str().is_some_and(|text| {
-                    text.contains(['\r', '\n']) || super::json::base64_decode(text).is_err()
-                }))
-                || malformed_bytes(inner)
-        }),
-        Value::Array(values) => values.iter().any(malformed_bytes),
-        _ => false,
+        Value::Object(object) => object
+            .iter()
+            .map(|(key, inner)| {
+                let value = match (key.as_str(), inner) {
+                    ("bytesValue", Value::String(text)) => Value::String(
+                        super::json::base64_encode(&official_base64(text).ok_or(())?),
+                    ),
+                    _ => official_bytes(inner)?,
+                };
+                Ok((key.clone(), value))
+            })
+            .collect::<Result<Map<String, Value>, ()>>()
+            .map(Value::Object),
+        Value::Array(values) => values
+            .iter()
+            .map(official_bytes)
+            .collect::<Result<Vec<_>, ()>>()
+            .map(Value::Array),
+        other => Ok(other.clone()),
     }
 }
 

@@ -477,7 +477,7 @@ fn an_export_carries_the_database_and_an_import_restores_it() {
                 "0",
             ])
             .args(extra)
-            .args(["--", "sh", "-c", script])
+            .args(["--", "/bin/sh", "-c", script])
             .stdin(Stdio::null())
             .output()
             .unwrap()

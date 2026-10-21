@@ -16,7 +16,9 @@ use fireemu_core_database::key::validate_key;
 use fireemu_core_database::node::VALUE_KEY;
 use fireemu_core_database::path::PRIORITY_KEY;
 use fireemu_core_database::push_id::PushIdGenerator;
-use fireemu_core_database::server_value::{resolve, stored_priority, SERVER_VALUE_KEY};
+use fireemu_core_database::server_value::{
+    has_server_value, resolve, stored_priority, SERVER_VALUE_KEY,
+};
 use fireemu_core_database::{
     Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, Priority, QueryParams,
     ServerValueContext, Tree,
@@ -694,8 +696,8 @@ impl Database {
     /// Imports `text` into `namespace` as firebase-tools does: `PUT /.json` as the owner with
     /// `disableTriggers=true&writeSizeLimit=unlimited`. The error is the request's.
     pub fn import_text(&mut self, namespace: &str, text: &str, now: i64) -> Result<(), String> {
-        // A valid name needs no escaping in the query.
-        route(Some(namespace), None, namespace)
+        // A valid name needs no escaping in the query; the server keeps it lowercased.
+        let namespace = &route(Some(namespace), None, namespace)
             .map_err(|_| "Invalid Firebase database name".to_owned())?;
         let request = HttpRequest {
             method: "PUT".to_owned(),
@@ -719,6 +721,31 @@ impl Database {
             },
             _ => body,
         })
+    }
+
+    /// Installs an import [`prepare_import`] checked, as [`Database::import_text`] would
+    /// write its text: the tree replaces the namespace's data (an equal value keeps the
+    /// stored form), listeners hear the change, and the namespace counts as imported. A file
+    /// with server values is written now, so they resolve against this time and the data.
+    pub fn install_import(&mut self, import: PreparedImport, now: i64) -> Result<(), String> {
+        let (root, limits) = match import.content {
+            ImportContent::Deferred(text) => {
+                return self.import_text(&import.namespace, &text, now)
+            }
+            ImportContent::Built { root, limits } => (root, limits),
+        };
+        if limits != self.options.limits {
+            return Err("the import was checked against other write limits".to_owned());
+        }
+        let paths = [Path::root()];
+        let before = self.before_write(&import.namespace, &paths);
+        self.namespace(&import.namespace).tree.replace_root(root);
+        let effective = self.effective(&import.namespace, &paths, before)[0];
+        let [path] = paths;
+        // The import request's own stream events: `import_text` leaves them unread too.
+        let _ = self.notify(&import.namespace, &Change::Put { path, effective });
+        self.imported.insert(import.namespace);
+        Ok(())
     }
 
     /// The events a change in `namespace` causes on the open streams.
@@ -1187,6 +1214,77 @@ fn parse_ordered(text: &str) -> ParsedBody {
             order: Vec::new(),
         },
     }
+}
+
+/// A database file checked for import by [`prepare_import`], ready for
+/// [`Database::install_import`].
+#[derive(Debug)]
+pub struct PreparedImport {
+    /// The namespace, lowercased as the server keeps it.
+    namespace: String,
+    content: ImportContent,
+}
+
+#[derive(Debug)]
+enum ImportContent {
+    /// The data the file describes, built against `limits`.
+    Built { root: Option<Node>, limits: Limits },
+    /// A file with server values, written again when installed: they resolve against the
+    /// time and the stored data then.
+    Deferred(String),
+}
+
+impl PreparedImport {
+    /// The namespace the import fills.
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    /// An estimate of the heap bytes held until it is installed (see
+    /// [`Node::retained_bytes`]), or the text's length for a file with server values.
+    pub fn retained_bytes(&self) -> u64 {
+        match &self.content {
+            ImportContent::Built { root, .. } => root.as_ref().map_or(0, Node::retained_bytes),
+            ImportContent::Deferred(text) => text.len() as u64,
+        }
+    }
+}
+
+/// Checks the file `text` for `namespace` as `PUT /.json` as the owner checks it, with the
+/// same refusals as [`Database::import_text`], and builds its data once: the parsed value is
+/// consumed as the tree is built, so the file is never held three times.
+pub fn prepare_import(
+    namespace: &str,
+    text: String,
+    limits: &Limits,
+) -> Result<PreparedImport, String> {
+    let namespace = route(Some(namespace), None, namespace)
+        .map_err(|_| "Invalid Firebase database name".to_owned())?;
+    if text.is_empty() {
+        return Err("No data supplied.".to_owned());
+    }
+    let json = parse(&text).map_err(|_| PARSE_ERROR.to_owned())?;
+    if has_server_value(&json) {
+        drop(json);
+        let options = RestOptions {
+            limits: *limits,
+            ..RestOptions::default()
+        };
+        Database::new(options, 0).import_text(&namespace, &text, 0)?;
+        return Ok(PreparedImport {
+            namespace,
+            content: ImportContent::Deferred(text),
+        });
+    }
+    let root = Node::from_json_owned(json, &Path::root(), limits)
+        .map_err(|err| write_refusal(&err, || data_refusal(&text)).message)?;
+    Ok(PreparedImport {
+        namespace,
+        content: ImportContent::Built {
+            root,
+            limits: *limits,
+        },
+    })
 }
 
 /// A write body: its text, for refusal positions, and its parsed value.

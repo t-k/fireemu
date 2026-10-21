@@ -944,9 +944,10 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
 }
 
 /// Under strict, a reference constant that names a document outside the request's own project
-/// and database, or more than 100 path elements, is refused as unobserved before any row
-/// (ruling of 2026-10-21 for `PX1d` r8: production's documented limits; the official emulator
-/// answers both).
+/// and database, more than 100 key path elements, or an id that matches production's
+/// documented reserved pattern `__.*__` (`____` included, which the official emulator accepts)
+/// is refused as unobserved before any row (ruling of 2026-10-21 for `PX1d` r8: production's
+/// documented limits).
 fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
@@ -956,13 +957,15 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
                     .strip_prefix(own)
                     .is_some_and(|rest| rest.starts_with('/'));
             // A key path element is a collection id and a document id.
-            let elements = name
+            let path = name
                 .strip_prefix(own)
                 .and_then(|rest| rest.strip_prefix('/'))
-                .map_or(0, |path| path.split('/').count() / 2);
-            (!inside || elements > MAX_PATH_ELEMENTS).then(|| {
+                .unwrap_or_default();
+            let elements = path.split('/').count() / 2;
+            let reserved = path.split('/').any(is_reserved_name);
+            (!inside || elements > MAX_PATH_ELEMENTS || reserved).then(|| {
                 Status::unimplemented(
-                    "a reference outside the request's database or longer than 100 path elements is not observed locally",
+                    "a reference outside the request's database, longer than 100 key path elements or with a reserved-looking id is not observed locally",
                 )
             })
         }
@@ -1210,7 +1213,7 @@ fn document_path_error(
                 "{label} \"{name}\" contains a {id} \"{segment}\" at index {at_unit}."
             ));
         }
-        if is_reserved_name(segment) {
+        if is_reserved_id(segment) {
             return Some(format!(
                 "{which} id \"{segment}\" is invalid because it is reserved."
             ));
@@ -1418,7 +1421,7 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                if key.is_empty() || (looks_reserved(key) && key != "__type__") {
+                if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
                     *refusable += 1;
                 }
                 // Production answered a string `__type__` alone in its map only (O-4
@@ -2131,23 +2134,22 @@ fn is_plain_key(key: &str) -> bool {
     let mut chars = key.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !looks_reserved(key)
+        && !is_reserved_name(key)
 }
 
 /// The most fields one `select` stage sets.
 const MAX_SELECT_FIELDS: usize = 64;
 
-/// A name like `__x__`, which Firestore reserves. `____` itself is not: the official emulator
-/// (1.22.0, probed 2026-10-21) accepts it as a collection id, a document id, a literal map key
-/// and an alias, and refuses `_____`.
+/// A name like `__x__`, which Firestore reserves (`__.*__`, `____` included).
 fn is_reserved_name(segment: &str) -> bool {
-    segment.len() > 4 && segment.starts_with("__") && segment.ends_with("__")
+    segment.len() >= 4 && segment.starts_with("__") && segment.ends_with("__")
 }
 
-/// Whether a name starts and ends with `__`, `____` included: the strict recorded-shape gates
-/// keep treating `____` as reserved, since production is unobserved for it.
-fn looks_reserved(segment: &str) -> bool {
-    segment.len() >= 4 && segment.starts_with("__") && segment.ends_with("__")
+/// A collection or document id the official emulator refuses as reserved: `__x__`, but not
+/// `____`, which it accepts as a collection id and a document id (1.22.0, probed 2026-10-21;
+/// strict refuses `____` in a reference as unobserved, see [`reference_outside`]).
+fn is_reserved_id(segment: &str) -> bool {
+    segment.len() > 4 && is_reserved_name(segment)
 }
 
 /// A projected output row as a pipeline result document: fields only, without a name or
@@ -2680,6 +2682,10 @@ mod tests {
             ("projects/p/databases/db2/documents/c/d".to_owned(), true),
             ("projects/p/databases/db/documentsx/c".to_owned(), true),
             ("projects/q/databases/db/documents/c/d".to_owned(), true),
+            (format!("{own}/c/____"), true),
+            (format!("{own}/____/d"), true),
+            (format!("{own}/c/___"), false),
+            (format!("{own}/c/__x__"), true),
         ] {
             assert_eq!(
                 reference_outside(&reference(name.clone()), own).is_some(),

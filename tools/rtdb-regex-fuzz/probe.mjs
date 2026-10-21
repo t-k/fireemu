@@ -1,12 +1,14 @@
 // node probe.mjs <host:port> <corpus.json> <out.json> [workers]
 //
 // Judges each expression in every rule context (rulings 15 and 16): `.read` without a query and
-// with one, `.read` as an event stream and as a realtime listen (both without a query), `.write`,
+// with one, `.read` as an event stream without and with the query, and as a realtime listen
+// without a query, `.write`,
 // and `.validate` beside `.write: true`, each as a signed-in user (an unsigned token) and
 // anonymously. Each worker owns a namespace, seeds it again before every rules load and write,
 // and records per expression:
 //   loadR/loadW/loadV (and errR/errW/errV): the rules load answer of each context;
 //   ra/ru: GET /t/o, qa/qu: the same with a query, sa/su: an event stream of /t/o,
+//   xa/xu: an event stream of /t/o with the query (review r11 M37),
 //   la/lu: a WebSocket listen of /t/o (200 for "ok", 401 for "permission_denied"),
 //   wa/wu: PUT /t/o under `.write`, va/vu: PUT /t/o under `.validate`;
 //   "a" signed in, "u" anonymous.
@@ -188,6 +190,8 @@ async function worker(k) {
         row.qu = await cell(() => status(`${base}/t/o.json?ns=${ns}&${query}`));
         row.sa = await cell(() => stream(`${base}/t/o.json?ns=${ns}&auth=${token}`));
         row.su = await cell(() => stream(`${base}/t/o.json?ns=${ns}`));
+        row.xa = await cell(() => stream(`${base}/t/o.json?ns=${ns}&${query}&auth=${token}`));
+        row.xu = await cell(() => stream(`${base}/t/o.json?ns=${ns}&${query}`));
         row.la = await cell(() => retried(() => listen(hostPort, ns, '/t/o', token)));
         row.lu = await cell(() => retried(() => listen(hostPort, ns, '/t/o', null)));
       } else {

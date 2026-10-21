@@ -2,8 +2,8 @@
 
 python3 compare.py <jar.json> <fireemu.json> <report.txt> [<interesting.json>]
 
-Each row holds the answers of twelve cells (see probe.mjs): ra, ru, qa, qu (reads without and
-with a query), sa, su (event streams), la, lu (realtime listens), wa, wu (`.write`) and va, vu (`.validate`), signed in (a) and anonymous (u). A
+Each row holds the answers of fourteen cells (see probe.mjs): ra, ru, qa, qu (reads without and
+with a query), sa, su (event streams), xa, xu (event streams with the query), la, lu (realtime listens), wa, wu (`.write`) and va, vu (`.validate`), signed in (a) and anonymous (u). A
 cell's outcome is its status, or "load<status>" when the rules of its context were refused.
 A cell is fail-open, and the row BLOCKING, when fireemu answers 200 where the official
 emulator does not, except for a pattern the official emulator cannot determinize (its own
@@ -13,7 +13,8 @@ counts both per cell.
 import json
 import sys
 
-CELLS = {"ra": "R", "ru": "R", "qa": "R", "qu": "R", "sa": "R", "su": "R", "la": "R", "lu": "R",
+CELLS = {"ra": "R", "ru": "R", "qa": "R", "qu": "R", "sa": "R", "su": "R", "xa": "R", "xu": "R",
+         "la": "R", "lu": "R",
          "wa": "W", "wu": "W", "va": "V", "vu": "V"}
 
 jar = json.load(open(sys.argv[1], encoding="utf-8"))

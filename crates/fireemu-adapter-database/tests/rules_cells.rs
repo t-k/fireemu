@@ -3,8 +3,9 @@
 //! `fixtures/rules-cells-official-emulator-4.11.2.json` was recorded by
 //! `tools/rtdb-regex-fuzz/probe.mjs`: the expression as `.read` (with an `.indexOn`), as
 //! `.write`, and as `.validate` beside `.write: true` at `/t/$k`, the load answer of each, and
-//! the status of a read of `/t/o` without and with a query and of a write to `/t/o`, each
-//! signed in and anonymously. A row fireemu answers otherwise carries fireemu's answers and
+//! the status of a read of `/t/o` without and with a query, of an event stream without and
+//! with the query, of a listen and of a write to `/t/o`, each signed in and anonymously. Rows
+//! recorded before the event stream with the query (`xa`, `xu`) was a cell hold null there. A row fireemu answers otherwise carries fireemu's answers and
 //! why the difference is listed; none of them lets a request through that the official
 //! emulator refuses.
 
@@ -12,9 +13,12 @@ use fireemu_adapter_database::realtime::{Opened, Session};
 use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
 
 const NOW: i64 = 1_792_464_733_000;
-const CELLS: [&str; 12] = [
-    "ra", "ru", "qa", "qu", "sa", "su", "la", "lu", "wa", "wu", "va", "vu",
+const CELLS: [&str; 14] = [
+    "ra", "ru", "qa", "qu", "sa", "su", "xa", "xu", "la", "lu", "wa", "wu", "va", "vu",
 ];
+/// The cells of the `.read` context, and the event streams with the query among them.
+const READ_CELLS: usize = 10;
+const QUERY_STREAMS: [usize; 2] = [6, 7];
 const SEED: &str = r#"{"t":{"o":{"s":"Hello","n":5,"d":2.5,"b":true,"z":0,"e":"","num":"5","k":"v","m":1,"o":{"k":"v","m":1,".priority":3},"arr":{"0":"a","1":"b"},".priority":7},"p":{"m":2}},"u":"u1"}"#;
 const WRITTEN: &str = r#"{"k":"w","m":2,"s":"Hi","b":false}"#;
 const QUERY: &str = "orderBy=%22m%22&startAt=0&limitToFirst=2";
@@ -140,7 +144,10 @@ fn judge(expr: &str) -> (Vec<u16>, Vec<Option<String>>, Vec<Option<u16>>) {
         if load != 200 {
             let error: serde_json::Value = serde_json::from_str(&body).unwrap();
             errors.push(error["error"].as_str().map(str::to_owned));
-            cells.extend(std::iter::repeat_n(None, if i == 0 { 8 } else { 2 }));
+            cells.extend(std::iter::repeat_n(
+                None,
+                if i == 0 { READ_CELLS } else { 2 },
+            ));
             continue;
         }
         errors.push(None);
@@ -158,6 +165,11 @@ fn judge(expr: &str) -> (Vec<u16>, Vec<Option<String>>, Vec<Option<u16>>) {
                 &format!("/t/o.json?ns=c&auth={token}"),
             )));
             cells.push(Some(stream(&mut db, "/t/o.json?ns=c")));
+            cells.push(Some(stream(
+                &mut db,
+                &format!("/t/o.json?ns=c&{QUERY}&auth={token}"),
+            )));
+            cells.push(Some(stream(&mut db, &format!("/t/o.json?ns=c&{QUERY}"))));
             cells.push(Some(listen(&mut db, Some(&token))));
             cells.push(Some(listen(&mut db, None)));
         } else {
@@ -236,7 +248,11 @@ fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() 
                     .flatten()
                     .any(|error| error.contains("could not determinize efficiently"));
                 for (i, cell) in CELLS.iter().enumerate().filter(|_| !determinize) {
-                    let context = if i < 8 { 0 } else { 1 + (i - 8) / 2 };
+                    let context = if i < READ_CELLS {
+                        0
+                    } else {
+                        1 + (i - READ_CELLS) / 2
+                    };
                     let allowed = |(loads, _, cells): &(Vec<u16>, _, Vec<Option<u16>>)| {
                         loads[context] == 200 && cells[i] == Some(200)
                     };
@@ -245,7 +261,13 @@ fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() 
                 expected
             }
         };
-        let got = judge(expr);
+        let mut got = judge(expr);
+        // A row recorded before the event streams with the query were cells has none there.
+        for i in QUERY_STREAMS {
+            if expected.2[i].is_none() {
+                got.2[i] = None;
+            }
+        }
         if got != expected {
             failures.push(format!("{expr:?}: got {got:?}, expected {expected:?}"));
         }

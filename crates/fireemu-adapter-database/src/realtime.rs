@@ -535,7 +535,9 @@ impl Session {
         if !allowed {
             return Err(Self::denied());
         }
-        db.remember_on_disconnect(self.client, &self.namespace, writes, action == "om");
+        for (path, value) in writes {
+            db.remember_on_disconnect(self.client, &self.namespace, &path, value);
+        }
         Ok(Json::string(""))
     }
 

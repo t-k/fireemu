@@ -2110,43 +2110,91 @@ fn an_on_disconnect_merge_is_judged_as_its_entries_when_registered() {
 }
 
 #[test]
-fn an_on_disconnect_merge_runs_only_as_the_update_it_was_registered_as() {
-    // Recorded on the official emulator (review r11 hand3, rerun in r12): each entry of the
-    // merge passes alone, so it registers, but the merge as one update does not, so nothing
-    // of it is written when the connection ends. A separate set still runs (review M4).
-    let mut db = db();
-    load(
-        &mut db,
-        "odu",
-        r#"{"rules":{".read":true,"t":{"$k":{".write":true,".validate":"!(newData.child('a').val() == newData.child('b').val())"}}}}"#,
-    );
-    call(
-        &mut db,
-        "PUT",
-        "/t.json?ns=odu",
-        OWNER,
-        r#"{"o":{"a":1,"b":2},"p":{"a":1,"b":2}}"#,
-    );
-    let mut session = open(&mut db, "odu");
-    assert_eq!(
-        send(
-            &mut db,
-            &mut session,
-            1,
-            "om",
-            r#"{"p":"/t/o","d":{"a":5,"b":5}}"#
+fn an_on_disconnect_update_that_fails_whole_makes_none_of_the_writes() {
+    // Recorded on the official emulator (r12 table odmix, hand3): each registered value
+    // passes alone, so all register, but made together the merge fails the rule at `o`, and
+    // then none of them is made, not even the set at `p`, in either order and whether the
+    // rule is `.validate` or `.write`.
+    let rule = "!(newData.child('a').val() == newData.child('b').val())";
+    for place in [
+        format!(r#"".write":true,".validate":"{rule}""#),
+        format!(r#"".write":"{rule}""#),
+    ] {
+        for order in [["om", "o"], ["o", "om"]] {
+            let mut db = db();
+            load(
+                &mut db,
+                "odu",
+                &format!(r#"{{"rules":{{".read":true,"t":{{"$k":{{{place}}}}}}}}}"#),
+            );
+            call(
+                &mut db,
+                "PUT",
+                "/t.json?ns=odu",
+                OWNER,
+                r#"{"o":{"a":1,"b":2},"p":{"a":1,"b":2}}"#,
+            );
+            let mut session = open(&mut db, "odu");
+            for (r, action) in (1..).zip(order) {
+                let body = if action == "om" {
+                    r#"{"p":"/t/o","d":{"a":5,"b":5}}"#
+                } else {
+                    r#"{"p":"/t/p/a","d":7}"#
+                };
+                assert_eq!(
+                    send(&mut db, &mut session, r, action, body),
+                    vec![reply(r, "ok", r#""""#)],
+                    "{place} {order:?}"
+                );
+            }
+            db.close_realtime(session.client(), LATER);
+            assert_eq!(
+                call(&mut db, "GET", "/t.json?ns=odu", OWNER, "").1,
+                r#"{"o":{"a":1,"b":2},"p":{"a":1,"b":2}}"#,
+                "{place} {order:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn on_disconnect_writes_run_as_one_update_validated_whole() {
+    // Recorded on the official emulator (gen11 seed 1201 rows 1760 and 2288, r12; hand3):
+    // when the connection ends, the values that pass alone are made as one update judged
+    // whole, so a child that fails `.validate` or `.write` there stops all of them, deletes
+    // included.
+    for (rules, merge) in [
+        (
+            r#"{"rules":{".read":true,"t":{"$k":{".write":true,"$c":{".validate":"newData.parent().child('a').exists()"}}}}}"#,
+            r#"{"p":"/t/o","d":{"a":null,"x":1}}"#,
         ),
-        vec![reply(1, "ok", r#""""#)]
-    );
-    assert_eq!(
-        send(&mut db, &mut session, 2, "o", r#"{"p":"/t/p/a","d":7}"#),
-        vec![reply(2, "ok", r#""""#)]
-    );
-    db.close_realtime(session.client(), LATER);
-    assert_eq!(
-        call(&mut db, "GET", "/t.json?ns=odu", OWNER, "").1,
-        r#"{"o":{"a":1,"b":2},"p":{"a":7,"b":2}}"#
-    );
+        (
+            r#"{"rules":{".read":true,"t":{"$k":{".write":"!(newData.child('a').val() == newData.child('b').val())"}}}}"#,
+            r#"{"p":"/t/o","d":{"a":5,"b":5}}"#,
+        ),
+    ] {
+        let mut db = db();
+        load(&mut db, "odw", rules);
+        call(
+            &mut db,
+            "PUT",
+            "/t.json?ns=odw",
+            OWNER,
+            r#"{"o":{"a":1,"b":2}}"#,
+        );
+        let mut session = open(&mut db, "odw");
+        assert_eq!(
+            send(&mut db, &mut session, 1, "om", merge),
+            vec![reply(1, "ok", r#""""#)],
+            "{rules}"
+        );
+        db.close_realtime(session.client(), LATER);
+        assert_eq!(
+            call(&mut db, "GET", "/t.json?ns=odw", OWNER, "").1,
+            r#"{"o":{"a":1,"b":2}}"#,
+            "{rules}"
+        );
+    }
 }
 
 #[test]

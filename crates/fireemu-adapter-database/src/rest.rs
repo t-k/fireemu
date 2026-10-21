@@ -1277,39 +1277,7 @@ impl Database {
         let Some((namespace, pending)) = self.on_disconnect.remove(&client) else {
             return;
         };
-        // Each registered value is judged at its own path with newData holding every value
-        // registered, as the official emulator judges them at the end: a merge whose result
-        // fails a rule is not made, while the values others leave allowed are (review r11
-        // hand3, review M4). Where that reading is not certain the value must pass every
-        // reading: alone on the current data, and with only the merges it came from.
-        let all = pending.entries_with_merges();
-        let wire = |pick: &dyn Fn(&BTreeSet<u64>) -> bool| -> (Vec<usize>, Vec<(String, Json)>) {
-            all.iter()
-                .enumerate()
-                .filter(|(_, (_, _, merges))| pick(merges))
-                .map(|(i, (keys, value, _))| (i, (keys.join("/"), value.clone())))
-                .unzip()
-        };
-        let (_, whole) = wire(&|_| true);
-        let mut allowed = self.allowed_within(&namespace, &whole, &access, now_millis);
-        let merges: BTreeSet<u64> = all.iter().flat_map(|(_, _, m)| m.iter().copied()).collect();
-        for merge in merges {
-            let (picked, part) = wire(&|merges| merges.contains(&merge));
-            let within = self.allowed_within(&namespace, &part, &access, now_millis);
-            for (i, ok) in picked.into_iter().zip(within) {
-                allowed[i] &= ok;
-            }
-        }
-        let entries: Vec<(Vec<String>, Json)> = all
-            .into_iter()
-            .zip(allowed)
-            .filter(|((keys, value, _), within)| {
-                let path = Path::from_keys(keys.iter().cloned());
-                *within
-                    && self.may_write(&namespace, &WriteOp::Set(&path, value), &access, now_millis)
-            })
-            .map(|((keys, value, _), _)| (keys, value))
-            .collect();
+        let entries = self.on_disconnect_writes(&namespace, pending.entries(), &access, now_millis);
         if entries.is_empty() {
             return;
         }
@@ -1365,24 +1333,19 @@ impl Database {
         }
     }
 
-    /// Registers `writes` to be made when `client`'s connection ends: a set, or the entries
-    /// of one merge when `merged`.
+    /// Registers `value` to be written at `path` when `client`'s connection ends.
     pub(crate) fn remember_on_disconnect(
         &mut self,
         client: u64,
         namespace: &str,
-        writes: Vec<(Path, Json)>,
-        merged: bool,
+        path: &Path,
+        value: Json,
     ) {
-        let pending = &mut self
-            .on_disconnect
+        self.on_disconnect
             .entry(client)
             .or_insert_with(|| (namespace.to_owned(), Pending::default()))
-            .1;
-        let merge = merged.then(|| pending.merge());
-        for (path, value) in writes {
-            pending.remember(path.keys(), value, merge);
-        }
+            .1
+            .remember(path.keys(), value);
     }
 
     /// Cancels what `client` registered at and below `path`.

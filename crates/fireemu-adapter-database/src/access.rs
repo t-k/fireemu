@@ -280,44 +280,83 @@ impl Database {
             .can_write(before.root(), after.root(), &written, &requester)
     }
 
-    /// Which of `entries`, made together as one update at the root, `access` may make: each
-    /// judged at its own path, with newData holding all of them. An update the tree refuses
-    /// is left to the caller.
-    pub(crate) fn allowed_within(
+    /// The onDisconnect values `access` makes when its connection ends, as the official
+    /// emulator makes them (review M4; r12 tables odmix, hand3 and gen11 seed 1201): a value
+    /// that fails its rules alone on the current data is dropped, and the rest are made as one
+    /// update judged whole, so a failing rule there stops all of them. Whether the first step
+    /// reads `.validate` is not recorded, so a value whose `.write` alone passes but whose
+    /// `.validate` alone fails makes nothing at all. An update the tree refuses is left to the
+    /// caller.
+    pub(crate) fn on_disconnect_writes(
         &self,
         namespace: &str,
-        entries: &[(String, Json)],
+        entries: Vec<(Vec<String>, Json)>,
         access: &Access,
         now: i64,
-    ) -> Vec<bool> {
+    ) -> Vec<(Vec<String>, Json)> {
         if self.bypasses(access) {
-            return vec![true; entries.len()];
+            return entries;
         }
         let Some(loaded) = self.loaded_rules(namespace) else {
-            return vec![self.options().rules == RulesMode::AllowAll; entries.len()];
+            return if self.options().rules == RulesMode::AllowAll {
+                entries
+            } else {
+                Vec::new()
+            };
         };
         let limits = self.options().limits;
         let before = self
             .tree(namespace)
             .cloned()
             .unwrap_or_else(|| Tree::new(limits));
-        let mut after = before.clone();
         let context = fireemu_core_database::ServerValueContext { now_millis: now };
-        if after.update(&Path::root(), entries, context).is_err() {
-            return vec![true; entries.len()];
-        }
         let auth = access.auth();
         let requester = Requester { auth: &auth, now };
-        entries
+        let mut kept = Vec::new();
+        for (keys, value) in entries {
+            let path = Path::from_keys(keys.iter().cloned());
+            let mut after = before.clone();
+            if after.set(&path, &value, context).is_err() {
+                kept.push((keys, value));
+                continue;
+            }
+            let (before, after) = (before.root(), after.root());
+            let permitted = loaded
+                .rules
+                .write_permitted(before, after, &path, &requester);
+            let validates = loaded.rules.write_validates(
+                before,
+                after,
+                std::slice::from_ref(&path),
+                &requester,
+            );
+            if permitted && !validates {
+                return Vec::new();
+            }
+            if permitted {
+                kept.push((keys, value));
+            }
+        }
+        let wire: Vec<(String, Json)> = kept
             .iter()
-            .map(|(key, _)| {
-                Path::parse(key, &limits).is_ok_and(|path| {
-                    loaded
-                        .rules
-                        .can_write(before.root(), after.root(), &[path], &requester)
-                })
-            })
-            .collect()
+            .map(|(keys, value)| (keys.join("/"), value.clone()))
+            .collect();
+        let mut after = before.clone();
+        if after.update(&Path::root(), &wire, context).is_err() {
+            return kept;
+        }
+        let paths: Vec<Path> = kept
+            .iter()
+            .map(|(keys, _)| Path::from_keys(keys.iter().cloned()))
+            .collect();
+        if loaded
+            .rules
+            .can_write(before.root(), after.root(), &paths, &requester)
+        {
+            kept
+        } else {
+            Vec::new()
+        }
     }
 
     /// The rules text of `namespace`: what was loaded, or the default the official emulator

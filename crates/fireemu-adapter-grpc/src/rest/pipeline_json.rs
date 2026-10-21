@@ -31,20 +31,21 @@ const REQUEST_KEYS: &[&str] = &[
     "requestOptions",
 ];
 
-/// Whether a `bytesValue` anywhere in an `:executePipeline` body holds a line break. The shared
-/// REST decoder skips CR and LF in base64; the official emulator 1.22.0 refuses such a body with
-/// `Payload isn't valid for request.` (review r9 M2), and production is unrecorded, so only this
-/// method checks it, before the transcoder.
-pub fn bytes_hold_a_line_break(body: &Value) -> bool {
+/// Whether a `bytesValue` anywhere in an `:executePipeline` body is base64 the official
+/// emulator 1.22.0 does not read: one with a line break (CR or LF, which the shared REST decoder
+/// skips; review r9 M2), or one the decoder refuses (a space, a tab, `!`, a lone sextet). It
+/// refuses the body with `Payload isn't valid for request.`; production is unrecorded, so only
+/// this method checks it, before the transcoder.
+pub fn malformed_bytes(body: &Value) -> bool {
     match body {
         Value::Object(object) => object.iter().any(|(key, inner)| {
             (key == "bytesValue"
-                && inner
-                    .as_str()
-                    .is_some_and(|text| text.contains(['\r', '\n'])))
-                || bytes_hold_a_line_break(inner)
+                && inner.as_str().is_some_and(|text| {
+                    text.contains(['\r', '\n']) || super::json::base64_decode(text).is_err()
+                }))
+                || malformed_bytes(inner)
         }),
-        Value::Array(values) => values.iter().any(bytes_hold_a_line_break),
+        Value::Array(values) => values.iter().any(malformed_bytes),
         _ => false,
     }
 }

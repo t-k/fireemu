@@ -7466,12 +7466,13 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
     }
 }
 
-/// A `bytesValue` with a line break (CR, LF, CRLF, a MIME break after 76 characters) is
-/// refused by the official emulator 1.22.0 with `Payload isn't valid for request.`; strict
+/// A `bytesValue` with a line break (CR, LF, CRLF, a MIME break after 76 characters), a tab, a
+/// form feed, a space, `!` or a lone sextet is refused by the official emulator 1.22.0 with
+/// `Payload isn't valid for request.`; strict
 /// answers it with UNIMPLEMENTED (review r9 M2). Other methods keep the shared decoder, which
 /// skips line breaks, until production is observed (a commit pins that).
 #[test]
-fn rest_execute_pipeline_refuses_base64_line_breaks() {
+fn rest_execute_pipeline_refuses_base64_the_official_emulator_does_not_read() {
     let mime = format!("{}\r\n{}", "QUJD".repeat(19), "QUJD");
     for strict in [true, false] {
         let s = enterprise_state(strict, None);
@@ -7482,6 +7483,11 @@ fn rest_execute_pipeline_refuses_base64_line_breaks() {
             "\nQUJD",
             "QUJD\n",
             mime.as_str(),
+            "QUJD\tQUJD",
+            "QUJD\u{c}QUJD",
+            "QU JD",
+            "QUJD!",
+            "Q",
         ] {
             for literal in [
                 json!({"bytesValue": text}),

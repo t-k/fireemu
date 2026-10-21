@@ -2949,6 +2949,38 @@ fn document_only_import_peak_rss_is_within_one_point_two_times_the_artifact() {
 /// `out`, whose parent is the empty path. Restricting the permissions of "" fails with
 /// ENOENT, so the export was never written and the command still exited with the child's
 /// status, which made a seed-refresh job look successful while refreshing nothing.
+/// The export at exit goes where the preflight resolved the path: a symlink on the way that is
+/// re-pointed while the suite runs is not followed again (export-guard review M2).
+#[cfg(unix)]
+#[test]
+fn export_on_exit_writes_where_the_preflight_resolved_the_path() {
+    let dir = scratch("resolved-once");
+    let first = dir.join("first");
+    let second = dir.join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    let repoint = format!(
+        "rm {link} && ln -s {second} {link}",
+        link = link.display(),
+        second = second.display()
+    );
+    let output = exec()
+        .args(["--export-on-exit"])
+        .arg(link.join("out"))
+        .args(["--", "sh", "-c", &repoint])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(
+        first.join("out/firebase-export-metadata.json").is_file(),
+        "the export did not go where the preflight resolved: {log}"
+    );
+    assert!(!second.join("out").exists(), "{log}");
+}
+
 #[test]
 fn export_on_exit_accepts_a_bare_relative_directory_name() {
     let dir = scratch("bare-relative");

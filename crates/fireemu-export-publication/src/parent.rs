@@ -807,6 +807,44 @@ mod tests {
     }
 
     #[test]
+    fn the_walk_keeps_every_component_after_a_missing_one_and_follows_forty_hops() {
+        let root = TrustedTempDir::new("walk-missing-hops");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir(base.join("real")).unwrap();
+        // `real` exists beside the missing `x`, but below `x` it is a name to make.
+        let (existing, missing) = walk(&base.join("x/real")).unwrap();
+        assert_eq!(existing, base);
+        assert_eq!(missing, [OsString::from("x"), OsString::from("real")]);
+        // A chain of exactly 40 links is followed; one more is refused.
+        let mut to = base.join("real");
+        for hop in 1..=41 {
+            let link = base.join(format!("hop{hop}"));
+            symlink(&to, &link).unwrap();
+            to = link;
+        }
+        assert_eq!(walk(&base.join("hop40")).unwrap().0, base.join("real"));
+        let error = walk(&base.join("hop41")).unwrap_err();
+        assert!(error.contains("more than 40 symlinks"), "{error}");
+    }
+
+    #[test]
+    fn a_chain_is_below_a_shared_directory_only_when_one_of_its_directories_others_can_write() {
+        let root = TrustedTempDir::new("below-shared");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir_all(base.join("a/b")).unwrap();
+        assert!(!below_shared(&base.join("a/b")).unwrap());
+        for mode in [0o720, 0o702, 0o1777] {
+            std::fs::set_permissions(base.join("a"), std::fs::Permissions::from_mode(mode))
+                .unwrap();
+            let shared = below_shared(&base.join("a/b"));
+            std::fs::set_permissions(base.join("a"), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            assert!(shared.unwrap(), "{mode:o}");
+        }
+        assert!(below_shared(&base.join("missing")).is_err());
+    }
+
+    #[test]
     fn inspect_parent_judges_a_link_by_its_holder_through_the_walk() {
         // The holder verdict inside the walk, reached through inspect_parent (review S3).
         let root = TrustedTempDir::new("inspect-holder");

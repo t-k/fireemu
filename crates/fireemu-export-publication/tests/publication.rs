@@ -976,6 +976,20 @@ fn preflight_is_read_only_for_missing_and_existing_destinations() {
     assert_eq!(std::fs::read_dir(root.0.path()).unwrap().count(), 1);
 }
 
+/// Outside a shared directory only the user or root could have made the target, so a
+/// group-writable export directory of the user's own (umask 002) keeps working.
+#[test]
+fn an_existing_target_of_the_users_own_outside_a_shared_directory_may_be_group_writable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = TestRoot::new("own-open-target");
+    let target = root.target();
+    create_private_dir(&target);
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o775)).unwrap();
+    fireemu_export_publication::preflight(&target).unwrap();
+    let stage = PublicationStage::create(&target, |_| Ok(())).unwrap();
+    assert!(stage.target_was_present());
+}
+
 #[test]
 fn preflight_refuses_unsafe_ancestors_without_creating_missing_parents() {
     use std::os::unix::fs::PermissionsExt as _;

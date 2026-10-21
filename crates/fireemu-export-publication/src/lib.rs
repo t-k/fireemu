@@ -769,6 +769,17 @@ mod tests {
         assert_eq!(rename_for(true, |_| Ok(())), Ok(()));
     }
 
+    /// A rename the sticky bit refuses (another user's entry in /tmp) names the sticky
+    /// directory and what to do; other failures keep the plain message.
+    #[test]
+    fn a_rename_the_sticky_bit_refuses_names_the_remedy() {
+        let sticky = publication_error(rustix::io::Errno::PERM);
+        assert!(sticky.contains("sticky bit"), "{sticky}");
+        assert!(sticky.contains("a directory of your own"), "{sticky}");
+        let other = publication_error(rustix::io::Errno::IO);
+        assert!(!other.contains("sticky"), "{other}");
+    }
+
     #[test]
     fn any_other_rename_failure_keeps_the_plain_message() {
         let message = publication_error(rustix::io::Errno::EXIST);

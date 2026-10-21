@@ -563,20 +563,39 @@ mod java_chars_tests {
     }
 
     #[test]
-    fn a_lowercase_holding_capital_sigma_is_refused() {
+    fn capital_sigma_lowercases_as_java_21_only_between_plain_neighbours() {
+        // Java 21 makes `Σ` the final `ς` by its word-break iterator; Rust by case-ignorable
+        // skipping. They agree when each neighbour is the string's edge, an ASCII space or a
+        // cased Latin, Greek or Cyrillic letter, and the rest is an error (review r11 M41).
+        for (text, java) in [
+            ("\u{03A3}", "\u{03C3}"),
+            ("\u{0391}\u{03A3}", "\u{03B1}\u{03C2}"),
+            ("\u{0391}\u{03A3}\u{0391}", "\u{03B1}\u{03C3}\u{03B1}"),
+            ("\u{0391}\u{03A3} \u{0391}", "\u{03B1}\u{03C2} \u{03B1}"),
+            ("a \u{03A3}", "a \u{03C3}"),
+            ("\u{03A3}\u{03A3}", "\u{03C3}\u{03C2}"),
+            ("\u{0416}\u{03A3}", "\u{0436}\u{03C2}"),
+        ] {
+            assert_eq!(
+                super::eval::java_case(text, true).as_deref(),
+                Some(java),
+                "{text}"
+            );
+        }
         for text in [
-            "\u{03A3}",
-            "\u{0391}\u{03A3}",
             "\u{0391}:\u{03A3}",
-            "a\u{03A3}b",
+            "\u{0391}\u{10D50}\u{03A3}",
+            "\u{10D50}\u{03A3}",
+            "\u{0391}\u{03A3}.",
+            "\u{0391}\u{0301}\u{03A3}",
+            "1\u{03A3}",
+            "\u{0391}\u{03A3}\u{0345}",
         ] {
             assert_eq!(super::eval::java_case(text, true), None, "{text}");
-            assert!(super::eval::java_case(text, false).is_some(), "{text}");
+            // Garay maps differently in both directions, so only the others uppercase.
+            let garay = text.contains('\u{10D50}');
+            assert_eq!(super::eval::java_case(text, false).is_some(), !garay, "{text}");
         }
-        assert_eq!(
-            super::eval::java_case("\u{03C3}", true).as_deref(),
-            Some("\u{03C3}")
-        );
     }
 
     #[test]

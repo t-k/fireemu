@@ -334,13 +334,21 @@ const CASE_DIFFERS: [(char, char); 10] = [
     ('\u{16EBB}', '\u{16ED3}'),
 ];
 
-/// `s.toLowerCase()` or `s.toUpperCase()` as Java 21 gives it. A lowercase of a string holding
-/// `Σ` is an error too: whether it becomes the final `ς` depends on its neighbours as Java 21
-/// reads them, which is not reproduced (review r11 M41).
+/// `s.toLowerCase()` or `s.toUpperCase()` as Java 21 gives it. Java 21 makes `Σ` the final
+/// `ς` by its word-break iterator, and Rust by skipping case-ignorable characters; the two
+/// agree when each neighbour of the `Σ` is a [`plain_sigma_neighbour`], and a lowercase with
+/// any other `Σ` is an error (review r11 M41).
 pub(crate) fn java_case(s: &str, lower: bool) -> Option<String> {
-    if s.chars()
-        .any(|c| CASE_DIFFERS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)))
-        || (lower && s.contains('\u{03A3}'))
+    let chars: Vec<char> = s.chars().collect();
+    let ambiguous_sigma = |i: usize| {
+        chars[i] == '\u{03A3}'
+            && !(plain_sigma_neighbour(i.checked_sub(1).map(|p| chars[p]))
+                && plain_sigma_neighbour(chars.get(i + 1).copied()))
+    };
+    if chars
+        .iter()
+        .any(|&c| CASE_DIFFERS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)))
+        || (lower && (0..chars.len()).any(ambiguous_sigma))
     {
         return None;
     }
@@ -349,6 +357,20 @@ pub(crate) fn java_case(s: &str, lower: bool) -> Option<String> {
     } else {
         s.to_uppercase()
     })
+}
+
+/// A neighbour of `Σ` both Java 21 and Rust read alike: the string's edge, an ASCII space, or
+/// a Latin, Greek or Cyrillic letter that changes case (so cased, and a word character).
+fn plain_sigma_neighbour(c: Option<char>) -> bool {
+    let Some(c) = c else {
+        return true;
+    };
+    let letter_block = matches!(c, 'A'..='Z' | 'a'..='z' | '\u{00C0}'..='\u{024F}' | '\u{0370}'..='\u{03FF}' | '\u{0400}'..='\u{04FF}')
+        && !matches!(c, '\u{00D7}' | '\u{00F7}');
+    c == ' '
+        || (letter_block
+            && c.is_alphabetic()
+            && (c.to_lowercase().ne(std::iter::once(c)) || c.to_uppercase().ne(std::iter::once(c))))
 }
 
 /// `s.replace(from, to)` as Java gives it: an empty `from` puts `to` before every UTF-16 unit

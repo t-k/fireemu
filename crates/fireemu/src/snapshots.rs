@@ -256,6 +256,60 @@ impl SnapshotHook for Storage {
     }
 }
 
+/// The session's Realtime Database namespaces: those whose project (see
+/// [`fireemu_adapter_database::namespace::project_of`]) the session owns. A restore empties
+/// the owned namespaces the snapshot does not hold, streams and listens see the restored
+/// values, and onDisconnect writes registered for them are dropped, as a reset drops them.
+pub struct RealtimeDatabase(pub Arc<Mutex<fireemu_adapter_database::rest::Database>>);
+
+impl RealtimeDatabase {
+    fn owned(scope: &Scope) -> impl Fn(&str) -> bool + '_ {
+        move |namespace| {
+            scope.owns_project(fireemu_adapter_database::namespace::project_of(namespace))
+        }
+    }
+}
+
+impl SnapshotHook for RealtimeDatabase {
+    fn name(&self) -> &'static str {
+        "database"
+    }
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let database = self
+            .0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Realtime Database"))?;
+        Ok(Arc::new(
+            database.capture_namespaces_where(Self::owned(scope)),
+        ))
+    }
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<fireemu_adapter_database::rest::NamespacesSnapshot>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .lock()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the Realtime Database"))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let snapshot = part
+            .downcast_ref::<fireemu_adapter_database::rest::NamespacesSnapshot>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Realtime Database"))?
+            .restore_namespaces_where(Self::owned(scope), snapshot);
+        Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<fireemu_adapter_database::rest::NamespacesSnapshot>()
+            .map_or(
+                0,
+                fireemu_adapter_database::rest::NamespacesSnapshot::retained_bytes,
+            )
+    }
+}
+
 /// The session's users, credentials, codes and tokens -- captured as an
 /// [`AuthSnapshot`], which holds no TOTP secret material (`INV-AUTH-003`, ADR-034): enrolled
 /// TOTP factors are kept with a detached secret and rebound on restore to the secret the
@@ -1456,6 +1510,66 @@ mod tests {
         tenant_user(&registry, "worker-alpha", "kept", "kept@example.test");
         let populated = hook.capture(&scope).unwrap();
         assert!(hook.retained_bytes(&populated) > hook.retained_bytes(&empty));
+    }
+
+    /// The Realtime Database part names itself and refuses a part that is not its shape or a
+    /// store that cannot be locked.
+    #[test]
+    fn the_database_hook_names_its_part_and_refuses_a_foreign_or_poisoned_one() {
+        use fireemu_adapter_database::rest::{Database, RestOptions};
+        use std::sync::{Arc, Mutex};
+
+        let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 1)));
+        let hook = super::RealtimeDatabase(database.clone());
+        let scope = Scope::Project("demo-app".to_owned());
+        assert_eq!(hook.name(), "database");
+        let part = hook.capture(&scope).expect("capture");
+        hook.validate(&scope, &part).expect("its own part");
+
+        let foreign: super::SnapshotPart = Arc::new(7u8);
+        let refused = hook.validate(&scope, &foreign).unwrap_err();
+        assert_eq!(refused.part, "database");
+        assert_eq!(refused.message, "the captured part is not this hook's");
+
+        let poisoner = database.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.lock().unwrap();
+            panic!("poison the database");
+        })
+        .join();
+        let refused = hook.validate(&scope, &part).unwrap_err();
+        assert_eq!(refused.part, "database");
+        assert_eq!(refused.message, "the Realtime Database is poisoned");
+    }
+
+    /// `SNAP-MEM-01`: the Realtime Database part counts the owned namespaces toward the session
+    /// byte budget and a foreign part as zero.
+    #[test]
+    fn the_database_hook_counts_the_owned_namespaces_in_the_retained_bytes() {
+        use fireemu_adapter_database::rest::{Database, NamespacesSnapshot, RestOptions};
+        use std::sync::{Arc, Mutex};
+
+        let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 1)));
+        let hook = super::RealtimeDatabase(database.clone());
+        let scope = Scope::Project("demo-app".to_owned());
+        let empty = hook.capture(&scope).expect("capture");
+        assert_eq!(hook.retained_bytes(&empty), 0);
+
+        database
+            .lock()
+            .unwrap()
+            .import_text("demo-app-default-rtdb", r#"{"a":"text"}"#, 0)
+            .unwrap();
+        let part = hook.capture(&scope).expect("capture");
+        let expected = part
+            .downcast_ref::<NamespacesSnapshot>()
+            .map(NamespacesSnapshot::retained_bytes)
+            .unwrap();
+        assert!(expected > 1, "{expected}");
+        assert_eq!(hook.retained_bytes(&part), expected);
+
+        let foreign: super::SnapshotPart = Arc::new(7u8);
+        assert_eq!(hook.retained_bytes(&foreign), 0);
     }
 
     /// `SNAP-MEM-01`: the production Auth hook reports a positive retained-byte estimate for a

@@ -935,12 +935,12 @@ fn write_failure(err: &fireemu_core_database::DatabaseError) -> Failure {
 /// start, `ep`/`en`/`ein` end, `l` limit and `vf` its side. `[MIN_NAME]` and `[MAX_NAME]`
 /// are the SDK's key sentinels.
 fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure> {
+    const FIELDS: [&str; 9] = ["i", "sp", "sn", "sin", "ep", "en", "ein", "l", "vf"];
     if q.is_empty() {
         return Ok(None);
     }
-    // The official emulator refuses a query with a field it does not know, or an inclusive
-    // flag that is no boolean (review r11 M42); a limit needs its side.
-    const FIELDS: [&str; 9] = ["i", "sp", "sn", "sin", "ep", "en", "ein", "l", "vf"];
+    // The official emulator refuses a query with a field it does not know (`FIELDS`), or an
+    // inclusive flag that is no boolean (review r11 M42); a limit needs its side.
     if q.keys().any(|key| !FIELDS.contains(&key.as_str()))
         || ["sin", "ein"]
             .iter()

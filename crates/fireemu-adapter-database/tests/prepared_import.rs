@@ -3,6 +3,7 @@
 //! [`Database::import_text`] (a `PUT /.json` as the owner) does, so `--import` can parse each
 //! file once and still refuse a bad file before anything is installed.
 
+use fireemu_adapter_database::realtime::Opened;
 use fireemu_adapter_database::rest::{prepare_import, Database, Handled, HttpRequest, RestOptions};
 use std::fmt::Write as _;
 
@@ -105,6 +106,44 @@ fn server_values_in_a_prepared_import_resolve_when_it_is_installed() {
         db.export_texts(),
         vec![("p".to_owned(), format!(r#"{{"n":7,"t":{}}}"#, NOW + 7))]
     );
+}
+
+#[test]
+fn listeners_hear_a_prepared_import_as_they_hear_the_import_request() {
+    for (seed, text) in [
+        ("1", r#"{"a":{"b":2}}"#),
+        (r#"{"a":{"b":2}}"#, r#"{"a":{"b":2.0}}"#),
+        (r#"{"a":1}"#, "null"),
+    ] {
+        let mut pushed = Vec::new();
+        for prepared in [false, true] {
+            let mut db = Database::new(RestOptions::default(), 1);
+            put(&mut db, "p", seed);
+            let Ok(Opened::Session(mut session, _)) =
+                db.open_realtime("/.ws?v=5&ns=p", Some("127.0.0.1:9000"), NOW)
+            else {
+                panic!("no session");
+            };
+            for path in ["/", "/a"] {
+                let frame =
+                    format!(r#"{{"t":"d","d":{{"r":1,"a":"q","b":{{"p":"{path}","h":""}}}}}}"#);
+                session.receive(&mut db, &frame, NOW);
+            }
+            db.drain_pushes();
+            if prepared {
+                let import = prepare_import("p", text.to_owned(), &Limits::default()).unwrap();
+                db.install_import(import, NOW).unwrap();
+            } else {
+                db.import_text("p", text, NOW).unwrap();
+            }
+            pushed.push(db.drain_pushes());
+        }
+        assert_eq!(pushed[1], pushed[0], "{seed} then {text}");
+        assert!(
+            !pushed[0].is_empty() || seed == r#"{"a":{"b":2}}"#,
+            "{text}"
+        );
+    }
 }
 
 #[test]

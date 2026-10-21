@@ -211,7 +211,7 @@ fn class_item(chars: &[char], i: usize) -> Option<(ClassItem, usize)> {
             };
             Some((item, i + 2))
         }
-        '[' => None,
+        // `[` is a plain member there (`[[:` was refused before).
         c => Some((ClassItem::Char(*c), i + 1)),
     }
 }
@@ -224,12 +224,12 @@ fn fold_class(chars: &[char], start: usize, out: &mut String) -> Option<usize> {
     if negated {
         i += 1;
     }
-    if chars.get(i) == Some(&']') {
-        return None;
-    }
     let mut ranges = Vec::new();
+    // The first member may be `]`, as there.
+    let mut first = true;
     let mut escapes = String::new();
-    while chars.get(i)? != &']' {
+    while first || chars.get(i)? != &']' {
+        first = false;
         let (item, next) = class_item(chars, i)?;
         i = next;
         let in_range = chars.get(i) == Some(&'-') && chars.get(i + 1).is_some_and(|c| *c != ']');
@@ -244,7 +244,7 @@ fn fold_class(chars: &[char], start: usize, out: &mut String) -> Option<usize> {
                     return None;
                 };
                 i = next;
-                ranges.extend(fold_range(lo, hi)?);
+                ranges.extend(fold_range(lo, hi));
             }
             // A letter stands for both its cases; anything else is its own case.
             ClassItem::Char(c) => {
@@ -258,6 +258,11 @@ fn fold_class(chars: &[char], start: usize, out: &mut String) -> Option<usize> {
         out.push('^');
     }
     out.push_str(&escapes);
+    if ranges.is_empty() && escapes.is_empty() {
+        // A class whose members all stand for nothing: a character no subject holds (the
+        // UTF-16 view never writes U+10FFFF).
+        out.push('\u{10ffff}');
+    }
     push_ranges(out, &ranges);
     out.push(']');
     Some(i + 1)
@@ -268,11 +273,11 @@ fn fold_class(chars: &[char], start: usize, out: &mut String) -> Option<usize> {
 /// rows): it scans `lo..=hi` and closes a run where `isAlphabetic` changes or at `hi`, the run
 /// always starting at `lo`. A closed run of letters adds `[upper(lo)-upper(end)]` and
 /// `[lower(lo)-lower(end)]`, any other run `[lo-end]`. A run closed at `hi` ends at `hi` and
-/// takes the class of the run before it, so `[ -A]` is the plain `[ -A]`. `None` for a range
-/// reversed before or after the fold.
-fn fold_range(lo: char, hi: char) -> Option<Vec<(char, char)>> {
+/// takes the class of the run before it, so `[ -A]` is the plain `[ -A]`. A range that is
+/// reversed, before or after the fold, stands for nothing there (recorded rows: `[Z-y]`).
+fn fold_range(lo: char, hi: char) -> Vec<(char, char)> {
     if lo > hi {
-        return None;
+        return Vec::new();
     }
     let mut ranges = Vec::new();
     let mut letters = lo.is_ascii_alphabetic();
@@ -293,7 +298,8 @@ fn fold_range(lo: char, hi: char) -> Option<Vec<(char, char)>> {
         }
         c = next_char(c);
     }
-    ranges.iter().all(|(a, b)| a <= b).then_some(ranges)
+    ranges.retain(|(a, b)| a <= b);
+    ranges
 }
 
 /// The ASCII character before `c` (`c` is above `lo`, so ASCII too).
@@ -557,10 +563,19 @@ mod tests {
         assert_eq!(matches_i("^[Z-a]$", "b"), Some(false));
         assert_eq!(matches_i("^[_-a]$", "`"), Some(true));
         assert_eq!(matches_i("^[_-a]$", "A"), Some(false));
-        // A fold that reverses a run is an error (`[[-z]` folds a letter run to `[[-Z]`).
-        assert_eq!(matches_i("^[[-z]$", "b"), None);
-        // A range reversed before folding is an error too.
-        assert_eq!(matches_i("^[z-a]$", "b"), None);
+        // A run the fold reverses stands for nothing (`[Z-y]`: recorded rows).
+        for (subject, expected) in [
+            ("Z", true),
+            ("_", true),
+            ("z", true),
+            ("a", false),
+            ("y", false),
+        ] {
+            assert_eq!(matches_i("^[Z-y]$", subject), Some(expected), "{subject}");
+        }
+        // So does a range reversed before folding.
+        assert_eq!(matches_i("^[z-a]$", "b"), Some(false));
+        assert_eq!(matches_i("^[^z-a]$", "b"), Some(true));
     }
 
     #[test]
@@ -579,9 +594,12 @@ mod tests {
         }
         // Without `i` the same patterns are read.
         assert_eq!(matches("^\u{e9}$", "\u{e9}"), Some(true));
-        // A class that starts with `]` or holds `[` is not folded either.
-        assert_eq!(matches_i("^[]a]$", "a"), None);
-        assert_eq!(matches_i("^[a[]$", "a"), None);
+        // A class may start with `]` and hold `[`, as there.
+        assert_eq!(matches_i("^[]a]$", "A"), Some(true));
+        assert_eq!(matches_i("^[]a]$", "]"), Some(true));
+        assert_eq!(matches_i("^[a[]$", "["), Some(true));
+        assert_eq!(matches_i("^[@-[]$", "_"), Some(false));
+        assert_eq!(matches_i("^[@-[]$", "["), Some(true));
     }
 
     #[test]

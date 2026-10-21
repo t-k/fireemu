@@ -315,7 +315,7 @@ def lexer_expression():
     roll = rng.random()
     if roll < 0.6:
         return rng.choices([name_expression, keyword_member, update_operator, split_comment,
-                            regex_terminator, relation], weights=[3, 2, 1, 1, 1, 1])[0]()
+                            regex_terminator, relation], weights=[3, 2, 2, 1, 1, 1])[0]()
     roll = rng.random()
     if roll < 0.35:
         return f"{string_literal()} {operator()} {string_literal()}"

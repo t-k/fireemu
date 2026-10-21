@@ -394,9 +394,15 @@ impl Lexer<'_> {
             let saved = self.at;
             self.at += 1;
             if next_is(self, &|c| matches!(c, 'x' | 'X')).is_some() {
-                // Read into a double, as there: any length, and `0x` alone is 0 (review r8
-                // S21).
-                return Ok((start, Token::Number(radix_value(&digits(self, 16), 16))));
+                // Read into a double, as there: any length, and `0x` alone is NaN (review r8
+                // S21; recorded 2026-10-21).
+                let hex = digits(self, 16);
+                let value = if hex.is_empty() {
+                    f64::NAN
+                } else {
+                    radix_value(&hex, 16)
+                };
+                return Ok((start, Token::Number(value)));
             }
             let octal = digits(self, 10);
             if let Some(bad) = octal.chars().find(|c| matches!(c, '8' | '9')) {
@@ -480,6 +486,9 @@ impl Lexer<'_> {
                         self.at += 1;
                     }
                 }
+                // The reader takes the next character past format characters too
+                // (recorded 2026-10-21: `'a\<LF><U+200B>b'` is `ab`).
+                self.skip_format();
                 continue;
             }
             // `n` hex digits, each read past format characters. Short of them, the escape

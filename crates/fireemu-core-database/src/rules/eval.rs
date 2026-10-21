@@ -85,6 +85,12 @@ fn leaf_value<'a>(leaf: &Leaf) -> Value<'a> {
 /// else as Java's `Double.toString` (plain from 10^-3 up to 10^7, otherwise
 /// `d.dddE<exponent>`).
 fn number_text(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_owned();
+    }
+    if n.is_infinite() {
+        return if n > 0.0 { "Infinity" } else { "-Infinity" }.to_owned();
+    }
     // Rust's `as` saturates as Java's `(long)` does.
     #[allow(
         clippy::cast_possible_truncation,
@@ -430,7 +436,11 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
         BinaryOp::Ne => Some(Value::Bool(!equal(l, r))),
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
             let ordering = match (l, r) {
-                (Value::Num(a), Value::Num(b)) => a.partial_cmp(b)?,
+                // Any comparison with NaN is false there.
+                (Value::Num(a), Value::Num(b)) => match a.partial_cmp(b) {
+                    Some(ordering) => ordering,
+                    None => return Some(Value::Bool(false)),
+                },
                 (Value::Str(a), Value::Str(b)) => a.encode_utf16().cmp(b.encode_utf16()),
                 // Any other pair is an error there, so the rule is false negated or not
                 // (review r8 M22).
@@ -444,7 +454,7 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
             }))
         }
         BinaryOp::Add => match (l, r) {
-            (Value::Num(a), Value::Num(b)) => finite(a + b),
+            (Value::Num(a), Value::Num(b)) => Some(Value::Num(a + b)),
             (Value::Str(a), _) => Some(Value::Str(format!("{a}{}", text(r)?))),
             (_, Value::Str(b)) => Some(Value::Str(format!("{}{b}", text(l)?))),
             _ => None,
@@ -453,19 +463,20 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
             let (Value::Num(a), Value::Num(b)) = (l, r) else {
                 return None;
             };
-            finite(match op {
+            // NaN and the infinities are numbers there, as in JavaScript (the r9 operator
+            // matrix).
+            Some(Value::Num(match op {
                 BinaryOp::Sub => a - b,
                 BinaryOp::Mul => a * b,
+                // A division by zero is NaN there, never an infinity (recorded 2026-10-21).
+                #[allow(clippy::float_cmp)]
+                BinaryOp::Div if *b == 0.0 => f64::NAN,
                 BinaryOp::Div => a / b,
                 _ => a % b,
-            })
+            }))
         }
         BinaryOp::And | BinaryOp::Or => None,
     }
-}
-
-fn finite<'a>(n: f64) -> Option<Value<'a>> {
-    n.is_finite().then_some(Value::Num(n))
 }
 
 /// The text of a value added to a string: only numbers and strings have one.

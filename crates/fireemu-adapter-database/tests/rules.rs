@@ -1712,3 +1712,11 @@ fn a_write_has_no_key_ordering() {
         );
     }
 }
+
+#[test]
+fn the_database_debug_says_whether_a_server_clock_is_set() {
+    let mut db = db();
+    assert!(format!("{db:?}").contains("ServerClock(system)"));
+    db.set_clock(std::sync::Arc::new(|| NOW));
+    assert!(format!("{db:?}").contains("ServerClock(set)"));
+}

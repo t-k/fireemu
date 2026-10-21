@@ -138,7 +138,7 @@ Run it with `npx fireemu exec --only database -- node test.mjs`. To test product
 
 ## Differences from the official emulator
 
-Every known difference refuses or denies where the official emulator allows, except the last one in this list. No known difference lets a request through that the official emulator denies.
+Fireemu fails closed: where it does not reproduce what the official emulator does, the rules are refused when they load or the rule is false, so every known difference refuses or denies where the official emulator allows, except the last one in this list. No known difference lets a request through that the official emulator denies. Character classes (names, white space and the format characters the official emulator's reader skips) follow Java 21's tables, as that emulator's reader does, and operators and methods were compared with it for every operand type.
 
 ### Regular expressions
 
@@ -153,15 +153,17 @@ The official emulator reads `matches()` patterns in a dialect of its own, an aut
 | An escaped backslash inside a class | `/[\\a]/` |
 | An operator that starts an alternative | `/(|a)/`, `/^(a|*)$/` |
 | The `i` flag with any character beyond ASCII in the pattern | `/^é$/i`, `/[ａ-ｚ]/i` |
+| A backslash before a line break | `/a\` followed by a new line and `b/` |
+| An escaped letter with a format character such as U+200B after the backslash | `/\` U+200B `u0061/` |
 
 Patterns the official emulator refuses when the rules load, such as `\s`, an unclosed class or group, or an unescaped `^` in the middle, are refused here with the same message.
 
 ### Other differences
 
 - A lone escaped surrogate in a string literal (`'\uD83D'`) is refused when the rules load; the official emulator loads it.
-- With no `auth`, `auth.uid == null` is an error here (the rule is false, negated or not); the official emulator reads it as `true`.
+- A `\u` escape in a name (`\u0061uth.uid`, `auth.\u0075id`) is refused when the rules load; the official emulator reads it as the letter.
 - A few rules both refuse are refused with another message or at another column.
-- A pattern the official emulator cannot determinize ("could not determinize efficiently", a resource limit of its automaton library) is refused there when the rules load and loads here. Production's limit is not known.
+- A pattern the official emulator cannot determinize ("could not determinize efficiently", a resource limit of its automaton library) is refused there when the rules load and loads here, where the rule is evaluated. The recorded ones are large: several counted repetitions of groups of alternatives in one pattern. Production's limit is not known, so Fireemu does not guess one.
 
 ## Export, import and snapshots
 

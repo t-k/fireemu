@@ -16,7 +16,7 @@ Name the rules files in `firebase.json`, as for the Firebase CLI:
 
 or in `fireemu.toml` (`rules.source` for Firestore, `storage.rules` for Storage). The startup output has a `firestore rules:` and a `storage rules:` line that say whether rules are loaded.
 
-Realtime Database rules load from the `database` section of `firebase.json`, a single file for the default instance or one per instance or deploy target; the startup output's `database rules:` line names each file and its instance. See [Realtime Database](../../products/realtime-database/#security-rules) for the credentials each profile accepts, what an instance without rules allows, and the regular-expression differences from the official emulator.
+Realtime Database rules load from the `database` section of `firebase.json`, a single file for the default instance or one per instance or deploy target; the startup output's `database rules:` line names each file and its instance. Where Fireemu does not reproduce the official emulator's evaluation yet, the rules are refused or the rule is false, never allowed. See [Realtime Database](../../products/realtime-database/#security-rules) for the credentials each profile accepts, what an instance without rules allows, and the differences from the official emulator.
 
 `@firebase/rules-unit-testing` can also load rules at run time: `initializeTestEnvironment` sends the `firestore.rules` and `storage.rules` you pass to the emulators, and `testEnv.clearFirestore()` is served.
 

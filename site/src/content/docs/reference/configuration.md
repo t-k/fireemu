@@ -21,9 +21,9 @@ Fireemu validates the file at startup, including rules the schema cannot express
 | `firebaseJson` | The `firebase.json` to read ports, rules, indexes and Functions from | [Configuration files](../../guides/configuration/) |
 | `firestore` | Edition, API mode, indexes, limits, history | [Cloud Firestore](../../products/firestore/) |
 | `rules` | Firestore Security Rules source, and the denial log for Firestore and Storage | [Security Rules](../../guides/security-rules/) |
-| `auth` | Sign-in methods, password policy, MFA, tenants, providers, tokens | [Authentication](../../products/auth/) |
+| `auth` | Sign-in methods, password policy, MFA, tenants, providers, tokens, and whether the Firestore, Storage and Realtime Database Security Rules surfaces accept unsigned mock ID tokens (`allowUnsignedIdTokens`) | [Authentication](../../products/auth/) |
 | `storage` | Storage Security Rules and stored-byte limit | [Cloud Storage](../../products/storage/) |
-| `database` | What a Realtime Database instance without a rules file allows (`defaultAccess`) | [Realtime Database](../../products/realtime-database/) |
+| `database` | What a Realtime Database instance without a rules file allows (`defaultAccess`); under `strict`, `auth.allowUnsignedIdTokens` decides whether its rules accept `@firebase/rules-unit-testing` mock tokens | [Realtime Database](../../products/realtime-database/) |
 | `functions` | Codebase, runner, application clock, unserved triggers | [Cloud Functions](../../products/functions/) |
 | `scheduler` | Time zone, catch-up and overlap of scheduled functions | [Time and scheduled functions](../../guides/time/) |
 | `pubsub`, `eventarc` | Authentication and delivery settings | [Pub/Sub and Eventarc](../../products/pubsub-eventarc/) |

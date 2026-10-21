@@ -311,10 +311,9 @@ fn java_int(text: &str) -> Option<i32> {
     }
     let mut value: i64 = 0;
     for c in digits.chars() {
-        value = value * 10 + i64::from(super::java_chars::decimal_digit(c)?);
-        if value > i64::from(i32::MAX) + 1 {
-            return None;
-        }
+        value = value
+            .checked_mul(10)?
+            .checked_add(i64::from(super::java_chars::decimal_digit(c)?))?;
     }
     i32::try_from(if negative { -value } else { value }).ok()
 }

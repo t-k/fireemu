@@ -50,7 +50,7 @@ usage:
   fireemu up [options]
   fireemu emulators:start [options]
 
-Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.
+Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured; the Realtime Database when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.
 
 options:
   --config <file>

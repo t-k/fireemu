@@ -70,7 +70,10 @@ The answers follow production as recorded by fireemu's production observations (
 | `collectionId` or `parent` of a collection reference, or `documentId` of a subcollection | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
 | An array or map literal holding expressions in another shape than a map of fields and literals, a map of one map of fields, a map of one function or an array of one field, or used as a function argument | `UNIMPLEMENTED` | `INVALID_ARGUMENT` |
 
-Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.
+| An invalid, empty or 1500-byte alias in `add_fields`, `distinct` or `aggregate`, or an empty alias map of `select`, `add_fields`, `distinct` or `aggregate` | `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the official emulator's text, in its order (every alias before an empty map), before the stage is refused as unsupported |
+| An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
+
+Every other function and stage is refused with `UNIMPLEMENTED`, after the argument checks in the table above, never ignored.
 
 ## Composite indexes
 

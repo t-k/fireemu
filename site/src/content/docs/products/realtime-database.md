@@ -23,6 +23,8 @@ npx fireemu exec --only database -- npm test
 }
 ```
 
+Since v0.29.0 a `firebase.json` with `emulators.database`, which `firebase init` writes, starts the database where earlier versions only reported it. A busy port stops the start (`error: bind 127.0.0.1:9000: Address already in use`); 9000 is also PHP-FPM's default, so choose another with `--database-port` or `emulators.database.port`, or leave the database out with `--only`.
+
 The start banner shows the address and the rules in force:
 
 ```text
@@ -32,7 +34,9 @@ The start banner shows the address and the rules in force:
 
 ## Connect
 
-`fireemu exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the command it runs, and the Admin SDK reads it. Web and mobile clients connect explicitly:
+`fireemu exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the command it runs, and the Admin SDK reads it.
+
+`exec` also sets `FIREBASE_CONFIG` with the `databaseURL` `https://<project>.firebaseio.com`, as firebase-tools does, so an Admin SDK app initialized without options reads and writes the instance `<project>`, not `<project>-default-rtdb`, which the single rules form and the client example below use. Pass `databaseURL: 'https://<project>-default-rtdb.firebaseio.com'` to `initializeApp` to share an instance with clients. Web and mobile clients connect explicitly:
 
 ```js
 import { initializeApp } from 'firebase/app';
@@ -87,9 +91,9 @@ Rules are evaluated as the official emulator evaluates them: `.read`, `.write`, 
 | Credential | `emulator` profile | `strict` profile (the default) |
 |---|---|---|
 | `Authorization: Bearer owner` (the Admin SDK against an emulator) | Administrator; rules do not apply | Administrator; rules do not apply |
-| Any other `Authorization: Bearer` or `access_token` | Administrator, as on the official emulator (safe only because the listener is loopback) | Refused with 401 |
+| Any other `Authorization: Bearer` or `access_token` | Administrator, as on the official emulator. The listener is on loopback unless `network.allowNonLoopbackHosts` publishes it; see [CI and containers](../../guides/ci-and-containers/) first | Refused with 401 |
 | `auth=<ID token>` signed by Fireemu's Auth | The user it names, its custom claims as members of `auth` | The user it names, when the token is for the instance's project |
-| `auth=<unsigned ID token>` (`@firebase/rules-unit-testing`, `mockUserToken`) | The user its `sub` names, whatever project it names and with or without `aud`, as the official emulator reads it | The user it names when it has the `createMockUserToken` shape and the instance's project as audience, while `auth.allowUnsignedIdTokens` is `true` (the default; `false` under `productionExact`) |
+| `auth=<unsigned ID token>` (`@firebase/rules-unit-testing`, `mockUserToken`) | The user its `sub` names, whatever project it names and with or without `aud`, as the official emulator reads it, while `auth.allowUnsignedIdTokens` is `true` (the default; `false` under `productionExact`, which makes it anonymous) | The user it names when it has the `createMockUserToken` shape and the instance's project as audience, while `auth.allowUnsignedIdTokens` is `true` (the default; `false` under `productionExact`) |
 | Any other `auth=` value | Anonymous | Refused with 401 |
 
 `/.inspect/databases.json`, which `firebase emulators:export` reads, answers anyone under the `emulator` profile and only the `owner` credential under `strict` or with a locked database.
@@ -99,7 +103,7 @@ Rules are evaluated as the official emulator evaluates them: `.read`, `.write`, 
 An instance with no rules file follows `database.defaultAccess`:
 
 - `"open"` (the development default in both profiles): every request is allowed, as the official emulator serves a database without rules.
-- `"locked"` (the `productionExact` default, `strict` profile only): only the `owner` credential reads and writes, as a new production database in locked mode admits only administrators. Other administrator tokens are then held to the rules too.
+- `"locked"` (the `productionExact` default, `strict` profile only): only the `owner` credential reads and writes, as a new production database in locked mode admits only administrators. Every other credential, a signed-in user's included, is refused with 401.
 
 ```toml
 schemaVersion = 1
@@ -128,7 +132,7 @@ await assertFails(alice.ref('users/bob').set({ name: 'Mallory' }));
 await testEnv.cleanup();
 ```
 
-Run it with `npx fireemu exec --only database -- node test.mjs`. To test production's refusal of unsigned tokens, set `auth.allowUnsignedIdTokens` to `false` or set [`productionExact`](../../guides/profiles/).
+Run it with `npx fireemu exec --only database -- node test.mjs`. To test production's refusal of unsigned tokens, set `auth.allowUnsignedIdTokens` to `false` or set [`productionExact`](../../guides/profiles/). The realtime connection then refuses the mock token (`invalid_token`) and the SDK keeps retrying, so a read or write from `authenticatedContext()` does not settle instead of failing; check the refusal over REST (`?auth=<token>` answers 401) or give the assertion a timeout.
 
 ### Limits
 
@@ -187,7 +191,7 @@ emulator-data/
 
 `--import` writes each file as the `owner` credential with `disableTriggers=true`, as firebase-tools does, before the command starts. The file name, lowercased, is the instance. A file named after an invalid instance, or one the database would refuse (invalid JSON, an invalid key, data nested too deep), stops the start before any other product's data is installed. An export's database section is skipped, with a note, when the database is not selected.
 
-Session snapshots and resets include the instances of the session's project. A restore is seen by open listeners and event streams, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
+Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
 
 ## Not supported yet
 

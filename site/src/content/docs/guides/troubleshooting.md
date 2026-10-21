@@ -21,6 +21,7 @@ npx fireemu doctor --connect http://127.0.0.1:<port>
 
 | Symptom | What to check |
 |---|---|
+| Startup fails with `bind 127.0.0.1:9000: Address already in use` | Your `firebase.json` has `emulators.database`, so the Realtime Database starts on 9000, which another process (PHP-FPM by default) holds. Use `--database-port`, or leave it out with `--only`. |
 | Your `firebase.json` or `fireemu.toml` is not used | The `config:` line of the startup output names the files that were loaded. See [Which files are loaded](../configuration/#which-files-are-loaded), and the ownership rule if you run in a container or with `sudo`. |
 | Every Firestore or Storage request is denied | Under `strict`, a project without Security Rules refuses client requests, as production does. Check the `firestore rules:` and `storage rules:` startup lines. See [Security Rules](../security-rules/). |
 | A request is denied and you do not know why | Read the `note: firestore: Security Rules denied ...` line on standard error, or the Rules page of the UI. |

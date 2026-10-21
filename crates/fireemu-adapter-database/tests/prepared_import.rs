@@ -187,8 +187,7 @@ fn an_import_checked_against_other_limits_is_not_installed() {
 
 #[test]
 fn a_prepared_import_holds_its_tree_in_a_bounded_size() {
-    // A size regression check on what `--import` keeps between reading and installing: the
-    // built tree, not the text or a parsed copy. 2,000 objects of five members each.
+    // Check the retained tree size estimate for 2,000 objects of five members each.
     let mut text = String::from("{\"users\":{");
     for i in 0..2_000 {
         if i > 0 {
@@ -206,12 +205,33 @@ fn a_prepared_import_holds_its_tree_in_a_bounded_size() {
     text.push_str("}}");
     let import = prepare_import("p", text.clone(), &Limits::default()).unwrap();
     let held = import.retained_bytes();
-    // At least every key and string it holds, at most a few times the text.
+    // The measured estimate/text ratio is 1057921 / 200137 = 5.285984100890889; ceil + 1 gives 7.
     assert!(held >= text.len() as u64, "{held}");
     assert!(
-        held <= 8 * text.len() as u64,
+        held <= 7 * text.len() as u64,
         "{held} bytes held for {} bytes of text",
         text.len()
+    );
+}
+
+#[test]
+fn a_built_import_holds_neither_its_text_nor_a_parsed_copy() {
+    let text = format!(r#"{{"k":"v","n":1}}{}"#, " ".repeat(100_000));
+    let import = prepare_import("p", text, &Limits::default()).unwrap();
+    let debug = format!("{import:?}");
+    assert!(
+        debug.len() < 2_000,
+        "the built import retains its padded text"
+    );
+    assert!(
+        !debug.contains("Object("),
+        "the built import retains parsed JSON"
+    );
+    let mut db = Database::new(RestOptions::default(), 1);
+    db.install_import(import, NOW).unwrap();
+    assert_eq!(
+        db.export_texts(),
+        vec![("p".to_owned(), r#"{"k":"v","n":1}"#.to_owned())]
     );
 }
 

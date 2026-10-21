@@ -2832,7 +2832,7 @@ fn read_database_section_within(
         let import = fireemu_adapter_database::rest::prepare_import(
             &namespace,
             text,
-            &fireemu_adapter_database::rest::RestOptions::default().limits,
+            &fireemu_adapter_database::rest::WRITE_LIMITS,
         )
         .map_err(|e| ArtifactError::new("database", &path, e))?;
         namespaces.push(import);
@@ -5242,6 +5242,27 @@ mod tests {
             installed(super::read_database_section(root.path(), &section).unwrap()),
             vec![("good".to_owned(), r#"{"x":1}"#.to_owned())]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_import_checks_the_limits_the_database_writes_with() {
+        let root = budget_dir("database-write-limits");
+        let section_dir = root.path().join("database_export");
+        std::fs::create_dir_all(&section_dir).unwrap();
+        let depth = fireemu_adapter_database::rest::WRITE_LIMITS.max_depth + 1;
+        let text = format!("{}1{}", r#"{"a":"#.repeat(depth), "}".repeat(depth));
+        std::fs::write(section_dir.join("deep.json"), text).unwrap();
+        let section = fireemu_core_export::metadata::Section {
+            version: "4.11.2".to_owned(),
+            path: "database_export".to_owned(),
+            metadata_file: None,
+        };
+        let refused = super::read_database_section(root.path(), &section)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("database_export/deep.json"), "{refused}");
+        assert!(refused.contains("Invalid data"), "{refused}");
     }
 
     /// What the prepared Realtime Database files install into an empty database.

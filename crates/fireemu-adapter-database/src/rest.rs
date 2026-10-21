@@ -121,6 +121,9 @@ pub enum RulesMode {
     DenyAll,
 }
 
+/// The limits the served database writes with and imports are checked against.
+pub const WRITE_LIMITS: Limits = Limits::PRODUCTION;
+
 /// Options of the REST layer.
 #[derive(Debug, Clone)]
 pub struct RestOptions {
@@ -142,7 +145,7 @@ impl Default for RestOptions {
         Self {
             default_namespace: "fake-server".to_owned(),
             rules: RulesMode::AllowAll,
-            limits: Limits::default(),
+            limits: WRITE_LIMITS,
             realtime_message_bytes: 16 * 1024 * 1024,
             inspect_needs_owner: false,
         }

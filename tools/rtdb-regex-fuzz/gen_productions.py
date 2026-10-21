@@ -34,6 +34,22 @@ def required(edges=False):
     names += ["format " + p for p in ["after_backslash", "in_escape", "in_string_body",
                                       "in_number", "in_operator", "in_name", "in_regex",
                                       "after_regex_backslash", "in_flags"]]
+    names += ["name " + n for n in ["start Lu", "start Ll", "start Lt", "start Lm", "start Lo",
+                                    "start Nl", "start Sc", "start Pc", "part Mn", "part Mc",
+                                    "part Nd", "part Pc", "part ignorable", "part ignorable_c1",
+                                    "neither No", "neither No_fraction",
+                                    "neither Other_Alphabetic", "neither So_letter",
+                                    "neither astral_letter", "neither newer_than_java"]]
+    names += ["name_place " + p for p in ["member", "variable", "inside"]]
+    names += ["update --5", "update 5--1", "update 5", "update -", "update ++5",
+              "update auth.uid--", "update data.val()--1"]
+    names += ["regex_terminator " + t for t in ["LF", "CR", "CRLF", "LS", "PS"]]
+    names += ["relation " + o for o in ["<", "<=", ">", ">="]]
+    names += ["keyword_member " + m for m in ["length", "val", "child", "exists", "contains",
+                                              "matches", "parent", "true", "null", "if",
+                                              "return", "typeof", "auth", "now"]]
+    names += ["comment_split " + c for c in ["/* a *", "true /", "1 /F* ", "'x'.ma", "/*F*/ ",
+                                             "true /"]]
     if edges:
         names += ["edge " + e for e in ["|", ")", "*", "+", "?", "{", "{2}", "}", "()", "**",
                                         "\\\\", "{1,", "{,2}"]]

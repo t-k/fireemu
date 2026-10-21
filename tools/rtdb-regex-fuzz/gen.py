@@ -246,7 +246,76 @@ def operator():
     return op
 
 
+# Name characters by Java class (review r8 S22): starts, parts, and characters that are
+# neither there although Unicode calls some of them letters or digits.
+NAME_CHARS = {
+    "start Lu": "\u00c9", "start Ll": "\u00e9", "start Lt": "\u01c5", "start Lm": "\u02b0",
+    "start Lo": "\u05d0", "start Nl": "\u2160", "start Sc": "\u20ac", "start Pc": "_",
+    "part Mn": "\u0300", "part Mc": "\u0903", "part Nd": "\u0663", "part Pc": "\u203f",
+    "part ignorable": "\u0001", "part ignorable_c1": "\u009f",
+    "neither No": "\u00b2", "neither No_fraction": "\u00bd", "neither Other_Alphabetic": "\u0345",
+    "neither So_letter": "\u24d0", "neither astral_letter": "\U0001d41a",
+    "neither newer_than_java": "\u1c89",
+}
+VALUES = ["null", "data.child('x').val()", "true", "5", "-0", "'a'", "''",
+          "data.child('o').val()", "data", "auth", "auth.uid", "(0 / 0)"]
+
+
+def name_expression():
+    name = rng.choice(list(NAME_CHARS))
+    used["name " + name] += 1
+    c = NAME_CHARS[name]
+    where = rng.choice(["member", "variable", "inside"])
+    used["name_place " + where] += 1
+    return {
+        "member": f"auth.token.{c}x == null",
+        "variable": f"$x{c} == 'k'" if not name.startswith("start") else f"{c}x == null",
+        "inside": f"auth.u{c}id == 'u1'",
+    }[where]
+
+
+def keyword_member():
+    member = rng.choice(["length", "val", "child", "exists", "contains", "matches", "parent",
+                         "true", "null", "if", "return", "typeof", "auth", "now"])
+    receiver = rng.choice(["auth.token", "data.val()", "'Hello'", "data", "root.child('t')"])
+    used["keyword_member " + member] += 1
+    return f"{receiver}.{member} == null"
+
+
+def update_operator():
+    shape = rng.choice(["--5 == 5", "5--1 == 6", "5 -- 1 == 6", "5 - -1 == 6", "- -5 == 5",
+                        "5 -F-1 == 6", "++5 == 5", "auth.uid-- == 1", "data.val()--1 == 6"])
+    used["update " + shape.split()[0]] += 1
+    return shape.replace("F", fmt())
+
+
+def split_comment():
+    shape = rng.choice(["/* a *F/ false && */ true", "true /F/ && false", "1 /F* 2 */ == 1",
+                        "'x'.matches(/F/) || true", "/*F*/ true", "true /* x *F/ && false */"])
+    used["comment_split " + shape[:6]] += 1
+    return shape.replace("F", fmt())
+
+
+def regex_terminator():
+    name = rng.choice(list(TERMINATORS))
+    t = TERMINATORS[name]
+    where = rng.choice([f"/a{t}b/", f"/[{t}]/", f"/ab{t}/", f"/a\\{t}b/"])
+    used["regex_terminator " + name] += 1
+    return f"'ab'.matches({where})"
+
+
+def relation():
+    op = rng.choice(["<", "<=", ">", ">="])
+    left, right = rng.choice(VALUES), rng.choice(VALUES)
+    used["relation " + op] += 1
+    return f"{left} {op} {right}"
+
+
 def lexer_expression():
+    roll = rng.random()
+    if roll < 0.6:
+        return rng.choices([name_expression, keyword_member, update_operator, split_comment,
+                            regex_terminator, relation], weights=[3, 2, 1, 1, 1, 1])[0]()
     roll = rng.random()
     if roll < 0.35:
         return f"{string_literal()} {operator()} {string_literal()}"
@@ -270,7 +339,7 @@ def lexer_expression():
 rows = []
 seen = set()
 while len(rows) < 2 * count:
-    if rng.random() < 0.4:
+    if rng.random() < 0.5:
         expr = lexer_expression()
         if expr in seen:
             continue

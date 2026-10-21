@@ -23,7 +23,10 @@ export default defineConfig({
 			title: 'Fireemu',
 			description:
 				'A local Firebase emulator for tests and CI that follows production Firebase behavior.',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/t-k/fireemu' }],
+			social: [
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/t-k/fireemu' },
+				{ icon: 'npm', label: 'npm', href: 'https://www.npmjs.com/package/fireemu' },
+			],
 			editLink: { baseUrl: 'https://github.com/t-k/fireemu/edit/main/site/' },
 			lastUpdated: false,
 			customCss: ['./src/styles/custom.css'],

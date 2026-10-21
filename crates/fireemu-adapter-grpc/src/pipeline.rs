@@ -1159,14 +1159,24 @@ fn collection_name_error(name: &str) -> Option<String> {
     let segments: Vec<&str> = path.split('/').collect();
     let mut offset = 1;
     for (at, segment) in segments.iter().enumerate() {
+        let (id, which) = if at % 2 == 0 {
+            ("collection id", "Collection")
+        } else {
+            ("resource id", "Resource")
+        };
         if segment.is_empty() && at + 1 < segments.len() {
-            let id = if at % 2 == 0 {
-                "collection id"
-            } else {
-                "resource id"
-            };
             return Some(format!(
                 "Collection name \"{name}\" lacks a {id} at index {offset}."
+            ));
+        }
+        if matches!(*segment, "." | "..") {
+            return Some(format!(
+                "Collection name \"{name}\" contains a {id} \"{segment}\" at index {offset}."
+            ));
+        }
+        if is_reserved_name(segment) {
+            return Some(format!(
+                "{which} id \"{segment}\" is invalid because it is reserved."
             ));
         }
         offset += units(segment) + 1;
@@ -1176,11 +1186,17 @@ fn collection_name_error(name: &str) -> Option<String> {
             "Collection name \"{name}\" has invalid trailing \"/\"."
         ));
     }
-    (segments.len() % 2 == 0).then(|| {
-        format!(
+    if segments.len() % 2 == 0 {
+        return Some(format!(
             "Collection name \"{name}\" lacks \"/\" at index {}.",
             units(name)
-        )
+        ));
+    }
+    let at = segments.iter().position(|id| id.len() > MAX_ID_BYTES)?;
+    Some(if at % 2 == 0 {
+        "The kind / collection group can be at most 1,500 bytes.".to_owned()
+    } else {
+        "Path element can be at most 1,500 bytes.".to_owned()
     })
 }
 
@@ -1424,7 +1440,7 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
+                if key.is_empty() || (looks_reserved(key) && key != "__type__") {
                     *refusable += 1;
                 }
                 // Production answered a string `__type__` alone in its map only (O-4
@@ -2137,14 +2153,22 @@ fn is_plain_key(key: &str) -> bool {
     let mut chars = key.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !is_reserved_name(key)
+        && !looks_reserved(key)
 }
 
 /// The most fields one `select` stage sets.
 const MAX_SELECT_FIELDS: usize = 64;
 
-/// A name like `__x__`, which Firestore reserves.
+/// A name like `__x__`, which Firestore reserves. `____` itself is not: the official emulator
+/// (1.22.0, probed 2026-10-21) accepts it as a collection id, a document id, a literal map key
+/// and an alias, and refuses `_____`.
 fn is_reserved_name(segment: &str) -> bool {
+    segment.len() > 4 && segment.starts_with("__") && segment.ends_with("__")
+}
+
+/// Whether a name starts and ends with `__`, `____` included: the strict recorded-shape gates
+/// keep treating `____` as reserved, since production is unobserved for it.
+fn looks_reserved(segment: &str) -> bool {
     segment.len() >= 4 && segment.starts_with("__") && segment.ends_with("__")
 }
 
@@ -2340,6 +2364,11 @@ mod tests {
             (d.to_owned(), None),
             (format!("{d}/c/{a1500}"), None),
             (format!("{d}/{a1500}/d"), None),
+            (format!("{d}/____/____"), None),
+            (
+                format!("{d}/c/_____"),
+                Some("Resource id \"_____\" is invalid because it is reserved.".to_owned()),
+            ),
             (
                 format!("{d}/__x__/d"),
                 Some("Collection id \"__x__\" is invalid because it is reserved.".to_owned()),
@@ -2547,6 +2576,7 @@ mod tests {
     /// The collection stage's reference, as the official emulator 1.22.0 answered each form
     /// (probed 2026-10-21).
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn collection_names_get_the_official_texts() {
         let d = "projects/demo-app/databases/(default)/documents";
         let lacks = |name: &str, at: usize| {
@@ -2586,6 +2616,83 @@ mod tests {
             (
                 "/ab//d/e/".to_owned(),
                 Some("Collection name \"/ab//d/e/\" lacks a resource id at index 4.".to_owned()),
+            ),
+            (
+                "/.".to_owned(),
+                Some(
+                    "Collection name \"/.\" contains a collection id \".\" at index 1.".to_owned(),
+                ),
+            ),
+            (
+                "/c/../s".to_owned(),
+                Some(
+                    "Collection name \"/c/../s\" contains a resource id \"..\" at index 3."
+                        .to_owned(),
+                ),
+            ),
+            (
+                "/c/d/.".to_owned(),
+                Some(
+                    "Collection name \"/c/d/.\" contains a collection id \".\" at index 5."
+                        .to_owned(),
+                ),
+            ),
+            (
+                "/.//d".to_owned(),
+                Some(
+                    "Collection name \"/.//d\" contains a collection id \".\" at index 1."
+                        .to_owned(),
+                ),
+            ),
+            (
+                "/./".to_owned(),
+                Some(
+                    "Collection name \"/./\" contains a collection id \".\" at index 1.".to_owned(),
+                ),
+            ),
+            (
+                "/c//.".to_owned(),
+                Some("Collection name \"/c//.\" lacks a resource id at index 3.".to_owned()),
+            ),
+            (
+                "/__c__//d".to_owned(),
+                Some("Collection id \"__c__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                "/__c__/".to_owned(),
+                Some("Collection id \"__c__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                "/c/__d__".to_owned(),
+                Some("Resource id \"__d__\" is invalid because it is reserved.".to_owned()),
+            ),
+            ("/____".to_owned(), None),
+            ("/__x".to_owned(), None),
+            (format!("/{}", "a".repeat(1500)), None),
+            (format!("/c/{}/s", "a".repeat(1500)), None),
+            (
+                format!("/{}", "a".repeat(1501)),
+                Some("The kind / collection group can be at most 1,500 bytes.".to_owned()),
+            ),
+            (
+                format!("/{}", "é".repeat(751)),
+                Some("The kind / collection group can be at most 1,500 bytes.".to_owned()),
+            ),
+            (
+                format!("/c/{}/s", "a".repeat(1501)),
+                Some("Path element can be at most 1,500 bytes.".to_owned()),
+            ),
+            (
+                format!("/c/{}/__d__", "a".repeat(1501)),
+                Some("Collection id \"__d__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("/{}/", "a".repeat(1501)),
+                trailing(&format!("/{}/", "a".repeat(1501))),
+            ),
+            (
+                format!("/c/{}", "a".repeat(1501)),
+                lacks(&format!("/c/{}", "a".repeat(1501)), 1504),
             ),
         ] {
             assert_eq!(collection_name_error(&name), want, "{name}");

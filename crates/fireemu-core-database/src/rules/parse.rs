@@ -7,6 +7,8 @@
 //! one. Positions are character offsets into the expression text; the caller maps them to
 //! the line and column of the rules file.
 
+use super::java_chars;
+
 /// A syntax or type error, at a character offset of the expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExprError {
@@ -35,9 +37,9 @@ enum Token {
     End,
 }
 
-const PUNCTUATION: [&str; 26] = [
-    "===", "!==", "==", "!=", "<=", ">=", "&&", "||", "(", ")", "[", "]", "{", "}", ".", ",", ";",
-    "?", ":", "!", "+", "-", "*", "/", "%", "<",
+const PUNCTUATION: [&str; 28] = [
+    "===", "!==", "--", "++", "==", "!=", "<=", ">=", "&&", "||", "(", ")", "[", "]", "{", "}",
+    ".", ",", ";", "?", ":", "!", "+", "-", "*", "/", "%", "<",
 ];
 
 /// A binary operator.
@@ -222,9 +224,19 @@ impl Lexer<'_> {
     /// the line and `/* … */`. A `/` followed by `/` or `*` never starts a regular expression.
     fn skip_space(&mut self) -> Result<(), ExprError> {
         loop {
-            match (self.chars.get(self.at), self.chars.get(self.at + 1)) {
-                (Some(&c), _) if is_space(c) => self.at += 1,
-                (Some('/'), Some('/')) => {
+            let Some(&c) = self.chars.get(self.at) else {
+                return Ok(());
+            };
+            if is_space(c) {
+                self.at += 1;
+                continue;
+            }
+            // The reader skips format characters while it reads `//`, `/*` and `*/` too
+            // (review r8 M20).
+            let second = self.past_format(self.at + 1);
+            match (c, self.chars.get(second)) {
+                ('/', Some('/')) => {
+                    self.at = second;
                     while self
                         .chars
                         .get(self.at)
@@ -233,18 +245,39 @@ impl Lexer<'_> {
                         self.at += 1;
                     }
                 }
-                (Some('/'), Some('*')) => {
-                    let body = self.at + 2;
-                    let end = (body..self.chars.len().saturating_sub(1))
-                        .find(|&i| self.chars[i] == '*' && self.chars[i + 1] == '/');
-                    let Some(end) = end else {
-                        return Err(ExprError::new(self.chars.len(), "unterminated comment"));
-                    };
-                    self.at = end + 2;
+                ('/', Some('*')) => {
+                    let mut i = second + 1;
+                    loop {
+                        match self.chars.get(i) {
+                            None => {
+                                return Err(ExprError::new(
+                                    self.chars.len(),
+                                    "unterminated comment",
+                                ));
+                            }
+                            Some('*') => {
+                                let after = self.past_format(i + 1);
+                                if self.chars.get(after) == Some(&'/') {
+                                    self.at = after + 1;
+                                    break;
+                                }
+                                i += 1;
+                            }
+                            Some(_) => i += 1,
+                        }
+                    }
                 }
                 _ => return Ok(()),
             }
         }
+    }
+
+    /// The first index from `i` on that holds no format character.
+    fn past_format(&self, mut i: usize) -> usize {
+        while self.chars.get(i).copied().is_some_and(is_format) {
+            i += 1;
+        }
+        i
     }
 
     /// The next token and where it starts. `regex_allowed` is true where an operand is
@@ -264,14 +297,17 @@ impl Lexer<'_> {
         if c == '/' && regex_allowed {
             return self.regex(start);
         }
-        if c.is_alphabetic() || c == '_' || c == '$' {
+        // Names follow Java's identifier classes, as the reader there reads them (review r8
+        // M18); a character outside the Basic Multilingual Plane is never one.
+        if java_chars::is_identifier_start(c) {
             let mut name = String::new();
             while let Some(&c) = self.chars.get(self.at) {
-                if c.is_alphanumeric() || c == '_' || c == '$' {
-                    name.push(c);
-                    self.at += 1;
-                } else if is_format(c) {
+                if is_format(c) {
                     // Dropped from the name (`tr\u{200b}ue` is `true`).
+                    self.at += 1;
+                } else if c != '\u{feff}' && java_chars::is_identifier_part(c) {
+                    // (U+FEFF is white space to the reader, so it ends the name.)
+                    name.push(c);
                     self.at += 1;
                 } else {
                     break;
@@ -358,11 +394,9 @@ impl Lexer<'_> {
             let saved = self.at;
             self.at += 1;
             if next_is(self, &|c| matches!(c, 'x' | 'X')).is_some() {
-                let hex = digits(self, 16);
-                #[allow(clippy::cast_precision_loss)]
-                return u64::from_str_radix(&hex, 16)
-                    .map(|n| (start, Token::Number(n as f64)))
-                    .map_err(|_| ExprError::new(start, "Unsupported javascript syntax."));
+                // Read into a double, as there: any length, and `0x` alone is 0 (review r8
+                // S21).
+                return Ok((start, Token::Number(radix_value(&digits(self, 16), 16))));
             }
             let octal = digits(self, 10);
             if let Some(bad) = octal.chars().find(|c| matches!(c, '8' | '9')) {
@@ -375,10 +409,7 @@ impl Lexer<'_> {
                 ));
             }
             if !octal.is_empty() {
-                #[allow(clippy::cast_precision_loss)]
-                return u64::from_str_radix(&octal, 8)
-                    .map(|n| (start, Token::Number(n as f64)))
-                    .map_err(|_| ExprError::new(start, "Unsupported javascript syntax."));
+                return Ok((start, Token::Number(radix_value(&octal, 8))));
             }
             self.at = saved;
         }
@@ -540,6 +571,13 @@ impl Lexer<'_> {
                 // Dropped from the pattern, as there.
                 continue;
             }
+            if is_line_terminator(c) {
+                // A line ends the literal there (review r8 M21).
+                return Err(ExprError::new(
+                    self.at - 1,
+                    "unterminated regular expression literal",
+                ));
+            }
             match c {
                 '\\' => {
                     pattern.push(c);
@@ -589,40 +627,50 @@ impl Lexer<'_> {
     }
 }
 
+/// The value of `digits` in `radix`, accumulated in a double as the JavaScript reader does.
+fn radix_value(digits: &str, radix: u32) -> f64 {
+    digits.chars().fold(0.0, |value, digit| {
+        value * f64::from(radix) + f64::from(digit.to_digit(radix).unwrap_or(0))
+    })
+}
+
+/// The official emulator's refusal of `--` or `++` (`op`) on `operand`: a name or member
+/// is a valid operand that the rules forbid, anything else an invalid one.
+fn update_refusal(op: &str, operand: &Expr, at: usize) -> ExprError {
+    let assignable = matches!(
+        operand.kind,
+        ExprKind::Name(_) | ExprKind::Member(..) | ExprKind::Index(..)
+    );
+    let message = match (assignable, op) {
+        (true, _) => format!("Rule expressions may not contain '{op}' operator."),
+        (false, "--") => "Invalid decrement operand.".to_owned(),
+        (false, _) => "Invalid increment operand.".to_owned(),
+    };
+    ExprError::new(at, message)
+}
+
 /// Whether `c` ends a line (and so a string literal or a `//` comment) there.
 fn is_line_terminator(c: char) -> bool {
     matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
 }
 
-/// Whether `c` separates tokens as on the official emulator (recorded 2026-10-21): Unicode
-/// white space and line terminators except U+0085, which it reads as part of a name, U+FEFF,
-/// and the format characters it skips (see [`is_format`]).
+/// Whether `c` separates tokens as on the official emulator's JavaScript reader (Rhino on
+/// Java 21): tab, vertical tab, form feed, space, U+00A0, U+FEFF and Java's space separators;
+/// the line terminators; and the format characters it skips (see [`is_format`]). U+0085 is
+/// none of these there (it is part of a name).
 fn is_space(c: char) -> bool {
-    (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}' || is_format(c)
+    matches!(c, '\t' | '\u{b}' | '\u{c}' | ' ' | '\u{a0}' | '\u{feff}')
+        || java_chars::is_space_separator(c)
+        || is_line_terminator(c)
+        || is_format(c)
 }
 
-/// The format characters (Unicode category Cf) the official emulator's JavaScript reader
-/// drops from names and regular-expression literals and skips between tokens (recorded
-/// 2026-10-21 on Java 21; a string literal keeps them, and U+FEFF is only white space there).
-/// The reader works on UTF-16 units, so no character outside the Basic Multilingual Plane is
-/// one: those are refused, as there. This is Java 21's list of Cf characters in that plane.
+/// The format characters the official emulator's reader drops from names and
+/// regular-expression literals and skips between tokens: Java's FORMAT characters above
+/// U+007F, U+FEFF aside (white space there). A string literal keeps them. The reader works on
+/// UTF-16 units, so no character outside the Basic Multilingual Plane is one.
 fn is_format(c: char) -> bool {
-    matches!(
-        c,
-        '\u{ad}'
-            | '\u{600}'..='\u{605}'
-            | '\u{61c}'
-            | '\u{6dd}'
-            | '\u{70f}'
-            | '\u{890}'..='\u{891}'
-            | '\u{8e2}'
-            | '\u{180e}'
-            | '\u{200b}'..='\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{206f}'
-            | '\u{fff9}'..='\u{fffb}'
-    )
+    u32::from(c) > 0x7F && c != '\u{feff}' && java_chars::is_format(c)
 }
 
 /// The groups and counted repetitions of a pattern, as the official emulator checks them. It
@@ -979,9 +1027,7 @@ impl Parser<'_> {
                 let number = matches!(token, Token::Number(_));
                 let mut end = at + 1;
                 while end < chars.len()
-                    && (chars[end].is_alphanumeric()
-                        || matches!(chars[end], '_' | '$')
-                        || (number && chars[end] == '.'))
+                    && (java_chars::is_identifier_part(chars[end]) || (number && chars[end] == '.'))
                 {
                     end += 1;
                 }
@@ -1121,6 +1167,13 @@ impl Parser<'_> {
                     kind: ExprKind::Neg(Box::new(operand)),
                 })
             }
+            Token::Punct(op @ ("--" | "++")) => {
+                // The JavaScript reader parses a prefix decrement or increment; the rules
+                // refuse it (review r8 M19).
+                self.next()?;
+                let operand = self.unary()?;
+                Err(update_refusal(op, &operand, at))
+            }
             Token::Name(name) if name == "typeof" => Err(ExprError::new(
                 at,
                 "Rule expressions may not contain 'typeof' operator.",
@@ -1182,6 +1235,13 @@ impl Parser<'_> {
                 };
             } else {
                 self.depth -= steps;
+                // A postfix decrement or increment, refused as there; after a call the
+                // reader ends the statement instead, which the caller then refuses.
+                if let (at, Token::Punct(op @ ("--" | "++"))) = self.peek()?.clone() {
+                    if !matches!(expr.kind, ExprKind::Call(..)) {
+                        return Err(update_refusal(op, &expr, at));
+                    }
+                }
                 return Ok(expr);
             }
         }

@@ -13,6 +13,7 @@
 
 mod check;
 mod eval;
+mod java_chars;
 mod parse;
 mod pattern;
 
@@ -414,4 +415,70 @@ fn compile_node(spec: &RuleSpec, wildcards: &BTreeSet<String>) -> Result<RuleNod
         }
     }
     Ok(node)
+}
+
+#[cfg(test)]
+mod java_chars_tests {
+    //! The generated tables against the classes Java 21 printed, for every code unit of the
+    //! Basic Multilingual Plane (review r8 M18), and what the reader does with each.
+
+    use super::java_chars;
+
+    /// The fixture's ranges for `name`.
+    fn ranges(name: &str) -> Vec<(u32, u32)> {
+        let fixture = include_str!("../../tests/fixtures/java21-chars.txt");
+        let line = fixture
+            .lines()
+            .find(|line| line.split_whitespace().next() == Some(name))
+            .unwrap_or_else(|| panic!("{name} is in the fixture"));
+        line.split_whitespace()
+            .skip(1)
+            .map(|range| {
+                let (lo, hi) = range.split_once('-').unwrap();
+                (
+                    u32::from_str_radix(lo, 16).unwrap(),
+                    u32::from_str_radix(hi, 16).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_bmp_code_unit_is_classified_as_java_21_classifies_it() {
+        type Classify = fn(char) -> bool;
+        let classes: [(&str, Classify); 4] = [
+            ("identifier_start", java_chars::is_identifier_start),
+            ("identifier_part", java_chars::is_identifier_part),
+            ("space_separator", java_chars::is_space_separator),
+            ("format", java_chars::is_format),
+        ];
+        for (name, classify) in classes {
+            let ranges = ranges(name);
+            let mut checked = 0;
+            for code in 0..=0xFFFF_u32 {
+                let Some(c) = char::from_u32(code) else {
+                    continue; // a surrogate is no char here
+                };
+                let java = ranges.iter().any(|&(lo, hi)| (lo..=hi).contains(&code));
+                assert_eq!(classify(c), java, "{name} U+{code:04X}");
+                checked += 1;
+            }
+            assert_eq!(checked, 0x1_0000 - 0x800);
+        }
+    }
+
+    #[test]
+    fn nothing_outside_the_bmp_is_a_name_character() {
+        for c in [
+            '\u{1d41a}',
+            '\u{1d7ce}',
+            '\u{10400}',
+            '\u{1f600}',
+            '\u{e0001}',
+        ] {
+            assert!(!java_chars::is_identifier_start(c));
+            assert!(!java_chars::is_identifier_part(c));
+            assert!(!java_chars::is_format(c));
+        }
+    }
 }

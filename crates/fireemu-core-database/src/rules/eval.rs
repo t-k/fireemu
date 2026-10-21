@@ -365,8 +365,10 @@ fn plain_sigma_neighbour(c: Option<char>) -> bool {
     let Some(c) = c else {
         return true;
     };
-    let letter_block = matches!(c, 'A'..='Z' | 'a'..='z' | '\u{00C0}'..='\u{024F}' | '\u{0370}'..='\u{03FF}' | '\u{0400}'..='\u{04FF}')
-        && !matches!(c, '\u{00D7}' | '\u{00F7}');
+    let letter_block = matches!(
+        c,
+        'A'..='Z' | 'a'..='z' | '\u{00C0}'..='\u{024F}' | '\u{0370}'..='\u{04FF}'
+    );
     c == ' '
         || (letter_block
             && c.is_alphabetic()

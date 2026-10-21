@@ -594,7 +594,39 @@ mod java_chars_tests {
             assert_eq!(super::eval::java_case(text, true), None, "{text}");
             // Garay maps differently in both directions, so only the others uppercase.
             let garay = text.contains('\u{10D50}');
-            assert_eq!(super::eval::java_case(text, false).is_some(), !garay, "{text}");
+            assert_eq!(
+                super::eval::java_case(text, false).is_some(),
+                !garay,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_plain_sigma_neighbour_is_cased_and_no_case_ignorable() {
+        // A plain neighbour before `Σ` makes it final and one after keeps it medial, as a
+        // cased letter does in Java 21 (the recorded `case12` table checks each on the
+        // official emulator).
+        for c in (0..=0x04FF_u32).filter_map(char::from_u32) {
+            if c == ' ' || super::eval::java_case(&format!("{c}\u{03A3}"), true).is_none() {
+                continue;
+            }
+            assert_eq!(
+                super::eval::java_case(&format!("{c}\u{03A3}"), true)
+                    .unwrap()
+                    .chars()
+                    .last(),
+                Some('\u{03C2}'),
+                "{c:?}"
+            );
+            assert_eq!(
+                super::eval::java_case(&format!("\u{03A3}{c}"), true)
+                    .unwrap()
+                    .chars()
+                    .next(),
+                Some('\u{03C3}'),
+                "{c:?}"
+            );
         }
     }
 

@@ -2969,7 +2969,7 @@ fn export_on_exit_writes_where_the_preflight_resolved_the_path() {
     let output = exec()
         .args(["--export-on-exit"])
         .arg(link.join("out"))
-        .args(["--", "sh", "-c", &repoint])
+        .args(["--", "/bin/sh", "-c", &repoint])
         .output()
         .unwrap();
     let log = text(&output);

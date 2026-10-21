@@ -219,7 +219,7 @@ fn member<'a>(
             #[allow(clippy::cast_precision_loss)]
             Some(Value::Num(s.encode_utf16().count() as f64))
         }
-        Value::Query => Some(query_member(scope.query, name)),
+        Value::Query => Some(query_member(scope.query, scope.new_data.is_some(), name)),
         _ => None,
     }
 }
@@ -228,13 +228,14 @@ fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
     bound.map_or(Value::Null, |b| from_json(&b.value))
 }
 
-/// A member of `query`. A read without a query is ordered by key. `startAt` is the start
+/// A member of `query`. A read without a query is ordered by key; a write has no ordering at
+/// all (review r9 M24: `orderByKey` is false in `.write` and `.validate` there). `startAt` is the start
 /// bound, inclusive or not; `endAt` is an inclusive end bound only; `equalTo` is the start
 /// value when an inclusive end bound has the same value.
-fn query_member<'a>(query: Option<&QueryParams>, name: &str) -> Value<'a> {
+fn query_member<'a>(query: Option<&QueryParams>, writing: bool, name: &str) -> Value<'a> {
     let Some(q) = query else {
         return match name {
-            "orderByKey" => Value::Bool(true),
+            "orderByKey" => Value::Bool(!writing),
             "orderByValue" | "orderByPriority" => Value::Bool(false),
             _ => Value::Null,
         };

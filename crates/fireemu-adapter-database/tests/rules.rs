@@ -1646,3 +1646,46 @@ fn a_restore_or_a_reset_cancels_the_reads_its_data_no_longer_allows() {
         );
     }
 }
+
+#[test]
+fn a_write_has_no_key_ordering() {
+    // Review r9 M24, recorded on the official emulator: `query.orderByKey` is true for a read
+    // without a query and false in `.write` and `.validate`, over REST and the realtime
+    // protocol, onDisconnect writes included.
+    let user = format!("auth={}", token(r#"{"sub":"u1","uid":"u1"}"#));
+    for (rules, allowed) in [
+        (r#"{"rules":{".read":true,".write":"query.orderByKey"}}"#, false),
+        (r#"{"rules":{".read":true,".write":"!query.orderByKey"}}"#, true),
+        (r#"{"rules":{".read":true,".write":"query.orderByKey == false"}}"#, true),
+        (r#"{"rules":{".read":true,".write":true,".validate":"query.orderByKey"}}"#, false),
+        (r#"{"rules":{".read":true,".write":true,".validate":"!query.orderByKey"}}"#, true),
+        (r#"{"rules":{".read":"query.orderByKey"}}"#, true),
+    ] {
+        let mut db = db();
+        load(&mut db, "ok", rules);
+        let reading = rules.contains(r#"".read":"query"#);
+        let expected = if allowed { 200 } else { 401 };
+        if reading {
+            assert_eq!(call(&mut db, "GET", "/a.json?ns=ok", &[], "").0, expected, "{rules}");
+            continue;
+        }
+        for credential in ["", user.as_str()] {
+            let target = format!("/a.json?ns=ok&{credential}");
+            assert_eq!(call(&mut db, "PUT", &target, &[], "1").0, expected, "{rules}");
+        }
+        let mut session = open(&mut db, "ok");
+        let status = if allowed { "ok" } else { "permission_denied" };
+        assert!(
+            send(&mut db, &mut session, 1, "p", r#"{"p":"/b","d":1}"#)
+                .iter()
+                .any(|frame| frame.contains(&format!(r#""s":"{status}""#))),
+            "{rules}"
+        );
+        assert!(
+            send(&mut db, &mut session, 2, "o", r#"{"p":"/c","d":1}"#)
+                .iter()
+                .any(|frame| frame.contains(&format!(r#""s":"{status}""#))),
+            "{rules}"
+        );
+    }
+}

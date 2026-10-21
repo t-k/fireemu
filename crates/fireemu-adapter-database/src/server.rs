@@ -33,7 +33,7 @@ use tokio_stream::StreamExt as _;
 
 use crate::realtime::{split_frames, Opened, Prepared, Received, Session};
 use crate::rest::{
-    parse_body, refusal_response, Database, Handled, HttpRequest, HttpResponse, SseEvent,
+    parse_body, refusal_response, Database, Handled, HttpRequest, HttpResponse, Peer, SseEvent,
 };
 use crate::target_escape::TargetEscaper;
 use crate::websocket::{
@@ -237,23 +237,7 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
     }
 }
 
-/// The answer to a peer on another host for a route that answers loopback peers only: the
-/// rules route, as Fireemu's Firestore and Storage rules routes (ruling 17). Under the
-/// emulator profile any bearer token is an administrator, so off loopback a remote peer could
-/// otherwise read or replace the rules.
-fn remote_refusal(remote: bool, path: &str) -> Option<HttpResponse> {
-    (remote && path.starts_with("/.settings/")).then(|| {
-        crate::rest::refusal_response(&crate::request::Refusal::new(
-            403,
-            "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not the control API, rule loading, data clearing or App Check debug-token management",
-        ))
-    })
-}
-
 async fn answer(shared: &Arc<Shared>, request: Request<Incoming>, remote: bool) -> Response<Body> {
-    if let Some(refusal) = remote_refusal(remote, request.uri().path()) {
-        return full(refusal);
-    }
     if is_websocket_upgrade(&request) {
         return upgrade(shared, request);
     }
@@ -295,7 +279,8 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>, remote: bool) 
         .database
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    match database.handle_parsed(&request, parsed, now) {
+    let peer = if remote { Peer::Remote } else { Peer::Loopback };
+    match database.handle_from(&request, parsed, now, peer) {
         Handled::Response { response, events } => {
             deliver(shared, &mut database, events);
             full(response)
@@ -723,36 +708,6 @@ async fn run_realtime<S: AsyncRead + AsyncWrite + Unpin>(
 mod tests {
     use super::*;
     use crate::rest::RestOptions;
-
-    #[test]
-    fn the_rules_route_answers_loopback_peers_only() {
-        // Ruling 17: the refusal comes before the credential is read, so it is the same
-        // under every profile and for every credential, the owner's included.
-        for path in [
-            "/.settings/rules.json",
-            "/.settings/rules.json?ns=x",
-            "/.settings/x",
-        ] {
-            let path = path.split('?').next().unwrap();
-            let refused = remote_refusal(true, path).expect("a remote peer is refused");
-            assert_eq!(refused.status, 403);
-            let body = String::from_utf8(refused.body).unwrap();
-            assert!(
-                body.contains("this route answers loopback peers only"),
-                "{body}"
-            );
-            assert!(remote_refusal(false, path).is_none(), "{path}");
-        }
-        for path in [
-            "/.json",
-            "/settings/rules.json",
-            "/a/.settings.json",
-            "/.ws",
-            "/.lp",
-        ] {
-            assert!(remote_refusal(true, path).is_none(), "{path}");
-        }
-    }
 
     #[tokio::test]
     async fn an_empty_queue_takes_any_one_message_and_then_the_byte_budget_holds() {

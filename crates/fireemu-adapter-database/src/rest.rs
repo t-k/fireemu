@@ -34,6 +34,19 @@ use crate::namespace::route;
 use crate::on_disconnect::Pending;
 use crate::request::{self, Location, Output, Refusal};
 
+/// Where a request comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peer {
+    /// A loopback address.
+    Loopback,
+    /// Any other host.
+    Remote,
+}
+
+/// The refusal of a loopback-only route to another host, the same as Fireemu's Firestore and
+/// Storage rules routes give.
+pub const REMOTE_REFUSAL: &str = "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not the control API, rule loading, data clearing or App Check debug-token management";
+
 /// An HTTP request as the REST layer sees it.
 #[derive(Debug, Clone, Default)]
 pub struct HttpRequest {
@@ -540,6 +553,27 @@ impl Database {
         parsed: Option<ParsedBody>,
         now_millis: i64,
     ) -> Handled {
+        self.handle_from(request, parsed, now_millis, Peer::Loopback)
+    }
+
+    /// [`Database::handle_parsed`] for a request from `peer`: the rules route answers
+    /// loopback peers only (ruling 17).
+    pub fn handle_from(
+        &mut self,
+        request: &HttpRequest,
+        parsed: Option<ParsedBody>,
+        now_millis: i64,
+        peer: Peer,
+    ) -> Handled {
+        let refused = (peer == Peer::Remote)
+            .then(|| request::split_target(&request.target).0)
+            .filter(|path| request::names_settings(path));
+        if refused.is_some() {
+            return Handled::Response {
+                response: refusal_response(&Refusal::new(403, REMOTE_REFUSAL)),
+                events: Vec::new(),
+            };
+        }
         match self.dispatch(request, parsed, now_millis) {
             Ok(handled) => handled,
             Err(refusal) => Handled::Response {

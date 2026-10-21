@@ -1812,3 +1812,74 @@ fn get_priority_answers_a_string_priority() {
     );
     assert_eq!(call(&mut db, "GET", "/c.json?ns=gp", &[], "").0, 200);
 }
+
+#[test]
+fn a_remote_peer_is_refused_the_rules_route_however_its_path_is_written() {
+    // Review r11 M34: the refusal follows the router's own reading of the path, so no
+    // spelling of the rules route reaches it from another host, under any profile and with
+    // any credential; data and the other routes stay served.
+    use fireemu_adapter_database::rest::{Credentials, Peer};
+    let strict = || Credentials {
+        strict: true,
+        id_tokens: None,
+    };
+    for (profile, credentials, rules) in [
+        ("emulator", Credentials::default(), RulesMode::AllowAll),
+        ("strict", strict(), RulesMode::AllowAll),
+        ("strict locked", strict(), RulesMode::DenyAll),
+    ] {
+        let mut db = Database::new(
+            RestOptions {
+                credentials,
+                rules,
+                ..RestOptions::default()
+            },
+            7,
+        );
+        for target in [
+            "/.settings/rules.json?ns=r",
+            "//.settings/rules.json?ns=r",
+            "///.settings/rules.json?ns=r",
+            "/%2Esettings/rules.json?ns=r",
+            "/%2esettings/rules.json?ns=r",
+            "/.settings/rules?ns=r",
+            "/.settings?ns=r",
+        ] {
+            for (method, body) in [("GET", ""), ("PUT", r#"{"rules":{".read":true}}"#)] {
+                for credential in [&[("Authorization", "Bearer owner")][..], &[]] {
+                    let request = request(method, target, credential, body);
+                    let Handled::Response { response, .. } =
+                        db.handle_from(&request, None, NOW, Peer::Remote)
+                    else {
+                        panic!("stream")
+                    };
+                    let text = String::from_utf8(response.body).unwrap();
+                    assert_eq!(response.status, 403, "{profile} {method} {target}: {text}");
+                    assert!(
+                        text.contains("this route answers loopback peers only"),
+                        "{text}"
+                    );
+                }
+            }
+        }
+        for target in [
+            "/.json?ns=r",
+            "/a/.settings.json?ns=r",
+            "/settings/rules.json?ns=r",
+        ] {
+            let request = request("GET", target, OWNER, "");
+            let Handled::Response { response, .. } =
+                db.handle_from(&request, None, NOW, Peer::Remote)
+            else {
+                panic!("stream")
+            };
+            assert_ne!(response.status, 403, "{profile} {target}");
+        }
+        let local = request("GET", "//.settings/rules.json?ns=r", OWNER, "");
+        let Handled::Response { response, .. } = db.handle_from(&local, None, NOW, Peer::Loopback)
+        else {
+            panic!("stream")
+        };
+        assert_eq!(response.status, 200, "{profile} loopback");
+    }
+}

@@ -34,6 +34,14 @@ impl Refusal {
     }
 }
 
+/// Whether `raw_path` reaches the rules route as [`location`] routes it: its first
+/// non-empty segment, percent-decoded, is `.settings`, however many slashes come first and
+/// whatever follows (review r11 M34). Decided before the credential is read.
+pub fn names_settings(raw_path: &str) -> bool {
+    let stem = raw_path.strip_suffix(".json").unwrap_or(raw_path);
+    percent_decode(stem).split('/').find(|s| !s.is_empty()) == Some(".settings")
+}
+
 /// The location part of a target: the raw `/a/b.json` path made into a database path.
 pub enum Location {
     /// A database path.
@@ -94,7 +102,7 @@ pub fn location(raw_path: &str, writing: bool, limits: &Limits) -> Result<Locati
         });
     };
     let decoded = percent_decode(stem);
-    if decoded.split('/').find(|s| !s.is_empty()) == Some(".settings") {
+    if names_settings(raw_path) {
         return Ok(Location::Settings);
     }
     let path = Path::parse(&decoded, limits).map_err(|err| match err.kind {

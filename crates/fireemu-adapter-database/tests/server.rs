@@ -1019,3 +1019,108 @@ async fn a_stream_the_rules_no_longer_allow_ends_after_its_cancel_event() {
     );
     assert_eq!(database.lock().unwrap().subscription_count(), 0);
 }
+
+/// This host's own non-loopback address, which the kernel delivers as the peer of a
+/// connection to it; `None` on a host without one (a sandbox without a network).
+fn own_non_loopback_address() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+/// One request with the owner's credential; `None` when `host` cannot be reached in time
+/// (a host firewall, a sandbox).
+async fn owner_call(host: &str, method: &str, target: &str, body: &str) -> Option<String> {
+    let limit = Duration::from_secs(5);
+    let mut stream = tokio::time::timeout(limit, TcpStream::connect(host))
+        .await
+        .ok()?
+        .ok()?;
+    let request = format!(
+        "{method} {target} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer owner\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.ok()?;
+    let mut response = String::new();
+    tokio::time::timeout(limit, stream.read_to_string(&mut response))
+        .await
+        .ok()?
+        .ok()?;
+    Some(response)
+}
+
+#[tokio::test]
+async fn the_rules_route_answers_loopback_peers_only_however_its_path_is_written() {
+    // Ruling 17 and review r11 M34/S30: a peer on another host is refused the rules route,
+    // under every profile and with the owner's credential, for every spelling of the path the
+    // router reads as the rules route; data stays served to it, and loopback peers keep the
+    // route.
+    use fireemu_adapter_database::rest::{Credentials, RulesMode};
+    let strict = || Credentials {
+        strict: true,
+        id_tokens: None,
+    };
+    let profiles = [
+        ("emulator", Credentials::default(), RulesMode::AllowAll),
+        ("strict", strict(), RulesMode::AllowAll),
+        ("strict locked", strict(), RulesMode::DenyAll),
+    ];
+    let rules_routes = [
+        "/.settings/rules.json?ns=r",
+        "//.settings/rules.json?ns=r",
+        "///.settings/rules.json?ns=r",
+        "/%2Esettings/rules.json?ns=r",
+        "/%2esettings/rules.json?ns=r",
+    ];
+    let remote_ip = own_non_loopback_address();
+    for (profile, credentials, rules) in profiles {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let database = Arc::new(Mutex::new(Database::new(
+            RestOptions {
+                credentials,
+                rules,
+                ..RestOptions::default()
+            },
+            3,
+        )));
+        tokio::spawn(serve(
+            listener,
+            Arc::clone(&database),
+            ServerConfig::default(),
+        ));
+        // The encoded spellings reach the route too; it answers them 403 from any peer.
+        let loopback = format!("127.0.0.1:{port}");
+        for target in &rules_routes[..3] {
+            let answer = owner_call(&loopback, "GET", target, "").await.unwrap();
+            assert!(
+                answer.starts_with("HTTP/1.1 200"),
+                "{profile} loopback {target}: {answer}"
+            );
+        }
+        let Some(ip) = remote_ip else {
+            eprintln!("skipped the off-loopback half: this host has no non-loopback address");
+            continue;
+        };
+        let remote = std::net::SocketAddr::new(ip, port).to_string();
+        let Some(answer) = owner_call(&remote, "GET", "/.json?ns=r", "").await else {
+            eprintln!("skipped the off-loopback half: {remote} does not reach the server");
+            continue;
+        };
+        assert!(
+            answer.starts_with("HTTP/1.1 200"),
+            "{profile} data from {remote}: {answer}"
+        );
+        for target in rules_routes {
+            for (method, body) in [("GET", ""), ("PUT", r#"{"rules":{".read":true}}"#)] {
+                let answer = owner_call(&remote, method, target, body).await.unwrap();
+                assert!(
+                    answer.starts_with("HTTP/1.1 403")
+                        && answer.contains("this route answers loopback peers only"),
+                    "{profile} {method} {target} from {remote}: {answer}"
+                );
+            }
+        }
+    }
+}

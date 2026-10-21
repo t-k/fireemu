@@ -641,6 +641,9 @@ impl Database {
         } else {
             request::query(&params, output.shallow)?
         };
+        // An event stream whose query only orders loads all the data, and the official
+        // emulator follows it as a plain stream: judged without the query, needing no index.
+        let query = query.filter(|q| !(streaming && loads_all_data(q)));
         // The rules come before the index (the official emulator's order, review S6).
         let (kind, judged) = read_kind(streaming, output.shallow, query.as_ref());
         if !writing && !self.may_read(&namespace, &path, judged, kind, &access, now_millis) {
@@ -1488,22 +1491,27 @@ fn parse_ordered(text: &str) -> ParsedBody {
     }
 }
 
-/// The kind of a REST read: an event stream, or a plain `GET`.
 /// The kind of a REST read and the query its rules see, as the official emulator judges it
-/// (review r11 M37, M38): an event stream is judged without its query, as a stream; a
-/// `shallow` GET has no ordering; any other GET is a GET with its query.
+/// (review r11 M37, M38): an event stream is a stream with the query it follows (none when
+/// its query only orders); a `shallow` GET has no ordering; any other GET is a GET with its
+/// query.
 fn read_kind(
     streaming: bool,
     shallow: bool,
     query: Option<&QueryParams>,
 ) -> (ReadKind, Option<&QueryParams>) {
     if streaming {
-        (ReadKind::Stream, None)
+        (ReadKind::Stream, query)
     } else if shallow {
         (ReadKind::Check, query)
     } else {
         (ReadKind::Get, query)
     }
+}
+
+/// Whether a query selects every child: no bound and no limit.
+fn loads_all_data(query: &QueryParams) -> bool {
+    query.start.is_none() && query.end.is_none() && query.limit.is_none()
 }
 
 /// A write body: its text, for refusal positions, and its parsed value.

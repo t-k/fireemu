@@ -148,15 +148,29 @@ fn closed_streams_receive_nothing() {
 
 #[test]
 fn invalid_stream_requests_are_refused_like_reads() {
+    // A filtered query without its index is refused as a read is; one that only orders
+    // loads all the data and streams, as on the official emulator (recorded in r12).
     let mut db = Database::new(RestOptions::default(), 1);
     match db.handle(
-        &request("GET", "/s.json?ns=e1&orderBy=\"h\"", true, ""),
+        &request(
+            "GET",
+            "/s.json?ns=e1&orderBy=\"h\"&limitToFirst=1",
+            true,
+            "",
+        ),
         NOW,
     ) {
         Handled::Response { response, .. } => assert_eq!(response.status, 400),
-        Handled::Stream { .. } => panic!("a query without an index must not stream"),
+        Handled::Stream { .. } => panic!("a filtered query without an index must not stream"),
     }
     assert_eq!(db.subscription_count(), 0);
+    assert!(matches!(
+        db.handle(
+            &request("GET", "/s.json?ns=e1&orderBy=\"h\"", true, ""),
+            NOW
+        ),
+        Handled::Stream { .. }
+    ));
 }
 
 #[test]

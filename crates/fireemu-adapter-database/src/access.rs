@@ -364,9 +364,17 @@ impl Database {
         }
         let mut events = Vec::new();
         if client.is_none() {
-            // An event stream is judged without its query (review r11 M37).
-            for (id, path, _query, access) in self.subscription_entries(namespace) {
-                if !self.may_read(namespace, &path, None, ReadKind::Stream, &access, now) {
+            // An event stream is judged with the query it follows: none when its query only
+            // orders (review r11 M37).
+            for (id, path, query, access) in self.subscription_entries(namespace) {
+                if !self.may_read(
+                    namespace,
+                    &path,
+                    query.as_ref(),
+                    ReadKind::Stream,
+                    &access,
+                    now,
+                ) {
                     self.unsubscribe(id);
                     events.push((id, SseEvent::cancel()));
                 }

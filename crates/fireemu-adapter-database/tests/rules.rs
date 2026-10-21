@@ -1967,6 +1967,73 @@ fn a_stream_is_judged_without_its_query_and_a_shallow_read_unordered() {
 }
 
 #[test]
+fn a_stream_with_a_filtered_query_is_judged_with_it_and_one_loading_everything_is_not() {
+    // Recorded on the official emulator (r12 hand5 rerun): an event stream whose query
+    // bounds or limits its window is judged with that query, as a GET is, while one that
+    // only orders loads all the data and is a plain stream: judged without its query and
+    // needing no index.
+    for (rule, filtered_allowed) in [
+        ("query.orderByChild == 'm' && query.startAt == 1", true),
+        ("query.limitToFirst == 2", true),
+        ("query.orderByPriority", false),
+        ("query.orderByChild == null", false),
+    ] {
+        let mut db = db();
+        load(
+            &mut db,
+            "sf",
+            &format!(r#"{{"rules":{{".read":"{rule}","a":{{".indexOn":["m"]}}}}}}"#),
+        );
+        call(&mut db, "PUT", "/a.json?ns=sf", OWNER, r#"{"x":{"m":1}}"#);
+        let streamed = matches!(
+            db.handle(
+                &request(
+                    "GET",
+                    "/a.json?ns=sf&orderBy=%22m%22&startAt=1&limitToFirst=2",
+                    &[("Accept", "text/event-stream")],
+                    ""
+                ),
+                NOW
+            ),
+            Handled::Stream { .. }
+        );
+        assert_eq!(streamed, filtered_allowed, "{rule}");
+    }
+    let mut db = db();
+    load(
+        &mut db,
+        "sv",
+        r#"{"rules":{".read":"query.orderByPriority"}}"#,
+    );
+    call(&mut db, "PUT", "/a.json?ns=sv", OWNER, r#"{"x":1}"#);
+    assert!(matches!(
+        db.handle(
+            &request(
+                "GET",
+                "/a.json?ns=sv&orderBy=%22$value%22",
+                &[("Accept", "text/event-stream")],
+                ""
+            ),
+            NOW
+        ),
+        Handled::Stream { .. }
+    ));
+    load(&mut db, "sv", r#"{"rules":{".read":true}}"#);
+    assert!(!matches!(
+        db.handle(
+            &request(
+                "GET",
+                "/a.json?ns=sv&orderBy=%22$value%22&limitToFirst=1",
+                &[("Accept", "text/event-stream")],
+                ""
+            ),
+            NOW
+        ),
+        Handled::Stream { .. }
+    ));
+}
+
+#[test]
 fn an_on_disconnect_merge_is_judged_as_its_entries_when_registered() {
     // Review r11 M39, recorded on the official emulator: each entry of an onDisconnect merge
     // is judged as a set on the current tree, and the registration fails if any fails, so a

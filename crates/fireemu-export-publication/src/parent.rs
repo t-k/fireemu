@@ -9,7 +9,11 @@
 //!
 //! Threat model, stated plainly. This protects against other local users and against volumes that
 //! ignore ownership: every ancestor must be owned by root or the exporting user, not writable by
-//! anyone else, free of ACL entries for anyone else, and on a volume that enforces ownership. It
+//! anyone else (except a root-owned directory with the sticky bit, such as `/tmp`, where other
+//! users can add entries but cannot rename or remove the ones the export makes; they can only
+//! take a name first, which refuses the export), free of ACL entries for anyone else, and on a
+//! volume that enforces ownership. An export parent that is a symlink is followed only when root
+//! owns it and the directory holding it is trusted (macOS `/tmp`). It
 //! does not defend against the exporting user's own processes, or root, changing the namespace
 //! concurrently: such a process can rename a directory away and put another directory of the same
 //! owner in its place (the descriptor reopen accepts any directory that user owns), and the
@@ -83,7 +87,27 @@ pub(crate) fn inspect_parent(
 ) -> Result<(PathBuf, Vec<OsString>), String> {
     match std::fs::symlink_metadata(parent) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err("the export parent is a symlink, which an export never follows".to_owned());
+            // Followed only when root owns the link and the directory holding it is trusted
+            // (macOS `/tmp` → `private/tmp`); the canonical chain is validated below.
+            let holder = parent.parent().unwrap_or(Path::new("/"));
+            let holder_error = std::fs::symlink_metadata(holder).map_or_else(
+                |error| {
+                    Some(format!(
+                        "cannot inspect the directory holding the export parent: {error}"
+                    ))
+                },
+                |held| {
+                    ancestor_error(
+                        holder,
+                        held.uid(),
+                        held.mode(),
+                        rustix::process::geteuid().as_raw(),
+                    )
+                },
+            );
+            if let Some(error) = parent_link_error(parent, metadata.uid(), holder_error) {
+                return Err(error);
+            }
         }
         Ok(metadata) if !metadata.file_type().is_dir() => {
             return Err("the export parent is not a directory".to_owned());
@@ -208,18 +232,10 @@ pub(crate) fn trusted_ancestors(
         })?;
         // Before the owner and the mode are trusted: on a volume that ignores ownership they mean nothing.
         volume_check(ancestor)?;
-        let mode = metadata.mode();
-        if metadata.uid() != 0 && metadata.uid() != effective_uid {
-            return Err(format!(
-                "export namespace ancestor {} is not owned by the current user or root",
-                ancestor.display()
-            ));
-        }
-        if mode & 0o022 != 0 {
-            return Err(format!(
-                "export namespace ancestor {} is writable by other users, so staged cleanup cannot be made safe",
-                ancestor.display()
-            ));
+        if let Some(error) =
+            ancestor_error(ancestor, metadata.uid(), metadata.mode(), effective_uid)
+        {
+            return Err(error);
         }
         #[cfg(target_os = "macos")]
         crate::acl::reject_unsafe_acl(
@@ -228,6 +244,54 @@ pub(crate) fn trusted_ancestors(
         )?;
     }
     Ok(parent)
+}
+
+/// Why an ancestor of the export cannot be trusted, from its owner and mode: it must be owned by
+/// root or the exporting user and not writable by anyone else, except a directory root owns
+/// with the sticky bit (such as `/tmp`), where other users can add entries but cannot rename or
+/// remove the ones the export makes, which is what a swap of the stage or the target needs.
+pub(crate) fn ancestor_error(
+    path: &Path,
+    uid: u32,
+    mode: u32,
+    effective_uid: u32,
+) -> Option<String> {
+    if uid != 0 && uid != effective_uid {
+        return Some(format!(
+            "export namespace ancestor {} is not owned by the current user or root",
+            path.display()
+        ));
+    }
+    let shared = mode & 0o022 != 0;
+    let root_sticky = uid == 0 && mode & 0o1000 != 0;
+    (shared && !root_sticky).then(|| {
+        format!(
+            "export namespace ancestor {} is writable by other users, so staged cleanup cannot be made safe; use a directory that only you (or root) can write, or a root-owned directory with the sticky bit such as /tmp",
+            path.display()
+        )
+    })
+}
+
+/// Why an export parent that is a symlink is not followed: unless root owns the link and the
+/// directory holding it is trusted (`holder_error` is that directory's refusal), another user
+/// could point it elsewhere.
+pub(crate) fn parent_link_error(
+    parent: &Path,
+    link_uid: u32,
+    holder_error: Option<String>,
+) -> Option<String> {
+    if link_uid != 0 {
+        return Some(format!(
+            "the export parent {} is a symlink not owned by root, which an export never follows",
+            parent.display()
+        ));
+    }
+    holder_error.map(|error| {
+        format!(
+            "the export parent {} is a symlink in an untrusted directory: {error}",
+            parent.display()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -551,6 +615,122 @@ mod tests {
         let made =
             prepare_and_validate_parent_with(&existing.join("a/../a"), &accept, &|_| {}).unwrap();
         assert_eq!(made, existing.join("a"));
+    }
+
+    const OTHER: u32 = 4242;
+    const ME: u32 = 501;
+
+    #[test]
+    fn an_ancestor_is_trusted_by_owner_and_mode_with_the_root_sticky_exception() {
+        let p = Path::new("/a");
+        // Owned by root or the user, not writable by others.
+        assert_eq!(ancestor_error(p, 0, 0o40755, ME), None);
+        assert_eq!(ancestor_error(p, ME, 0o40700, ME), None);
+        // Root-owned and sticky: /tmp (1777) and a group-writable sticky directory.
+        assert_eq!(ancestor_error(p, 0, 0o41777, ME), None);
+        assert_eq!(ancestor_error(p, 0, 0o41775, ME), None);
+        // Writable by others without the sticky bit, or sticky but not root's.
+        for (uid, mode) in [
+            (0, 0o40777),
+            (0, 0o40775),
+            (ME, 0o40777),
+            (ME, 0o41777),
+            (ME, 0o40770),
+        ] {
+            let error = ancestor_error(p, uid, mode, ME).unwrap();
+            assert!(
+                error.contains("writable by other users"),
+                "{uid} {mode:o}: {error}"
+            );
+        }
+        // Another user's directory, sticky or not.
+        for mode in [0o40755, 0o41777, 0o40700] {
+            let error = ancestor_error(p, OTHER, mode, ME).unwrap();
+            assert!(
+                error.contains("not owned by the current user or root"),
+                "{mode:o}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_parent_symlink_is_followed_only_when_root_owns_it_in_a_trusted_directory() {
+        assert_eq!(parent_link_error(Path::new("/tmp"), 0, None), None);
+        let theirs = parent_link_error(Path::new("/x"), ME, None).unwrap();
+        assert!(theirs.contains("symlink"), "{theirs}");
+        let held = parent_link_error(Path::new("/x"), 0, Some("held".to_owned())).unwrap();
+        assert!(held.contains("held"), "{held}");
+    }
+
+    proptest::proptest! {
+        /// Over every permission bit and three owners: never another user's directory, never one
+        /// others can write unless root owns it with the sticky bit.
+        #[test]
+        fn trust_follows_the_owner_and_the_sticky_bit(mode in 0u32..0o10000, owner in 0usize..3) {
+            let uid = [0, ME, OTHER][owner];
+            let verdict = ancestor_error(Path::new("/a"), uid, 0o40000 | mode, ME);
+            let shared = mode & 0o022 != 0;
+            let root_sticky = uid == 0 && mode & 0o1000 != 0;
+            let trusted = (uid == 0 || uid == ME) && (!shared || root_sticky);
+            proptest::prop_assert_eq!(verdict.is_none(), trusted, "{} {:o}", uid, mode);
+        }
+    }
+
+    #[test]
+    fn a_sticky_directory_the_user_owns_or_a_shared_one_without_it_stays_refused() {
+        let root = TrustedTempDir::new("parent-sticky");
+        for mode in [0o1777, 0o777, 0o1770] {
+            let shared = root.join(format!("shared-{mode:o}"));
+            std::fs::create_dir_all(shared.join("mine")).unwrap();
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(mode)).unwrap();
+            let error = trusted_ancestors(&shared.join("mine"), &accept).unwrap_err();
+            assert!(
+                error.contains("writable by other users"),
+                "{mode:o}: {error}"
+            );
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
+    /// The real `/tmp`, where it is a root-owned sticky directory (Linux 1777; macOS a root-owned
+    /// symlink to `/private/tmp`, 1777): a private directory below it is a trusted parent, and on
+    /// macOS `/tmp` itself is followed as the export parent.
+    #[test]
+    fn a_private_directory_below_the_system_tmp_is_trusted() {
+        let tmp = Path::new("/tmp");
+        let Ok(canonical) = std::fs::canonicalize(tmp) else {
+            return;
+        };
+        let metadata = std::fs::metadata(&canonical).unwrap();
+        if metadata.uid() != 0 || metadata.mode() & 0o1000 == 0 {
+            eprintln!(
+                "skipped: {} is not a root-owned sticky directory",
+                canonical.display()
+            );
+            return;
+        }
+        let mine = tmp.join(format!(
+            "fireemu-export-guard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&mine).unwrap();
+        std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result =
+            prepare_and_validate_parent_with(&mine.join("export-parent"), &accept, &|_| {});
+        let parent = inspect_parent(tmp, &accept);
+        let _ = std::fs::remove_dir(mine.join("export-parent"));
+        let _ = std::fs::remove_dir(&mine);
+        assert_eq!(
+            result.unwrap(),
+            canonical
+                .join(mine.file_name().unwrap())
+                .join("export-parent")
+        );
+        assert_eq!(parent.unwrap().0, canonical);
     }
 
     #[test]

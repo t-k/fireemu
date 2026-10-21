@@ -13,7 +13,7 @@
 //! reads half of.
 //!
 //! Unix cleanup requires every canonical namespace ancestor to be root/current-user owned and
-//! not group/world writable; on macOS an ACL entry that lets another principal change an ancestor
+//! not group/world writable, or root-owned with the sticky bit (`/tmp`); on macOS an ACL entry that lets another principal change an ancestor
 //! (every `allow` entry of a principal but the owner, root and the user running the export) is refused,
 //! and a `deny` entry is accepted; the stage's own ACL is cleared when it is created. Staged export publication is
 //! unavailable on Windows and fails before creating or modifying any export path.

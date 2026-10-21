@@ -281,12 +281,10 @@ impl Database {
     }
 
     /// The onDisconnect values `access` makes when its connection ends, as the official
-    /// emulator makes them (review M4; r12 tables odmix, hand3 and gen11 seed 1201): a value
-    /// that fails its rules alone on the current data is dropped, and the rest are made as one
-    /// update judged whole, so a failing rule there stops all of them. Whether the first step
-    /// reads `.validate` is not recorded, so a value whose `.write` alone passes but whose
-    /// `.validate` alone fails makes nothing at all. An update the tree refuses is left to the
-    /// caller.
+    /// emulator makes them (review M4; r12 tables odmix, odmix2, hand3 and gen11 seed 1201):
+    /// a value that fails `.write` or `.validate` alone on the current data is dropped, and the
+    /// rest are made as one update judged whole, so a failing rule there stops all of them. An
+    /// update the tree refuses is left to the caller.
     pub(crate) fn on_disconnect_writes(
         &self,
         namespace: &str,
@@ -320,20 +318,12 @@ impl Database {
                 kept.push((keys, value));
                 continue;
             }
-            let (before, after) = (before.root(), after.root());
-            let permitted = loaded
-                .rules
-                .write_permitted(before, after, &path, &requester);
-            let validates = loaded.rules.write_validates(
-                before,
-                after,
+            if loaded.rules.can_write(
+                before.root(),
+                after.root(),
                 std::slice::from_ref(&path),
                 &requester,
-            );
-            if permitted && !validates {
-                return Vec::new();
-            }
-            if permitted {
+            ) {
                 kept.push((keys, value));
             }
         }

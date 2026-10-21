@@ -200,34 +200,24 @@ impl Rules {
         written: &[Path],
         requester: &Requester<'_>,
     ) -> bool {
+        // A priority belongs to its node: a write of `<path>/.priority` is judged as a write
+        // of `<path>`, never through a `$wildcard` below it (review M3).
+        let written: Vec<Path> = written
+            .iter()
+            .map(|path| {
+                if path.is_priority() {
+                    path.parent().unwrap_or_else(Path::root)
+                } else {
+                    path.clone()
+                }
+            })
+            .collect();
         written
             .iter()
-            .all(|path| self.write_permitted(before, after, path, requester))
-            && self.write_validates(before, after, written, requester)
-    }
-
-    /// Whether `.write` lets the change at `written` through, `.validate` aside.
-    pub fn write_permitted(
-        &self,
-        before: Option<&Node>,
-        after: Option<&Node>,
-        written: &Path,
-        requester: &Requester<'_>,
-    ) -> bool {
-        self.write_allowed(before, after, &node_path(written), requester)
-    }
-
-    /// Whether every `.validate` the change at `written` reaches holds, `.write` aside.
-    pub fn write_validates(
-        &self,
-        before: Option<&Node>,
-        after: Option<&Node>,
-        written: &[Path],
-        requester: &Requester<'_>,
-    ) -> bool {
-        written
-            .iter()
-            .all(|path| self.validates(before, after, &node_path(path), requester))
+            .all(|path| self.write_allowed(before, after, path, requester))
+            && written
+                .iter()
+                .all(|path| self.validates(before, after, path, requester))
     }
 
     /// The `.indexOn` names declared for `path`.
@@ -378,16 +368,6 @@ fn run(rule: &Rule, scope: &eval::Scope<'_>) -> bool {
 }
 
 /// The rules level for `key` below `node`: the exact key, else the wildcard, which binds.
-/// A priority belongs to its node: a write of `<path>/.priority` is judged as a write of
-/// `<path>`, never through a `$wildcard` below it (review M3).
-fn node_path(path: &Path) -> Path {
-    if path.is_priority() {
-        path.parent().unwrap_or_else(Path::root)
-    } else {
-        path.clone()
-    }
-}
-
 fn descend<'a>(
     node: &'a RuleNode,
     key: &str,

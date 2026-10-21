@@ -2158,6 +2158,54 @@ fn an_on_disconnect_update_that_fails_whole_makes_none_of_the_writes() {
 }
 
 #[test]
+fn an_on_disconnect_write_its_rules_now_deny_alone_is_dropped() {
+    // Recorded on the official emulator (r12 table odmix2): a gate shut after registration
+    // makes the value at `o` fail alone, by `.validate` or by `.write`, so it is dropped and
+    // the value at `p` is made, whether they were two sets or one merge.
+    let gate = "root.child('gate').child($k).val() != 'shut'";
+    for place in [
+        format!(r#"".write":true,".validate":"{gate}""#),
+        format!(r#"".write":"{gate}""#),
+    ] {
+        for registered in [
+            vec![
+                ("o", r#"{"p":"/t/o/a","d":3}"#),
+                ("o", r#"{"p":"/t/p/a","d":4}"#),
+            ],
+            vec![("om", r#"{"p":"/t","d":{"o/a":3,"p/a":4}}"#)],
+        ] {
+            let mut db = db();
+            load(
+                &mut db,
+                "odg",
+                &format!(r#"{{"rules":{{".read":true,"t":{{"$k":{{{place}}}}}}}}}"#),
+            );
+            call(
+                &mut db,
+                "PUT",
+                "/t.json?ns=odg",
+                OWNER,
+                r#"{"o":{"a":1},"p":{"a":1}}"#,
+            );
+            let mut session = open(&mut db, "odg");
+            for (r, (action, body)) in (1..).zip(&registered) {
+                assert_eq!(
+                    send(&mut db, &mut session, r, action, body),
+                    vec![reply(r, "ok", r#""""#)]
+                );
+            }
+            call(&mut db, "PUT", "/gate/o.json?ns=odg", OWNER, r#""shut""#);
+            db.close_realtime(session.client(), LATER);
+            assert_eq!(
+                call(&mut db, "GET", "/t.json?ns=odg", OWNER, "").1,
+                r#"{"o":{"a":1},"p":{"a":4}}"#,
+                "{place} {registered:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn on_disconnect_writes_run_as_one_update_validated_whole() {
     // Recorded on the official emulator (gen11 seed 1201 rows 1760 and 2288, r12; hand3):
     // when the connection ends, the values that pass alone are made as one update judged

@@ -115,6 +115,9 @@ pub enum ExprKind {
     Str(String),
     /// `null`
     Null,
+    /// The ordering by the child at these keys: a string literal compared with an ordering
+    /// (`query.orderByChild == 'a/b'`), as the check reads it.
+    Ordering(Vec<String>),
     /// `/pattern/flags`, compiled when the rules load.
     Regex(super::pattern::Pattern),
     /// `[a, b]`, only as an argument of `hasChildren`.
@@ -148,6 +151,7 @@ impl ExprKind {
             | Self::Number(_)
             | Self::Str(_)
             | Self::Null
+            | Self::Ordering(_)
             | Self::Regex(_)
             | Self::Name(_) => Vec::new(),
             Self::Member(object, _) | Self::Not(object) | Self::Neg(object) => vec![object],
@@ -165,6 +169,7 @@ impl ExprKind {
             | Self::Number(_)
             | Self::Str(_)
             | Self::Null
+            | Self::Ordering(_)
             | Self::Regex(_)
             | Self::Name(_) => Vec::new(),
             Self::Member(object, _) | Self::Not(object) | Self::Neg(object) => vec![*object],

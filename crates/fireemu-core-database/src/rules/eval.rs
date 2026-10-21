@@ -49,8 +49,21 @@ enum Value<'a> {
     Bool(bool),
     Num(f64),
     Str(String),
-    /// An object or array from `auth` or `val()`.
+    /// An object or array inside `auth`: a new value each time it is read.
     Json(Json),
+    /// `auth` itself, one object.
+    Auth(Json),
+    /// `auth` without a user, and any absent member of `auth`: the official emulator's empty
+    /// object, which equals `null` and whose members are itself.
+    AuthEmpty,
+    /// What `val()` gives for a location with children: the official emulator's sentinel,
+    /// which equals nothing and has no members.
+    Sentinel,
+    /// An ordering by the child at these keys.
+    Ordering(Vec<String>),
+    /// An integer query bound: the official emulator holds it as a `Long`, which equals the
+    /// number it stands for but is no number to `<`, `+`, `-` or a member.
+    Long(i64),
     Snapshot(Snapshot<'a>),
     Query,
     Regex(super::pattern::Pattern),
@@ -122,6 +135,7 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
         ExprKind::Number(n) => Some(Value::Num(*n)),
         ExprKind::Str(s) => Some(Value::Str(s.clone())),
         ExprKind::Null => Some(Value::Null),
+        ExprKind::Ordering(keys) => Some(Value::Ordering(keys.clone())),
         ExprKind::Regex(pattern) => Some(Value::Regex(pattern.clone())),
         ExprKind::Array(items) => items
             .iter()
@@ -129,18 +143,15 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
             .collect::<Option<Vec<_>>>()
             .map(Value::Array),
         ExprKind::Name(name) => variable(name, scope),
-        ExprKind::Member(object, name) => {
-            let auth = rooted_at_auth(object);
-            member(eval(object, scope)?, name, scope, auth)
-        }
-        ExprKind::Index(object_expr, index) => {
-            let object = eval(object_expr, scope)?;
+        ExprKind::Member(object, name) => member(eval(object, scope)?, name, scope),
+        ExprKind::Index(object, index) => {
+            let object = eval(object, scope)?;
             let key = match eval(index, scope)? {
                 Value::Str(s) => s,
                 Value::Num(n) => number_text(n),
                 _ => return None,
             };
-            member(object, &key, scope, rooted_at_auth(object_expr))
+            member(object, &key, scope)
         }
         ExprKind::Call(callee, arguments) => {
             let ExprKind::Member(object, name) = &callee.kind else {
@@ -173,7 +184,11 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
 
 fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     match name {
-        "auth" => Some(from_json(scope.auth)),
+        "auth" => Some(match scope.auth {
+            Json::Object(_) | Json::Array(_) => Value::Auth(scope.auth.clone()),
+            Json::Null => Value::AuthEmpty,
+            other => from_json(other),
+        }),
         #[allow(clippy::cast_precision_loss)]
         "now" => Some(Value::Num(scope.now as f64)),
         "root" => Some(Value::Snapshot(scope.root.clone())),
@@ -184,35 +199,25 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     }
 }
 
-/// Whether `expr` is `auth` or one of its members.
-fn rooted_at_auth(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Name(name) => name == "auth",
-        ExprKind::Member(object, _) | ExprKind::Index(object, _) => rooted_at_auth(object),
-        _ => false,
-    }
-}
-
-/// A member of `object`. Under `auth` (`in_auth`) any member of an object, `length`
-/// included, and any member of `null` is a value, `null` when absent; elsewhere `length` of
-/// anything but a string is an error (review r8 M23, the r9 method matrix).
-fn member<'a>(
-    object: Value<'a>,
-    name: &str,
-    scope: &Scope<'a>,
-    in_auth: bool,
-) -> Option<Value<'a>> {
+/// A member of `object`. Inside `auth` any member of an object or array, `length` included,
+/// is its value, or the empty object when absent; the empty object's members are itself
+/// (review r8 M23, the r10 ternary matrix). Anything else has only `length` of a string and
+/// the members of `query`.
+fn member<'a>(object: Value<'a>, name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
+    let object = match object {
+        Value::Auth(json) => Value::Json(json),
+        other => other,
+    };
     match object {
-        Value::Null if in_auth => Some(Value::Null),
-        Value::Json(Json::Object(_) | Json::Array(_)) if name == "length" && !in_auth => None,
-        Value::Json(Json::Object(map)) => Some(map.get(name).map_or(Value::Null, from_json)),
-        // An array is an object keyed by its indexes: any other member is null.
+        Value::AuthEmpty => Some(Value::AuthEmpty),
+        Value::Json(Json::Object(map)) => Some(map.get(name).map_or(Value::AuthEmpty, from_json)),
+        // An array is an object keyed by its indexes.
         Value::Json(Json::Array(items)) => Some(
             name.parse::<usize>()
                 .ok()
                 .filter(|index| index.to_string() == name)
                 .and_then(|index| items.get(index))
-                .map_or(Value::Null, from_json),
+                .map_or(Value::AuthEmpty, from_json),
         ),
         Value::Str(s) if name == "length" =>
         {
@@ -225,7 +230,11 @@ fn member<'a>(
 }
 
 fn bound_value<'a>(bound: Option<&Bound>) -> Value<'a> {
-    bound.map_or(Value::Null, |b| from_json(&b.value))
+    match bound.map(|b| &b.value) {
+        None => Value::Null,
+        Some(Json::Number(crate::number::Number::Int(n))) => Value::Long(*n),
+        Some(value) => from_json(value),
+    }
 }
 
 /// A member of `query`. A read without a query is ordered by key; a write has no ordering at
@@ -250,7 +259,7 @@ fn query_member<'a>(query: Option<&QueryParams>, writing: bool, name: &str) -> V
         "orderByValue" => Value::Bool(q.order_by == OrderBy::Value),
         "orderByPriority" => Value::Bool(q.order_by == OrderBy::Priority),
         "orderByChild" => match &q.order_by {
-            OrderBy::Child(path) => Value::Str(path.keys().join("/")),
+            OrderBy::Child(path) => Value::Ordering(path.keys().to_vec()),
             _ => Value::Null,
         },
         "equalTo" => bound_value(equal),
@@ -315,7 +324,7 @@ fn snapshot_call<'a>(
                 content: Content::Leaf(leaf),
                 ..
             }) => leaf_value(leaf),
-            Some(n) => Value::Json(n.to_json(crate::node::Format::Plain)),
+            Some(_) => Value::Sentinel,
         }),
         "child" => {
             let child = string_argument(arguments, 0)?;
@@ -391,16 +400,6 @@ fn snapshot_call<'a>(
 fn binary<'a>(op: BinaryOp, left: &Expr, right: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
     let l = eval(left, scope)?;
     let r = eval(right, scope)?;
-    // Objects compare by identity there: `auth` is one object, so `auth == auth` holds, while
-    // each `val()` or member of `auth` is a new one (the r9 operator matrix).
-    let auth = |expr: &Expr| matches!(&expr.kind, ExprKind::Name(name) if name == "auth");
-    if matches!(l, Value::Json(_)) && auth(left) && auth(right) {
-        match op {
-            BinaryOp::Eq => return Some(Value::Bool(true)),
-            BinaryOp::Ne => return Some(Value::Bool(false)),
-            _ => {}
-        }
-    }
     combine(op, &l, &r)
 }
 
@@ -433,8 +432,8 @@ fn chain<'a>(op: BinaryOp, operands: &[Expr], scope: &Scope<'a>) -> Option<Value
 /// `l op r` for an operator that is not `&&` or `||`.
 fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> {
     match op {
-        BinaryOp::Eq => Some(Value::Bool(equal(l, r))),
-        BinaryOp::Ne => Some(Value::Bool(!equal(l, r))),
+        BinaryOp::Eq => equal(l, r).map(Value::Bool),
+        BinaryOp::Ne => equal(l, r).map(|equal| Value::Bool(!equal)),
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
             let ordering = match (l, r) {
                 // Any comparison with NaN is false there.
@@ -489,15 +488,26 @@ fn text(value: &Value<'_>) -> Option<String> {
     }
 }
 
-/// Equality of two values of the same primitive type; values of different types are not
-/// equal, and an object or snapshot equals nothing.
+/// Equality of two values of the same primitive type, or of two orderings; values of
+/// different types are not equal, and a new object (`val()`, a member of `auth`) equals
+/// nothing. The official emulator compares two snapshots by location, and `auth` and
+/// `query` each by identity; that is not reproduced, so such a comparison is an error and
+/// the rule is false whether or not it is negated (review r9 M25, option (b)).
 #[allow(clippy::float_cmp)]
-fn equal(l: &Value<'_>, r: &Value<'_>) -> bool {
-    match (l, r) {
-        (Value::Null, Value::Null) => true,
+fn equal(l: &Value<'_>, r: &Value<'_>) -> Option<bool> {
+    Some(match (l, r) {
+        (Value::Snapshot(_), Value::Snapshot(_))
+        | (Value::Auth(_), Value::Auth(_))
+        | (Value::Query, Value::Query) => return None,
+        (Value::Null | Value::AuthEmpty, Value::Null | Value::AuthEmpty) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Num(a), Value::Num(b)) => a == b,
+        (Value::Long(a), Value::Long(b)) => a == b,
+        // A `Long` and a `Double` compare as doubles there.
+        #[allow(clippy::cast_precision_loss)]
+        (Value::Long(a), Value::Num(b)) | (Value::Num(b), Value::Long(a)) => *a as f64 == *b,
         (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Ordering(a), Value::Ordering(b)) => a == b,
         _ => false,
-    }
+    })
 }

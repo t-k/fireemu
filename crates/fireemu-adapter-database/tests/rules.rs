@@ -1654,11 +1654,26 @@ fn a_write_has_no_key_ordering() {
     // protocol, onDisconnect writes included.
     let user = format!("auth={}", token(r#"{"sub":"u1","uid":"u1"}"#));
     for (rules, allowed) in [
-        (r#"{"rules":{".read":true,".write":"query.orderByKey"}}"#, false),
-        (r#"{"rules":{".read":true,".write":"!query.orderByKey"}}"#, true),
-        (r#"{"rules":{".read":true,".write":"query.orderByKey == false"}}"#, true),
-        (r#"{"rules":{".read":true,".write":true,".validate":"query.orderByKey"}}"#, false),
-        (r#"{"rules":{".read":true,".write":true,".validate":"!query.orderByKey"}}"#, true),
+        (
+            r#"{"rules":{".read":true,".write":"query.orderByKey"}}"#,
+            false,
+        ),
+        (
+            r#"{"rules":{".read":true,".write":"!query.orderByKey"}}"#,
+            true,
+        ),
+        (
+            r#"{"rules":{".read":true,".write":"query.orderByKey == false"}}"#,
+            true,
+        ),
+        (
+            r#"{"rules":{".read":true,".write":true,".validate":"query.orderByKey"}}"#,
+            false,
+        ),
+        (
+            r#"{"rules":{".read":true,".write":true,".validate":"!query.orderByKey"}}"#,
+            true,
+        ),
         (r#"{"rules":{".read":"query.orderByKey"}}"#, true),
     ] {
         let mut db = db();
@@ -1666,12 +1681,20 @@ fn a_write_has_no_key_ordering() {
         let reading = rules.contains(r#"".read":"query"#);
         let expected = if allowed { 200 } else { 401 };
         if reading {
-            assert_eq!(call(&mut db, "GET", "/a.json?ns=ok", &[], "").0, expected, "{rules}");
+            assert_eq!(
+                call(&mut db, "GET", "/a.json?ns=ok", &[], "").0,
+                expected,
+                "{rules}"
+            );
             continue;
         }
         for credential in ["", user.as_str()] {
             let target = format!("/a.json?ns=ok&{credential}");
-            assert_eq!(call(&mut db, "PUT", &target, &[], "1").0, expected, "{rules}");
+            assert_eq!(
+                call(&mut db, "PUT", &target, &[], "1").0,
+                expected,
+                "{rules}"
+            );
         }
         let mut session = open(&mut db, "ok");
         let status = if allowed { "ok" } else { "permission_denied" };

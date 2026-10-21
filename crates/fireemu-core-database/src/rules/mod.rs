@@ -389,8 +389,8 @@ fn compile_rule(
                     message: error.message,
                 }
             };
-            let expr = parse::parse(&source.text).map_err(located)?;
-            check::check(&expr, kind, wildcards).map_err(located)?;
+            let mut expr = parse::parse(&source.text).map_err(located)?;
+            check::check(&mut expr, kind, wildcards).map_err(located)?;
             Ok(Some(Rule::Expr(expr)))
         }
     }

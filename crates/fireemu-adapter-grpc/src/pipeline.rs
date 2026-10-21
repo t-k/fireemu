@@ -953,10 +953,12 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
                 || name
                     .strip_prefix(own)
                     .is_some_and(|rest| rest.starts_with('/'));
+            // A key path element is a collection id and a document id.
             let elements = name
                 .strip_prefix(own)
-                .map_or(0, |rest| rest.split('/').count());
-            (!inside || elements > MAX_PATH_ELEMENTS + 1).then(|| {
+                .and_then(|rest| rest.strip_prefix('/'))
+                .map_or(0, |path| path.split('/').count() / 2);
+            (!inside || elements > MAX_PATH_ELEMENTS).then(|| {
                 Status::unimplemented(
                     "a reference outside the request's database or longer than 100 path elements is not observed locally",
                 )
@@ -980,7 +982,9 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     }
 }
 
-/// The most path elements of a document name (production's limit).
+/// The most key path elements (collection and document id pairs) of a document name
+/// (production's limit; the official emulator 1.22.0 answers `A key path cannot have more than
+/// 100 elements.` past it).
 const MAX_PATH_ELEMENTS: usize = 100;
 
 /// A constant with every timestamp cut to microseconds, as production stores a value and the
@@ -1146,18 +1150,33 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
 }
 
 /// The official emulator's refusal of a collection stage's reference (1.22.0, probed
-/// 2026-10-21): it must start with `/`; an empty segment before the last names the missing
-/// collection or document ID at its offset; a trailing `/` is refused; an even number of
-/// segments names a document (the index counts UTF-16 units).
+/// 2026-10-21): the name must start with `/`, then the path's checks as
+/// [`document_path_error`] makes them, with an odd number of segments (a collection).
 fn collection_name_error(name: &str) -> Option<String> {
-    let units = |text: &str| text.encode_utf16().count();
     let Some(path) = name.strip_prefix('/') else {
         return Some(format!(
             "Collection name \"{name}\" lacks \"/\" at index 0."
         ));
     };
+    document_path_error(name, "Collection name", path, 1, true)
+}
+
+/// The official emulator's checks of a path below the documents root, in its order (1.22.0,
+/// probed 2026-10-21; indexes count UTF-16 units, as its Java does): segment by segment, an
+/// empty segment other than the last, a `.` or `..` id, and a reserved id (`__x__`); then a
+/// trailing `/`; then the parity (`collection`: an odd number of segments); then more than 100
+/// key path elements (id pairs); then an id of more than 1500 bytes. `offset` is where `path`
+/// starts in `name`, and `label` names the whole in the texts.
+fn document_path_error(
+    name: &str,
+    label: &str,
+    path: &str,
+    offset: usize,
+    collection: bool,
+) -> Option<String> {
+    let units = |text: &str| text.encode_utf16().count();
     let segments: Vec<&str> = path.split('/').collect();
-    let mut offset = 1;
+    let mut at_unit = offset;
     for (at, segment) in segments.iter().enumerate() {
         let (id, which) = if at % 2 == 0 {
             ("collection id", "Collection")
@@ -1166,12 +1185,12 @@ fn collection_name_error(name: &str) -> Option<String> {
         };
         if segment.is_empty() && at + 1 < segments.len() {
             return Some(format!(
-                "Collection name \"{name}\" lacks a {id} at index {offset}."
+                "{label} \"{name}\" lacks a {id} at index {at_unit}."
             ));
         }
         if matches!(*segment, "." | "..") {
             return Some(format!(
-                "Collection name \"{name}\" contains a {id} \"{segment}\" at index {offset}."
+                "{label} \"{name}\" contains a {id} \"{segment}\" at index {at_unit}."
             ));
         }
         if is_reserved_name(segment) {
@@ -1179,18 +1198,19 @@ fn collection_name_error(name: &str) -> Option<String> {
                 "{which} id \"{segment}\" is invalid because it is reserved."
             ));
         }
-        offset += units(segment) + 1;
+        at_unit += units(segment) + 1;
     }
     if path.is_empty() || name.ends_with('/') {
-        return Some(format!(
-            "Collection name \"{name}\" has invalid trailing \"/\"."
-        ));
+        return Some(format!("{label} \"{name}\" has invalid trailing \"/\"."));
     }
-    if segments.len() % 2 == 0 {
+    if (segments.len() % 2 == 1) != collection {
         return Some(format!(
-            "Collection name \"{name}\" lacks \"/\" at index {}.",
+            "{label} \"{name}\" lacks \"/\" at index {}.",
             units(name)
         ));
+    }
+    if segments.len() / 2 > MAX_PATH_ELEMENTS {
+        return Some("A key path cannot have more than 100 elements.".to_owned());
     }
     let at = segments.iter().position(|id| id.len() > MAX_ID_BYTES)?;
     Some(if at % 2 == 0 {
@@ -1201,12 +1221,12 @@ fn collection_name_error(name: &str) -> Option<String> {
 }
 
 /// The official emulator's refusal of a reference constant (1.22.0, probed 2026-10-21; indexes
-/// count UTF-16 units, as its Java does), in its order of checks: the documents-relative form
-/// (`/c`), the `projects/{p}/databases/{d}/documents` prefix (a missing project or database id,
-/// a missing `documents`), a trailing `/`, then over the path below `documents`: an empty
-/// segment, a reserved id (`__x__`), a `.` or `..` id, an id of more than 1500 bytes, and a
-/// collection (an odd number of segments). The documents root is a reference too.
-#[allow(clippy::too_many_lines)]
+/// count UTF-16 units, as its Java does). It reads the name left to right: the
+/// documents-relative form (`/c`) is not recognized; then `projects`, `/`, a project id, `/`,
+/// `databases`, `/`, a database id, and optionally `/documents` and `/` and a path, which
+/// [`document_path_error`] checks. A missing keyword or id is named at its index, a name that
+/// ends right after a `/` has an invalid trailing `/`, and `documents/` alone is told to omit it.
+/// The database root and the documents root are references too.
 fn reference_literal_error(name: &str) -> Option<String> {
     let units = |text: &str| text.encode_utf16().count();
     if name.starts_with('/') {
@@ -1217,40 +1237,47 @@ fn reference_literal_error(name: &str) -> Option<String> {
             "Document parent name \"{name}\" lacks {what} at index {at}."
         ))
     };
-    let Some(after) = name.strip_prefix("projects/") else {
-        return if name == "projects" {
-            lacks("\"/\"", units(name))
-        } else {
-            lacks("\"projects\"", 0)
-        };
+    let trailing = || {
+        Some(format!(
+            "Document parent name \"{name}\" has invalid trailing \"/\"."
+        ))
     };
-    // The prefix: each id must be present and followed by the next keyword.
-    let mut offset = "projects/".len();
-    let mut rest = after;
-    for (id, next) in [
+    let Some(mut rest) = name.strip_prefix("projects") else {
+        return lacks("\"projects\"", 0);
+    };
+    let mut offset = "projects".len();
+    for (id, keyword) in [
         ("a project id", "databases"),
         ("a database id", "documents"),
     ] {
-        let (value, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        let Some(tail) = rest.strip_prefix('/') else {
+            return lacks("\"/\"", offset);
+        };
+        offset += 1;
+        if tail.is_empty() {
+            return trailing();
+        }
+        let (value, tail) = tail.split_at(tail.find('/').unwrap_or(tail.len()));
         if value.is_empty() {
             return lacks(id, offset);
         }
-        offset += units(value) + 1;
-        if tail.is_empty() && !rest.contains('/') {
-            return lacks("\"/\"", units(name));
+        offset += units(value);
+        // The database root names no document but is a reference.
+        if tail.is_empty() && keyword == "documents" {
+            return None;
         }
-        let Some(tail) = tail.strip_prefix(next) else {
-            return lacks(&format!("\"{next}\""), offset);
+        let Some(tail) = tail.strip_prefix('/') else {
+            return lacks("\"/\"", offset);
         };
-        offset += next.len();
-        rest = tail;
-        if next == "databases" {
-            let Some(tail) = rest.strip_prefix('/') else {
-                return lacks("\"/\"", offset);
-            };
-            offset += 1;
-            rest = tail;
+        offset += 1;
+        if tail.is_empty() {
+            return trailing();
         }
+        let Some(tail) = tail.strip_prefix(keyword) else {
+            return lacks(&format!("\"{keyword}\""), offset);
+        };
+        offset += keyword.len();
+        rest = tail;
     }
     // Below `documents`: nothing (the documents root), or `/` and a path.
     if rest.is_empty() {
@@ -1259,78 +1286,12 @@ fn reference_literal_error(name: &str) -> Option<String> {
     let Some(path) = rest.strip_prefix('/') else {
         return lacks("\"/\"", offset);
     };
-    offset += 1;
     if path.is_empty() {
         return Some(format!(
             "Document parent name \"{name}\" is invalid: Omit trailing \"/\"."
         ));
     }
-    if name.ends_with('/') {
-        return Some(format!(
-            "Document parent name \"{name}\" has invalid trailing \"/\"."
-        ));
-    }
-    let segments: Vec<&str> = path.split('/').collect();
-    let kind = |at: usize| {
-        if at % 2 == 0 {
-            "collection id"
-        } else {
-            "resource id"
-        }
-    };
-    let starts: Vec<usize> = segments
-        .iter()
-        .scan(offset, |at, segment| {
-            let start = *at;
-            *at += units(segment) + 1;
-            Some(start)
-        })
-        .collect();
-    if let Some(at) = segments.iter().position(|segment| segment.is_empty()) {
-        return lacks(&format!("a {}", kind(at)), starts[at]);
-    }
-    if let Some((at, id)) = segments
-        .iter()
-        .enumerate()
-        .find(|(_, id)| is_reserved_name(id))
-    {
-        let which = if at % 2 == 0 {
-            "Collection"
-        } else {
-            "Resource"
-        };
-        return Some(format!(
-            "{which} id \"{id}\" is invalid because it is reserved."
-        ));
-    }
-    if let Some((at, id)) = segments
-        .iter()
-        .enumerate()
-        .find(|(_, id)| matches!(**id, "." | ".."))
-    {
-        return Some(format!(
-            "Document parent name \"{name}\" contains a {} \"{id}\" at index {}.",
-            kind(at),
-            starts[at]
-        ));
-    }
-    if let Some((at, _)) = segments
-        .iter()
-        .enumerate()
-        .find(|(_, id)| id.len() > MAX_ID_BYTES)
-    {
-        return Some(if at % 2 == 0 {
-            "The kind / collection group can be at most 1,500 bytes.".to_owned()
-        } else {
-            "Path element can be at most 1,500 bytes.".to_owned()
-        });
-    }
-    (segments.len() % 2 == 1).then(|| {
-        format!(
-            "Document parent name \"{name}\" lacks \"/\" at index {}.",
-            units(name)
-        )
-    })
+    document_path_error(name, "Document parent name", path, offset + 1, false)
 }
 
 /// The longest document or collection id, and the longest literal map key (production's limits).
@@ -2485,9 +2446,181 @@ mod tests {
                 "projects/other/databases/(default)/documents/c/d".to_owned(),
                 None,
             ),
+            // The prefix, read left to right.
+            ("projects/demo-app/databases/(default)".to_owned(), None),
+            ("projects/o/databases/zz".to_owned(), None),
+            (
+                "projectsx".to_owned(),
+                parent("projectsx", "lacks \"/\" at index 8."),
+            ),
+            (String::new(), parent("", "lacks \"projects\" at index 0.")),
+            (
+                "projects/".to_owned(),
+                parent("projects/", "has invalid trailing \"/\"."),
+            ),
+            (
+                "projects//".to_owned(),
+                parent("projects//", "lacks a project id at index 9."),
+            ),
+            (
+                "projects/p".to_owned(),
+                parent("projects/p", "lacks \"/\" at index 10."),
+            ),
+            (
+                "projects/demo-app/".to_owned(),
+                parent("projects/demo-app/", "has invalid trailing \"/\"."),
+            ),
+            (
+                "projects/demo-app/x/".to_owned(),
+                parent("projects/demo-app/x/", "lacks \"databases\" at index 18."),
+            ),
+            (
+                "projects/demo-app/databases".to_owned(),
+                parent("projects/demo-app/databases", "lacks \"/\" at index 27."),
+            ),
+            (
+                "projects/demo-app/databasesx/y".to_owned(),
+                parent("projects/demo-app/databasesx/y", "lacks \"/\" at index 27."),
+            ),
+            (
+                "projects/demo-app/databases/".to_owned(),
+                parent(
+                    "projects/demo-app/databases/",
+                    "has invalid trailing \"/\".",
+                ),
+            ),
+            (
+                "projects/demo-app/databases//".to_owned(),
+                parent(
+                    "projects/demo-app/databases//",
+                    "lacks a database id at index 28.",
+                ),
+            ),
+            (
+                "projects/demo-app/databases/(default)/".to_owned(),
+                parent(
+                    "projects/demo-app/databases/(default)/",
+                    "has invalid trailing \"/\".",
+                ),
+            ),
+            (
+                "projects/demo-app/databases/(default)//".to_owned(),
+                parent(
+                    "projects/demo-app/databases/(default)//",
+                    "lacks \"documents\" at index 38.",
+                ),
+            ),
+            (
+                format!("{d}x/c"),
+                parent(&format!("{d}x/c"), "lacks \"/\" at index 47."),
+            ),
+            // Below `documents`: segment by segment, then trailing, parity, depth, length.
+            (
+                format!("{d}//"),
+                parent(&format!("{d}//"), "lacks a collection id at index 48."),
+            ),
+            (
+                format!("{d}/c/d//"),
+                parent(&format!("{d}/c/d//"), "lacks a collection id at index 52."),
+            ),
+            (
+                format!("{d}/./"),
+                parent(
+                    &format!("{d}/./"),
+                    "contains a collection id \".\" at index 48.",
+                ),
+            ),
+            (
+                format!("{d}/__x__/"),
+                Some("Collection id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/__x__/d/./e"),
+                Some("Collection id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/c/./__x__/e"),
+                parent(
+                    &format!("{d}/c/./__x__/e"),
+                    "contains a resource id \".\" at index 50.",
+                ),
+            ),
+            (
+                format!("{d}/{a1501}//d"),
+                parent(
+                    &format!("{d}/{a1501}//d"),
+                    "lacks a resource id at index 1550.",
+                ),
+            ),
+            (
+                format!("{d}/{a1501}/"),
+                parent(&format!("{d}/{a1501}/"), "has invalid trailing \"/\"."),
+            ),
+            (
+                format!("{d}/{a1501}"),
+                parent(&format!("{d}/{a1501}"), "lacks \"/\" at index 1549."),
+            ),
+            (format!("{d}/{}", deep(200)), None),
+            (
+                format!("{d}/{}", deep(202)),
+                Some("A key path cannot have more than 100 elements.".to_owned()),
+            ),
+            (
+                format!("{d}/{}/{a1501}", deep(201)),
+                Some("A key path cannot have more than 100 elements.".to_owned()),
+            ),
+            (
+                format!("{d}/{}/__x__", deep(201)),
+                Some("Resource id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/{}", deep(203)),
+                parent(
+                    &format!("{d}/{}", deep(203)),
+                    &format!("lacks \"/\" at index {}.", d.len() + 1 + deep(203).len()),
+                ),
+            ),
         ];
         for (name, want) in cases {
             assert_eq!(reference_literal_error(&name), want, "{name:.120}");
+        }
+    }
+
+    /// `n` path segments alternating `c` and `d`.
+    fn deep(n: usize) -> String {
+        ["c", "d"]
+            .iter()
+            .cycle()
+            .take(n)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// Under strict, a reference outside the request's documents, or deeper than 100 key path
+    /// elements, is refused before any row; one inside is left to the other checks.
+    #[test]
+    fn strict_refuses_references_outside_or_too_deep() {
+        let own = "projects/p/databases/db/documents";
+        let reference = |name: String| pb::Value {
+            value_type: Some(pb::value::ValueType::ReferenceValue(name)),
+        };
+        for (name, outside) in [
+            (format!("{own}/c/d"), false),
+            (own.to_owned(), false),
+            (format!("{own}/{}", deep(200)), false),
+            (format!("{own}/{}", deep(201)), false),
+            (format!("{own}/{}", deep(202)), true),
+            ("projects/p/databases/db".to_owned(), true),
+            ("projects/p/databases/db2/documents/c/d".to_owned(), true),
+            ("projects/p/databases/db/documentsx/c".to_owned(), true),
+            ("projects/q/databases/db/documents/c/d".to_owned(), true),
+        ] {
+            assert_eq!(
+                reference_outside(&reference(name.clone()), own).is_some(),
+                outside,
+                "{name:.80}"
+            );
         }
     }
 
@@ -2693,6 +2826,19 @@ mod tests {
             (
                 format!("/c/{}", "a".repeat(1501)),
                 lacks(&format!("/c/{}", "a".repeat(1501)), 1504),
+            ),
+            (format!("/{}", deep(201)), None),
+            (
+                format!("/{}", deep(203)),
+                Some("A key path cannot have more than 100 elements.".to_owned()),
+            ),
+            (
+                format!("/{}/{}", deep(202), "a".repeat(1501)),
+                Some("A key path cannot have more than 100 elements.".to_owned()),
+            ),
+            (
+                format!("/{}/{}", deep(200), "a".repeat(1501)),
+                Some("The kind / collection group can be at most 1,500 bytes.".to_owned()),
             ),
         ] {
             assert_eq!(collection_name_error(&name), want, "{name}");

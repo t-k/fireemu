@@ -238,7 +238,12 @@ impl Client {
 
     /// The next frame: opcode and payload.
     async fn next(&mut self) -> (u8, Vec<u8>) {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        self.next_within(Duration::from_secs(5)).await
+    }
+
+    /// The next frame, waiting at most `limit`.
+    async fn next_within(&mut self, limit: Duration) -> (u8, Vec<u8>) {
+        tokio::time::timeout(limit, async {
             loop {
                 if self.buffer.len() >= 2 {
                     let opcode = self.buffer[0] & 0x0F;
@@ -266,7 +271,7 @@ impl Client {
             }
         })
         .await
-        .expect("no frame within 5 s")
+        .unwrap_or_else(|_| panic!("no frame within {limit:?}"))
     }
 
     async fn next_text(&mut self) -> String {
@@ -899,9 +904,10 @@ async fn a_websocket_dropped_for_falling_behind_writes_what_it_registered_once()
     reader
         .text(r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/presence","d":"online"}}}"#)
         .await;
-    // Reading again lets the server finish the pushes it was writing and read that frame.
+    // Reading again lets the server finish the pushes it was writing and read that frame. The
+    // backlog is megabytes of large frames, which a loaded machine can take a while to drain.
     loop {
-        let (opcode, _) = reader.next().await;
+        let (opcode, _) = reader.next_within(Duration::from_secs(60)).await;
         if opcode == 0x8 || opcode == 0xFF {
             break;
         }

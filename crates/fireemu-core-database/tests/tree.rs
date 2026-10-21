@@ -610,3 +610,22 @@ fn rewriting_an_equal_value_keeps_the_stored_form() {
         .unwrap();
     assert_eq!(export(&tree, "/o"), json!({"x": 1}));
 }
+
+#[test]
+fn the_retained_bytes_count_nodes_keys_strings_and_priorities() {
+    use fireemu_core_database::Node;
+    let node = std::mem::size_of::<Node>() as u64;
+    let key = std::mem::size_of::<String>() as u64;
+    assert_eq!(Tree::new(Limits::default()).retained_bytes(), 0);
+    assert_eq!(tree_with(json!(true)).retained_bytes(), node);
+    assert_eq!(tree_with(json!("xyz")).retained_bytes(), node + 3);
+    // The root, one child under a two-byte key, and its three-byte string.
+    assert_eq!(
+        tree_with(json!({"ab": "xyz"})).retained_bytes(),
+        2 * node + key + 2 + 3
+    );
+    assert_eq!(
+        tree_with(json!({"ab": {".value": 1, ".priority": "pp"}})).retained_bytes(),
+        2 * node + key + 2 + 2
+    );
+}

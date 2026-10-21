@@ -776,3 +776,42 @@ fn same_form_compares_numbers_by_kind_and_bits() {
         .same_form(&Json::object([("a", Json::int(1)), ("b", Json::int(1))])));
     assert!(!Json::string("a").same_form(&Json::string("b")));
 }
+
+/// The retained bytes as documented on `Tree::retained_bytes`, walked independently.
+fn reference_bytes(node: &Node) -> u64 {
+    let mut bytes = std::mem::size_of::<Node>() as u64;
+    if let Some(fireemu_core_database::Priority::String(priority)) = &node.priority {
+        bytes += priority.len() as u64;
+    }
+    match &node.content {
+        Content::Leaf(Leaf::String(text)) => bytes += text.len() as u64,
+        Content::Leaf(_) => {}
+        Content::Children(children) => {
+            for (key, child) in children {
+                bytes += std::mem::size_of::<String>() as u64 + key.len() as u64;
+                bytes += reference_bytes(child);
+            }
+        }
+    }
+    bytes
+}
+
+proptest! {
+    #[test]
+    fn the_retained_bytes_follow_the_stored_tree(ops in prop::collection::vec(op(), 0..12)) {
+        let mut tree = Tree::new(Limits::default());
+        for op in ops {
+            match op {
+                Op::Set(at, v) => {
+                    tree.set(&Path::from_keys(at), &v, NOW).unwrap();
+                }
+                Op::Update(base, entries) => {
+                    let wire: Vec<(String, Json)> =
+                        entries.iter().map(|(rel, v)| (join(rel), v.clone())).collect();
+                    tree.update(&Path::from_keys(base), &wire, NOW).unwrap();
+                }
+            }
+            prop_assert_eq!(tree.retained_bytes(), tree.root().map_or(0, reference_bytes));
+        }
+    }
+}

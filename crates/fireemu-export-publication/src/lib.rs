@@ -1372,6 +1372,33 @@ mod mount_point_tests {
     }
 
     /// A stage name already taken is skipped for the next one; any other error is reported.
+    /// A directory opened to list and move entries is a directory, never a link or a file, and
+    /// its descriptor does not leak into a child process.
+    #[test]
+    fn a_listable_descriptor_opens_a_directory_only_and_closes_on_exec() {
+        use std::os::unix::fs::symlink;
+        let root = scratch("listable");
+        std::fs::create_dir(root.join("dir")).unwrap();
+        std::fs::write(root.join("file"), b"").unwrap();
+        symlink(root.join("dir"), root.join("link")).unwrap();
+        let dir = held(&root);
+        let opened = super::open_listable(dir.as_fd(), "dir".as_ref()).unwrap();
+        assert!(rustix::io::fcntl_getfd(&opened)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC));
+        assert!(
+            rustix::fs::Dir::read_from(&opened).is_ok(),
+            "it can be listed"
+        );
+        for name in ["link", "file"] {
+            assert!(
+                super::open_listable(dir.as_fd(), name.as_ref()).is_err(),
+                "{name}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn a_taken_stage_name_is_skipped_and_another_error_is_reported() {
         use std::sync::atomic::Ordering;

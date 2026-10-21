@@ -1129,3 +1129,29 @@ fn a_stage_names_its_target_by_the_resolved_path() {
         std::fs::canonicalize(&real).unwrap().join("export")
     );
 }
+
+/// A second preflight of the same path replaces the directory the first one held: a stage of the
+/// resolved path then goes to the directory the latest preflight walked.
+#[cfg(unix)]
+#[test]
+fn the_latest_preflight_of_a_path_is_the_one_held() {
+    let root = TestRoot::new("held-latest");
+    let parent = root.0.join("parent");
+    create_private_dir(&parent);
+    let resolved = fireemu_export_publication::preflight(&parent.join("export")).unwrap();
+    let old = root.0.join("old");
+    std::fs::rename(&parent, &old).unwrap();
+    create_private_dir(&parent);
+    assert_eq!(
+        fireemu_export_publication::preflight(&parent.join("export")).unwrap(),
+        resolved
+    );
+    let stage = PublicationStage::create(&resolved, |_| Ok(())).unwrap();
+    assert_eq!(
+        std::fs::read_dir(&parent).unwrap().count(),
+        1,
+        "the stage is in the new parent"
+    );
+    assert_eq!(std::fs::read_dir(&old).unwrap().count(), 0);
+    drop(stage);
+}

@@ -1123,6 +1123,70 @@ mod tests {
         assert!(error.contains("ignores ownership"), "{error}");
     }
 
+    /// A search descriptor names a directory only, never a link or a file, and does not leak
+    /// into a child process.
+    #[test]
+    fn a_search_descriptor_opens_a_directory_only_and_closes_on_exec() {
+        let root = TrustedTempDir::new("search-flags");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir(base.join("dir")).unwrap();
+        std::fs::write(base.join("file"), b"").unwrap();
+        symlink(base.join("dir"), base.join("link")).unwrap();
+        let dir = open_search(&base);
+        let opened = rustix::fs::openat(&dir, "dir", search_flags(), Mode::empty()).unwrap();
+        assert!(rustix::io::fcntl_getfd(&opened)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC));
+        for name in ["link", "file"] {
+            assert!(
+                rustix::fs::openat(&dir, name, search_flags(), Mode::empty()).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    /// Removal by descriptor never follows a link at the name and refuses a file there; what the
+    /// link points to is kept.
+    #[test]
+    fn a_tree_is_removed_by_descriptor_without_following_links() {
+        let root = TrustedTempDir::new("remove-tree");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir_all(base.join("tree/sub")).unwrap();
+        std::fs::write(base.join("tree/sub/file"), b"").unwrap();
+        std::fs::create_dir(base.join("kept")).unwrap();
+        std::fs::write(base.join("kept/file"), b"kept").unwrap();
+        symlink(base.join("kept"), base.join("tree/link")).unwrap();
+        symlink(base.join("kept"), base.join("link")).unwrap();
+        std::fs::write(base.join("file"), b"").unwrap();
+        let dir = open_search(&base);
+        assert!(remove_tree_at(dir.as_fd(), OsStr::new("link")).is_err());
+        assert!(remove_tree_at(dir.as_fd(), OsStr::new("file")).is_err());
+        remove_tree_at(dir.as_fd(), OsStr::new("tree")).unwrap();
+        assert!(!base.join("tree").exists());
+        assert_eq!(std::fs::read(base.join("kept/file")).unwrap(), b"kept");
+    }
+
+    /// `..` at `/` stays at `/`, as the kernel resolves it.
+    #[test]
+    fn dot_dot_at_the_root_stays_at_the_root() {
+        let walked = walk(Path::new("/../.."), &accept).unwrap();
+        assert_eq!(walked.anchor.path, Path::new("/"));
+    }
+
+    /// The ACL is read by path between two checks that the path still names the held directory.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_path_that_names_another_directory_than_the_one_held_is_refused() {
+        let root = TrustedTempDir::new("same-directory");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir(base.join("a")).unwrap();
+        std::fs::create_dir(base.join("b")).unwrap();
+        let held = rustix::fs::lstat(base.join("a")).unwrap();
+        same_directory(&base.join("a"), &held).unwrap();
+        let error = same_directory(&base.join("b"), &held).unwrap_err();
+        assert!(error.contains("changed while it was checked"), "{error}");
+    }
+
     const OTHER: u32 = 4242;
     const ME: u32 = 501;
 

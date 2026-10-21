@@ -281,15 +281,25 @@ function reversedMaps(value) {
   return Object.fromEntries(
     Object.entries(value).map(([key, inner]) => [
       key,
-      (key === "fields" || key === "options") && inner && typeof inner === "object" && !Array.isArray(inner)
-        ? Object.fromEntries(Object.entries(inner).reverse().map(([k, v]) => [k, reversedMaps(v)]))
+      (key === "fields" || key === "options") &&
+      inner &&
+      typeof inner === "object" &&
+      !Array.isArray(inner)
+        ? Object.fromEntries(
+            Object.entries(inner)
+              .reverse()
+              .map(([k, v]) => [k, reversedMaps(v)]),
+          )
         : reversedMaps(inner),
     ]),
   );
 }
 
 /** The same stages reading an empty collection, where only checks made before any row refuse. */
-const onEmpty = (stages) => [{ name: "collection", args: [{ referenceValue: "/empty" }] }, ...stages.slice(1)];
+const onEmpty = (stages) => [
+  { name: "collection", args: [{ referenceValue: "/empty" }] },
+  ...stages.slice(1),
+];
 
 async function collect(host, seed, count, out) {
   const next = grammar(generator(Number(seed)));
@@ -325,42 +335,53 @@ export function matrix() {
   const ref = (path) => ({ referenceValue: path });
   const kinds = {
     null: { nullValue: null },
-    boolean: { booleanValue: true },
-    integer: int(1),
-    double: { doubleValue: 1.5 },
-    timestamp: { timestampValue: "2020-01-01T00:00:00Z" },
-    string: { stringValue: "s" },
-    bytes: { bytesValue: "AA==" },
-    document: ref(`${DOCS}/c/d`),
-    collection: ref(`${DOCS}/c`),
-    geoPoint: { geoPointValue: { latitude: 1, longitude: 2 } },
-    array: { arrayValue: { values: [int(1)] } },
+    boolean: { booleanValue: false },
+    integer: int(7),
+    double: { doubleValue: 2.5 },
+    "double-nan": { doubleValue: "NaN" },
+    timestamp: { timestampValue: "2021-01-01T00:00:00Z" },
+    string: { stringValue: "k" },
+    "string-empty": { stringValue: "" },
+    bytes: { bytesValue: "AQI=" },
+    "ref-doc": ref(`${DOCS}/c/d`),
+    "ref-coll": ref(`${DOCS}/c`),
+    "ref-root": ref(DOCS),
+    "ref-otherdb": ref("projects/demo-app/databases/other/documents/c/d"),
+    "ref-otherdb-coll": ref("projects/demo-app/databases/other/documents/c"),
+    geo: { geoPointValue: { latitude: 1.5, longitude: 2.5 } },
+    array: { arrayValue: { values: [int(1), { stringValue: "a" }] } },
+    "array-empty": { arrayValue: {} },
     map: { mapValue: { fields: { a: int(1) } } },
+    "map-empty": { mapValue: {} },
     vector: {
       mapValue: {
         fields: {
           __type__: { stringValue: "__vector__" },
-          value: { arrayValue: { values: [{ doubleValue: 1 }] } },
+          value: { arrayValue: { values: [{ doubleValue: 1 }, { doubleValue: 2 }] } },
         },
       },
     },
     field: field("i"),
-    function: fn("document_id", field("__name__")),
+    "field-missing": field("nope"),
+    "field-name": field("__name__"),
+    "fn-field": fn("document_id", field("__name__")),
+    "fn-const-ok": fn("document_id", ref(`${DOCS}/c/d`)),
+    "fn-const-bad": fn("collection_id", ref(`${DOCS}/c`)),
+    "fn-unknown": fn("nope_fn", int(1)),
   };
-  const comparisons = ["equal", "not_equal", "less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal"];
-  const calls = [];
-  for (const [kind, value] of Object.entries(kinds)) {
-    for (const name of comparisons) {
-      calls.push([`${name}(${kind}, i)`, fn(name, value, field("i")), true]);
-      calls.push([`${name}(i, ${kind})`, fn(name, field("i"), value), true]);
-    }
-    for (const name of ["document_id", "collection_id", "parent"]) {
-      calls.push([`${name}(${kind})`, fn(name, value), false]);
-    }
-    calls.push([`array(${kind})`, fn("array", value), false]);
-    calls.push([`map(${kind}, i)`, fn("map", value, field("i")), false]);
-    calls.push([`map("k", ${kind})`, fn("map", { stringValue: "k" }, value), false]);
-  }
+  const functions = {
+    equal: [[2], true],
+    not_equal: [[2], true],
+    less_than: [[2], true],
+    less_than_or_equal: [[2], true],
+    greater_than: [[2], true],
+    greater_than_or_equal: [[2], true],
+    document_id: [[1], false],
+    collection_id: [[1], false],
+    parent: [[1], false],
+    array: [[0, 1, 2], false],
+    map: [[0, 1, 2, 3, 4], false],
+  };
   const inputs = [
     ["seeded", [{ name: "collection", args: [ref("/c")] }]],
     ["empty", [{ name: "collection", args: [ref("/empty")] }]],
@@ -372,38 +393,391 @@ export function matrix() {
       ],
     ],
   ];
+  const calls = [];
+  for (const name of Object.keys(functions).sort()) {
+    const [arities, condition] = functions[name];
+    for (const arity of arities) {
+      if (arity === 0) {
+        calls.push([`${name}()`, fn(name), condition]);
+        continue;
+      }
+      for (let pos = 0; pos < arity; pos += 1) {
+        for (const [fillerName, filler] of [
+          ["F", field("i")],
+          ["C", name === "map" ? { stringValue: "k" } : int(1)],
+        ]) {
+          for (const [kind, value] of Object.entries(kinds)) {
+            const args = Array.from({ length: arity }, (_, j) =>
+              name === "map"
+                ? j % 2 === 0
+                  ? { stringValue: `k${j}` }
+                  : fillerName === "F"
+                    ? field("i")
+                    : int(1)
+                : filler,
+            );
+            args[pos] = value;
+            calls.push([
+              `${name}/${arity}@${pos}[${fillerName}] ${kind}`,
+              fn(name, ...args),
+              condition,
+            ]);
+          }
+        }
+      }
+    }
+  }
   const rows = [];
   for (const [label, call, condition] of calls) {
     for (const [input, stages] of inputs) {
       rows.push({
-        id: `matrix select ${label} ${input}`,
+        id: `matrix sel ${label} ${input}`,
         stages: [...stages, { name: "select", args: [{ mapValue: { fields: { v: call } } }] }],
       });
-      if (condition && input !== "filtered") {
-        rows.push({ id: `matrix where ${label} ${input}`, stages: [...stages, { name: "where", args: [call] }] });
+      rows.push({
+        id: `matrix nest ${label} ${input}`,
+        stages: [
+          ...stages,
+          { name: "select", args: [{ mapValue: { fields: { v: fn("array", call) } } }] },
+        ],
+      });
+      if (condition) {
+        rows.push({
+          id: `matrix where ${label} ${input}`,
+          stages: [...stages, { name: "where", args: [call] }],
+        });
       }
     }
   }
-  const forms = ["c", "/c", "/c/d", "/c/d/", "//c/d", "/c//d", "/", "", `${DOCS}/c`, `${DOCS}/c/d`, "/c/x/s", "c/x/s", "projects/x/databases/y/documents/c", "/c/"];
+  const forms = [
+    "c",
+    "/c",
+    "/c/d",
+    "/c/d/",
+    "//c/d",
+    "/c//d",
+    "/",
+    "",
+    `${DOCS}/c`,
+    `${DOCS}/c/d`,
+    "/c/x/s",
+    "c/x/s",
+    "/c/x/s/",
+    "/c/x//",
+    "projects/x/databases/y/documents/c",
+    "/c/",
+    "/é",
+    "/__c__",
+    "/c/./s",
+    "/.",
+    "/..",
+    "/c d",
+    " /c",
+    "/c\t",
+    `/${"a".repeat(1600)}`,
+    "/c/x/s/y/t",
+    "//",
+    "///",
+    "/c?x",
+    "/c#x",
+    "/日本",
+  ];
   for (const form of forms) {
-    rows.push({ id: `matrix collection ${JSON.stringify(form)}`, stages: [{ name: "collection", args: [ref(form)] }] });
+    // Match Python's default json.dumps escaping in row IDs.
+    const label = JSON.stringify(form).replace(
+      /[\u007f-\uffff]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+    rows.push({ id: `matrix coll ${label}`, stages: [{ name: "collection", args: [ref(form)] }] });
     rows.push({
-      id: `matrix collection_group ${JSON.stringify(form)}`,
+      id: `matrix coll-limit ${label}`,
+      stages: [
+        { name: "collection", args: [ref(form)] },
+        { name: "limit", args: [int(-1)] },
+      ],
+    });
+    rows.push({
+      id: `matrix coll-select-empty ${label}`,
+      stages: [
+        { name: "collection", args: [ref(form)] },
+        { name: "select", args: [{ mapValue: {} }] },
+      ],
+    });
+    rows.push({
+      id: `matrix cg ${label}`,
       stages: [{ name: "collection_group", args: [ref(form), { stringValue: "c" }] }],
     });
     for (const name of ["document_id", "collection_id", "parent"]) {
       for (const [input, stages] of inputs) {
         rows.push({
-          id: `matrix ${name}(ref ${JSON.stringify(form)}) ${input}`,
-          stages: [...stages, { name: "select", args: [{ mapValue: { fields: { v: fn(name, ref(form)) } } }] }],
+          id: `matrix const ${name}(ref ${label}) ${input}`,
+          stages: [
+            ...stages,
+            { name: "select", args: [{ mapValue: { fields: { v: fn(name, ref(form)) } } }] },
+          ],
         });
       }
     }
+    rows.push({
+      id: `matrix const equal(ref ${label}, __name__) empty`,
+      stages: [
+        ...inputs[1][1],
+        { name: "where", args: [fn("equal", ref(form), field("__name__"))] },
+      ],
+    });
   }
-  for (const kind of ["string", "integer", "null", "map"]) {
-    rows.push({ id: `matrix collection(${kind})`, stages: [{ name: "collection", args: [kinds[kind]] }] });
+  for (const [kind, value] of Object.entries(kinds)) {
+    rows.push({ id: `matrix coll-kind ${kind}`, stages: [{ name: "collection", args: [value] }] });
+    rows.push({
+      id: `matrix coll-kind-limit ${kind}`,
+      stages: [
+        { name: "collection", args: [value] },
+        { name: "limit", args: [int(-1)] },
+      ],
+    });
   }
-  const good = JSON.stringify({ structuredPipeline: { pipeline: { stages: [{ name: "collection", args: [ref("/c")] }] } } });
+  rows.push({ id: "matrix coll-arity-0", stages: [{ name: "collection", args: [] }] });
+  rows.push({
+    id: "matrix coll-arity-2",
+    stages: [{ name: "collection", args: [ref("/c"), ref("/c")] }],
+  });
+  rows.push({
+    id: "matrix coll-arity-2-bad",
+    stages: [{ name: "collection", args: [ref("c"), ref("/c")] }],
+  });
+  rows.push({
+    id: "matrix coll-second-stage",
+    stages: [
+      { name: "collection", args: [ref("/c")] },
+      { name: "collection", args: [ref("c")] },
+    ],
+  });
+  rows.push({
+    id: "matrix coll-option",
+    stages: [{ name: "collection", args: [ref("c")], options: { x: int(1) } }],
+  });
+  const values = {
+    "geo-lat-91": { geoPointValue: { latitude: 91, longitude: 0 } },
+    "geo-lng-181": { geoPointValue: { latitude: 0, longitude: 181 } },
+    "geo-nan": { geoPointValue: { latitude: "NaN", longitude: 0 } },
+    "geo-empty": { geoPointValue: {} },
+    "ts-year0": { timestampValue: "0000-01-01T00:00:00Z" },
+    "ts-year10000": { timestampValue: "10000-01-01T00:00:00Z" },
+    "ts-1969": { timestampValue: "1969-12-31T23:59:59Z" },
+    "ts-nanos": { timestampValue: "2020-01-01T00:00:00.123456789Z" },
+    "ts-min": { timestampValue: "0001-01-01T00:00:00Z" },
+    "vec-empty": {
+      mapValue: { fields: { __type__: { stringValue: "__vector__" }, value: { arrayValue: {} } } },
+    },
+    "vec-int": {
+      mapValue: {
+        fields: {
+          __type__: { stringValue: "__vector__" },
+          value: { arrayValue: { values: [int(1)] } },
+        },
+      },
+    },
+    "vec-str": {
+      mapValue: {
+        fields: {
+          __type__: { stringValue: "__vector__" },
+          value: { arrayValue: { values: [{ stringValue: "a" }] } },
+        },
+      },
+    },
+    "vec-nan": {
+      mapValue: {
+        fields: {
+          __type__: { stringValue: "__vector__" },
+          value: { arrayValue: { values: [{ doubleValue: "NaN" }] } },
+        },
+      },
+    },
+    "vec-novalue": { mapValue: { fields: { __type__: { stringValue: "__vector__" } } } },
+    "vec-extra": {
+      mapValue: {
+        fields: {
+          __type__: { stringValue: "__vector__" },
+          value: { arrayValue: { values: [{ doubleValue: 1 }] } },
+          x: int(1),
+        },
+      },
+    },
+    "vec-value-int": {
+      mapValue: { fields: { __type__: { stringValue: "__vector__" }, value: int(1) } },
+    },
+    "vec-2049": {
+      mapValue: {
+        fields: {
+          __type__: { stringValue: "__vector__" },
+          value: {
+            arrayValue: { values: Array.from({ length: 2049 }, () => ({ doubleValue: 1 })) },
+          },
+        },
+      },
+    },
+    "type-other": {
+      mapValue: { fields: { __type__: { stringValue: "__other__" }, value: int(1) } },
+    },
+    "type-int": { mapValue: { fields: { __type__: int(1) } } },
+    "type-bson": { mapValue: { fields: { __type__: { stringValue: "__bsonobjectid__" } } } },
+    "int-max": { integerValue: "9223372036854775807" },
+    "dbl-inf": { doubleValue: "-Infinity" },
+    "str-1mb": { stringValue: "a".repeat(1024 * 1024 + 10) },
+    "bytes-1mb": { bytesValue: "QUFB".repeat(350000) },
+    "map-key-long": { mapValue: { fields: { ["a".repeat(1600)]: int(1) } } },
+    "map-key-backtick": { mapValue: { fields: { "`a`": int(1) } } },
+    "map-key-ctl": { mapValue: { fields: { "a\tb": int(1) } } },
+    "map-many": {
+      mapValue: {
+        fields: Object.fromEntries(Array.from({ length: 20001 }, (_, i) => [`k${i}`, int(1)])),
+      },
+    },
+    "array-many": { arrayValue: { values: Array.from({ length: 20001 }, () => int(1)) } },
+    unset: {},
+  };
+  for (const [kind, value] of Object.entries(values)) {
+    for (const [expression, call] of Object.entries({
+      bare: value,
+      eq: fn("equal", field("i"), value),
+      array: fn("array", value),
+      "map-v": fn("map", { stringValue: "k" }, value),
+    })) {
+      for (const [input, stages] of inputs) {
+        rows.push({
+          id: `value sel ${kind} ${expression} ${input}`,
+          stages: [...stages, { name: "select", args: [{ mapValue: { fields: { v: call } } }] }],
+        });
+      }
+      if (expression === "eq") {
+        for (const [input, stages] of inputs.slice(0, 2)) {
+          rows.push({
+            id: `value where ${kind} ${expression} ${input}`,
+            stages: [...stages, { name: "where", args: [call] }],
+          });
+        }
+      }
+    }
+  }
+  const referenceForms = {
+    doc: `${DOCS}/c/d`,
+    coll: `${DOCS}/c`,
+    root: DOCS,
+    subdoc: `${DOCS}/c/d/s/e`,
+    "reserved-coll": `${DOCS}/__x__/d`,
+    "reserved-doc": `${DOCS}/c/__x__`,
+    "reserved-sub": `${DOCS}/c/d/__s__/e`,
+    "dot-coll": `${DOCS}/./d`,
+    "dotdot-doc": `${DOCS}/c/..`,
+    "dot-doc": `${DOCS}/c/.`,
+    "long-id": `${DOCS}/c/${"a".repeat(1600)}`,
+    "long-coll": `${DOCS}/${"a".repeat(1600)}/d`,
+    "ctl-id": `${DOCS}/c/a\tb`,
+    "nul-id": `${DOCS}/c/a\u0000b`,
+    "space-id": `${DOCS}/c/a b`,
+    unicode: `${DOCS}/é/日本`,
+    "empty-seg": `${DOCS}//d`,
+    trailing: `${DOCS}/c/d/`,
+    "double-trailing": `${DOCS}/c/d//`,
+    "other-db": "projects/demo-app/databases/other/documents/c/d",
+    "other-project": "projects/x/databases/(default)/documents/c/d",
+    "bad-db-id": "projects/demo-app/databases/Bad_DB!/documents/c/d",
+    "default-x": "projects/demo-app/databases/(default)x/documents/c/d",
+    "no-documents": "projects/demo-app/databases/(default)/c/d",
+    "db-only": "projects/demo-app/databases/(default)",
+    "empty-project": "projects//databases/(default)/documents/c/d",
+    relative: "c/d",
+    rooted: "/c/d",
+    empty: "",
+    "deep-200": DOCS + "/c/d".repeat(101),
+    "id-dunder-name": `${DOCS}/c/__name__`,
+    "id-backtick": `${DOCS}/c/` + "`d`",
+    "id-pct": `${DOCS}/c/%2F`,
+    "id-dot-in": `${DOCS}/c/a.b`,
+    "uppercase-projects": "Projects/demo-app/databases/(default)/documents/c/d",
+  };
+  for (const [form, path] of Object.entries(referenceForms)) {
+    const value = ref(path);
+    const expressions = {
+      "equal-l": fn("equal", value, field("__name__")),
+      "equal-r": fn("equal", field("__name__"), value),
+      lt: fn("less_than", field("i"), value),
+      "const-eq": fn("equal", value, int(1)),
+      array: fn("array", value),
+      "map-v": fn("map", { stringValue: "k" }, value),
+      document_id: fn("document_id", value),
+      collection_id: fn("collection_id", value),
+      parent: fn("parent", value),
+      bare: value,
+      "in-map-lit": { mapValue: { fields: { a: value } } },
+      "in-array-lit": { arrayValue: { values: [value] } },
+    };
+    for (const [expression, call] of Object.entries(expressions)) {
+      for (const [input, stages] of inputs) {
+        rows.push({
+          id: `ref sel ${form} ${expression} ${input}`,
+          stages: [...stages, { name: "select", args: [{ mapValue: { fields: { v: call } } }] }],
+        });
+        if (["equal-l", "equal-r", "lt", "const-eq"].includes(expression) && input !== "filtered") {
+          rows.push({
+            id: `ref where ${form} ${expression} ${input}`,
+            stages: [...stages, { name: "where", args: [call] }],
+          });
+        }
+      }
+    }
+  }
+  const domain = {};
+  for (const size of [1048487, 1048488]) {
+    domain[`string-${size}`] = { stringValue: "a".repeat(size) };
+    domain[`bytes-${size}`] = { bytesValue: Buffer.alloc(size, 97).toString("base64") };
+  }
+  for (const size of [1500, 1501]) {
+    domain[`map-key-${size}`] = { mapValue: { fields: { ["a".repeat(size)]: int(1) } } };
+  }
+  for (const size of [2048, 2049]) {
+    domain[`vector-${size}`] = {
+      mapValue: {
+        fields: {
+          __type__: { stringValue: "__vector__" },
+          value: {
+            arrayValue: { values: Array.from({ length: size }, () => ({ doubleValue: 1 })) },
+          },
+        },
+      },
+    };
+  }
+  for (const depth of [20, 21]) {
+    let map = int(1);
+    let array = int(1);
+    for (let i = 0; i < depth; i += 1) {
+      map = { mapValue: { fields: { a: map } } };
+      array = { arrayValue: { values: [array] } };
+    }
+    domain[`map-depth-${depth}`] = map;
+    domain[`array-depth-${depth}`] = array;
+  }
+  domain["timestamp-nanos"] = { timestampValue: "2020-01-01T00:00:00.123456789Z" };
+  domain["equal-int-int"] = fn("equal", int(1), int(1));
+  domain["equal-int-string"] = fn("equal", int(1), { stringValue: "a" });
+  domain["less-than-ref-ref"] = fn("less_than", ref(`${DOCS}/c/d`), ref(`${DOCS}/c/d`));
+  domain["equal-document-id"] = fn("equal", field("i"), fn("document_id", ref(`${DOCS}/c/d`)));
+  domain["equal-collection-id"] = fn("equal", field("i"), fn("collection_id", ref(`${DOCS}/c`)));
+  for (const [kind, value] of Object.entries(domain)) {
+    for (const [input, stages] of inputs) {
+      rows.push({
+        id: `domain sel ${kind} ${input}`,
+        stages: [...stages, { name: "select", args: [{ mapValue: { fields: { v: value } } }] }],
+      });
+    }
+    rows.push({
+      id: `domain where ${kind} empty`,
+      stages: [...inputs[1][1], { name: "where", args: [fn("equal", field("i"), value)] }],
+    });
+  }
+  const good = JSON.stringify({
+    structuredPipeline: { pipeline: { stages: [{ name: "collection", args: [ref("/c")] }] } },
+  });
   const deep = (n) => `${"[".repeat(n)}${"]".repeat(n)}`;
   for (const [label, text] of [
     ["truncated", good.slice(0, -3)],
@@ -505,7 +879,11 @@ async function compare(officialPath, emulatorPath, strictPath, reportPath, rowsP
       }
     }
     // Both answered: the results, not only the status (review r5).
-    if (e.status === 200 && o.status === 200 && canonical(sortedResults(e)) !== canonical(sortedResults(o))) {
+    if (
+      e.status === 200 &&
+      o.status === 200 &&
+      canonical(sortedResults(e)) !== canonical(sortedResults(o))
+    ) {
       report.emulatorResultsDiffer.push(line);
       interesting.push(row);
     }

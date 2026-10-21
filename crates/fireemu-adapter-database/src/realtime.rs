@@ -522,32 +522,16 @@ impl Session {
             check_registered(path, value, &limits, context)?;
         }
         // The official emulator checks the rules when a write is registered as well as when it
-        // is made (RTDB-03 Q-R1).
-        let allowed = if action == "o" {
-            writes.iter().all(|(path, value)| {
-                db.may_write(
-                    &self.namespace,
-                    &WriteOp::Set(path, value),
-                    &self.access,
-                    context.now_millis,
-                )
-            })
-        } else {
-            let entries: Vec<(String, Json)> = match arguments.get("d") {
-                Some(Json::Object(entries)) => entries
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let base = location(arguments, true, db)?;
+        // is made (RTDB-03 Q-R1); a merge is checked as its entries, each a set on the current
+        // tree, and fails if any fails (review r11 M39).
+        let allowed = writes.iter().all(|(path, value)| {
             db.may_write(
                 &self.namespace,
-                &WriteOp::Update(&base, &entries),
+                &WriteOp::Set(path, value),
                 &self.access,
                 context.now_millis,
             )
-        };
+        });
         if !allowed {
             return Err(Self::denied());
         }

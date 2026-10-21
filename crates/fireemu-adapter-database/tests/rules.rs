@@ -1965,3 +1965,45 @@ fn a_stream_is_judged_without_its_query_and_a_shallow_read_unordered() {
         assert_eq!(status == 200, shallow_allowed, "{rule} shallow");
     }
 }
+
+#[test]
+fn an_on_disconnect_merge_is_judged_as_its_entries_when_registered() {
+    // Review r11 M39, recorded on the official emulator: each entry of an onDisconnect merge
+    // is judged as a set on the current tree, and the registration fails if any fails, so a
+    // rule reading a sibling the merge also writes sees the sibling as it is now.
+    let mut db = db();
+    load(
+        &mut db,
+        "odm",
+        r#"{"rules":{".read":true,"t":{"$k":{".write":true,".validate":"newData.child('a').val() == newData.child('b').val()"}}}}"#,
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/t/o.json?ns=odm",
+        OWNER,
+        r#"{"a":1,"b":2}"#,
+    );
+    let mut session = open(&mut db, "odm");
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            1,
+            "om",
+            r#"{"p":"/t/o","d":{"a":5,"b":5}}"#
+        ),
+        vec![refused(1)]
+    );
+    // A plain merge is one update, judged on its result, on both servers.
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            2,
+            "m",
+            r#"{"p":"/t/o","d":{"a":5,"b":5}}"#
+        ),
+        vec![reply(2, "ok", r#""""#)]
+    );
+}

@@ -1529,8 +1529,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-21T00:13:42.578928Z",
-      "updateTime": "2026-10-21T00:13:42.578928Z"
+      "createTime": "2026-10-21T02:24:49.241495Z",
+      "updateTime": "2026-10-21T02:24:49.241495Z"
      }
     ]
    }
@@ -7080,8 +7080,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-21T00:13:42.578928Z",
-      "updateTime": "2026-10-21T00:13:42.578928Z"
+      "createTime": "2026-10-21T02:24:49.241495Z",
+      "updateTime": "2026-10-21T02:24:49.241495Z"
      }
     ]
    }
@@ -12472,10 +12472,10 @@
            "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
           },
           "__create_time__": {
-           "timestampValue": "2026-10-21T00:13:42.578928Z"
+           "timestampValue": "2026-10-21T02:24:49.241495Z"
           },
           "__update_time__": {
-           "timestampValue": "2026-10-21T00:13:42.578928Z"
+           "timestampValue": "2026-10-21T02:24:49.241495Z"
           },
           "i": {
            "integerValue": "1"
@@ -400953,8 +400953,8 @@
         "doubleValue": 1.5
        }
       },
-      "createTime": "2026-10-21T00:13:42.578928Z",
-      "updateTime": "2026-10-21T00:13:42.578928Z"
+      "createTime": "2026-10-21T02:24:49.241495Z",
+      "updateTime": "2026-10-21T02:24:49.241495Z"
      }
     ]
    }
@@ -406038,6 +406038,394 @@
    "official": {
     "status": 400,
     "message": "The function collection_id(...) requires `Reference` but got `STRING`."
+   }
+  },
+  {
+   "id": "r6 M3 map(1, i) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 M3 map(true, i) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "booleanValue": true
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is BOOLEAN"
+   }
+  },
+  {
+   "id": "r6 M3 map(1, 2) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 M3 map(1.5, i) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "doubleValue": 1.5
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is DOUBLE"
+   }
+  },
+  {
+   "id": "r6 M3 map(null, i) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "nullValue": null
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is NULL"
+   }
+  },
+  {
+   "id": "r6 M3 dup key then LONG key",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "aa": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "fieldReferenceValue": "i"
+            },
+            {
+             "stringValue": "k"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         },
+         "zz": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 S2 select {} then limit(-1)",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {}
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "-1"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The 'select(...)' stage requires at least one field."
+   }
+  },
+  {
+   "id": "r6 S2 equal(map(i, 1), [i])",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "equal",
+           "args": [
+            {
+             "functionValue": {
+              "name": "map",
+              "args": [
+               {
+                "fieldReferenceValue": "i"
+               },
+               {
+                "integerValue": "1"
+               }
+              ]
+             }
+            },
+            {
+             "arrayValue": {
+              "values": [
+               {
+                "fieldReferenceValue": "i"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FIELD_REFERENCE_VALUE"
+   }
+  },
+  {
+   "id": "r6 add_fields {} then limit(-1)",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "add_fields",
+     "args": [
+      {
+       "mapValue": {}
+      }
+     ]
+    },
+    {
+     "name": "limit",
+     "args": [
+      {
+       "integerValue": "-1"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The 'add_fields(...)' stage requires at least one field."
    }
   }
  ]

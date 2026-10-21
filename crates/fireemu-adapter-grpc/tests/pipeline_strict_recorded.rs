@@ -996,7 +996,9 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 empty(),
             ],
             strict: None,
-            emulator: (400, EMPTY_SELECT),
+            // A literal key's type is checked before any row, and before the empty map
+            // (the official emulator 1.22.0).
+            emulator: (400, "map key must be of type STRING, given type is DOUBLE"),
         },
         Case {
             label: "N68 aggregate {c: count(n)} by {\"\": document_id(1)}",
@@ -1504,7 +1506,8 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
             label: "add_fields {} then limit(-1)",
             stages: vec![stage("add_fields", vec![map(vec![])]), stage("limit", vec![int(-1)])],
             strict: None,
-            emulator: (400, "The 'limit(...)' cannot have a negative value: -1"),
+            // The official emulator answers the empty map before a negative count.
+            emulator: (400, "The 'add_fields(...)' stage requires at least one field."),
         },
         Case {
             label: "map(n): the argument count first",
@@ -1607,7 +1610,9 @@ fn the_round_four_checks_hold_in_every_position() {
             label: "equal(map(i, 1), nope_fn())",
             stages: vec![select(func("equal", vec![key_call(), func("nope_fn", vec![])]))],
             strict: None,
-            emulator: (400, "map keys must be constants/literals"),
+            // The official emulator names the nonexistent function first; fireemu refuses an
+            // unknown function as unsupported (the known class).
+            emulator: (501, "function \"nope_fn\" is unsupported locally"),
         },
         Case {
             label: "{a: [i], b: nope_fn()}",
@@ -1675,7 +1680,8 @@ fn strict_answers_a_refusal_only_in_the_stage_production_recorded_it() {
             label: "select {} then limit(-1)",
             stages: vec![empty(), stage("limit", vec![int(-1)])],
             strict: None,
-            emulator: (400, "The 'limit(...)' cannot have a negative value: -1"),
+            // The official emulator answers the empty map first.
+            emulator: (400, EMPTY_SELECT),
         },
         Case {
             label: "select {} then add_fields {a..b: top}",
@@ -1696,7 +1702,8 @@ fn strict_answers_a_refusal_only_in_the_stage_production_recorded_it() {
                 ],
             ))],
             strict: None,
-            emulator: (400, "map keys must be constants/literals"),
+            // The official emulator answers the literal holding a field first.
+            emulator: (400, "Value type is not supported: FIELD_REFERENCE_VALUE"),
         },
         Case {
             label: "aggregate {a..b: count()} by {}",
@@ -1724,4 +1731,63 @@ fn strict_answers_a_refusal_only_in_the_stage_production_recorded_it() {
             emulator: (400, "Invalid empty property path string."),
         },
     ]);
+}
+
+/// A `map(...)` key of a literal that is not a string is refused before any row is read, as the
+/// official emulator refuses it on an empty collection (`PX1d` r5 review M3): `map(1, i)`,
+/// `map(true, i)`, `map(1, 2)`. Strict answers the shapes production refused (O-3
+/// `functions#map-integer-key`, O-4 `#map-key-boolean`, both of a field value) and nothing else.
+#[test]
+fn a_map_key_type_is_refused_before_any_row() {
+    let long = "map key must be of type STRING, given type is LONG";
+    let boolean = "map key must be of type STRING, given type is BOOLEAN";
+    for strict in [true, false] {
+        // No document: the collection is empty.
+        let state = state(strict);
+        for (key, value, text, recorded) in [
+            (int(1), field("i"), long, true),
+            (json!({ "booleanValue": true }), field("i"), boolean, true),
+            (int(1), int(2), long, false),
+            (
+                json!({ "doubleValue": 1.5 }),
+                field("i"),
+                "map key must be of type STRING, given type is DOUBLE",
+                false,
+            ),
+            (
+                json!({ "nullValue": null }),
+                field("i"),
+                "map key must be of type STRING, given type is NULL",
+                false,
+            ),
+        ] {
+            let got = answer(
+                &state,
+                &[select(func("map", vec![key.clone(), value.clone()]))],
+            );
+            if strict && !recorded {
+                assert_eq!(got.0, 501, "{key} {value}: {got:?}");
+            } else {
+                assert_eq!(got, (400, text.to_owned()), "strict={strict} {key} {value}");
+            }
+        }
+        // The key type is answered before a repeated key, whatever the order.
+        let got = answer(
+            &state,
+            &[select(func(
+                "map",
+                vec![
+                    string("k"),
+                    field("i"),
+                    string("k"),
+                    field("i"),
+                    int(1),
+                    field("i"),
+                ],
+            ))],
+        );
+        if !strict {
+            assert_eq!(got, (400, long.to_owned()));
+        }
+    }
 }

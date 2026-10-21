@@ -327,3 +327,40 @@ fn repeated_requests_get_one_answer_under_both_profiles() {
         }
     }
 }
+
+/// The review's round-5 rows (`r6 ` ids) answer the official emulator's text under the emulator
+/// profile: a literal `map(...)` key's type before any row (on an empty collection too) and
+/// before a repeated key, a negative count after an empty map, a literal holding a field before
+/// a `map(...)` key that is no literal.
+#[test]
+fn the_round_five_rows_answer_the_official_texts_under_the_emulator_profile() {
+    let (corpus, order) = read_ordered("fs-ent-pipeline-differential.json");
+    let s = state(false);
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/c/d"),
+        &json!({"fields": corpus["seed"]["fields"]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let mut checked = 0;
+    for (at, row) in corpus["rows"].as_array().unwrap().iter().enumerate() {
+        if !row["id"].as_str().unwrap().starts_with("r6 ") {
+            continue;
+        }
+        let request = json!({"structuredPipeline": {"pipeline": {"stages": row["stages"]}}});
+        let (status, body) = call_ordered(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &request,
+            &order.rebased(
+                &format!("/rows/{at}/stages"),
+                "/structuredPipeline/pipeline/stages",
+            ),
+        );
+        assert_eq!(answer(status, &body), official(row), "{}", row["id"]);
+        checked += 1;
+    }
+    assert_eq!(checked, 9);
+}

@@ -42,7 +42,17 @@ export function grammar(random) {
   const int = (n) => ({ integerValue: String(n) });
   const dbl = (d) => ({ doubleValue: d });
   const str = (s) => ({ stringValue: s });
-  const map = (fields) => ({ mapValue: { fields } });
+  // A map's entries in a drawn order: the official emulator reads them in wire order (PX1d r5
+  // review S6).
+  const shuffled = (fields) => {
+    const entries = Object.entries(fields);
+    for (let i = entries.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(random() * (i + 1));
+      [entries[i], entries[j]] = [entries[j], entries[i]];
+    }
+    return Object.fromEntries(entries);
+  };
+  const map = (fields) => ({ mapValue: { fields: shuffled(fields) } });
   const arr = (...values) => ({ arrayValue: { values } });
   const field = () => ({
     fieldReferenceValue: pick(["i", "n", "top", "dbl", "x", "__name__", "a..b", "i.j"]),
@@ -190,13 +200,17 @@ export function grammar(random) {
               ],
         };
       case "sort":
-        return { name, args: [{ functionValue: { name: "ascending", args: [field()] } }] };
+        return chance(0.3)
+          ? { name, args: [map({ expression: field(), direction: str("ascending") })] }
+          : { name, args: [{ functionValue: { name: "ascending", args: [field()] } }] };
       default:
         return { name, args: [field()] };
     }
   };
   return () => {
-    const stages = [{ name: "collection", args: [{ referenceValue: "/c" }] }];
+    // A share of the rows reads an empty collection, where only static checks can refuse.
+    const input = chance(0.15) ? "/empty" : "/c";
+    const stages = [{ name: "collection", args: [{ referenceValue: input }] }];
     const n = 1 + Math.floor(random() * 3);
     for (let i = 0; i < n; i += 1) stages.push(stage());
     if (chance(0.05)) stages.at(-1).options = { x: int(1) };
@@ -287,6 +301,12 @@ const canonical = (value) =>
       : v,
   );
 
+/** An answer with its results in a fixed order (without a sort stage the order is unspecified). */
+const sortedResults = (answer) => ({
+  ...answer,
+  results: (answer.results ?? []).map((r) => canonical(r)).toSorted(),
+});
+
 async function compare(officialPath, emulatorPath, strictPath, reportPath, rowsPath) {
   const [official, emulator, strict] = await Promise.all(
     [officialPath, emulatorPath, strictPath].map(async (p) =>
@@ -321,6 +341,7 @@ async function compare(officialPath, emulatorPath, strictPath, reportPath, rowsP
     strictUntraced: [],
     strict501: 0,
     strictAnswered: 0,
+    emulatorResultsDiffer: [],
   };
   const interesting = [];
   official.rows.forEach((row, i) => {
@@ -338,6 +359,11 @@ async function compare(officialPath, emulatorPath, strictPath, reportPath, rowsP
         report.refusesMore.push(line);
         interesting.push(row);
       }
+    }
+    // Both answered: the results, not only the status (review r5).
+    if (e.status === 200 && o.status === 200 && canonical(sortedResults(e)) !== canonical(sortedResults(o))) {
+      report.emulatorResultsDiffer.push(line);
+      interesting.push(row);
     }
     if (s.status === 501) report.strict501 += 1;
     else {
@@ -371,6 +397,7 @@ async function compare(officialPath, emulatorPath, strictPath, reportPath, rowsP
       strictAnswered: report.strictAnswered,
       strictDiffers: report.strictDiffers.length,
       strictUntraced: report.strictUntraced.length,
+      emulatorResultsDiffer: report.emulatorResultsDiffer.length,
     }),
   );
 }

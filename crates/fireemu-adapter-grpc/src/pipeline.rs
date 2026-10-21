@@ -585,11 +585,16 @@ pub fn compile_pipeline_in_order(
     // not make is unrecorded, so under strict the empty map wins only when every part passed
     // fireemu's checks.
     // Under strict, the request's shape then decides which refusal is answered (`pipeline_shape`).
+    // A negative `limit` or `offset` is checked after the empty map (the official emulator
+    // 1.22.0; PX1d r5 review S2), a string one before it (O-4).
     match (compiled, deferred) {
         (Err(error), Some(empty))
             if error.code() != tonic::Code::InvalidArgument
                 && (validated_unrun || unrecorded == Unrecorded::OfficialEmulator) =>
         {
+            Err(empty)
+        }
+        (Err(error), Some(empty)) if error.message().contains("cannot have a negative value") => {
             Err(empty)
         }
         (Ok(()), Some(empty)) => Err(empty),
@@ -677,8 +682,57 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
 /// expression is refused with `INVALID_ARGUMENT`, as production and the official emulator
 /// refuse every such literal; under strict one with a map key that is not plain is
 /// `UNIMPLEMENTED` (production answered plain keys only).
-#[allow(clippy::too_many_lines)]
 fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
+    let expr = decode_operand_tree(value, unrecorded)?;
+    match map_key_error(value) {
+        Some(error) => Err(error),
+        None => Ok(expr),
+    }
+}
+
+/// The `map(...)` key checks of an operand, made after every other check of the whole operand
+/// (the official emulator 1.22.0 answers a literal holding a field, a nonexistent function or
+/// an argument count anywhere in the operand first; `PX1d` r5 review S2), in document order: a
+/// key that is no literal (FS-ENT-ORACLE O-4 `o4/functions#map-key-*-field`), then a literal
+/// key of another type than a string, which is refused before any row is read, as the official
+/// emulator refuses it on an empty collection (review M3). A reference or map key keeps the
+/// per-row answer, whose type names differ.
+fn map_key_error(value: &pb::Value) -> Option<Status> {
+    use pb::value::ValueType as V;
+    let Some(V::FunctionValue(function)) = &value.value_type else {
+        return None;
+    };
+    if function.name == "map" {
+        let keys = || function.args.iter().step_by(2);
+        if keys().any(|key| !is_literal(key)) {
+            return Some(Status::invalid_argument(
+                "map keys must be constants/literals",
+            ));
+        }
+        for key in keys() {
+            if let Some(
+                kind @ (V::NullValue(_)
+                | V::BooleanValue(_)
+                | V::IntegerValue(_)
+                | V::DoubleValue(_)
+                | V::TimestampValue(_)
+                | V::BytesValue(_)
+                | V::GeoPointValue(_)
+                | V::ArrayValue(_)),
+            ) = &key.value_type
+            {
+                return Some(Status::invalid_argument(format!(
+                    "map key must be of type STRING, given type is {}",
+                    official_type_name(Some(kind))
+                )));
+            }
+        }
+    }
+    function.args.iter().find_map(map_key_error)
+}
+
+#[allow(clippy::too_many_lines)]
+fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         None => Err(own_text(
@@ -714,14 +768,6 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
             ];
             Expr::call(&function.name, placeholders, Placement::Value)
                 .map_err(|e| expr_status(e, unrecorded))?;
-            // A `map(...)` key that is no literal is refused before anything is evaluated
-            // (FS-ENT-ORACLE O-4, `o4/functions#map-key-*-field`).
-            if function.name == "map" && function.args.iter().step_by(2).any(|key| !is_literal(key))
-            {
-                return Err(Status::invalid_argument(
-                    "map keys must be constants/literals",
-                ));
-            }
             // The official emulator ignores function options; production has not answered
             // them, so strict refuses them as unobserved.
             if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
@@ -747,7 +793,7 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
                             fireemu_core_firestore::value::Value::Reference(name.clone()),
                         ))
                     }
-                    _ => decode_operand(arg, unrecorded),
+                    _ => decode_operand_tree(arg, unrecorded),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Expr::call(&function.name, args, Placement::Value)
@@ -1216,8 +1262,16 @@ fn decode_select(
         paths.push((alias, value, decode_alias(alias)?));
     }
     let mut aliases = Vec::with_capacity(paths.len());
-    for (alias, value, path) in paths {
-        aliases.push((alias, path, decode_operand(value, unrecorded)?));
+    for (alias, value, path) in &paths {
+        aliases.push((
+            *alias,
+            path.clone(),
+            decode_operand_tree(value, unrecorded)?,
+        ));
+    }
+    // The `map(...)` key checks come after every value's other checks (PX1d r5 review H8).
+    if let Some(error) = paths.iter().find_map(|(_, value, _)| map_key_error(value)) {
+        return Err(error);
     }
     if aliases.is_empty() {
         // FS-ENT-ORACLE O-4 `o4/stages#select-empty-map`.

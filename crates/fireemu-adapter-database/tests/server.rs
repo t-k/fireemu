@@ -315,6 +315,32 @@ async fn a_closed_websocket_ends_with_its_data_even_when_the_client_sent_more() 
 }
 
 #[tokio::test]
+async fn a_closing_websocket_reads_what_follows_for_a_bounded_time_only() {
+    // Review r10 S27: a client that keeps sending after its close frame cannot hold the
+    // connection open; the server stops reading after its linger time (2 s) and closes, so the
+    // client's writes start failing.
+    let (address, _database) = start(Duration::from_secs(30)).await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=wb").await;
+    client.next_text().await;
+    client.send(0x8, &[0x03, 0xE8]).await;
+    let started = tokio::time::Instant::now();
+    let mut ended = false;
+    while started.elapsed() < Duration::from_secs(8) {
+        if !client.try_text(&"x".repeat(1_000)).await {
+            ended = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(ended, "the server still read after {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "closed after {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
 async fn the_realtime_protocol_runs_over_a_websocket() {
     let (address, database) = start(Duration::from_secs(30)).await;
     let (mut client, head) = Client::connect(&address, "/.ws?v=5&ns=w1").await;

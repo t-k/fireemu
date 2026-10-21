@@ -1862,6 +1862,28 @@ fn a_remote_peer_is_refused_the_rules_route_however_its_path_is_written() {
                 }
             }
         }
+        // Dot segments are not collapsed: the router reads them as the keys they spell, which
+        // no path accepts, from any peer. An encoded slash decodes to the rules route.
+        for (target, remote_status) in [
+            ("/./.settings/rules.json?ns=r", 400),
+            ("/../.settings/rules.json?ns=r", 400),
+            ("/x/../.settings/rules.json?ns=r", 400),
+            ("/%2E/.settings/rules.json?ns=r", 400),
+            ("/%2F.settings/rules.json?ns=r", 403),
+        ] {
+            for peer in [Peer::Remote, Peer::Loopback] {
+                let request = request("GET", target, OWNER, "");
+                let Handled::Response { response, .. } = db.handle_from(&request, None, NOW, peer)
+                else {
+                    panic!("stream")
+                };
+                let text = String::from_utf8(response.body).unwrap();
+                if remote_status == 400 || peer == Peer::Remote {
+                    assert_eq!(response.status, remote_status, "{profile} {target}: {text}");
+                }
+                assert!(!text.contains(".read"), "{profile} {target}: {text}");
+            }
+        }
         for target in [
             "/.json?ns=r",
             "/a/.settings.json?ns=r",
@@ -2062,17 +2084,57 @@ fn an_on_disconnect_merge_is_judged_as_its_entries_when_registered() {
         ),
         vec![refused(1)]
     );
-    // A plain merge is one update, judged on its result, on both servers.
+    // Every entry is judged, not the first alone: `a` set to 2 passes on the current tree,
+    // `b` set to 2 does not.
     assert_eq!(
         send(
             &mut db,
             &mut session,
             2,
+            "om",
+            r#"{"p":"/t/o","d":{"a":2,"b":2}}"#
+        ),
+        vec![refused(2)]
+    );
+    // A plain merge is one update, judged on its result, on both servers.
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            3,
             "m",
             r#"{"p":"/t/o","d":{"a":5,"b":5}}"#
         ),
-        vec![reply(2, "ok", r#""""#)]
+        vec![reply(3, "ok", r#""""#)]
     );
+}
+
+#[test]
+fn a_rules_change_judges_an_event_stream_with_the_query_it_follows() {
+    // An event stream with a filtered query stays open after a rules change that allows that
+    // query, and is cancelled by one that does not (review r11 M37).
+    let mut db = db();
+    let rules = r#"{"rules":{".read":"query.limitToFirst == 2","a":{".indexOn":["m"]}}}"#;
+    load(&mut db, "eq", rules);
+    call(&mut db, "PUT", "/a.json?ns=eq", OWNER, r#"{"x":{"m":1}}"#);
+    let Handled::Stream { id, .. } = db.handle(
+        &request(
+            "GET",
+            "/a.json?ns=eq&orderBy=%22m%22&limitToFirst=2",
+            &[("Accept", "text/event-stream")],
+            "",
+        ),
+        NOW,
+    ) else {
+        panic!("not streamed");
+    };
+    assert!(load(&mut db, "eq", rules).is_empty());
+    let events = load(
+        &mut db,
+        "eq",
+        r#"{"rules":{".read":"query.limitToFirst == 3","a":{".indexOn":["m"]}}}"#,
+    );
+    assert_eq!(events.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![id]);
 }
 
 #[test]

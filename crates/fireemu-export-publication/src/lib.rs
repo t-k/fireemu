@@ -272,6 +272,117 @@ pub fn preflight(_target: &Path) -> Result<PathBuf, String> {
     )
 }
 
+/// The target inspected by an overwrite policy, held independently of its diagnostic pathname.
+///
+/// A missing target has no directory. A present target is opened without following a symlink,
+/// and its identity is checked against the entry publication will replace. Policy readers must
+/// use the held directory on Unix, never reopen [`Self::path`].
+#[derive(Debug)]
+pub struct ExportTarget {
+    path: PathBuf,
+    #[cfg(unix)]
+    directory: Option<std::fs::File>,
+}
+
+impl ExportTarget {
+    /// The historical pathname, for diagnostics only.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The held directory, or `None` when the checked target did not exist.
+    #[cfg(unix)]
+    pub fn directory(&self) -> Option<&std::fs::File> {
+        self.directory.as_ref()
+    }
+}
+
+/// Inspects the same held destination used by publication without making parents or a stage.
+#[cfg(unix)]
+pub fn inspect_target(target: &Path) -> Result<ExportTarget, String> {
+    let target = std::path::absolute(target).map_err(|error| error.to_string())?;
+    let name = target
+        .file_name()
+        .ok_or("the export path has no directory name")?;
+    let walked = match held(&target)? {
+        Some(walked) => walked,
+        None => parent::inspect_parent(
+            target
+                .parent()
+                .ok_or("the export path has no parent directory")?,
+            &parent::system_volume_check,
+        )?,
+    };
+    parent::judge_held(
+        walked.anchor.fd.as_fd(),
+        &walked.anchor.path,
+        &parent::system_volume_check,
+        rustix::process::geteuid().as_raw(),
+    )?;
+    // A preflight's missing names may now exist. Walk them without creating any directory.
+    let mut anchor = walked.anchor;
+    for component in walked.missing {
+        let fd = match open_listable(anchor.fd.as_fd(), &component) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => {
+                return Ok(ExportTarget {
+                    path: target,
+                    directory: None,
+                })
+            }
+            Err(error) => return Err(format!("cannot inspect the export parent: {error}")),
+        };
+        anchor.path.push(&component);
+        let mode = parent::judge(
+            fd.as_fd(),
+            &anchor.path,
+            &parent::system_volume_check,
+            rustix::process::geteuid().as_raw(),
+        )?;
+        anchor.below_shared |= mode & 0o022 != 0;
+        anchor.fd = fd;
+    }
+    let path = anchor.path.join(name);
+    let expected = target_identity_at(anchor.fd.as_fd(), name)?;
+    let checked = capture_target(
+        anchor.fd.as_fd(),
+        name,
+        &path,
+        anchor.below_shared,
+        &expected,
+    )?;
+    if target_identity_at(anchor.fd.as_fd(), name)? != expected {
+        return Err("the export target changed while it was inspected".to_owned());
+    }
+    Ok(checked)
+}
+
+#[cfg(unix)]
+fn capture_target(
+    parent: BorrowedFd<'_>,
+    name: &OsStr,
+    path: &Path,
+    below_shared: bool,
+    expected: &TargetIdentity,
+) -> Result<ExportTarget, String> {
+    let directory = if expected.present {
+        check_present_target(parent, name, path, below_shared)?;
+        let fd = open_listable(parent, name)
+            .map_err(|error| format!("cannot open the export target: {error}"))?;
+        if identity_of(fd.as_fd())? != *expected {
+            return Err("the export target changed while it was inspected".to_owned());
+        }
+        parent::system_volume_check(path, fd.as_fd())?;
+        Some(std::fs::File::from(fd))
+    } else {
+        None
+    };
+    Ok(ExportTarget {
+        path: path.to_owned(),
+        directory,
+    })
+}
+
 /// An owner-only sibling directory that is not publishable until marked complete.
 #[derive(Debug)]
 pub struct PublicationStage {
@@ -308,7 +419,7 @@ impl PublicationStage {
     #[cfg(unix)]
     pub fn create(
         target: &Path,
-        validate_target: impl FnOnce(&Path) -> Result<(), String>,
+        validate_target: impl FnOnce(&ExportTarget) -> Result<(), String>,
     ) -> Result<Self, String> {
         Self::create_with(target, validate_target, &is_mount_root)
     }
@@ -317,7 +428,7 @@ impl PublicationStage {
     #[cfg(unix)]
     fn create_with(
         target: &Path,
-        validate_target: impl FnOnce(&Path) -> Result<(), String>,
+        validate_target: impl FnOnce(&ExportTarget) -> Result<(), String>,
         mount_root: MountRoot<'_>,
     ) -> Result<Self, String> {
         // A one-element relative name such as `out` has the empty path as its parent, and
@@ -348,22 +459,15 @@ impl PublicationStage {
         let anchor = parent::complete(walked, &parent::system_volume_check, &|_| {})?;
         let target = anchor.path.join(&target_name);
         let expected_target = target_identity_at(anchor.fd.as_fd(), &target_name)?;
-        // Before the overwrite policy reads anything in it.
-        let opened_target = if expected_target.present {
-            check_present_target(
-                anchor.fd.as_fd(),
-                &target_name,
-                &target,
-                anchor.below_shared,
-            )?;
-            let opened = open_target(anchor.fd.as_fd(), &target_name)?;
-            // An existing destination can itself be a mount point (a volume mounted there).
-            parent::system_volume_check(&target, opened.as_fd())?;
-            Some(opened)
-        } else {
-            None
-        };
-        validate_target(&target)?;
+        let checked = capture_target(
+            anchor.fd.as_fd(),
+            &target_name,
+            &target,
+            anchor.below_shared,
+            &expected_target,
+        )?;
+        validate_target(&checked)?;
+        let opened_target = checked.directory.map(OwnedFd::from);
         if target_identity_at(anchor.fd.as_fd(), &target_name)? != expected_target {
             return Err(
                 "the export target changed while its overwrite policy was checked; it was left unchanged"
@@ -417,7 +521,7 @@ impl PublicationStage {
     #[cfg(not(unix))]
     pub fn create(
         _target: &Path,
-        _validate_target: impl FnOnce(&Path) -> Result<(), String>,
+        _validate_target: impl FnOnce(&ExportTarget) -> Result<(), String>,
     ) -> Result<Self, String> {
         Err(
             "safe atomic export publication is unavailable on Windows; no export was written"
@@ -623,37 +727,27 @@ fn identity_of(directory: BorrowedFd<'_>) -> Result<TargetIdentity, String> {
     identity_from(&stat)
 }
 
-/// Clears the ACL a new stage (`name` in the held `directory`) inherited, by `path` (macOS has no
-/// descriptor interface for it), only while `path` names that very stage: a fresh judged walk of
-/// its parent must end at a directory whose entry `name` has the stage's `(st_dev, st_ino)`, and
-/// `lstat(path)` must still have it afterwards. If the user renamed the held directory meanwhile,
-/// the old path names something else and the export refuses here, never touching it.
+/// Clears the stage's inherited ACL only through an identity-checked held descriptor.
 #[cfg(target_os = "macos")]
 fn clear_acl_checked(directory: BorrowedFd<'_>, name: &OsStr, path: &Path) -> Result<(), String> {
-    let stage = stat_at(directory, name)
-        .map_err(|error| format!("cannot inspect the export stage: {error}"))?;
-    let changed = || {
-        format!(
-            "the export stage {} is no longer named by its path (was a directory of the export renamed?); nothing was exported",
-            path.display()
-        )
-    };
-    let holder = path.parent().ok_or_else(changed)?;
-    let walked = parent::walk(holder, &parent::system_volume_check)?;
-    if !walked.missing.is_empty() {
-        return Err(changed());
+    clear_acl_checked_with(directory, name, path, &|| {})
+}
+
+#[cfg(target_os = "macos")]
+fn clear_acl_checked_with(
+    directory: BorrowedFd<'_>,
+    name: &OsStr,
+    path: &Path,
+    before_clear: &dyn Fn(),
+) -> Result<(), String> {
+    let expected = target_identity_at(directory, name)?;
+    let stage = open_listable(directory, name)
+        .map_err(|error| format!("cannot open the export stage {}: {error}", path.display()))?;
+    if identity_of(stage.as_fd())? != expected {
+        return Err("the export stage changed before its ACL was cleared".to_owned());
     }
-    let named = stat_at(walked.anchor.fd.as_fd(), name).map_err(|_| changed())?;
-    if (named.st_dev, named.st_ino) != (stage.st_dev, stage.st_ino) {
-        return Err(changed());
-    }
-    acl::clear_stage_acl(path)?;
-    let after = rustix::fs::lstat(path).map_err(|_| changed())?;
-    if (after.st_dev, after.st_ino) == (stage.st_dev, stage.st_ino) {
-        Ok(())
-    } else {
-        Err(changed())
-    }
+    before_clear();
+    acl::clear_stage_acl(stage.as_fd())
 }
 
 /// A directory of the stage, held by descriptor: what the caller writes the export through. Every
@@ -714,6 +808,15 @@ impl StageDir {
     /// created exclusively, so the write never follows a link.
     #[cfg(unix)]
     pub fn create_file(&self, relative: &Path) -> Result<std::fs::File, String> {
+        self.create_file_with(relative, || {})
+    }
+
+    #[cfg(unix)]
+    fn create_file_with(
+        &self,
+        relative: &Path,
+        after_unlink: impl FnOnce(),
+    ) -> Result<std::fs::File, String> {
         let name = relative
             .file_name()
             .ok_or_else(|| format!("{} names no file", relative.display()))?;
@@ -722,6 +825,7 @@ impl StageDir {
             Ok(()) | Err(rustix::io::Errno::NOENT) => {}
             Err(error) => return Err(format!("cannot replace it: {error}")),
         }
+        after_unlink();
         rustix::fs::openat(
             &parent.fd,
             name,
@@ -1821,5 +1925,65 @@ mod mount_point_tests {
                 let _ = std::fs::remove_dir_all(root);
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod review_r4_regressions {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_link_replanted_after_unlink_is_refused_without_touching_its_victim() {
+        let root = parent::trusted_temp::TrustedTempDir::new("replanted-stage-link");
+        let victim = root.join("victim");
+        std::fs::write(&victim, b"do not touch").unwrap();
+        let stage = PublicationStage::create(&root.join("export"), |_| Ok(())).unwrap();
+        let tree = stage.stage_dir().unwrap();
+        let result = tree.create_file_with(Path::new("file"), || {
+            symlink(&victim, tree.path.join("file")).unwrap();
+        });
+        assert!(
+            result.is_err(),
+            "exclusive non-following creation must refuse the replanted link"
+        );
+        assert_eq!(std::fs::read(&victim).unwrap(), b"do not touch");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_swap_immediately_before_acl_clear_never_changes_the_victim_acl() {
+        let root = parent::trusted_temp::TrustedTempDir::new("acl-clear-swap");
+        let holder = root.join("holder");
+        let moved = root.join("moved");
+        let victim = root.join("victim");
+        std::fs::create_dir(&holder).unwrap();
+        std::fs::create_dir(&victim).unwrap();
+        let entries = vec![exacl::AclEntry::deny_group(
+            "everyone",
+            exacl::Perm::DELETE,
+            None,
+        )];
+        exacl::setfacl(&[&victim], &entries, None).unwrap();
+        let before = exacl::getfacl(&victim, None).unwrap();
+        let directory = std::fs::File::open(&holder).unwrap();
+        create_private_stage(directory.as_fd(), OsStr::new("stage")).unwrap();
+        let _result = clear_acl_checked_with(
+            directory.as_fd(),
+            OsStr::new("stage"),
+            &holder.join("stage"),
+            &|| {
+                std::fs::rename(&holder, &moved).unwrap();
+                std::fs::create_dir(&holder).unwrap();
+                symlink(&victim, holder.join("stage")).unwrap();
+            },
+        );
+        let after = exacl::getfacl(&victim, None).unwrap();
+        exacl::setfacl(&[&victim], &[], None).unwrap();
+        assert_eq!(
+            after, before,
+            "the victim ACL must remain unchanged even on refusal"
+        );
+        assert!(std::fs::read_dir(&victim).unwrap().next().is_none());
     }
 }

@@ -3124,7 +3124,7 @@ pub fn export(
     endpoints: &Endpoints,
     initiated_by: &str,
 ) -> Result<(), ArtifactError> {
-    let staged = PublicationStage::create(dir, may_overwrite)
+    let staged = PublicationStage::create(dir, may_overwrite_target)
         .map_err(|e| ArtifactError::new("export", dir, e))?;
     // The tree is written through the stage's held descriptors, and the entries the export does
     // not manage are read from the previous export opened relative to the held parent: no path
@@ -4478,6 +4478,56 @@ fn copy_private_file(source: &Path, destination: &Path, byte_limit: u64) -> Resu
 /// rule always: a directory is only overwritten when it already holds a
 /// `firebase-export-metadata.json`, so `fireemu emulators:export ~/Documents` cannot
 /// silently replace a directory that was never an export.
+#[cfg(unix)]
+pub fn may_overwrite(dir: &Path) -> Result<(), String> {
+    may_overwrite_target(&fireemu_export_publication::inspect_target(dir)?)
+}
+
+#[cfg(unix)]
+fn may_overwrite_target(target: &fireemu_export_publication::ExportTarget) -> Result<(), String> {
+    use std::os::fd::AsFd as _;
+    let Some(directory) = target.directory() else {
+        return Ok(());
+    };
+    let mut empty = true;
+    let mut interrupted = false;
+    let entries = rustix::fs::Dir::read_from(directory)
+        .map_err(|error| format!("cannot inspect {}: {error}", target.path().display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("cannot inspect {}: {error}", target.path().display()))?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        empty = false;
+        interrupted |= name.starts_with(b".fireemu-displaced-");
+    }
+    let manifest = rustix::fs::statat(
+        directory.as_fd(),
+        METADATA_FILE_NAME,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .is_ok_and(|stat| {
+        rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::RegularFile
+    });
+    if empty || manifest {
+        return Ok(());
+    }
+    let hint = if interrupted {
+        "; it holds a .fireemu-displaced-* directory, the previous export an interrupted export left there: move its contents back, or empty the directory"
+    } else {
+        ""
+    };
+    Err(format!("{} is not empty and holds no {METADATA_FILE_NAME}, so it is not an export directory; choose an empty or dedicated directory{hint}", target.path().display()))
+}
+
+#[cfg(not(unix))]
+fn may_overwrite_target(target: &fireemu_export_publication::ExportTarget) -> Result<(), String> {
+    may_overwrite(target.path())
+}
+
+#[cfg(not(unix))]
 pub fn may_overwrite(dir: &Path) -> Result<(), String> {
     let metadata = match std::fs::symlink_metadata(dir) {
         Ok(metadata) => metadata,
@@ -6090,6 +6140,128 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A preflight holds the destination even when its former pathname is reused.
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_policy_reads_the_held_target_after_its_parent_is_renamed() {
+        let base = budget_dir("overwrite-held-policy");
+        let parent = base.join("parent");
+        let target = parent.join("data");
+        std::fs::create_dir_all(&target).unwrap();
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        may_overwrite(&resolved).unwrap();
+        std::fs::create_dir(target.join("auth_export")).unwrap();
+        std::fs::write(
+            target.join("auth_export/important.txt"),
+            b"preserve every byte",
+        )
+        .unwrap();
+        let moved = base.join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let result = PublicationStage::create(&resolved, super::may_overwrite_target);
+        assert_eq!(
+            std::fs::read(moved.join("data/auth_export/important.txt")).unwrap(),
+            b"preserve every byte"
+        );
+        let error = result.unwrap_err();
+        assert!(error.contains("is not empty and holds no"), "{error}");
+        assert!(std::fs::read_dir(&target).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_policy_accepts_the_held_export_despite_an_unrelated_nonexport_at_the_old_path() {
+        let base = budget_dir("overwrite-held-valid");
+        let parent = base.join("parent");
+        let target = parent.join("data");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join(super::METADATA_FILE_NAME), b"{}").unwrap();
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        let moved = base.join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("unrelated.txt"), b"leave me alone").unwrap();
+        may_overwrite(&resolved).unwrap();
+        let stage = PublicationStage::create(&resolved, super::may_overwrite_target).unwrap();
+        stage.complete().publish().unwrap();
+        assert_eq!(
+            std::fs::read(target.join("unrelated.txt")).unwrap(),
+            b"leave me alone"
+        );
+        assert!(moved.join("data").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_inspection_of_an_absent_held_target_never_creates_its_missing_parents() {
+        let base = budget_dir("overwrite-held-absent");
+        let parent = base.join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let target = parent.join("missing/data");
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        let moved = base.join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("unrelated.txt"), b"not the target").unwrap();
+        may_overwrite(&resolved).unwrap();
+        assert!(!moved.join("missing").exists());
+        assert_eq!(
+            std::fs::read(target.join("unrelated.txt")).unwrap(),
+            b"not the target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_inspection_judges_a_parent_created_after_preflight() {
+        let base = budget_dir("overwrite-late-parent");
+        let target = base.join("late/data");
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("notes"), b"preserve").unwrap();
+        assert!(may_overwrite(&resolved)
+            .unwrap_err()
+            .contains("is not empty"));
+        std::fs::remove_dir_all(base.join("late")).unwrap();
+        let victim = base.join("victim");
+        std::fs::create_dir(&victim).unwrap();
+        std::os::unix::fs::symlink(&victim, base.join("late")).unwrap();
+        assert!(may_overwrite(&resolved).is_err());
+        assert!(std::fs::read_dir(victim).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    proptest::proptest! {
+        #[test]
+        fn held_overwrite_policy_matches_empty_or_regular_manifest(
+            occupied in proptest::bool::ANY,
+            manifest_kind in 0u8..4,
+            rename_parent in proptest::bool::ANY,
+        ) {
+            let base = budget_dir("overwrite-held-model");
+            let parent = base.join("parent");
+            let target = parent.join("data");
+            std::fs::create_dir_all(&target).unwrap();
+            let resolved = fireemu_export_publication::preflight(&target).unwrap();
+            if occupied { std::fs::write(target.join("notes"), b"preserve").unwrap(); }
+            let manifest = target.join(super::METADATA_FILE_NAME);
+            match manifest_kind {
+                1 => std::fs::write(&manifest, b"{}").unwrap(),
+                2 => std::fs::create_dir(&manifest).unwrap(),
+                3 => std::os::unix::fs::symlink("missing", &manifest).unwrap(),
+                _ => {},
+            }
+            if rename_parent {
+                std::fs::rename(&parent, base.join("moved")).unwrap();
+                std::fs::create_dir_all(&target).unwrap();
+                std::fs::write(target.join("unrelated"), b"unrelated old path").unwrap();
+            }
+            let expected = (!occupied && manifest_kind == 0) || manifest_kind == 1;
+            proptest::prop_assert_eq!(may_overwrite(&resolved).is_ok(), expected);
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn overwrite_authorization_is_bound_to_the_captured_target_identity() {
@@ -6097,7 +6269,8 @@ mod tests {
         let target = base.join("export");
 
         let error = PublicationStage::create(&target, |checked| {
-            may_overwrite(checked)?;
+            super::may_overwrite_target(checked)?;
+            let checked = checked.path();
             std::fs::create_dir(checked).map_err(|error| error.to_string())?;
             std::fs::write(checked.join("notes.txt"), "preserve")
                 .map_err(|error| error.to_string())?;

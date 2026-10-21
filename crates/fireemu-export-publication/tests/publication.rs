@@ -1191,8 +1191,7 @@ fn missing_names_made_after_the_preflight_are_entered_and_links_refused() {
 
 /// After the held directory is renamed away and its old name recreated with the predictable
 /// stage names planted as links to a victim, nothing reaches the victim (r3 review M2): the stage
-/// is made and written through the held directory's descriptors, and on macOS the stage ACL step
-/// refuses because the old path no longer names the stage.
+/// is made, has its ACL cleared, and is written through the held directory's descriptors.
 #[cfg(unix)]
 #[test]
 fn a_renamed_held_directory_never_lets_the_export_through_a_planted_stage_name() {
@@ -1219,25 +1218,19 @@ fn a_renamed_held_directory_never_lets_the_export_through_a_planted_stage_name()
         )
         .unwrap();
     }
-    match PublicationStage::create(&resolved, |_| Ok(())) {
-        Ok(stage) => {
-            let tree = stage.stage_dir().unwrap();
-            tree.create_dir(Path::new("auth_export")).unwrap();
-            std::io::Write::write_all(
-                &mut tree
-                    .create_file(Path::new("firebase-export-metadata.json"))
-                    .unwrap(),
-                b"{}",
-            )
-            .unwrap();
-            stage.complete().publish().unwrap();
-            assert!(moved.join("data/firebase-export-metadata.json").is_file());
-        }
-        Err(error) => {
-            eprintln!("refused: {error}");
-            assert!(error.contains("no longer named"), "{error}");
-        }
-    }
+    let stage = PublicationStage::create(&resolved, |_| Ok(()))
+        .expect("the held stage is usable after its parent is renamed");
+    let tree = stage.stage_dir().unwrap();
+    tree.create_dir(Path::new("auth_export")).unwrap();
+    std::io::Write::write_all(
+        &mut tree
+            .create_file(Path::new("firebase-export-metadata.json"))
+            .unwrap(),
+        b"{}",
+    )
+    .unwrap();
+    stage.complete().publish().unwrap();
+    assert!(moved.join("data/firebase-export-metadata.json").is_file());
     assert_eq!(
         std::fs::read_dir(&victim).unwrap().count(),
         0,

@@ -1598,9 +1598,10 @@ impl RestState {
         // production's text (coordinator ruling of 2026-10-21), the transcoder's refusals
         // included (ruling (c) of the r6 review).
         let gate = if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
-            crate::pipeline_shape::RefusalGate::Recorded(crate::pipeline_shape::shape_of_json(
-                body, key_order,
-            ))
+            crate::pipeline_shape::RefusalGate::Recorded(
+                crate::pipeline_shape::shape_of_json(body, key_order),
+                database.to_owned(),
+            )
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };

@@ -341,7 +341,7 @@ fn pipeline_request() -> pb::ExecutePipelineRequest {
                         stages: vec![pb::pipeline::Stage {
                             name: "collection".to_owned(),
                             args: vec![pb::Value {
-                                value_type: Some(pb::value::ValueType::StringValue(
+                                value_type: Some(pb::value::ValueType::ReferenceValue(
                                     "/items".to_owned(),
                                 )),
                             }],

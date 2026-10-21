@@ -10,6 +10,8 @@
 //     collect <seed> <count> <answers.json>
 //   FIRESTORE_EMULATOR_HOST=127.0.0.1:<port> node src/fs-ent-pipeline/differential-sweep.mjs \
 //     replay <rows.json> <answers.json>
+//   FIRESTORE_EMULATOR_HOST=127.0.0.1:<port> node src/fs-ent-pipeline/differential-sweep.mjs \
+//     matrix <answers.json>
 //   node src/fs-ent-pipeline/differential-sweep.mjs compare <official.json> <emulator.json> \
 //     <strict.json> <report.json> [rows.jsonl]
 //
@@ -222,7 +224,8 @@ async function call(host, method, path, body) {
     method,
     headers: { authorization: "Bearer owner", "content-type": "application/json" },
   };
-  if (body !== undefined) init.body = JSON.stringify(body);
+  // A string is sent as written (a malformed body); anything else as JSON.
+  if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
   const response = await fetch(`http://${host}/v1/${path}`, init);
   const text = await response.text();
   let parsed;
@@ -259,11 +262,12 @@ async function send(host, pipelines) {
   const seeded = await call(host, "PATCH", `${DOCS}/c/d`, { fields: SEED });
   if (seeded.status !== 200) throw new Error(`seed: ${JSON.stringify(seeded)}`);
   const rows = [];
-  for (const { id, stages } of pipelines) {
-    const body = { structuredPipeline: { pipeline: { stages } } };
+  for (const { id, stages, text } of pipelines) {
+    const body = text ?? { structuredPipeline: { pipeline: { stages } } };
     rows.push({
       id,
       stages,
+      text,
       answer: answer(await call(host, "POST", `${DOCS}:executePipeline`, body)),
     });
   }
@@ -304,6 +308,122 @@ async function collect(host, seed, count, out) {
   const rows = await send(host, pipelines);
   await writeFile(out, JSON.stringify({ seed: Number(seed), count: Number(count), rows }));
   console.log(JSON.stringify({ seed: Number(seed), count: rows.length }));
+}
+
+/**
+ * The finite domains checked exhaustively (coordinator ruling of 2026-10-21 for PX1d r7): every
+ * function fireemu runs, in every argument position, with a constant of every value kind (and
+ * a field and a function), in a select and, for a condition, in a where, each on the seeded
+ * collection, on an empty one, and behind a where that keeps no row; every form of a collection
+ * reference in the collection stage, as a collection_group ancestor and as a document function's
+ * constant; and malformed bodies.
+ */
+export function matrix() {
+  const int = (n) => ({ integerValue: String(n) });
+  const field = (name) => ({ fieldReferenceValue: name });
+  const fn = (name, ...args) => ({ functionValue: { name, args } });
+  const ref = (path) => ({ referenceValue: path });
+  const kinds = {
+    null: { nullValue: null },
+    boolean: { booleanValue: true },
+    integer: int(1),
+    double: { doubleValue: 1.5 },
+    timestamp: { timestampValue: "2020-01-01T00:00:00Z" },
+    string: { stringValue: "s" },
+    bytes: { bytesValue: "AA==" },
+    document: ref(`${DOCS}/c/d`),
+    collection: ref(`${DOCS}/c`),
+    geoPoint: { geoPointValue: { latitude: 1, longitude: 2 } },
+    array: { arrayValue: { values: [int(1)] } },
+    map: { mapValue: { fields: { a: int(1) } } },
+    vector: {
+      mapValue: {
+        fields: {
+          __type__: { stringValue: "__vector__" },
+          value: { arrayValue: { values: [{ doubleValue: 1 }] } },
+        },
+      },
+    },
+    field: field("i"),
+    function: fn("document_id", field("__name__")),
+  };
+  const comparisons = ["equal", "not_equal", "less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal"];
+  const calls = [];
+  for (const [kind, value] of Object.entries(kinds)) {
+    for (const name of comparisons) {
+      calls.push([`${name}(${kind}, i)`, fn(name, value, field("i")), true]);
+      calls.push([`${name}(i, ${kind})`, fn(name, field("i"), value), true]);
+    }
+    for (const name of ["document_id", "collection_id", "parent"]) {
+      calls.push([`${name}(${kind})`, fn(name, value), false]);
+    }
+    calls.push([`array(${kind})`, fn("array", value), false]);
+    calls.push([`map(${kind}, i)`, fn("map", value, field("i")), false]);
+    calls.push([`map("k", ${kind})`, fn("map", { stringValue: "k" }, value), false]);
+  }
+  const inputs = [
+    ["seeded", [{ name: "collection", args: [ref("/c")] }]],
+    ["empty", [{ name: "collection", args: [ref("/empty")] }]],
+    [
+      "filtered",
+      [
+        { name: "collection", args: [ref("/c")] },
+        { name: "where", args: [fn("equal", field("i"), int(99))] },
+      ],
+    ],
+  ];
+  const rows = [];
+  for (const [label, call, condition] of calls) {
+    for (const [input, stages] of inputs) {
+      rows.push({
+        id: `matrix select ${label} ${input}`,
+        stages: [...stages, { name: "select", args: [{ mapValue: { fields: { v: call } } }] }],
+      });
+      if (condition && input !== "filtered") {
+        rows.push({ id: `matrix where ${label} ${input}`, stages: [...stages, { name: "where", args: [call] }] });
+      }
+    }
+  }
+  const forms = ["c", "/c", "/c/d", "/c/d/", "//c/d", "/c//d", "/", "", `${DOCS}/c`, `${DOCS}/c/d`, "/c/x/s", "c/x/s", "projects/x/databases/y/documents/c", "/c/"];
+  for (const form of forms) {
+    rows.push({ id: `matrix collection ${JSON.stringify(form)}`, stages: [{ name: "collection", args: [ref(form)] }] });
+    rows.push({
+      id: `matrix collection_group ${JSON.stringify(form)}`,
+      stages: [{ name: "collection_group", args: [ref(form), { stringValue: "c" }] }],
+    });
+    for (const name of ["document_id", "collection_id", "parent"]) {
+      for (const [input, stages] of inputs) {
+        rows.push({
+          id: `matrix ${name}(ref ${JSON.stringify(form)}) ${input}`,
+          stages: [...stages, { name: "select", args: [{ mapValue: { fields: { v: fn(name, ref(form)) } } }] }],
+        });
+      }
+    }
+  }
+  for (const kind of ["string", "integer", "null", "map"]) {
+    rows.push({ id: `matrix collection(${kind})`, stages: [{ name: "collection", args: [kinds[kind]] }] });
+  }
+  const good = JSON.stringify({ structuredPipeline: { pipeline: { stages: [{ name: "collection", args: [ref("/c")] }] } } });
+  const deep = (n) => `${"[".repeat(n)}${"]".repeat(n)}`;
+  for (const [label, text] of [
+    ["truncated", good.slice(0, -3)],
+    ["trailing input", `${good} trailing`],
+    ["trailing comma", good.replace(/}$/, ",}")],
+    ["unknown escape", good.replace('"/c"', '"/\\q"').replace("\\\\", "\\")],
+    ["deep nesting", `{"structuredPipeline": ${deep(120)}}`],
+    ["not an object", "[]"],
+    ["empty object", "{}"],
+  ]) {
+    rows.push({ id: `matrix body ${label}`, stages: [], text });
+  }
+  return rows;
+}
+
+/** Sends the exhaustive matrix to a loopback target. */
+async function collectMatrix(host, out) {
+  const rows = await send(host, matrix());
+  await writeFile(out, JSON.stringify({ input: "matrix", count: rows.length, rows }));
+  console.log(JSON.stringify({ input: "matrix", count: rows.length }));
 }
 
 /** Replays fixed pipelines, a JSON array of {id, stages} (a review's generated rows). */
@@ -430,12 +550,14 @@ if (import.meta.main) {
   const [mode, ...args] = process.argv.slice(2);
   if (mode === "collect" && args.length === 3)
     await collect(process.env.FIRESTORE_EMULATOR_HOST, ...args);
+  else if (mode === "matrix" && args.length === 1)
+    await collectMatrix(process.env.FIRESTORE_EMULATOR_HOST, ...args);
   else if (mode === "replay" && args.length === 2)
     await replay(process.env.FIRESTORE_EMULATOR_HOST, ...args);
   else if (mode === "compare" && args.length >= 4) await compare(...args);
   else {
     console.error(
-      "usage: differential-sweep.mjs collect <seed> <count> <out> | replay <rows.json> <out> | compare <official> <emulator> <strict> <report> [rows.jsonl]",
+      "usage: differential-sweep.mjs collect <seed> <count> <out> | matrix <out> | replay <rows.json> <out> | compare <official> <emulator> <strict> <report> [rows.jsonl]",
     );
     process.exitCode = 2;
   }

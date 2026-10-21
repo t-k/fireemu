@@ -22,6 +22,7 @@ fn invalid(message: &str) -> Status {
 }
 
 const EMPTY_ALIAS: &str = "Invalid empty property path string.";
+const DB: &str = "projects/demo-app/databases/(default)";
 
 #[test]
 fn every_recorded_refusal_has_a_shape() {
@@ -55,7 +56,7 @@ fn the_gate_answers_a_recorded_shape_with_its_recorded_text_only() {
     let recorded = shape_of_text(
         r#"{"structuredPipeline": {"pipeline": {"stages": [{"name": "collection", "args": [{"referenceValue": "/x"}]}, {"name": "select", "args": [{"mapValue": {"fields": {"": {"fieldReferenceValue": "other"}}}}]}]}}}"#,
     );
-    let gate = RefusalGate::Recorded(recorded.clone());
+    let gate = RefusalGate::Recorded(recorded.clone(), DB.to_owned());
     assert_eq!(
         gate.answer(invalid(EMPTY_ALIAS)).code(),
         tonic::Code::InvalidArgument
@@ -87,9 +88,34 @@ fn the_gate_answers_a_recorded_shape_with_its_recorded_text_only() {
         ),
         None,
     ] {
-        let status = RefusalGate::Recorded(shape.clone()).answer(invalid(EMPTY_ALIAS));
+        let status =
+            RefusalGate::Recorded(shape.clone(), DB.to_owned()).answer(invalid(EMPTY_ALIAS));
         assert_eq!(status.code(), tonic::Code::Unimplemented, "{shape:?}");
     }
+}
+
+#[test]
+fn a_text_may_name_the_request_database_only() {
+    // O-4 `o4/functions#collection-id-collection`: select {v: collection_id(<collection ref>)}.
+    let shape = shape_of_text(
+        r#"{"structuredPipeline": {"pipeline": {"stages": [{"name": "collection", "args": [{"referenceValue": "/x"}]}, {"name": "select", "args": [{"mapValue": {"fields": {"v": {"functionValue": {"name": "collection_id", "args": [{"referenceValue": "r"}]}}}}}]}]}}}"#,
+    );
+    let gate = RefusalGate::Recorded(shape, DB.to_owned());
+    let lacks = |name: &str| {
+        invalid(&format!(
+            "Document parent name \"{name}\" lacks \"/\" at index {}.",
+            name.len()
+        ))
+    };
+    assert_eq!(
+        gate.answer(lacks(&format!("{DB}/documents/c"))).code(),
+        tonic::Code::InvalidArgument
+    );
+    assert_eq!(
+        gate.answer(lacks("projects/x/databases/y/documents/c"))
+            .code(),
+        tonic::Code::Unimplemented
+    );
 }
 
 #[test]

@@ -188,14 +188,15 @@ fn malformed_requests_are_refused() {
     ] {
         assert!(request_from_json(db, &body).is_err(), "{body}");
     }
-    // A nested container past the depth limit is refused, not decoded.
+    // An expression tree past the decoder's bound is refused, not decoded; a literal's own
+    // 20-level limit is the compiler's (the official emulator counts it from the literal).
     let mut deep = json!({"integerValue": "1"});
-    for _ in 0..=MAX_NESTING_DEPTH {
+    for _ in 0..MAX_EXPRESSION_DEPTH {
         deep = json!({"arrayValue": {"values": [deep]}});
     }
     assert!(expression_from_json(&deep, 0).is_err());
     let mut shallow = json!({"integerValue": "1"});
-    for _ in 0..MAX_NESTING_DEPTH - 1 {
+    for _ in 0..MAX_EXPRESSION_DEPTH - 1 {
         shallow = json!({"arrayValue": {"values": [shallow]}});
     }
     assert!(expression_from_json(&shallow, 0).is_ok());

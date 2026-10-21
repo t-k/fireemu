@@ -123,7 +123,7 @@ fn field_ref(path: &str) -> pb::Value {
 fn pipeline(case: &Case, prefix: &str) -> pb::ExecutePipelineRequest {
     let mut stages = vec![stage(
         "collection",
-        value(pb::value::ValueType::StringValue("/items".to_owned())),
+        value(pb::value::ValueType::ReferenceValue("/items".to_owned())),
     )];
     if let Some(literal) = &case.literal {
         stages.push(stage(
@@ -646,7 +646,7 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
         let mut stages = vec![
             stage(
                 "collection",
-                value(pb::value::ValueType::StringValue("/items".to_owned())),
+                value(pb::value::ValueType::ReferenceValue("/items".to_owned())),
             ),
             stage(
                 "select",

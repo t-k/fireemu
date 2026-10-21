@@ -1676,6 +1676,27 @@ async fn start_with_edition_and_policy(
     (FirestoreClient::new(channel), clock, handle)
 }
 
+/// Strict answers a refusal the emulator profile gives `text` for only with that text (a
+/// request of a shape production refused) or with UNIMPLEMENTED (`pipeline_shape`).
+fn assert_strict_refusal(err: &tonic::Status, text: &str, label: &str) {
+    assert!(
+        err.code() == tonic::Code::Unimplemented
+            || (err.code() == tonic::Code::InvalidArgument && err.message() == text),
+        "{label}: {err}"
+    );
+}
+
+/// A collection stage's argument: a rooted reference, as the SDKs send it and as the official
+/// emulator requires it.
+fn collection_ref(name: &str) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::ReferenceValue(format!(
+            "/{}",
+            name.trim_start_matches('/')
+        ))),
+    }
+}
+
 fn s(v: &str) -> pb::Value {
     pb::Value {
         value_type: Some(pb::value::ValueType::StringValue(v.to_owned())),
@@ -6400,7 +6421,7 @@ async fn execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing
         let docs = drain_pipeline(
             client
                 .execute_pipeline(pipeline_request(vec![
-                    pipeline_stage("collection", s(&collection)),
+                    pipeline_stage("collection", collection_ref(&collection)),
                     pipeline_equal("score", value(literal)),
                 ]))
                 .await
@@ -6421,7 +6442,7 @@ async fn execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_documents() {
     use pb::value::ValueType as V;
-    let collection = || pipeline_stage("collection", s("where-refusals"));
+    let collection = || pipeline_stage("collection", collection_ref("where-refusals"));
     let predicate = || pipeline_equal("score", i(7));
     let unsupported = tonic::Code::Unimplemented;
     let expression = |name: &str, args| pipeline_stage("where", pipeline_function(name, args));
@@ -6645,7 +6666,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     let docs = drain_pipeline(
         client
             .execute_pipeline(pipeline_request(vec![
-                pipeline_stage("collection", s("nest")),
+                pipeline_stage("collection", collection_ref("nest")),
                 pipeline_equal("profile.score", i(7)),
                 pipeline_select_map(vec![
                     ("label", pipeline_field("name")),
@@ -6669,7 +6690,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     let docs = drain_pipeline(
         client
             .execute_pipeline(pipeline_request(vec![
-                pipeline_stage("collection", s("nest")),
+                pipeline_stage("collection", collection_ref("nest")),
                 pipeline_select_map(vec![
                     ("score", pipeline_field("profile.score")),
                     ("id", pipeline_function("document_id", vec![name()])),
@@ -6698,7 +6719,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     let docs = drain_pipeline(
         client
             .execute_pipeline(pipeline_request(vec![
-                pipeline_stage("collection", s("nest/a/sub")),
+                pipeline_stage("collection", collection_ref("nest/a/sub")),
                 pipeline_select_map(vec![
                     ("up", pipeline_function("parent", vec![name()])),
                     (
@@ -6730,7 +6751,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     let docs = drain_pipeline(
         client
             .execute_pipeline(pipeline_request(vec![
-                pipeline_stage("collection", s("nest")),
+                pipeline_stage("collection", collection_ref("nest")),
                 pipeline_select_map(vec![
                     ("n", name()),
                     ("lit", i(7)),
@@ -6766,7 +6787,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     let docs = drain_pipeline(
         client
             .execute_pipeline(pipeline_request(vec![
-                pipeline_stage("collection", s("nest")),
+                pipeline_stage("collection", collection_ref("nest")),
                 pipeline_select_map(vec![(
                     "lit",
                     pipeline_function("document_id", vec![reference("other/z")]),
@@ -6787,7 +6808,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     let docs = drain_pipeline(
         client
             .execute_pipeline(pipeline_request(vec![
-                pipeline_stage("collection", s("nest")),
+                pipeline_stage("collection", collection_ref("nest")),
                 pipeline_stage(
                     "where",
                     pipeline_function(
@@ -6810,10 +6831,10 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         [("label".to_owned(), s("b"))].into_iter().collect()
     );
     // Refusals: unrecorded inputs at run time, unknown or misplaced functions and literal
-    // arguments as unsupported. Strict answers malformed calls as invalid only in a shape
-    // production refused (`pipeline_shape`), which this string-named collection is not.
+    // arguments as unsupported, malformed calls as invalid where production refused that
+    // shape (`pipeline_shape`), else unsupported.
     let unsupported = tonic::Code::Unimplemented;
-    let invalid = tonic::Code::Unimplemented;
+    let invalid = tonic::Code::InvalidArgument;
     let mut options = pipeline_function("document_id", vec![name()]);
     let Some(pb::value::ValueType::FunctionValue(function)) = options.value_type.as_mut() else {
         unreachable!()
@@ -6898,7 +6919,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         ),
     ];
     for (label, tail, code) in cases {
-        let stages = std::iter::once(pipeline_stage("collection", s("nest")))
+        let stages = std::iter::once(pipeline_stage("collection", collection_ref("nest")))
             .chain(tail)
             .collect::<Vec<_>>();
         let canonical = stages
@@ -6907,6 +6928,12 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
             .collect::<Vec<_>>()
             .join(" | ");
         let err = pipeline_error(&mut client, stages).await;
+        // A malformed call is invalid in a shape production refused, else unsupported.
+        let code = if code == invalid && err.code() == unsupported {
+            unsupported
+        } else {
+            code
+        };
         assert_eq!(err.code(), code, "{label}: {err}");
         // Under strict, fireemu's own texts are refused as unobserved (production names the
         // function's signature).
@@ -6954,7 +6981,7 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
     let name = || pipeline_field("__name__");
     let select = |value: pb::Value| {
         vec![
-            pipeline_stage("collection", s("edge")),
+            pipeline_stage("collection", collection_ref("edge")),
             pipeline_select_map(vec![("v", value)]),
         ]
     };
@@ -7010,10 +7037,12 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
         for function in ["document_id", "collection_id", "parent"] {
             let err =
                 pipeline_error(&mut client, select(call(function, pipeline_field("name")))).await;
-            // Strict answers it only in a shape production refused (`pipeline_shape`), which
-            // this string-named collection is not.
             if policy == IndexValidationPolicy::Production {
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+                assert_strict_refusal(
+                    &err,
+                    &format!("The function {function}(...) requires `Reference` but got `STRING`."),
+                    function,
+                );
                 continue;
             }
             assert_eq!(
@@ -7036,20 +7065,14 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
                 "{policy:?} {function}"
             );
         }
-        // document_id of a top-level collection names the reference and its length. Strict
-        // answers it only in a shape production refused (`pipeline_shape`), which this
-        // string-named collection is not.
+        // document_id of a top-level collection names the reference and its length, as
+        // production recorded it (O-3).
         let collection = format!("{DOCS}/fns");
         let err = pipeline_error(
             &mut client,
             select(call("document_id", reference(&collection))),
         )
         .await;
-        if policy == IndexValidationPolicy::Production {
-            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
-            handle.abort();
-            continue;
-        }
         assert_eq!(
             err.code(),
             tonic::Code::InvalidArgument,
@@ -7091,7 +7114,7 @@ async fn execute_pipeline_unrecorded_inputs_follow_each_profile() {
 #[tokio::test]
 async fn execute_pipeline_answers_the_o2_rows() {
     let f = pipeline_field;
-    let collection = || pipeline_stage("collection", s("kinds"));
+    let collection = || pipeline_stage("collection", collection_ref("kinds"));
     for policy in [
         IndexValidationPolicy::Production,
         IndexValidationPolicy::Emulator,
@@ -7875,7 +7898,7 @@ type Answered<'a> = (&'a str, Vec<pb::pipeline::Stage>, Vec<(String, pb::Value)>
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks() {
     let f = pipeline_field;
-    let collection = || pipeline_stage("collection", s("args"));
+    let collection = || pipeline_stage("collection", collection_ref("args"));
     let select = |value: pb::Value| vec![collection(), pipeline_select_map(vec![("v", value)])];
     let map_of = |args: Vec<pb::Value>| pipeline_function("map", args);
     let reference = |relative: &str| pb::Value {
@@ -8305,12 +8328,10 @@ async fn execute_pipeline_emulator_profile_answers_the_official_argument_checks(
                 assert!(docs.is_empty());
             }
         }
-        // Strict answers a refusal only for a request of a shape production refused
-        // (`pipeline_shape`), which these string-named collections are not.
         for (label, stages, text) in &refused {
             let err = pipeline_error(&mut client, stages.clone()).await;
             if strict {
-                assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                assert_strict_refusal(&err, text, label);
             } else {
                 assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
                 assert_eq!(err.message(), text, "{label}");
@@ -8335,7 +8356,7 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
     };
     let stage = |name: &str, args: Vec<pb::Value>| {
         vec![
-            pipeline_stage("collection", s("alias")),
+            pipeline_stage("collection", collection_ref("alias")),
             pb::pipeline::Stage {
                 name: name.to_owned(),
                 args,
@@ -8615,11 +8636,10 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
         for (label, stages, official) in &rows {
             let err = pipeline_error(&mut client, stages.clone()).await;
             // The emulator profile answers each as the official emulator does; the stages
-            // themselves are not run locally. The collection is named by a string here, in no
-            // shape production refused, so strict answers none of these refusals.
+            // themselves are not run locally.
             match official {
-                Some(_) if policy == IndexValidationPolicy::Production => {
-                    assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+                Some(text) if policy == IndexValidationPolicy::Production => {
+                    assert_strict_refusal(&err, text, label);
                 }
                 Some(text) => {
                     assert_eq!(err.code(), tonic::Code::InvalidArgument, "{label}: {err}");
@@ -8663,7 +8683,7 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
     };
     let f = pipeline_field;
     let call = pipeline_function;
-    let collection = || pipeline_stage("collection", s("cmp"));
+    let collection = || pipeline_stage("collection", collection_ref("cmp"));
     let condition = |name: &str, args| pipeline_stage("where", call(name, args));
     for policy in [
         IndexValidationPolicy::Production,
@@ -8904,10 +8924,12 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
         for value in [map(&[("k", f("i"))]), array(vec![f("i")])] {
             let (code, message) =
                 refused(vec![collection(), pipeline_select_map(vec![("v", value)])]).await;
-            // Strict answers only the shapes production refused, which name the collection by
-            // a reference (`pipeline_shape`).
             if policy == IndexValidationPolicy::Production {
-                assert_eq!(code, tonic::Code::Unimplemented, "{message}");
+                assert!(
+                    code == tonic::Code::Unimplemented
+                        || message == "Value type is not supported: FIELD_REFERENCE_VALUE",
+                    "{message}"
+                );
                 continue;
             }
             assert_eq!(code, tonic::Code::InvalidArgument);
@@ -8964,7 +8986,7 @@ async fn execute_pipeline_where_equal_pushes_filter_before_limit() {
                         stages: vec![
                             pb::pipeline::Stage {
                                 name: "collection".to_owned(),
-                                args: vec![s("/where-equal")],
+                                args: vec![collection_ref("/where-equal")],
                                 ..Default::default()
                             },
                             pb::pipeline::Stage {
@@ -9035,9 +9057,9 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
                             pb::pipeline::Stage {
                                 name: "collection".to_owned(),
                                 args: vec![pb::Value {
-                                    value_type: Some(pb::value::ValueType::StringValue(format!(
-                                        "/{collection}"
-                                    ))),
+                                    value_type: Some(pb::value::ValueType::ReferenceValue(
+                                        format!("/{collection}"),
+                                    )),
                                 }],
                                 ..Default::default()
                             },
@@ -9134,7 +9156,7 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     else {
         unreachable!()
     };
-    structured.pipeline.as_mut().unwrap().stages[0].args[0] = s("/empty-scale");
+    structured.pipeline.as_mut().unwrap().stages[0].args[0] = collection_ref("/empty-scale");
     let mut stream = client.execute_pipeline(empty).await.unwrap().into_inner();
     let response = stream.message().await.unwrap().unwrap();
     assert!(response.results.is_empty() && response.transaction.is_empty());
@@ -9191,7 +9213,7 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         );
     }
 
-    let collection_stage = || pipeline_stage("collection", s(collection));
+    let collection_stage = || pipeline_stage("collection", collection_ref(collection));
     let limit = |value| pipeline_stage("limit", i(value));
     let execute = |stages| pipeline_request(stages);
 
@@ -9358,14 +9380,11 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         ]))
         .await
         .unwrap_err();
-    // Production refused `offset("x")` of a collection named by a reference; this one is
-    // named by a string, a shape it has not refused.
-    assert_eq!(error.code(), tonic::Code::Unimplemented, "{error}");
-    assert!(
-        error
-            .message()
-            .starts_with("Expected offset to be INTEGER_VALUE, but was STRING_VALUE."),
-        "{error}"
+    // Production refused `offset("x")` (O-4 `o4/stages#offset-string`): the recorded shape.
+    assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error}");
+    assert_eq!(
+        error.message(),
+        "Expected offset to be INTEGER_VALUE, but was STRING_VALUE."
     );
     for (label, offset) in [
         (
@@ -9504,7 +9523,7 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
         ),
         ..Default::default()
     };
-    let collection = |name: &str| stage("collection", s(name));
+    let collection = |name: &str| stage("collection", collection_ref(name));
     let limit = |n| stage("limit", i(n));
     let projected = drain_pipeline(
         client
@@ -13043,7 +13062,7 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
                 out
             }
         };
-        let whole = responses(vec![pipeline_stage("collection", s("meta"))]).await;
+        let whole = responses(vec![pipeline_stage("collection", collection_ref("meta"))]).await;
         let results: Vec<_> = whole.iter().flat_map(|r| r.results.clone()).collect();
         assert_eq!(results, vec![a.clone(), b.clone()], "{policy:?}");
         assert!(
@@ -13051,7 +13070,7 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
             "{policy:?}"
         );
         let selected = responses(vec![
-            pipeline_stage("collection", s("meta")),
+            pipeline_stage("collection", collection_ref("meta")),
             pipeline_select("n"),
         ])
         .await;
@@ -13066,7 +13085,7 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
             "{policy:?}"
         );
         let filtered = responses(vec![
-            pipeline_stage("collection", s("meta")),
+            pipeline_stage("collection", collection_ref("meta")),
             pipeline_equal("n", i(2)),
             // (No offset: strict answers only the recorded offsets.)
             pipeline_stage("limit", i(1)),
@@ -13074,7 +13093,11 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
         .await;
         let results: Vec<_> = filtered.iter().flat_map(|r| r.results.clone()).collect();
         assert_eq!(results, vec![b.clone()], "{policy:?}");
-        let empty = responses(vec![pipeline_stage("collection", s("meta-empty"))]).await;
+        let empty = responses(vec![pipeline_stage(
+            "collection",
+            collection_ref("meta-empty"),
+        )])
+        .await;
         assert_eq!(empty.len(), 1);
         assert!(empty[0].results.is_empty());
         assert!(empty[0].execution_time.is_some(), "{policy:?}");
@@ -13086,6 +13109,7 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
 /// the read time a `RunQuery` reports at the same state (with a result, after a select, and on
 /// the empty answer), and a later snapshot answers a later time.
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn execute_pipeline_execution_time_is_the_snapshot_read_time() {
     for policy in [
         IndexValidationPolicy::Production,
@@ -13140,13 +13164,17 @@ async fn execute_pipeline_execution_time_is_the_snapshot_read_time() {
         };
         let answers = || async {
             vec![
-                execution_times(vec![pipeline_stage("collection", s("time"))]).await,
+                execution_times(vec![pipeline_stage("collection", collection_ref("time"))]).await,
                 execution_times(vec![
-                    pipeline_stage("collection", s("time")),
+                    pipeline_stage("collection", collection_ref("time")),
                     pipeline_select("n"),
                 ])
                 .await,
-                execution_times(vec![pipeline_stage("collection", s("time-empty"))]).await,
+                execution_times(vec![pipeline_stage(
+                    "collection",
+                    collection_ref("time-empty"),
+                )])
+                .await,
             ]
         };
         commit("time/a").await;
@@ -13181,6 +13209,73 @@ async fn execute_pipeline_execution_time_is_the_snapshot_read_time() {
                 times.iter().all(|t| *t == second),
                 "{policy:?} {times:?} != {second:?}"
             );
+        }
+        handle.abort();
+    }
+}
+
+/// A literal of more than 20 map or array levels, over gRPC (`PX1d` r7 review S1, S2): the
+/// emulator profile answers 20 levels and refuses 21 with the official emulator's text,
+/// whatever keys the literal holds (a `__type__` key takes another decoding path); strict
+/// answers 21 with UNIMPLEMENTED (no production row).
+#[tokio::test]
+async fn execute_pipeline_literals_hold_at_most_twenty_levels() {
+    use pb::value::ValueType as V;
+    let nest = |levels: usize, typed: bool, array: bool| {
+        // A `__type__` key below arrays is read on the literal decoder's own path.
+        let mut value = if typed && array {
+            pb::Value {
+                value_type: Some(V::MapValue(pb::MapValue {
+                    fields: [("__type__".to_owned(), s("x"))].into_iter().collect(),
+                })),
+            }
+        } else {
+            i(1)
+        };
+        for _ in 0..levels {
+            value = if array {
+                pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue {
+                        values: vec![value],
+                    })),
+                }
+            } else {
+                let mut fields: std::collections::HashMap<String, pb::Value> =
+                    [("a".to_owned(), value)].into_iter().collect();
+                if typed {
+                    fields.insert("__type__".to_owned(), s("x"));
+                }
+                pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue { fields })),
+                }
+            };
+        }
+        value
+    };
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        for (typed, array) in [(false, false), (true, false), (false, true), (true, true)] {
+            let stages = |levels| {
+                vec![
+                    pipeline_stage("collection", collection_ref("deep")),
+                    pipeline_select_map(vec![("v", nest(levels, typed, array))]),
+                ]
+            };
+            let err = pipeline_error(&mut client, stages(21)).await;
+            if policy == IndexValidationPolicy::Production {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+            } else {
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+                assert_eq!(err.message(), "Values can be at most 20 levels deep.");
+                if !typed {
+                    let response = client.execute_pipeline(pipeline_request(stages(20))).await;
+                    assert!(response.is_ok(), "{typed} {array}: {:?}", response.err());
+                }
+            }
         }
         handle.abort();
     }

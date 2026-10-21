@@ -730,12 +730,12 @@ fn request_body(
             KeyOrder::default(),
         ));
     }
+    if path.ends_with(":executePipeline") {
+        return pipeline_body(bytes, production_refusals);
+    }
     let parsed = if path.ends_with(":batchWrite") {
         crate::rest::json_syntax::parse_with_batch_field_order(bytes)
             .map(|(value, order)| (value, order, KeyOrder::default()))
-    } else if path.ends_with(":executePipeline") {
-        crate::rest::json_syntax::parse_with_key_order(bytes)
-            .map(|(value, order)| (value, Vec::new(), order))
     } else {
         crate::rest::transcode::parse_body(bytes)
             .map(|value| (value, Vec::new(), KeyOrder::default()))
@@ -758,6 +758,47 @@ fn request_body(
             }
             response
         })
+}
+
+/// An `:executePipeline` body (`PX1d` r7 review M3, S3). Strict reads it with production's
+/// grammar and keeps its key order; a body that grammar refuses has no shape, so the refusal
+/// goes through the shape gate (501), as the transcoder's do (ruling (c)). The emulator profile
+/// reads it as the official emulator 1.22.0 does (`json_syntax::parse_official_with_key_order`:
+/// bare keys and single quotes, no trailing comma or unknown escape, trailing input ignored),
+/// and refuses any other body with `Payload isn't valid for request.`
+fn pipeline_body(
+    bytes: &[u8],
+    production_refusals: bool,
+) -> Result<(serde_json::Value, Vec<Vec<String>>, KeyOrder), crate::rest::RestResponse> {
+    let refuse = |status: Status| {
+        let mut response = crate::rest::error_response(&status);
+        response.body = serde_json::Value::Array(vec![response.body]);
+        response
+    };
+    if production_refusals {
+        let (value, order) =
+            crate::rest::json_syntax::parse_with_key_order(bytes).map_err(|error| {
+                refuse(
+                    crate::pipeline_shape::RefusalGate::Recorded(None, String::new()).answer(
+                        Status::invalid_argument(crate::rest::transcode::syntax_error_message(
+                            bytes, &error,
+                        )),
+                    ),
+                )
+            })?;
+        // What only production's grammar admits (a trailing comma, a bare key, an unknown
+        // escape) is unrecorded for this method and the official emulator refuses it, so strict
+        // answers it with UNIMPLEMENTED (r7 review matrix).
+        if serde_json::from_slice::<serde_json::Value>(bytes).is_err() {
+            return Err(refuse(Status::unimplemented(
+                "a body only production's lenient grammar reads is not observed locally for executePipeline",
+            )));
+        }
+        return Ok((value, Vec::new(), order));
+    }
+    crate::rest::json_syntax::parse_official_with_key_order(bytes)
+        .map(|(value, order)| (value, Vec::new(), order))
+        .map_err(|_| refuse(Status::invalid_argument("Payload isn't valid for request.")))
 }
 
 fn is_decoded_message_too_large(status: &Status) -> bool {
@@ -1047,6 +1088,49 @@ mod tests {
         );
         let (_, _, key_order) = super::request_body(br#"{"b": 1, "a": 2}"#, batch, true).unwrap();
         assert_eq!(key_order.keys(""), None);
+        // An executePipeline body that does not parse: strict has no shape for it (501); the
+        // emulator profile answers as the official emulator 1.22.0 does.
+        let refused = |body: &[u8], strict: bool| {
+            let response = super::request_body(body, pipeline, strict).unwrap_err();
+            (
+                response.status,
+                response.body[0]["error"]["message"].clone(),
+            )
+        };
+        let (status, message) = refused(br#"{"structuredPipeline": {"#, true);
+        assert_eq!(status, 501, "{message}");
+        assert!(
+            message
+                .as_str()
+                .unwrap()
+                .contains("Unexpected end of string"),
+            "{message}"
+        );
+        for body in [
+            &br#"{"structuredPipeline": {"#[..],
+            br#"{"a": 1,}"#,
+            br#"{"a": "\q"}"#,
+        ] {
+            assert_eq!(
+                refused(body, false),
+                (400, json!("Payload isn't valid for request."))
+            );
+        }
+        // Bare keys and single quotes are read by both grammars.
+        assert!(super::request_body(br"{a: 'x'}", pipeline, false).is_ok());
+        assert_eq!(refused(br"{a: 'x'}", true).0, 501);
+        assert_eq!(refused(br#"{"a": [1,]}"#, false).0, 400);
+        assert_eq!(refused(br#"{"a": "\v"}"#, false).0, 400);
+        assert!(super::request_body(br#"{"a": "\/\"\\"}"#, pipeline, false).is_ok());
+        // Trailing input after the first value is ignored by the official emulator only.
+        let (body, _, order) =
+            super::request_body(br#"{"b": 1, "a": 2} trailing"#, pipeline, false).unwrap();
+        assert_eq!(body, json!({"b": 1, "a": 2}));
+        assert_eq!(order.keys(""), Some(&["b".to_owned(), "a".to_owned()][..]));
+        assert_eq!(refused(br#"{"b": 1} trailing"#, true).0, 501);
+        // What only production's lenient grammar reads is UNIMPLEMENTED under strict.
+        assert_eq!(refused(br#"{"a": 1,}"#, true).0, 501);
+        assert_eq!(refused(br"{a: 1}", true).0, 501);
         let truncated = super::request_body(br#"{"structuredQuery":"#, query, true).unwrap_err();
         assert_eq!(truncated.status, 400);
         assert_eq!(

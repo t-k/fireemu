@@ -669,9 +669,10 @@ impl Firestore for GatewayService {
         // production's text (coordinator ruling of 2026-10-21); a decoded gRPC map keeps no
         // wire order.
         let gate = if self.gateway.production_refusals() {
-            crate::pipeline_shape::RefusalGate::Recorded(crate::pipeline_shape::shape_of_request(
-                request.get_ref(),
-            ))
+            crate::pipeline_shape::RefusalGate::Recorded(
+                crate::pipeline_shape::shape_of_request(request.get_ref()),
+                request.get_ref().database.clone(),
+            )
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };

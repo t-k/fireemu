@@ -145,6 +145,9 @@ struct Parser<'a> {
     /// The pointer of the value being read and the key order found so far, when the caller
     /// asked for the key order.
     key_order: Option<(String, KeyOrder)>,
+    /// The official emulator's grammar (1.22.0) instead of production's: no trailing comma, only
+    /// the standard escapes (and the quote), and the first value read alone.
+    official: bool,
 }
 
 const fn is_letter(byte: u8) -> bool {
@@ -271,6 +274,9 @@ impl Parser<'_> {
         loop {
             let key = match self.next_token() {
                 Token::Unknown => return Err(self.unknown("Expected an object key or }.")),
+                Token::EndObject if self.official && !out.is_empty() => {
+                    return Err(self.fail("Expected an object key.", self.at));
+                }
                 // A comma may trail the last member.
                 Token::EndObject => {
                     self.at += 1;
@@ -334,6 +340,9 @@ impl Parser<'_> {
             match self.next_token() {
                 Token::Unknown => {
                     return Err(self.unknown("Expected a value or ] within an array."));
+                }
+                Token::EndArray if self.official && !out.is_empty() => {
+                    return Err(self.fail("Expected a value.", self.at));
                 }
                 // A comma may trail the last element.
                 Token::EndArray => {
@@ -460,7 +469,12 @@ impl Parser<'_> {
                 b'n' => b'\n',
                 b'r' => b'\r',
                 b't' => b'\t',
-                b'v' => 0x0b,
+                b'v' if !self.official => 0x0b,
+                b'"' | b'\\' | b'/' => escaped,
+                other if other == quote => other,
+                _ if self.official => {
+                    return Err(self.fail("Invalid escape sequence.", i));
+                }
                 // Any other escaped character stands for itself (`\q` is `q`).
                 other => other,
             });
@@ -581,6 +595,25 @@ pub fn parse_with_key_order(body: &[u8]) -> Result<(Value, KeyOrder), SyntaxErro
     parse_internal(body, false, true).map(|(value, _, order)| (value, order))
 }
 
+/// Parses a body as the official emulator 1.22.0 reads an `executePipeline` request (probed
+/// 2026-10-21): bare keys and single quotes as production's grammar admits them, but no
+/// trailing comma and no unknown escape, and only the first value (trailing input is ignored);
+/// with the key order of every object.
+pub fn parse_official_with_key_order(body: &[u8]) -> Result<(Value, KeyOrder), SyntaxError> {
+    let mut parser = Parser {
+        body,
+        at: 0,
+        finishing: false,
+        leftover: 0,
+        batch_field_order: Vec::new(),
+        key_order: Some((String::new(), KeyOrder::default())),
+        official: true,
+    };
+    let value = parser.value(0, "", Location::Other)?;
+    let key_order = parser.key_order.map(|(_, order)| order).unwrap_or_default();
+    Ok((value, key_order))
+}
+
 fn parse_internal(
     body: &[u8],
     collect_batch_order: bool,
@@ -593,6 +626,7 @@ fn parse_internal(
         leftover: 0,
         batch_field_order: Vec::new(),
         key_order: collect_key_order.then(|| (String::new(), KeyOrder::default())),
+        official: false,
     };
     let location = if collect_batch_order {
         Location::Root
@@ -646,6 +680,40 @@ mod tests {
             Some(&["z".to_owned(), "~".to_owned()][..])
         );
         assert_eq!(order.rebased("/a/y", "").keys(""), None);
+    }
+
+    #[test]
+    fn the_official_grammar_reads_the_first_value_without_trailing_commas_or_unknown_escapes() {
+        let official = |text: &str| super::parse_official_with_key_order(text.as_bytes());
+        assert_eq!(
+            official(r"{a: 'x', b: [1]} trailing").unwrap().0,
+            json!({"a": "x", "b": [1]})
+        );
+        assert_eq!(
+            official(r#"{"a": "\/\"\\\n"}"#).unwrap().0,
+            json!({"a": "/\"\\\n"})
+        );
+        assert_eq!(official(r"{'a': '\'x'}").unwrap().0, json!({"a": "'x"}));
+        assert_eq!(
+            official(r#"{"a": "\b\f\n\r\t\u0041"}"#).unwrap().0,
+            json!({"a": "\u{8}\u{c}\n\r\tA"})
+        );
+        assert!(official("{}").is_ok() && official("[]").is_ok());
+        for refused in [
+            r#"{"a": 1,}"#,
+            r"[1,]",
+            r#"{"a": "\q"}"#,
+            r#"{"a": "\v"}"#,
+            r#"{"a": 1"#,
+            "",
+        ] {
+            assert!(official(refused).is_err(), "{refused}");
+        }
+        // Production's grammar keeps its leniencies.
+        assert!(super::parse(br#"{"a": [1,], "b": "\q"}"#).is_ok());
+        assert!(super::parse(br#"{"a": 1} trailing"#).is_err());
+        let (_, order) = official(r#"{"b": 1, "a": 2} {"x": 1}"#).unwrap();
+        assert_eq!(order.keys(""), Some(&["b".to_owned(), "a".to_owned()][..]));
     }
 
     #[test]

@@ -123,21 +123,21 @@ pub fn validate_pipeline(
             options,
         });
     }
-    // A collection stage naming a document: the official emulator's text (1.22.0, probed
-    // 2026-10-21); strict answers it only where the shape rule lets it.
+    // The collection stage's argument, as the official emulator 1.22.0 checks it before any
+    // other stage (probed 2026-10-21, PX1d r7 review M2): a reference of the rooted form
+    // `/c(/d/c)*`. Production recorded only that form, so strict answers any refusal here
+    // through the shape gate (501).
     if let Some(first) = pipeline.stages.first().filter(|s| s.name == "collection") {
-        if let Some(pb::value::ValueType::ReferenceValue(name)) =
-            first.args.first().and_then(|a| a.value_type.as_ref())
-        {
-            let segments = name.trim_start_matches('/').split('/').count();
-            if first.args.len() == 1 && segments % 2 == 0 && !name.contains("//") {
-                let index = if name.starts_with('/') { name.len() } else { 0 };
-                return Err(with_code(
-                    Status::invalid_argument(format!(
-                        "Collection name \"{name}\" lacks \"/\" at index {index}."
-                    )),
-                    "FS_PIPE_INVALID",
-                ));
+        if let [argument] = first.args.as_slice() {
+            let refusal = match argument.value_type.as_ref() {
+                Some(pb::value::ValueType::ReferenceValue(name)) => collection_name_error(name),
+                other => Some(format!(
+                    "Expected collection_name to be REFERENCE_VALUE, but was {}.",
+                    value_type_name(other)
+                )),
+            };
+            if let Some(text) = refusal {
+                return Err(with_code(Status::invalid_argument(text), "FS_PIPE_INVALID"));
             }
         }
     }
@@ -752,8 +752,7 @@ fn constant_call_error(expr: &Expr) -> Option<Status> {
 /// an argument count anywhere in the operand first; `PX1d` r5 review S2), in document order: a
 /// key that is no literal (FS-ENT-ORACLE O-4 `o4/functions#map-key-*-field`), then a literal
 /// key of another type than a string, which is refused before any row is read, as the official
-/// emulator refuses it on an empty collection (review M3). A reference or vector key keeps the
-/// per-row answer, whose type names differ.
+/// emulator refuses it on an empty collection (review M3), every type alike (r7 review M1).
 fn map_key_error(value: &pb::Value) -> Option<Status> {
     use pb::value::ValueType as V;
     let Some(V::FunctionValue(function)) = &value.value_type else {
@@ -766,26 +765,21 @@ fn map_key_error(value: &pb::Value) -> Option<Status> {
                 "map keys must be constants/literals",
             ));
         }
+        // Every literal key that is not a string, in the official emulator's type names
+        // (a vector is VECTOR, a reference ENTITY_REF; PX1d r7 review M1).
         for key in keys() {
-            if let Some(
-                kind @ (V::NullValue(_)
-                | V::BooleanValue(_)
-                | V::IntegerValue(_)
-                | V::DoubleValue(_)
-                | V::TimestampValue(_)
-                | V::BytesValue(_)
-                | V::GeoPointValue(_)
-                | V::ArrayValue(_)
-                | V::MapValue(_)),
-            ) = &key.value_type
-            {
-                if is_vector_literal(key) {
-                    continue;
+            match &key.value_type {
+                Some(V::StringValue(_)) => {}
+                kind => {
+                    let name = if is_vector_literal(key) {
+                        "VECTOR"
+                    } else {
+                        official_type_name(kind.as_ref())
+                    };
+                    return Some(Status::invalid_argument(format!(
+                        "map key must be of type STRING, given type is {name}"
+                    )));
                 }
-                return Some(Status::invalid_argument(format!(
-                    "map key must be of type STRING, given type is {}",
-                    official_type_name(Some(kind))
-                )));
             }
         }
     }
@@ -891,11 +885,13 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
             None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value) => Err(
                 Status::unimplemented("a literal of this shape is not observed locally"),
             ),
-            // fireemu's nesting limit is its own text: strict refuses it as unobserved.
+            // A literal of more than 20 levels, in the official emulator's words (1.22.0: 20
+            // levels are accepted); production has not answered it, so strict gives 501 through
+            // the shape gate.
             None => Ok(Expr::Constant(decode_official_literal(value).map_err(
                 |e| {
                     if e.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH") {
-                        own_text(e.message().to_owned(), unrecorded)
+                        Status::invalid_argument("Values can be at most 20 levels deep.")
                     } else {
                         e
                     }
@@ -921,6 +917,16 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                     .unwrap_or_else(|| format!("Value type is not supported: {kind}")),
             )),
         },
+    }
+}
+
+/// How many map and array levels a literal value nests.
+fn literal_depth(value: &pb::Value) -> usize {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => 1 + array.values.iter().map(literal_depth).max().unwrap_or(0),
+        Some(V::MapValue(map)) => 1 + map.fields.values().map(literal_depth).max().unwrap_or(0),
+        _ => 0,
     }
 }
 
@@ -964,6 +970,12 @@ fn decode_official_literal(
                 .any(|(key, inner)| test(key, value) || has(inner, test)),
             _ => false,
         }
+    }
+    // The depth limit holds on both paths below, whatever keys the literal has.
+    if literal_depth(value) > fireemu_core_firestore::value::MAX_NESTING_DEPTH as usize {
+        return Err(Status::invalid_argument(
+            "Values can be at most 20 levels deep.",
+        ));
     }
     let typed = |key: &str, map: &pb::Value| key == "__type__" && !is_vector_literal(map);
     // A reserved key is named before an empty one, at any depth (the official emulator 1.22.0,
@@ -1038,6 +1050,45 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// The official emulator's refusal of a collection stage's reference (1.22.0, probed
+/// 2026-10-21): it must start with `/`; an empty segment before the last names the missing
+/// collection or document ID at its offset; a trailing `/` is refused; an even number of
+/// segments names a document (the index counts UTF-16 units).
+fn collection_name_error(name: &str) -> Option<String> {
+    let units = |text: &str| text.encode_utf16().count();
+    let Some(path) = name.strip_prefix('/') else {
+        return Some(format!(
+            "Collection name \"{name}\" lacks \"/\" at index 0."
+        ));
+    };
+    let segments: Vec<&str> = path.split('/').collect();
+    let mut offset = 1;
+    for (at, segment) in segments.iter().enumerate() {
+        if segment.is_empty() && at + 1 < segments.len() {
+            let id = if at % 2 == 0 {
+                "collection id"
+            } else {
+                "resource id"
+            };
+            return Some(format!(
+                "Collection name \"{name}\" lacks a {id} at index {offset}."
+            ));
+        }
+        offset += units(segment) + 1;
+    }
+    if path.is_empty() || name.ends_with('/') {
+        return Some(format!(
+            "Collection name \"{name}\" has invalid trailing \"/\"."
+        ));
+    }
+    (segments.len() % 2 == 0).then(|| {
+        format!(
+            "Collection name \"{name}\" lacks \"/\" at index {}.",
+            units(name)
+        )
+    })
 }
 
 /// The official emulator's refusal of a reference literal that names no document: a name that
@@ -2078,6 +2129,54 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The collection stage's reference, as the official emulator 1.22.0 answered each form
+    /// (probed 2026-10-21).
+    #[test]
+    fn collection_names_get_the_official_texts() {
+        let d = "projects/demo-app/databases/(default)/documents";
+        let lacks = |name: &str, at: usize| {
+            Some(format!(
+                "Collection name \"{name}\" lacks \"/\" at index {at}."
+            ))
+        };
+        let trailing = |name: &str| {
+            Some(format!(
+                "Collection name \"{name}\" has invalid trailing \"/\"."
+            ))
+        };
+        for (name, want) in [
+            ("/c".to_owned(), None),
+            ("/c/x/s".to_owned(), None),
+            ("c".to_owned(), lacks("c", 0)),
+            (String::new(), lacks("", 0)),
+            ("c/x/s".to_owned(), lacks("c/x/s", 0)),
+            (format!("{d}/c"), lacks(&format!("{d}/c"), 0)),
+            ("/c/d".to_owned(), lacks("/c/d", 4)),
+            ("/c/é/s/d".to_owned(), lacks("/c/é/s/d", 8)),
+            ("/c/d/".to_owned(), trailing("/c/d/")),
+            ("/c/".to_owned(), trailing("/c/")),
+            ("/".to_owned(), trailing("/")),
+            (
+                "//c/d".to_owned(),
+                Some("Collection name \"//c/d\" lacks a collection id at index 1.".to_owned()),
+            ),
+            (
+                "/c//d".to_owned(),
+                Some("Collection name \"/c//d\" lacks a resource id at index 3.".to_owned()),
+            ),
+            (
+                "/ab/x//d".to_owned(),
+                Some("Collection name \"/ab/x//d\" lacks a collection id at index 6.".to_owned()),
+            ),
+            (
+                "/ab//d/e/".to_owned(),
+                Some("Collection name \"/ab//d/e/\" lacks a resource id at index 4.".to_owned()),
+            ),
+        ] {
+            assert_eq!(collection_name_error(&name), want, "{name}");
+        }
+    }
 
     /// A literal map's keys come in the body's order while a REST body is compiled, in key order
     /// otherwise, and in key order where two maps of the body hold the same keys in other orders.

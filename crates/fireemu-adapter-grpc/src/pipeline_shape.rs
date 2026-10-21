@@ -30,13 +30,15 @@ const REQUESTS: &str = include_str!("../../../conformance/fs-ent-pipeline-reques
 const PRODUCTION: &str = include_str!("../../../conformance/fs-ent-pipeline-production.json");
 
 /// How a pipeline's refusals are answered: as fireemu computes them (the emulator profile), or
-/// only when the request has a recorded shape (strict; `None` when it has no shape).
+/// only when the request has a recorded shape (strict; `None` when it has no shape), with the
+/// request's database (`projects/{p}/databases/{d}`): a text may name that database in place
+/// of the recorded one, never another.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefusalGate {
     /// Every refusal is answered.
     Open,
-    /// A refusal is answered only for a request of this recorded shape.
-    Recorded(Option<String>),
+    /// A refusal is answered only for a request of this recorded shape, in this database.
+    Recorded(Option<String>, String),
 }
 
 impl RefusalGate {
@@ -45,17 +47,26 @@ impl RefusalGate {
     /// `UNIMPLEMENTED`.
     #[must_use]
     pub fn answer(&self, error: Status) -> Status {
-        let Self::Recorded(shape) = self else {
+        let Self::Recorded(shape, database) = self else {
             return error;
         };
         if error.code() != tonic::Code::InvalidArgument {
             return error;
         }
-        let traced = shape.as_deref().is_some_and(|shape| {
-            recorded()
-                .get(shape)
-                .is_some_and(|texts| texts.contains(&normalized_text(error.message())))
-        });
+        // The request's own database stands for the recorded one; a text naming another
+        // database (a reference elsewhere) traces to no recorded row.
+        let own = if database.is_empty() {
+            error.message().to_owned()
+        } else {
+            error.message().replace(database.as_str(), OWN_DATABASE)
+        };
+        let traced = !own.contains("projects/")
+            && shape.as_deref().is_some_and(|shape| {
+                let text = normalized_text(&own.replace(OWN_DATABASE, "projects/~/databases/~"));
+                recorded()
+                    .get(shape)
+                    .is_some_and(|texts| texts.contains(&text))
+            });
         if traced {
             return error;
         }
@@ -69,6 +80,9 @@ impl RefusalGate {
         status
     }
 }
+
+/// Where a text names the request's own database while the gate checks it.
+const OWN_DATABASE: &str = "\u{1}database\u{1}";
 
 /// The shape of a REST `executePipeline` body, read with the wire order of its maps.
 #[must_use]

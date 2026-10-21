@@ -3,7 +3,10 @@
 //! `functionValue`, `pipelineValue`, `variableReferenceValue`) are decoded here only, so the
 //! document and query routes keep refusing them through [`super::json::value_from_json`].
 
-use fireemu_core_firestore::value::MAX_NESTING_DEPTH;
+/// The deepest expression tree a REST pipeline body may hold: the JSON grammar's own nesting
+/// bound. A literal's 20-level limit is the compiler's (the official emulator counts it from the
+/// literal, not from the stage that holds it).
+const MAX_EXPRESSION_DEPTH: u32 = 100;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Map, Value};
 
@@ -169,9 +172,9 @@ fn value_map_from_json(
 pub fn expression_from_json(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonError> {
     use pb::value::ValueType as V;
     let depth = parent_depth.saturating_add(1);
-    if depth > MAX_NESTING_DEPTH {
+    if depth > MAX_EXPRESSION_DEPTH {
         return err(format!(
-            "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum {MAX_NESTING_DEPTH}, got {depth}"
+            "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum {MAX_EXPRESSION_DEPTH}, got {depth}"
         ));
     }
     let Some((key, inner)) = v

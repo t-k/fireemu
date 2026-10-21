@@ -510,8 +510,8 @@ async fn pipeline_and_listen_are_explicitly_unimplemented() {
                             stages: vec![pb::pipeline::Stage {
                                 name: "collection".to_owned(),
                                 args: vec![pb::Value {
-                                    value_type: Some(pb::value::ValueType::StringValue(
-                                        "users".to_owned(),
+                                    value_type: Some(pb::value::ValueType::ReferenceValue(
+                                        "/users".to_owned(),
                                     )),
                                 }],
                                 options: HashMap::new(),

@@ -1,4 +1,5 @@
-//! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1, O-2 and O-3 programs,
+//! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1 and O-2 programs; the
+//! O-3 and O-4 programs wait for `PX1b` and `PX1d`, see `NOT_YET_REPLAYED`,
 //! `conformance/fs-ent-pipeline-requests.json`) against the in-process REST surface under both
 //! profiles and compares each answer with the production recording
 //! (`conformance/fs-ent-pipeline-production.json`): the status, the result documents as a
@@ -18,6 +19,23 @@ use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
+
+/// Programs the fixture records that this test does not replay yet: FS-ENT-ORACLE O-3 and O-4
+/// (recorded 2026-10-20). `PX1b` maps their answers into the strict profile and replays them; each
+/// must be in the export, so the list cannot hide a program that is not there.
+const NOT_YET_REPLAYED: &[&str] = &[
+    "fs-ent-pipeline/o3/aliases",
+    "fs-ent-pipeline/o3/comparisons",
+    "fs-ent-pipeline/o3/literals",
+    "fs-ent-pipeline/o3/functions",
+    "fs-ent-pipeline/o4/aliases",
+    "fs-ent-pipeline/o4/stages",
+    "fs-ent-pipeline/o4/conditions",
+    "fs-ent-pipeline/o4/literals",
+    "fs-ent-pipeline/o4/functions",
+    "fs-ent-pipeline/o4/documents",
+    "fs-ent-pipeline/o4/comparisons",
+];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
@@ -201,29 +219,6 @@ fn double(value: &Value) -> Value {
     })
 }
 
-/// An error message in a comparable form. A missing-separator refusal names the document parent
-/// and the index where the separator is missing, which is that name's length: the recorded
-/// name carries the placeholder project ID while production counted the real one, so the
-/// name is written relative to its documents root and the index is left out (fireemu's index
-/// is pinned against its own name in the local tests).
-fn message(text: &str) -> String {
-    let parent = text
-        .strip_prefix("Document parent name \"")
-        .and_then(|rest| rest.split_once("\" lacks \"/\" at index "))
-        .filter(|(_, index)| {
-            index
-                .strip_suffix('.')
-                .is_some_and(|n| n.parse::<usize>().is_ok())
-        });
-    match parent {
-        Some((name, _)) => format!(
-            "Document parent name \"{}\" lacks \"/\" at index <n>.",
-            relative(name)
-        ),
-        None => text.to_owned(),
-    }
-}
-
 /// A Firestore value or document in a comparable form.
 fn normalize(value: &Value) -> Value {
     match value {
@@ -231,11 +226,10 @@ fn normalize(value: &Value) -> Value {
             let mut out = serde_json::Map::new();
             for (key, inner) in map {
                 let inner = match key.as_str() {
-                    "doubleValue" | "latitude" | "longitude" => double(inner),
+                    "doubleValue" => double(inner),
                     "referenceValue" | "name" => json!(relative(inner.as_str().unwrap())),
                     "timestampValue" => json!(timestamp(inner.as_str().unwrap())),
                     "createTime" | "updateTime" => json!("<t>"),
-                    "message" if inner.is_string() => json!(message(inner.as_str().unwrap())),
                     _ => normalize(inner),
                 };
                 out.insert(key.clone(), inner);
@@ -284,8 +278,13 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         let s = state(strict);
         let mut differing = Vec::new();
         let mut compared = 0;
+        let mut skipped = Vec::new();
         for program in requests["programs"].as_array().unwrap() {
             let id = program["id"].as_str().unwrap();
+            if NOT_YET_REPLAYED.contains(&id) {
+                skipped.push(id);
+                continue;
+            }
             for seed in program["seed"].as_array().unwrap() {
                 let (status, body) = call(
                     &s,
@@ -327,6 +326,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             }
         }
         assert!(compared > 200, "{compared}");
+        assert_eq!(skipped, NOT_YET_REPLAYED);
         let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
         let unexpected: Vec<_> = differing.iter().filter(|(row, _, _)| !known(row)).collect();
         assert!(

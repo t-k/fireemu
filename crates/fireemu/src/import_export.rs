@@ -267,8 +267,8 @@ pub struct Prepared {
     auth: Option<PreparedAuth>,
     /// The Storage objects and buckets.
     storage: Option<PreparedStorage>,
-    /// The Realtime Database namespaces and the text of each.
-    database: Option<Vec<(String, String)>>,
+    /// The Realtime Database namespaces, each file checked and its data built once.
+    database: Option<Vec<fireemu_adapter_database::rest::PreparedImport>>,
     /// The Firestore time-to-live field configuration, from the fireemu-only sidecar. The
     /// official export format has no equivalent section, so an artifact without the sidecar
     /// leaves the running configuration unchanged.
@@ -564,16 +564,11 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
                 "the Realtime Database is poisoned",
             )
         })?;
-        for (namespace, text) in namespaces {
+        for import in namespaces {
+            let file = PathBuf::from(DATABASE_PATH).join(format!("{}.json", import.namespace()));
             database
-                .import_text(&namespace, &text, now_millis)
-                .map_err(|e| {
-                    ArtifactError::new(
-                        "database",
-                        PathBuf::from(DATABASE_PATH).join(format!("{namespace}.json")),
-                        e,
-                    )
-                })?;
+                .install_import(import, now_millis)
+                .map_err(|e| ArtifactError::new("database", file, e))?;
         }
     }
 
@@ -2779,7 +2774,7 @@ const IMPORT_DATABASE_BYTES_LIMIT: u64 = 1024 * 1024 * 1024;
 fn read_database_section(
     dir: &Path,
     section: &Section,
-) -> Result<Vec<(String, String)>, ArtifactError> {
+) -> Result<Vec<fireemu_adapter_database::rest::PreparedImport>, ArtifactError> {
     read_database_section_within(dir, section, IMPORT_DATABASE_BYTES_LIMIT)
 }
 
@@ -2788,7 +2783,7 @@ fn read_database_section_within(
     dir: &Path,
     section: &Section,
     limit: u64,
-) -> Result<Vec<(String, String)>, ArtifactError> {
+) -> Result<Vec<fireemu_adapter_database::rest::PreparedImport>, ArtifactError> {
     let section_dir = dir.join(&section.path);
     ensure_directory_inside(dir, &section_dir)
         .map_err(|e| ArtifactError::new("database", &section_dir, e))?;
@@ -2832,15 +2827,15 @@ fn read_database_section_within(
             "Realtime Database files",
         )
         .map_err(|e| ArtifactError::new("database", &path, e))?;
-        // Written into a scratch database first, so a file the import would refuse stops the
-        // start before any section is installed (review RTDB-04 S4).
-        fireemu_adapter_database::rest::Database::new(
-            fireemu_adapter_database::rest::RestOptions::default(),
-            0,
+        // Checked and built here, so a file the import would refuse stops the start before
+        // any section is installed (review RTDB-04 S4), and each file is parsed once.
+        let import = fireemu_adapter_database::rest::prepare_import(
+            &namespace,
+            text,
+            &fireemu_adapter_database::rest::RestOptions::default().limits,
         )
-        .import_text(&namespace, &text, 0)
         .map_err(|e| ArtifactError::new("database", &path, e))?;
-        namespaces.push((namespace, text));
+        namespaces.push(import);
     }
     Ok(namespaces)
 }
@@ -5244,9 +5239,23 @@ mod tests {
         assert!(refused.contains("Invalid data"), "{refused}");
         std::fs::remove_file(section_dir.join("bad.json")).unwrap();
         assert_eq!(
-            super::read_database_section(root.path(), &section).unwrap(),
+            installed(super::read_database_section(root.path(), &section).unwrap()),
             vec![("good".to_owned(), r#"{"x":1}"#.to_owned())]
         );
+    }
+
+    /// What the prepared Realtime Database files install into an empty database.
+    fn installed(
+        imports: Vec<fireemu_adapter_database::rest::PreparedImport>,
+    ) -> Vec<(String, String)> {
+        let mut database = fireemu_adapter_database::rest::Database::new(
+            fireemu_adapter_database::rest::RestOptions::default(),
+            0,
+        );
+        for import in imports {
+            database.install_import(import, 0).unwrap();
+        }
+        database.export_texts()
     }
 
     /// The Realtime Database files share one budget: 1 GiB, as the Storage and Firestore
@@ -5268,7 +5277,7 @@ mod tests {
         };
         let read = super::read_database_section_within(root.path(), &section, 14).unwrap();
         assert_eq!(
-            read,
+            installed(read),
             vec![
                 ("a".to_owned(), r#"{"x":1}"#.to_owned()),
                 ("b".to_owned(), r#"{"y":2}"#.to_owned())

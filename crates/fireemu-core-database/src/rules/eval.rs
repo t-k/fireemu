@@ -123,15 +123,18 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
             .collect::<Option<Vec<_>>>()
             .map(Value::Array),
         ExprKind::Name(name) => variable(name, scope),
-        ExprKind::Member(object, name) => member(eval(object, scope)?, name, scope),
-        ExprKind::Index(object, index) => {
-            let object = eval(object, scope)?;
+        ExprKind::Member(object, name) => {
+            let auth = rooted_at_auth(object);
+            member(eval(object, scope)?, name, scope, auth)
+        }
+        ExprKind::Index(object_expr, index) => {
+            let object = eval(object_expr, scope)?;
             let key = match eval(index, scope)? {
                 Value::Str(s) => s,
                 Value::Num(n) => number_text(n),
                 _ => return None,
             };
-            member(object, &key, scope)
+            member(object, &key, scope, rooted_at_auth(object_expr))
         }
         ExprKind::Call(callee, arguments) => {
             let ExprKind::Member(object, name) = &callee.kind else {
@@ -175,8 +178,27 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
     }
 }
 
-fn member<'a>(object: Value<'a>, name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
+/// Whether `expr` is `auth` or one of its members.
+fn rooted_at_auth(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Name(name) => name == "auth",
+        ExprKind::Member(object, _) | ExprKind::Index(object, _) => rooted_at_auth(object),
+        _ => false,
+    }
+}
+
+/// A member of `object`. Under `auth` (`in_auth`) any member of an object, `length`
+/// included, and any member of `null` is a value, `null` when absent; elsewhere `length` of
+/// anything but a string is an error (review r8 M23, the r9 method matrix).
+fn member<'a>(
+    object: Value<'a>,
+    name: &str,
+    scope: &Scope<'a>,
+    in_auth: bool,
+) -> Option<Value<'a>> {
     match object {
+        Value::Null if in_auth => Some(Value::Null),
+        Value::Json(Json::Object(_) | Json::Array(_)) if name == "length" && !in_auth => None,
         Value::Json(Json::Object(map)) => Some(map.get(name).map_or(Value::Null, from_json)),
         // An array is an object keyed by its indexes: any other member is null.
         Value::Json(Json::Array(items)) => Some(
@@ -317,6 +339,11 @@ fn snapshot_call<'a>(
             ))
         }
         "hasChildren" => {
+            // An empty list of names is true wherever the node is, as there (the r9 method
+            // matrix).
+            if matches!(arguments.first(), Some(Value::Array(keys)) if keys.is_empty()) {
+                return Some(Value::Bool(true));
+            }
             let Some(Node {
                 content: Content::Children(children),
                 ..
@@ -357,6 +384,16 @@ fn snapshot_call<'a>(
 fn binary<'a>(op: BinaryOp, left: &Expr, right: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
     let l = eval(left, scope)?;
     let r = eval(right, scope)?;
+    // Objects compare by identity there: `auth` is one object, so `auth == auth` holds, while
+    // each `val()` or member of `auth` is a new one (the r9 operator matrix).
+    let auth = |expr: &Expr| matches!(&expr.kind, ExprKind::Name(name) if name == "auth");
+    if matches!(l, Value::Json(_)) && auth(left) && auth(right) {
+        match op {
+            BinaryOp::Eq => return Some(Value::Bool(true)),
+            BinaryOp::Ne => return Some(Value::Bool(false)),
+            _ => {}
+        }
+    }
     combine(op, &l, &r)
 }
 
@@ -395,7 +432,9 @@ fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> 
             let ordering = match (l, r) {
                 (Value::Num(a), Value::Num(b)) => a.partial_cmp(b)?,
                 (Value::Str(a), Value::Str(b)) => a.encode_utf16().cmp(b.encode_utf16()),
-                _ => return Some(Value::Bool(false)),
+                // Any other pair is an error there, so the rule is false negated or not
+                // (review r8 M22).
+                _ => return None,
             };
             Some(Value::Bool(match op {
                 BinaryOp::Lt => ordering.is_lt(),

@@ -113,14 +113,18 @@ impl Checker<'_> {
             ExprKind::Name(name) => self.variable(expr.at, name),
             ExprKind::Member(object, name) => self.member(expr.at, object, name),
             ExprKind::Index(object, index) => {
+                // An index other than a string literal (those are members): the official
+                // emulator allows it on `auth` and its members, a `null` index aside, and
+                // refuses it on anything else (review r8 M23).
                 let object = self.ty(object)?;
                 self.ty(index)?;
                 match object {
-                    Ty::Any | Ty::Json => Ok(object),
-                    _ => Err(ExprError::new(
+                    Ty::Json if matches!(index.kind, ExprKind::Null) => Err(ExprError::new(
                         expr.at,
-                        "Invalid property access: target is not an object.",
+                        "Invalid property access on 'auth' object.",
                     )),
+                    Ty::Json => Ok(object),
+                    _ => Err(ExprError::new(expr.at, "Invalid property access.")),
                 }
             }
             ExprKind::Call(callee, arguments) => self.call(expr, callee, arguments),

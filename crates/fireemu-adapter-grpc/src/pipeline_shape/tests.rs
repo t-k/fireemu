@@ -449,3 +449,37 @@ proptest! {
         );
     }
 }
+
+/// A database id ends at `/`, `"`, whitespace or the end of the text, and only the whole id
+/// stands for the request's database; a text without `/databases/` names none.
+#[test]
+fn own_database_matches_whole_database_ids_only() {
+    let db = "projects/p/databases/db";
+    for (message, want) in [
+        (
+            "at projects/p/databases/db/documents/c",
+            "at \u{1}database\u{1}/documents/c",
+        ),
+        (
+            "name \"projects/p/databases/db\" lacks",
+            "name \"\u{1}database\u{1}\" lacks",
+        ),
+        (
+            "name projects/p/databases/db lacks",
+            "name \u{1}database\u{1} lacks",
+        ),
+        ("end projects/p/databases/db", "end \u{1}database\u{1}"),
+        (
+            "other projects/p/databases/db2/documents",
+            "other projects/p/databases/db2/documents",
+        ),
+        (
+            "other projects/p/databases/db\tx",
+            "other \u{1}database\u{1}\tx",
+        ),
+        ("no database projects/p", "no database projects/p"),
+    ] {
+        assert_eq!(own_database(message, db), want, "{message}");
+    }
+    assert_eq!(own_database("projects/p", ""), "projects/p");
+}

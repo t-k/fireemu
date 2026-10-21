@@ -2693,6 +2693,46 @@ mod tests {
                 "{name:.80}"
             );
         }
+        // Inside every container a constant can sit in.
+        let elsewhere = || reference("projects/q/databases/db/documents/c/d".to_owned());
+        let function =
+            |args: Vec<pb::Value>, options: std::collections::HashMap<String, pb::Value>| {
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                        name: "equal".to_owned(),
+                        args,
+                        options,
+                    })),
+                }
+            };
+        for holder in [
+            pb::Value {
+                value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                    values: vec![reference(format!("{own}/c/d")), elsewhere()],
+                })),
+            },
+            pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: [("k".to_owned(), elsewhere())].into_iter().collect(),
+                })),
+            },
+            function(vec![elsewhere()], std::collections::HashMap::new()),
+            function(
+                Vec::new(),
+                [("o".to_owned(), elsewhere())].into_iter().collect(),
+            ),
+            pb::Value {
+                value_type: Some(pb::value::ValueType::PipelineValue(pb::Pipeline {
+                    stages: vec![pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![elsewhere()],
+                        options: std::collections::HashMap::new(),
+                    }],
+                })),
+            },
+        ] {
+            assert!(reference_outside(&holder, own).is_some(), "{holder:?}");
+        }
     }
 
     /// Value limits of production, as the official emulator 1.22.0 answers them.

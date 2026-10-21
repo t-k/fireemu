@@ -328,7 +328,8 @@ fn repeated_requests_get_one_answer_under_both_profiles() {
     }
 }
 
-/// The review's round-5 and round-6 rows (`r6 ` and `r7 ` ids) answer the official emulator's
+/// The review's round-5 and round-6 rows (`r6 `, `r6 review ` and `r7 ` ids, the round-6
+/// review's `m3-*` and `g777-*/EG` rows among them) answer the official emulator's
 /// text under the emulator profile: a literal `map(...)` key's type before any row (on an empty
 /// collection too) and before a repeated key, a negative count after an empty map, a literal
 /// holding a field before a `map(...)` key that is no literal or a reserved alias, a failing
@@ -364,5 +365,5 @@ fn the_round_five_rows_answer_the_official_texts_under_the_emulator_profile() {
         assert_eq!(answer(status, &body), official(row), "{}", row["id"]);
         checked += 1;
     }
-    assert_eq!(checked, 20);
+    assert_eq!(checked, 43);
 }

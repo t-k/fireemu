@@ -1516,6 +1516,9 @@
      {
       "name": "projects/demo-app/databases/(default)/documents/c/d",
       "fields": {
+       "top": {
+        "stringValue": "t"
+       },
        "i": {
         "integerValue": "1"
        },
@@ -1524,13 +1527,10 @@
        },
        "dbl": {
         "doubleValue": 1.5
-       },
-       "top": {
-        "stringValue": "t"
        }
       },
-      "createTime": "2026-10-21T03:28:40.250222Z",
-      "updateTime": "2026-10-21T03:28:40.250222Z"
+      "createTime": "2026-10-21T03:59:51.774584Z",
+      "updateTime": "2026-10-21T03:59:51.774584Z"
      }
     ]
    }
@@ -7067,6 +7067,9 @@
      {
       "name": "projects/demo-app/databases/(default)/documents/c/d",
       "fields": {
+       "top": {
+        "stringValue": "t"
+       },
        "i": {
         "integerValue": "1"
        },
@@ -7075,13 +7078,10 @@
        },
        "dbl": {
         "doubleValue": 1.5
-       },
-       "top": {
-        "stringValue": "t"
        }
       },
-      "createTime": "2026-10-21T03:28:40.250222Z",
-      "updateTime": "2026-10-21T03:28:40.250222Z"
+      "createTime": "2026-10-21T03:59:51.774584Z",
+      "updateTime": "2026-10-21T03:59:51.774584Z"
      }
     ]
    }
@@ -12465,6 +12465,18 @@
        "v": {
         "mapValue": {
          "fields": {
+          "top": {
+           "stringValue": "t"
+          },
+          "__name__": {
+           "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+          },
+          "__create_time__": {
+           "timestampValue": "2026-10-21T03:59:51.774584Z"
+          },
+          "__update_time__": {
+           "timestampValue": "2026-10-21T03:59:51.774584Z"
+          },
           "i": {
            "integerValue": "1"
           },
@@ -12473,18 +12485,6 @@
           },
           "dbl": {
            "doubleValue": 1.5
-          },
-          "top": {
-           "stringValue": "t"
-          },
-          "__name__": {
-           "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
-          },
-          "__create_time__": {
-           "timestampValue": "2026-10-21T03:28:40.250222Z"
-          },
-          "__update_time__": {
-           "timestampValue": "2026-10-21T03:28:40.250222Z"
           }
          }
         }
@@ -400940,6 +400940,9 @@
      {
       "name": "projects/demo-app/databases/(default)/documents/c/d",
       "fields": {
+       "top": {
+        "stringValue": "t"
+       },
        "i": {
         "integerValue": "1"
        },
@@ -400948,13 +400951,10 @@
        },
        "dbl": {
         "doubleValue": 1.5
-       },
-       "top": {
-        "stringValue": "t"
        }
       },
-      "createTime": "2026-10-21T03:28:40.250222Z",
-      "updateTime": "2026-10-21T03:28:40.250222Z"
+      "createTime": "2026-10-21T03:59:51.774584Z",
+      "updateTime": "2026-10-21T03:59:51.774584Z"
      }
     ]
    }
@@ -406842,6 +406842,980 @@
    "official": {
     "status": 400,
     "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+   }
+  },
+  {
+   "id": "r6 review m3-map-long-seeded",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review m3-map-bool-seeded",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "booleanValue": true
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is BOOLEAN"
+   }
+  },
+  {
+   "id": "r6 review m3-map-long-const-seeded",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review m3-map-map-key-seeded",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "mapValue": {}
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is MAP"
+   }
+  },
+  {
+   "id": "r6 review m3-map-dup-const-seeded",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "integerValue": "1"
+            },
+            {
+             "stringValue": "k"
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map(...) constructor given duplicate key: k"
+   }
+  },
+  {
+   "id": "r6 review m3-parent-collref-seeded",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "referenceValue": "/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent \"/c\" not recognized."
+   }
+  },
+  {
+   "id": "r6 review m3-docid-string-seeded",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "stringValue": "x"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "The function document_id(...) requires `Reference` but got `STRING`."
+   }
+  },
+  {
+   "id": "r6 review m3-map-long-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review m3-map-bool-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "booleanValue": true
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is BOOLEAN"
+   }
+  },
+  {
+   "id": "r6 review m3-map-long-const-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review m3-map-map-key-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "mapValue": {}
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is MAP"
+   }
+  },
+  {
+   "id": "r6 review m3-map-dup-const-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k"
+            },
+            {
+             "integerValue": "1"
+            },
+            {
+             "stringValue": "k"
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": []
+   }
+  },
+  {
+   "id": "r6 review m3-docid-collref-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "referenceValue": "/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent \"/c\" not recognized."
+   }
+  },
+  {
+   "id": "r6 review m3-parent-collref-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "referenceValue": "/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent \"/c\" not recognized."
+   }
+  },
+  {
+   "id": "r6 review m3-docid-string-empty",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "stringValue": "x"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 200,
+    "results": []
+   }
+  },
+  {
+   "id": "r6 review m3-where-none-collid-collref",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "equal",
+        "args": [
+         {
+          "fieldReferenceValue": "i"
+         },
+         {
+          "integerValue": "99"
+         }
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r6 review m3-empty-collid-collref",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r6 review g777-00604/G",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "`q`": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k2"
+            },
+            {
+             "nullValue": null
+            },
+            {
+             "integerValue": "1"
+            },
+            {
+             "integerValue": "0"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review g777-00604/EG",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "`q`": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "stringValue": "k2"
+            },
+            {
+             "nullValue": null
+            },
+            {
+             "integerValue": "1"
+            },
+            {
+             "integerValue": "0"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review g777-01956/G",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "map",
+        "args": [
+         {
+          "integerValue": "1"
+         },
+         {
+          "geoPointValue": {
+           "latitude": 1,
+           "longitude": 2
+          }
+         },
+         {
+          "stringValue": "k"
+         },
+         {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "stringValue": "x"
+            }
+           }
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review g777-01956/EG",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "map",
+        "args": [
+         {
+          "integerValue": "1"
+         },
+         {
+          "geoPointValue": {
+           "latitude": 1,
+           "longitude": 2
+          }
+         },
+         {
+          "stringValue": "k"
+         },
+         {
+          "mapValue": {
+           "fields": {
+            "__type__": {
+             "stringValue": "x"
+            }
+           }
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r6 review g777-02353/G",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "map",
+        "args": [
+         {
+          "mapValue": {
+           "fields": {}
+          }
+         },
+         {
+          "fieldReferenceValue": "n"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is MAP"
+   }
+  },
+  {
+   "id": "r6 review g777-02353/EG",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/e"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "map",
+        "args": [
+         {
+          "mapValue": {
+           "fields": {}
+          }
+         },
+         {
+          "fieldReferenceValue": "n"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is MAP"
    }
   }
  ]

@@ -512,6 +512,7 @@ pub fn compile_pipeline_in_order(
     order: Option<&KeyOrder>,
 ) -> Result<CompiledExecution, Status> {
     let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
+    let _wire = WireOrderScope::enter(order);
     let mut stages = Vec::new();
     let mut last_rank = 0u8;
     let (mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
@@ -558,7 +559,20 @@ pub fn compile_pipeline_in_order(
                         continue;
                     }
                     let aliases = select_wire_order(order, position);
-                    stages.push(Stage::Select(decode_select(stage, unrecorded, aliases)?));
+                    match decode_select(stage, unrecorded, aliases) {
+                        Ok(select) => stages.push(Stage::Select(select)),
+                        // A reserved alias and a `map(...)` key type are answered after a
+                        // later stage's argument type, as an empty map is (the official
+                        // emulator 1.22.0: `select {__x__: i}` then `limit("x")` gives the
+                        // limit text).
+                        Err(error)
+                            if error.message().starts_with("Stage 'select': field name")
+                                || error.message().starts_with("map key must be of type") =>
+                        {
+                            deferred.get_or_insert(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 "offset" => {
                     if seen_offset {
@@ -680,12 +694,9 @@ fn expression_kind(value: &pb::Value) -> Option<&'static str> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => array.values.iter().find_map(expression_kind),
-        Some(V::MapValue(map)) => {
-            let mut keys: Vec<_> = map.fields.keys().collect();
-            keys.sort();
-            keys.into_iter()
-                .find_map(|key| expression_kind(&map.fields[key]))
-        }
+        Some(V::MapValue(map)) => ordered_keys(&map.fields)
+            .into_iter()
+            .find_map(|key| expression_kind(&map.fields[key])),
         Some(V::FieldReferenceValue(_)) => Some("FIELD_REFERENCE_VALUE"),
         Some(V::VariableReferenceValue(_)) => Some("VARIABLE_REFERENCE_VALUE"),
         Some(V::FunctionValue(_)) => Some("FUNCTION_VALUE"),
@@ -913,6 +924,9 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
     }
 }
 
+/// The official emulator's refusal of an empty key in a literal map.
+const EMPTY_LITERAL_KEY: &str = "Property names cannot be empty.";
+
 /// The first reserved map key (`__x__`, `__type__` aside) a literal holds at any depth, in key
 /// order.
 fn reserved_key(value: &pb::Value) -> Option<String> {
@@ -920,8 +934,7 @@ fn reserved_key(value: &pb::Value) -> Option<String> {
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => array.values.iter().find_map(reserved_key),
         Some(V::MapValue(map)) => {
-            let mut keys: Vec<&String> = map.fields.keys().collect();
-            keys.sort();
+            let keys = ordered_keys(&map.fields);
             keys.into_iter().find_map(|key| {
                 if is_reserved_name(key) && key != "__type__" {
                     Some(key.clone())
@@ -961,7 +974,7 @@ fn decode_official_literal(
         )));
     }
     if has(value, &|key, _| key.is_empty()) {
-        return Err(Status::invalid_argument("Property names cannot be empty."));
+        return Err(Status::invalid_argument(EMPTY_LITERAL_KEY));
     }
     if !has(value, &typed) {
         return crate::decode::decode_value(value)
@@ -1019,8 +1032,7 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
             if is_vector_literal(value) {
                 return vector_error(map).map(str::to_owned);
             }
-            let mut keys: Vec<_> = map.fields.keys().collect();
-            keys.sort();
+            let keys = ordered_keys(&map.fields);
             keys.into_iter()
                 .find_map(|key| literal_value_error(&map.fields[key]))
         }
@@ -1130,8 +1142,7 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => array.values.iter().find_map(entry),
         Some(V::MapValue(map)) => {
-            let mut keys: Vec<_> = map.fields.keys().collect();
-            keys.sort();
+            let keys = ordered_keys(&map.fields);
             keys.into_iter().find_map(|key| entry(&map.fields[key]))
         }
         _ => None,
@@ -1334,11 +1345,23 @@ fn decode_select(
         }
         parse_alias(alias)?;
     }
+    // An empty literal key is named after every other value's checks (the official emulator
+    // 1.22.0 names a literal holding a field, or a reserved key, in a later value first).
     let mut exprs = Vec::with_capacity(entries.len());
+    let mut empty_key = None;
     for (_, value) in &entries {
-        exprs.push(decode_operand_tree(value, unrecorded)?);
+        match decode_operand_tree(value, unrecorded) {
+            Ok(expr) => exprs.push(expr),
+            Err(error) if error.message() == EMPTY_LITERAL_KEY => {
+                empty_key.get_or_insert(error);
+            }
+            Err(error) => return Err(error),
+        }
     }
     if let Some(error) = entries.iter().find_map(|(_, value)| map_key_error(value)) {
+        return Err(error);
+    }
+    if let Some(error) = empty_key {
         return Err(error);
     }
     let mut aliases = Vec::with_capacity(entries.len());
@@ -1571,13 +1594,12 @@ fn check_unrun_alias_stage(
     // A select after an unrun stage: the official emulator checks its aliases too, with the
     // select texts, and answers an empty map last.
     if name == "select" {
-        let mut aliases: Vec<&String> = stage
+        let aliases: Vec<&String> = stage
             .args
             .iter()
             .filter_map(map_fields)
-            .flat_map(|fields| fields.keys())
+            .flat_map(ordered_keys)
             .collect();
-        aliases.sort();
         for alias in aliases {
             decode_alias(alias)?;
         }
@@ -1598,13 +1620,12 @@ fn check_unrun_alias_stage(
         }
         return Ok(());
     }
-    let mut stage_aliases: Vec<&String> = stage
+    let stage_aliases: Vec<&String> = stage
         .args
         .iter()
         .filter_map(map_fields)
-        .flat_map(|fields| fields.keys())
+        .flat_map(ordered_keys)
         .collect();
-    stage_aliases.sort();
     // The official emulator checks each alias's syntax, then its reserved first segment, then
     // its length (firebase-tools 15.28.2, Firestore emulator 1.22.0; production recorded the
     // syntax and length texts alone, O-4 `o4/stages#add-fields-*-alias*`).
@@ -1779,12 +1800,76 @@ fn reserved_alias(stage: &str, alias: &str) -> Option<String> {
     }
 }
 
-/// A wire map's values in key order (the wire map keeps no order, and a refusal named first
-/// must be the same on every run).
+/// A wire map's values in the order of [`ordered_keys`].
 fn sorted_values(fields: &std::collections::HashMap<String, pb::Value>) -> Vec<&pb::Value> {
-    let mut entries: Vec<_> = fields.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    entries.into_iter().map(|(_, value)| value).collect()
+    ordered_keys(fields)
+        .into_iter()
+        .map(|key| &fields[key])
+        .collect()
+}
+
+/// Each key list of a body's maps (sorted) with its wire order, `None` where two maps disagree.
+type WireKeys = std::collections::HashMap<Vec<String>, Option<Vec<String>>>;
+
+std::thread_local! {
+    /// The wire order of the maps of the request being compiled, by their sorted key list,
+    /// where the transport kept it (a REST body); `None` for a key list two maps of the body
+    /// share in different orders.
+    static WIRE_KEYS: std::cell::RefCell<Option<WireKeys>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes the wire order of a body's maps available to the checks while it lives.
+struct WireOrderScope;
+
+impl WireOrderScope {
+    fn enter(order: Option<&KeyOrder>) -> Self {
+        let table = order.map(|order| {
+            let mut table = WireKeys::new();
+            for keys in order.objects() {
+                let mut sorted = keys.to_vec();
+                sorted.sort();
+                table
+                    .entry(sorted)
+                    .and_modify(|known| {
+                        if known.as_deref() != Some(keys) {
+                            *known = None;
+                        }
+                    })
+                    .or_insert_with(|| Some(keys.to_vec()));
+            }
+            table
+        });
+        WIRE_KEYS.with(|cell| *cell.borrow_mut() = table);
+        Self
+    }
+}
+
+impl Drop for WireOrderScope {
+    fn drop(&mut self) {
+        WIRE_KEYS.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
+/// A wire map's keys in the request's order where the transport kept it and no other map of
+/// the body holds the same keys in another order, else in key order (a decoded gRPC map keeps
+/// none, and a refusal named first must be the same on every run). The official emulator
+/// 1.22.0 reads a literal's entries in wire order (`PX1d` r6 review S2).
+fn ordered_keys(fields: &std::collections::HashMap<String, pb::Value>) -> Vec<&String> {
+    let mut keys: Vec<&String> = fields.keys().collect();
+    keys.sort();
+    let sorted: Vec<String> = keys.iter().map(|k| (*k).clone()).collect();
+    let wire = WIRE_KEYS.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|table| table.get(&sorted).cloned().flatten())
+    });
+    match wire {
+        Some(order) => order
+            .iter()
+            .filter_map(|k| fields.get_key_value(k).map(|(key, _)| key))
+            .collect(),
+        None => keys,
+    }
 }
 
 /// The fields of a wire map value.
@@ -1993,6 +2078,34 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A literal map's keys come in the body's order while a REST body is compiled, in key order
+    /// otherwise, and in key order where two maps of the body hold the same keys in other orders.
+    #[test]
+    fn literal_keys_follow_the_wire_order_while_it_is_known() {
+        let fields = |keys: &[&str]| -> std::collections::HashMap<String, pb::Value> {
+            keys.iter()
+                .map(|k| ((*k).to_owned(), pb::Value::default()))
+                .collect()
+        };
+        let map = fields(&["b", "a"]);
+        let order = |text: &[u8]| {
+            crate::rest::json_syntax::parse_with_key_order(text)
+                .unwrap()
+                .1
+        };
+        assert_eq!(ordered_keys(&map), ["a", "b"]);
+        {
+            let one = order(br#"{"x": {"b": 1, "a": 2}}"#);
+            let _scope = WireOrderScope::enter(Some(&one));
+            assert_eq!(ordered_keys(&map), ["b", "a"]);
+            assert_eq!(ordered_keys(&fields(&["c", "d"])), ["c", "d"]);
+        }
+        assert_eq!(ordered_keys(&map), ["a", "b"]);
+        let both = order(br#"{"x": {"b": 1, "a": 2}, "y": {"a": 1, "b": 2}}"#);
+        let _scope = WireOrderScope::enter(Some(&both));
+        assert_eq!(ordered_keys(&map), ["a", "b"]);
+    }
 
     /// A wire order that does not name the select's aliases (a body whose map the transcoder
     /// changed) is not used: the aliases are checked in key order and set in path order.

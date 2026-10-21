@@ -7697,3 +7697,32 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
         assert!(empty.get("fields").is_none(), "{empty}");
     }
 }
+
+/// Under the emulator profile a REST literal is read in the body's key order, as the official
+/// emulator 1.22.0 reads it (`PX1d` r6 review S2): the first expression in that order is named.
+#[test]
+fn rest_execute_pipeline_literals_follow_the_body_order() {
+    let s = enterprise_state(false, None);
+    seed_nest(&s);
+    let select = |entries: &str| {
+        let (_, body) = call_text(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &format!(
+                r#"{{"structuredPipeline": {{"pipeline": {{"stages": [{{"name": "collection", "args": [{{"referenceValue": "/nest"}}]}}, {{"name": "select", "args": [{{"mapValue": {{"fields": {{"v": {{"mapValue": {{"fields": {{{entries}}}}}}}}}}}}}]}}]}}}}}}"#
+            ),
+        );
+        stream_error(&body)["error"]["message"].clone()
+    };
+    let function = r#"{"functionValue": {"name": "document_id", "args": [{"fieldReferenceValue": "__name__"}]}}"#;
+    let field = r#"{"fieldReferenceValue": "name"}"#;
+    assert_eq!(
+        select(&format!(r#""b": {function}, "a": {field}"#)),
+        "Value type is not supported: FUNCTION_VALUE"
+    );
+    assert_eq!(
+        select(&format!(r#""a": {field}, "b": {function}"#)),
+        "Value type is not supported: FIELD_REFERENCE_VALUE"
+    );
+}

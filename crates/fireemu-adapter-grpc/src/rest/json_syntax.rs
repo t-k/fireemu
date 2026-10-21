@@ -33,6 +33,11 @@ impl KeyOrder {
         self.0.get(pointer).map(Vec::as_slice)
     }
 
+    /// Every recorded object's keys in source order.
+    pub fn objects(&self) -> impl Iterator<Item = &[String]> {
+        self.0.values().map(Vec::as_slice)
+    }
+
     /// The order of the objects under `from`, with their pointers moved under `to` (an object
     /// of a larger document seen as a body of its own).
     #[must_use]

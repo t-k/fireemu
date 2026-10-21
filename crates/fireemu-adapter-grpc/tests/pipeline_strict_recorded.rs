@@ -1856,3 +1856,43 @@ fn a_failing_constant_call_is_refused_without_rows() {
         }
     }
 }
+
+/// Check order across values and stages under the emulator profile (the official emulator
+/// 1.22.0, `PX1d` r6 review S2): an empty literal key after a later value's literal holding a
+/// field; a reserved alias or a `map(...)` key type after a later stage's argument type.
+#[test]
+fn later_checks_answer_before_an_empty_key_a_reserved_alias_or_a_map_key_type() {
+    let field_text = "Value type is not supported: FIELD_REFERENCE_VALUE";
+    let limit_text = "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.";
+    let state = seeded(false);
+    let select_map = |entries: Vec<(&str, Value)>| stage("select", vec![map(entries)]);
+    let list = |values: Vec<Value>| json!({ "arrayValue": { "values": values } });
+    for (label, stages, text) in [
+        (
+            "empty key in aa, field literal in zz",
+            vec![select_map(vec![
+                ("aa", map(vec![("", string("1"))])),
+                ("zz", list(vec![field("i")])),
+            ])],
+            field_text,
+        ),
+        (
+            "reserved alias then limit(\"x\")",
+            vec![
+                select_map(vec![("__x__", field("i"))]),
+                stage("limit", vec![string("x")]),
+            ],
+            limit_text,
+        ),
+        (
+            "map key type then limit(\"x\")",
+            vec![
+                select(func("map", vec![int(1), field("i")])),
+                stage("limit", vec![string("x")]),
+            ],
+            limit_text,
+        ),
+    ] {
+        assert_eq!(answer(&state, &stages), (400, text.to_owned()), "{label}");
+    }
+}

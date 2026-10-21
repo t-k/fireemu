@@ -40,4 +40,11 @@ probe=$!
 node "$here/probe.mjs" "$FIREEMU" "$out/corpus-$seed.json" "$out/emu-$seed.json" "${PROBE_WORKERS:-4}"
 wait "$probe"
 python3 "$here/compare.py" "$out/jar-$seed.json" "$out/emu-$seed.json" "$out/report-$seed.txt" "$out/interesting-$seed.json"
-! grep -q '^BLOCKING' "$out/report-$seed.txt"
+# The write kinds: gen11 entries (its controls first) over every write operation.
+python3 "$here/gen11.py" "$seed" "${WRITE_COUNT:-500}" "$out/writes-$seed.json" "$out/writes-$seed.coverage.json" > /dev/null
+node "$here/write_probe.mjs" "127.0.0.1:$jar_port" "$out/writes-$seed.json" "$out/jar-writes-$seed.json" "${PROBE_WORKERS:-4}" > /dev/null &
+probe=$!
+node "$here/write_probe.mjs" "$FIREEMU" "$out/writes-$seed.json" "$out/emu-writes-$seed.json" "${PROBE_WORKERS:-4}" > /dev/null
+wait "$probe"
+python3 "$here/write_compare.py" "$out/jar-writes-$seed.json" "$out/emu-writes-$seed.json" "$out/report-writes-$seed.txt" "$out/interesting-writes-$seed.json"
+! grep -q '^BLOCKING' "$out/report-$seed.txt" "$out/report-writes-$seed.txt"

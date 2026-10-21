@@ -91305,5 +91305,9544 @@
   "load": 400,
   "error": "1:27: Invalid property access: target is not an object.\n",
   "read": null
+ },
+ {
+  "expr": "/* a *​/ false && */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:45: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *​/ false && */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:47: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* a *​/ true || */ false",
+  "query": "",
+  "load": 400,
+  "error": "1:44: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *​/ true || */ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* *​/ auth.uid == 'u2' || */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:54: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* *​/ auth.uid == 'u2' || */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:56: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true /* x *​/ && false */",
+  "query": "",
+  "load": 400,
+  "error": "1:50: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!(true /* x *​/ && false */)",
+  "query": "",
+  "load": 400,
+  "error": "1:53: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "true /​* && false */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /​* && false */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true /​/ && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /​/ && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/​/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/​/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/​/) || true",
+  "query": "",
+  "load": 400,
+  "error": "1:49: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/​/) || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:52: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid == 'u1' /​* x */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.uid == 'u1' /​* x */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1 /​* 2 */ == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1 /​* 2 */ == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "2 /​ 2 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(2 /​ 2 == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-​-5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-​-5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "+​+5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(+​+5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -​-1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -​-1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 <​< 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 <​< 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >​> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >​> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >​>​> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >​>​> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "2 *​* 3 == 8",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(2 *​* 3 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true &​ true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true &​ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true |​ false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true |​ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =​> 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =​> 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!​!true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!​!true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1 =​==​= 1",
+  "query": "",
+  "load": 400,
+  "error": "1:34: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =​==​= 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:36: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth​.​uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth​.​uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(!(auth.u​id == 'u1'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "$u​id == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "!($u​id == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token['s​ub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token['s​ub'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token['s​ub'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token['s​ub'] == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "da​ta.child('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(da​ta.child('s').val() == 'Hello')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.va​l() != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.va​l() != null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "nu​ll == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(nu​ll == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!fa​lse",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/* a *­/ false && */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:47: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* a *­/ true || */ false",
+  "query": "",
+  "load": 400,
+  "error": "1:44: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *­/ true || */ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* *­/ auth.uid == 'u2' || */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:54: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* *­/ auth.uid == 'u2' || */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:56: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true /* x *­/ && false */",
+  "query": "",
+  "load": 400,
+  "error": "1:50: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!(true /­* && false */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true /­/ && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /­/ && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "false /­/ || true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(false /­/ || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/­/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/­/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/­/) || true",
+  "query": "",
+  "load": 400,
+  "error": "1:49: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/­/) || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:52: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid == 'u1' /­* x */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.uid == 'u1' /­* x */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1 /­* 2 */ == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1 /­* 2 */ == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "2 /­ 2 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(2 /­ 2 == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-­-5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-­-5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "+­+5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(+­+5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "-­-5 == -5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-­-5 == -5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -­- 1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -­- 1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -­-1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -­-1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 <­< 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 <­< 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >­> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >­> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >­>­> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >­>­> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "2 *­* 3 == 8",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(2 *­* 3 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true &­ true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true &­ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true |­ false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true |­ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =­> 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =­> 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!­!true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!­!true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid =­ 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =­==­= 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:36: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "au­th.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(au­th.uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth­.­uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth­.­uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(!(auth.u­id == 'u1'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "$u­id == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "!($u­id == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token['s­ub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token['s­ub'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "da­ta.child('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(da­ta.child('s').val() == 'Hello')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.va­l() != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.va­l() != null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "nu­ll == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(nu­ll == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a *⁠/ false && */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:45: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *⁠/ false && */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:47: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* a *⁠/ true || */ false",
+  "query": "",
+  "load": 400,
+  "error": "1:44: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *⁠/ true || */ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* *⁠/ auth.uid == 'u2' || */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:54: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* *⁠/ auth.uid == 'u2' || */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:56: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true /⁠* && false */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /⁠* && false */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true /⁠/ && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /⁠/ && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "false /⁠/ || true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(false /⁠/ || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/⁠/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/⁠/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/⁠/) || true",
+  "query": "",
+  "load": 400,
+  "error": "1:49: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/⁠/) || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:52: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid == 'u1' /⁠* x */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.uid == 'u1' /⁠* x */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "2 /⁠ 2 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(2 /⁠ 2 == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-⁠-5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-⁠-5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "-⁠-5 == -5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-⁠-5 == -5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -⁠- 1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -⁠- 1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -⁠-1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -⁠-1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 <⁠< 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 <⁠< 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >⁠> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >⁠> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >⁠>⁠> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >⁠>⁠> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "2 *⁠* 3 == 8",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(2 *⁠* 3 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true &⁠ true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true &⁠ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =⁠> 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =⁠> 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!⁠!true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!⁠!true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid =⁠ 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid =⁠ 'u1')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =⁠==⁠= 1",
+  "query": "",
+  "load": 400,
+  "error": "1:34: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =⁠==⁠= 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:36: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "au⁠th.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(au⁠th.uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(!(auth.u⁠id == 'u1'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "$u⁠id == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "!($u⁠id == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token['s⁠ub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token['s⁠ub'] == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "da⁠ta.child('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(da⁠ta.child('s').val() == 'Hello')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.va⁠l() != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.va⁠l() != null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "nu⁠ll == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(nu⁠ll == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!fa⁠lse",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!fa⁠lse)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a *᠎/ true || */ false",
+  "query": "",
+  "load": 400,
+  "error": "1:44: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *᠎/ true || */ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* *᠎/ auth.uid == 'u2' || */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:54: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* *᠎/ auth.uid == 'u2' || */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:56: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true /* x *᠎/ && false */",
+  "query": "",
+  "load": 400,
+  "error": "1:50: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!(true /* x *᠎/ && false */)",
+  "query": "",
+  "load": 400,
+  "error": "1:53: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "true /᠎* && false */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /᠎* && false */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true /᠎/ && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /᠎/ && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "false /᠎/ || true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(false /᠎/ || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/᠎/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/᠎/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid == 'u1' /᠎* x */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1 /᠎* 2 */ == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "2 /᠎ 2 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(2 /᠎ 2 == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-᠎-5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-᠎-5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "+᠎+5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(+᠎+5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "-᠎-5 == -5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-᠎-5 == -5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -᠎- 1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -᠎- 1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -᠎-1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -᠎-1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 <᠎< 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 <᠎< 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >᠎> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >᠎> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >᠎>᠎> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >᠎>᠎> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "2 *᠎* 3 == 8",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(2 *᠎* 3 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true &᠎ true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true &᠎ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true |᠎ false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true |᠎ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =᠎> 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(!᠎!true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid =᠎ 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid =᠎ 'u1')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =᠎==᠎= 1",
+  "query": "",
+  "load": 400,
+  "error": "1:34: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth᠎.᠎uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth᠎.᠎uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(!(auth.u᠎id == 'u1'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "$u᠎id == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "!($u᠎id == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token['s᠎ub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token['s᠎ub'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "da᠎ta.child('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(da᠎ta.child('s').val() == 'Hello')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.va᠎l() != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.va᠎l() != null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "nu᠎ll == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(nu᠎ll == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!fa᠎lse",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!fa᠎lse)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a *⁯/ false && */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:45: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *⁯/ false && */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:47: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* a *⁯/ true || */ false",
+  "query": "",
+  "load": 400,
+  "error": "1:44: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *⁯/ true || */ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* *⁯/ auth.uid == 'u2' || */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:54: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* *⁯/ auth.uid == 'u2' || */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:56: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true /* x *⁯/ && false */",
+  "query": "",
+  "load": 400,
+  "error": "1:50: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!(true /* x *⁯/ && false */)",
+  "query": "",
+  "load": 400,
+  "error": "1:53: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "true /⁯* && false */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /⁯* && false */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'x'.matches(/⁯/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/⁯/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid == 'u1' /⁯* x */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.uid == 'u1' /⁯* x */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "2 /⁯ 2 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(2 /⁯ 2 == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-⁯-5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-⁯-5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "+⁯+5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(+⁯+5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "-⁯-5 == -5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-⁯-5 == -5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -⁯- 1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -⁯- 1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -⁯-1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -⁯-1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 <⁯< 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 <⁯< 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >⁯> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >⁯> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >⁯>⁯> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >⁯>⁯> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true &⁯ true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true &⁯ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true |⁯ false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true |⁯ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =⁯> 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =⁯> 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!⁯!true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!⁯!true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid =⁯ 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid =⁯ 'u1')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =⁯==⁯= 1",
+  "query": "",
+  "load": 400,
+  "error": "1:34: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =⁯==⁯= 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:36: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "au⁯th.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(au⁯th.uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.u⁯id == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.u⁯id == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth⁯.⁯uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth⁯.⁯uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(!(auth.u⁯id == 'u1'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "$u⁯id == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "!($u⁯id == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token.s⁯ub == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.s⁯ub == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token['s⁯ub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token['s⁯ub'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token['s⁯ub'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token['s⁯ub'] == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "da⁯ta.child('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(da⁯ta.child('s').val() == 'Hello')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.va⁯l() != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(nu⁯ll == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!fa⁯lse",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!fa⁯lse)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a *﻿/ false && */ true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/* a *﻿/ false && */ true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a *﻿/ true || */ false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(/* a *﻿/ true || */ false)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "/* *﻿/ auth.uid == 'u2' || */ true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/* *﻿/ auth.uid == 'u2' || */ true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true /* x *﻿/ && false */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /﻿* && false */)",
+  "query": "",
+  "load": 400,
+  "error": "1:36: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true /﻿/ && false",
+  "query": "",
+  "load": 400,
+  "error": "1:42: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!(true /﻿/ && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "false /﻿/ || true",
+  "query": "",
+  "load": 400,
+  "error": "1:42: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!(false /﻿/ || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/﻿/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('x'.matches(/﻿/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'x'.matches(/﻿/) || true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('x'.matches(/﻿/) || true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid == 'u1' /﻿* x */",
+  "query": "",
+  "load": 400,
+  "error": "1:46: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(auth.uid == 'u1' /﻿* x */)",
+  "query": "",
+  "load": 400,
+  "error": "1:48: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "1 /﻿* 2 */ == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(1 /﻿* 2 */ == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "2 /﻿ 2 == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(2 /﻿ 2 == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-﻿-5 == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(+﻿+5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "-﻿-5 == -5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(-﻿-5 == -5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "5 -﻿- 1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 -﻿- 1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 -﻿-1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 -﻿-1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1 <﻿< 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegally formed XML syntax\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 <﻿< 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegally formed XML syntax\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >﻿> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(8 >﻿> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "8 >﻿>﻿> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(8 >﻿>﻿> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "2 *﻿* 3 == 8",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(2 *﻿* 3 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true &﻿ true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true &﻿ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true |﻿ false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true |﻿ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =﻿> 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =﻿> 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!﻿!true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!﻿!true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid =﻿ 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid =﻿ 'u1')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =﻿==﻿= 1",
+  "query": "",
+  "load": 400,
+  "error": "1:32: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =﻿==﻿= 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:34: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "au﻿th.uid == 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(au﻿th.uid == 'u1')",
+  "query": "",
+  "load": 400,
+  "error": "1:33: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "auth﻿.﻿uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth﻿.﻿uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(!(auth.u﻿id == 'u1'))",
+  "query": "",
+  "load": 400,
+  "error": "1:39: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "$u﻿id == null",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!($u﻿id == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token['s﻿ub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token['s﻿ub'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token['s﻿ub'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token['s﻿ub'] == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "da﻿ta.child('s').val() == 'Hello'",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(da﻿ta.child('s').val() == 'Hello')",
+  "query": "",
+  "load": 400,
+  "error": "1:33: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "data.va﻿l() != null",
+  "query": "",
+  "load": 400,
+  "error": "1:35: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.va﻿l() != null)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "nu﻿ll == null",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(nu﻿ll == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "!fa﻿lse",
+  "query": "",
+  "load": 400,
+  "error": "1:32: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(!fa﻿lse)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "/* a *؀/ false && */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:45: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *؀/ false && */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:47: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* a *؀/ true || */ false",
+  "query": "",
+  "load": 400,
+  "error": "1:44: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a *؀/ true || */ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "/* *؀/ auth.uid == 'u2' || */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:54: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* *؀/ auth.uid == 'u2' || */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:56: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true /* x *؀/ && false */",
+  "query": "",
+  "load": 400,
+  "error": "1:50: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!(true /* x *؀/ && false */)",
+  "query": "",
+  "load": 400,
+  "error": "1:53: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "true /؀* && false */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /؀* && false */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true /؀/ && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /؀/ && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "false /؀/ || true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(false /؀/ || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/؀/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/؀/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "'x'.matches(/؀/) || true",
+  "query": "",
+  "load": 400,
+  "error": "1:49: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "!('x'.matches(/؀/) || true)",
+  "query": "",
+  "load": 400,
+  "error": "1:52: Unexpected end of expression\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid == 'u1' /؀* x */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.uid == 'u1' /؀* x */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1 /؀* 2 */ == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1 /؀* 2 */ == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-؀-5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-؀-5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "+؀+5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(+؀+5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "-؀-5 == -5",
+  "query": "",
+  "load": 400,
+  "error": "1:33: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-؀-5 == -5)",
+  "query": "",
+  "load": 400,
+  "error": "1:35: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -؀- 1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -؀- 1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -؀-1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -؀-1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 <؀< 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 <؀< 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >؀> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >؀> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >؀>؀> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >؀>؀> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "2 *؀* 3 == 8",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(2 *؀* 3 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true &؀ true",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true &؀ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true |؀ false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(true |؀ false)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 =؀> 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 =؀> 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!؀!true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!؀!true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid =؀ 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid =؀ 'u1')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "au؀th.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(au؀th.uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(!(auth.u؀id == 'u1'))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "$u؀id == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$uid'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token['s؀ub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token['s؀ub'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token['s؀ub'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token['s؀ub'] == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "da؀ta.child('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(da؀ta.child('s').val() == 'Hello')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.va؀l() != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.va؀l() != null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "nu؀ll == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(nu؀ll == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!fa؀lse",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!fa؀lse)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "--5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(--5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:34: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "++5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(++5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:34: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "- -5 == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(- -5 == 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-(-5) == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(-(-5) == 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "+ +5 == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(+ +5 == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!!true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(!!!false)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "~1 == -2",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '~' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(~1 == -2)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '~' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 << 2 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 << 2 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '<<' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "8 >>> 1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(8 >>> 1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '>>>' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "2 ** 3 == 8",
+  "query": "",
+  "load": 400,
+  "error": "1:30: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(2 ** 3 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "1 & 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 & 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '&' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 | 0",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 | 0)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '|' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "1 ^ 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '^' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(1 ^ 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '^' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.uid = 'u1'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid = 'u1')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain assignments.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "(1, true)",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Rule expressions may not contain ',' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!((1, true))",
+  "query": "",
+  "load": 400,
+  "error": "1:28: Rule expressions may not contain ',' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "true ? true : false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(void 0 == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain 'void' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "typeof 1 == 'number'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain 'typeof' operator.\n",
+  "read": null
+ },
+ {
+  "expr": "!(typeof 1 == 'number')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain 'typeof' operator.\n",
+  "read": null
+ },
+ {
+  "expr": "1 in [1]",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain 'in' operator.\n",
+  "read": null
+ },
+ {
+  "expr": "!(1 in [1])",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain 'in' operator.\n",
+  "read": null
+ },
+ {
+  "expr": "[1][0] == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unexpected array literal.\n",
+  "read": null
+ },
+ {
+  "expr": "!([1][0] == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unexpected array literal.\n",
+  "read": null
+ },
+ {
+  "expr": "{}.x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:29: syntax error\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!({}.x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain object literals.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "this == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain 'this' keyword.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(this == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain 'this' keyword.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "/* */ true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/* */ true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true /* */",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /* */)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/**/true/**/",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/**/true/**/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true/**//**/",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true/**//**/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/*/ true */ true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/*/ true */ true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a */ /* b */ true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/* a */ /* b */ true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a /* b */ true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(/* a /* b */ true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "/* a */ */ true",
+  "query": "",
+  "load": 400,
+  "error": "1:35: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "!(/* a */ */ true)",
+  "query": "",
+  "load": 400,
+  "error": "1:37: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "true // \n && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(true // \n && false)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "true //   && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(true //   && false)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "true // \r && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(true // \r && false)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "true //  && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true //  && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "true // \u000b && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true // \u000b && false)",
+  "query": "",
+  "load": 400,
+  "error": "1:51: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "true // \f && false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(true /*\n*/ && true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a/*'.length == 3 /* '*/",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('a/*'.length == 3 /* '*/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a*/'.length == 3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('a*/'.length == 3)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "\"//\".length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(\"//\".length == 2)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Hello'.matches(/l\\/*/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Hello'.matches(/l\\/*/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Hello'.matches(/H/)/**/",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Hello'.matches(/H/)/**/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Hello'.matches(/H//**/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Hello'.matches(/H//**/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Hello'.matches(/H/ /**/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Hello'.matches(/H/ /**/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Hello'.matches(/H/i/**/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Hello'.matches(/H/i/**/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'Hello'.matches(/H/i//\n)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Hello'.matches(/H/i//\n))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.true == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.true == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.null == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.null == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.if == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.if == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.in == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.new == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.class == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.class == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.this == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.this == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.typeof == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.typeof == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.function == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.function == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.var == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.var == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.let == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.let == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.undefined == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.undefined == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.NaN == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.NaN == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.length == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.val == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.val == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.constructor == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.constructor == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.__proto__ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.__proto__ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.toString == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.toString == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.hasOwnProperty == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.hasOwnProperty == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.valueOf == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.valueOf == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.prototype == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.prototype == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.length == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.uid.length == 2)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.size == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.uid.size == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.length == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'length'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.length == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'length'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.exists == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid == expression: left operand is not a number, boolean, string, null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(data.child('s').val().length == 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val().s == 'Hello'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val()['s'] == 'Hello')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data.val().length == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "root.val().t.s == 'Hello'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 't'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(root.val().t.s == 'Hello')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 't'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth['uid'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth['uid'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token['sub'] == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token['sub'] == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data['val']() == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data['val']() == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "data['child']('s').val() == 'Hello'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(now.length == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token.firebase.x == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.firebase.x == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.provider == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.provider == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token.aud != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token.aud != null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token.sub.length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.sub.toUpperCase() == 'U1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x.y == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x.y == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x.length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x.length == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x() == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "!(auth.token.x() == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.uid() == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "!(auth.uid() == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Type error: Function call on target that is not a function.\n",
+  "read": null
+ },
+ {
+  "expr": "'Hello'.length() == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Type error: Function call on target that is not a function.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!('Hello'.length() == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Type error: Function call on target that is not a function.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "'Hello'.size == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'size'.\n",
+  "read": null
+ },
+ {
+  "expr": "!('Hello'.size == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'size'.\n",
+  "read": null
+ },
+ {
+  "expr": "'Hello'['length'] == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('Hello'.x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "'Hello'[0] == 'H'",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access.\n",
+  "read": null
+ },
+ {
+  "expr": "!('Hello'[0] == 'H')",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid property access.\n",
+  "read": null
+ },
+ {
+  "expr": "5 .x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "!(5 .x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "(5).x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "!((5).x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:28: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "true.x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "!(true.x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "null.x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "!(null.x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.token.é == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.é == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x² == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x² == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x̃ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x̃ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ְx == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.€x == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x€ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x€ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x‿y == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x‿y == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ⓐ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.ⓐ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.Ⅻ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.Ⅻ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x\u0001 == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.token.𝐚 == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.𝐚 == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x𝐚 == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x𝐚 == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x٣ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.٣x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x½ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x½ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.ª == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ª == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.〇 == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.〇 == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x· == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x· == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x· == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x· == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x፩ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x፩ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.℘ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.℮ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.℮ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.゛ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.゛ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.ᢅ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.ᢅ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x᧚ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x᧚ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.ͅ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.ͅ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.Ⓐ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.\\u0073ub == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "\\u0061uth.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(\\u0061uth.uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.\\u0075id == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.\\u0075id == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x‌ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x‌ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x‍ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x‍ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "0xg == 0",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(0xg == 0)",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "1e == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:28: missing exponent\n",
+  "read": null
+ },
+ {
+  "expr": "!(1e == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing exponent\n",
+  "read": null
+ },
+ {
+  "expr": "1e+ == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing exponent\n",
+  "read": null
+ },
+ {
+  "expr": "!(.e3 == 0)",
+  "query": "",
+  "load": 400,
+  "error": "1:29: syntax error\n",
+  "read": null
+ },
+ {
+  "expr": "1.e3 == 1000",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1.e3 == 1000)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5. == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5. == 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": ".5 == 0.5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(08 == 8)",
+  "query": "",
+  "load": 400,
+  "error": "1:29: illegal octal literal digit 8; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "09.5 == 9.5",
+  "query": "",
+  "load": 400,
+  "error": "1:27: illegal octal literal digit 9; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "!(09.5 == 9.5)",
+  "query": "",
+  "load": 400,
+  "error": "1:29: illegal octal literal digit 9; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "08.5 == 8.5",
+  "query": "",
+  "load": 400,
+  "error": "1:27: illegal octal literal digit 8; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "!(08.5 == 8.5)",
+  "query": "",
+  "load": 400,
+  "error": "1:29: illegal octal literal digit 8; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "018 == 18",
+  "query": "",
+  "load": 400,
+  "error": "1:28: illegal octal literal digit 8; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "!(018 == 18)",
+  "query": "",
+  "load": 400,
+  "error": "1:30: illegal octal literal digit 8; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "019 == 19",
+  "query": "",
+  "load": 400,
+  "error": "1:28: illegal octal literal digit 9; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "!(019 == 19)",
+  "query": "",
+  "load": 400,
+  "error": "1:30: illegal octal literal digit 9; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "0.08 == 0.08",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(0.08 == 0.08)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1e08 == 1e8",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1e08 == 1e8)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "08e1 == 80",
+  "query": "",
+  "load": 400,
+  "error": "1:27: illegal octal literal digit 8; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "!(08e1 == 80)",
+  "query": "",
+  "load": 400,
+  "error": "1:29: illegal octal literal digit 8; interpreting it as a decimal digit\n",
+  "read": null
+ },
+ {
+  "expr": "017 == 15",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(017 == 15)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "017.5 == 15.5",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(0777 == 511)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "00 == 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(00 == 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "00.5 == 0.5",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(00.5 == 0.5)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "1e400 == 1e401",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1e400 > 1e308)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-1e400 < -1e308",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(-1e400 < -1e308)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1e-400 == 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1e-400 == 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-0 === 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(-0 === 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1/-0 < 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(1/-0 < 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "1/0 == 1e400",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(1/0 == 1e400)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "0/0 == 0/0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(0/0 == 0/0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "0/0 != 0/0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(9007199254740993 == 9007199254740992)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "0xFFFFFFFFFFFFFFFFFF > 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(0xFFFFFFFFFFFFFFFFF == 295147905179352825856)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "077777777777777777777777 > 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(077777777777777777777777 > 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1_0 == 10",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(1_0 == 10)",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "0b1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(0b1 == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "0o7 == 7",
+  "query": "",
+  "load": 400,
+  "error": "1:29: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(0o7 == 7)",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "1n == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:28: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(1n == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "1..5 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:30: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(1..5 == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "5..x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "!(5..x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid property access: target is not an object.\n",
+  "read": null
+ },
+ {
+  "expr": "0x1.5 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(0x1.5 == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:33: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "0x1e3 == 483",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(0x1e3 == 483)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1e1e1 == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:31: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(Infinity == 1e400)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable 'Infinity'.\n",
+  "read": null
+ },
+ {
+  "expr": "NaN == NaN",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable 'NaN'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(NaN == NaN)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable 'NaN'.\n",
+  "read": null
+ },
+ {
+  "expr": "4.9e-324 > 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(2e-324 == 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1.7976931348623157e308 * 10 == 1e400",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1.7976931348623157e308 * 10 == 1e400)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "0.1 + 0.2 == 0.3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(0.1 + 0.2 == 0.3)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "0.1 + 0.2 > 0.3",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(0.1 + 0.2 > 0.3)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('n').val() == 5.0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.child('n').val() == 5.0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('n').val() == 05",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.child('n').val() == 05)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('n').val() == 0x5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.child('n').val() == 0x5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('n').val() == .5e1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.child('n').val() == .5e1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('n').val() === 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.child('n').val() === 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 == '5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(5 == '5')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'5' == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(1 + '1' == '11')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a' == \"a\"",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('a' == \"a\")",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\'' == \"'\"",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\'' == \"'\")",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "\"\\\"\" == '\"'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(\"\\\"\" == '\"')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\\"' == '\"'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\\"' == '\"')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "\"\\'\" == \"'\"",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(\"\\'\" == \"'\")",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a\" == 'a'",
+  "query": "",
+  "load": 400,
+  "error": "1:36: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!('a\" == 'a')",
+  "query": "",
+  "load": 400,
+  "error": "1:38: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "\"a' == \"a\"",
+  "query": "",
+  "load": 400,
+  "error": "1:38: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!(\"a' == \"a\")",
+  "query": "",
+  "load": 400,
+  "error": "1:40: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'it''s' == 'its'",
+  "query": "",
+  "load": 400,
+  "error": "1:32: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!('it''s' == 'its')",
+  "query": "",
+  "load": 400,
+  "error": "1:34: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'a' 'b' == 'ab'",
+  "query": "",
+  "load": 400,
+  "error": "1:32: missing ; before statement\n",
+  "read": null
+ },
+ {
+  "expr": "!('a' 'b' == 'ab')",
+  "query": "",
+  "load": 400,
+  "error": "1:34: missing ) in parenthetical\n",
+  "read": null
+ },
+ {
+  "expr": "'\\9' == '9'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\08' == '\\x008')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\400' == ' 0'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\u{48}' == 'H')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'\\u{48}' == 'u{48}'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\u{48}' == 'u{48}')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\0' == '\\x00'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\0' == '\\x00')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\00' == '\\x00'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\00' == '\\x00')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\000'.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\000'.length == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\0000'.length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\0000'.length == 2)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\1'.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\a' == 'a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\c' == 'c'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\c' == 'c')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\v' == '\\x0b'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\v' == '\\x0b')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\/' == '/'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\/' == '/')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\\\'.length == 1",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\\\'.length == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'\\\\\\''.length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('\\\\\\''.length == 2)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val().x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().length == 2",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data.val().length > 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val()['length'] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data.val()['length'] == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val().size == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'size'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().size == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'size'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().toString == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'toString'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().toString == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'toString'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().constructor == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'constructor'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().constructor == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'constructor'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().__proto__ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property '__proto__'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().hasOwnProperty == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'hasOwnProperty'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().valueOf == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'valueOf'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().valueOf == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'valueOf'.\n",
+  "read": null
+ },
+ {
+  "expr": "root.val().length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(root.val().t.length == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 't'.\n",
+  "read": null
+ },
+ {
+  "expr": "root.val().t.s.length == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 't'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(root.val().t.s.length == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 't'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().n.length == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'n'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.child('n').val().length == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val().s.length == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().s.length == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().x.y == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().x.y == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().s.x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().s.x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().n.x == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'n'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().n.x == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'n'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.child('x').val() == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "data.child('x').val().length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data.child('x').val().length == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('x').val().y == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'y'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.child('x').val().y == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'y'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val().s['length'] == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().s['length'] == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val()['s'].length == 5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val()['s'].length == 5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 's'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val()[0] == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid property access.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val()[0] == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid property access.\n",
+  "read": null
+ },
+ {
+  "expr": "auth.x == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.x == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.x.y == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.x.y == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.sub.x == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token.sub.x == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.uid.x == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.uid.x == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 - -1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 - -1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 - - 1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 - - 1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5--1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:28: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 -- 1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:31: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 - -1 == 4",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(5 - -1 == 4)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "5++1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:28: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5++1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 + +1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:29: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 + +1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:31: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 +​+ 1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 +​+1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid increment operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5---1 == 4",
+  "query": "",
+  "load": 400,
+  "error": "1:28: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5---1 == 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:30: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 - --1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:36: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(5 - --1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:38: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "-(-(5)) == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(- - 5 == 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "-(- 5) == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(-(- 5) == 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!-5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: ! only operates on booleans.\n",
+  "read": null
+ },
+ {
+  "expr": "!(!-5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: ! only operates on booleans.\n",
+  "read": null
+ },
+ {
+  "expr": "-+5 == -5",
+  "query": "",
+  "load": 400,
+  "error": "1:26: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(-+5 == -5)",
+  "query": "",
+  "load": 400,
+  "error": "1:28: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "+-5 == -5",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(+-5 == -5)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '+' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.uid-- == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '--' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid-- == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '--' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.uid++ == 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Rule expressions may not contain '++' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.uid++ == 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Rule expressions may not contain '++' operator.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "data.child('n').val() - -1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.child('n').val() - -1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('n').val()--1 == 6",
+  "query": "",
+  "load": 400,
+  "error": "1:50: missing ; before statement\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!((5)--1 == 6)",
+  "query": "",
+  "load": 400,
+  "error": "1:32: Invalid decrement operand.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "5 -/**/-1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 -/**/-1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 -/**/- 1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 -/**/- 1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 -\n-1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 -\n-1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 -\t-1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 -\t-1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 -​ -1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 -​ -1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "5 - ​-1 == 6",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(5 - ​-1 == 6)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "1 - - - 1 == 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(1 - - - 1 == 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x0 == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x0 == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x٠ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x٠ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.٠ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.٠ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.々 == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.々 == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x̀ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x̀ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.̀ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.̀ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.xः == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x²y == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.² == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.Ⅰ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.xⅠ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xⅠ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ʰ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ʰ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ǅ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ǅ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token.x℘ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x゛ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x゛ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.፩ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.፩ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x⁰ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x⁰ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.x① == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x〇 == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.xำ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xำ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x็ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x็ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ำ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ำ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x꣱ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x꣱ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.xֿ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xֿ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ֿ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.ֿ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.xͅ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xͅ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.xְ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xְ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.xⒶ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.xⒶ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.xᢅ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xᢅ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ᢆ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.xᢆ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x𐐀 == null",
+  "query": "",
+  "load": 400,
+  "error": "1:38: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x𐐀 == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.µ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.µ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.xⸯ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xⸯ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ⸯ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ⸯ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.xˆ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.xˆ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ˆ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ˆ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.token.x == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x\u000e == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x\u000e == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x\u001b == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.x\u001b == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.x\u001c == null",
+  "query": "",
+  "load": 400,
+  "error": "1:43: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.x\u001c == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.u​id\u0001 == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.u​id\u0001 == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth.uid == 'u1'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth.uid == 'u1')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "$é == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Unknown variable '$é'.\n",
+  "read": null
+ },
+ {
+  "expr": "!($é == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Unknown variable '$é'.\n",
+  "read": null
+ },
+ {
+  "expr": "$x² == null",
+  "query": "",
+  "load": 400,
+  "error": "1:28: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!($x² == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:30: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.İ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ẞ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.Ⴀ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.Ⴀ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ȡ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ȡ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ࡰ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ࡰ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.Ᲊ == null",
+  "query": "",
+  "load": 400,
+  "error": "1:37: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth.token.Ᲊ == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:39: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth.token.Ꟁ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.Ꟁ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ㆻ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.ㆻ == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.鿽 == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token.鿽 == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth.token.ຆ == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(data.child('x').val() > 4)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('x').val() <= 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(null > 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid > expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "null < 4",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid < expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "!(null < 4)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid < expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "!(auth.token.x < 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val().x >= 0",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(5 < 'a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "true < 1",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid < expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "!(true < 1)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid < expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "true > false",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid > expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "!(true > false)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid > expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "'a' < 'b'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('a' < 'b')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('s').val() > 4",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data.child('s').val() > 4)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val() > 4",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data.val() > 4)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.child('n').val() > null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid > expression: right operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.child('n').val() > null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid > expression: right operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "null <= null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid <= expression: left operand must be a number or string.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.child('x').val() + 1 == 1)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(data.val().length != 2)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "root.child('t').val().length == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "data.val().x.length == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val().x.length == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "data.val()['x'] == null",
+  "query": "",
+  "load": 400,
+  "error": "1:25: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "!(data.val()['x'] == null)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: No such method/property 'x'.\n",
+  "read": null
+ },
+ {
+  "expr": "auth[0] == null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth.token[0] == null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ab'.matches(/a\nb/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/a\nb/))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/[\n]/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/[\n]/))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/a\\\nb/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('ab'.matches(/a\\\nb/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'ab'.matches(/^ab$/i\n)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('ab'.matches(/^ab$/i\n))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ab'.matches(/ab\n/)",
+  "query": "",
+  "load": 400,
+  "error": "1:42: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/ab\n/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/a\rb/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/a\rb/))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/[\r]/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/[\r]/))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/a\\\rb/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('ab'.matches(/^ab$/i\r))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ab'.matches(/a b/)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/a\\ b/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'ab'.matches(/^ab$/i )",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('ab'.matches(/ab /))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/a b/)",
+  "query": "",
+  "load": 400,
+  "error": "1:40: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/[ ]/))",
+  "query": "",
+  "load": 400,
+  "error": "1:42: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/a\\ b/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('ab'.matches(/a\\ b/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'ab'.matches(/^ab$/i )",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('ab'.matches(/^ab$/i ))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ab'.matches(/ab /)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/ab /))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/[]/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('ab'.matches(/a\\b/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'ab'.matches(/^ab$/i)",
+  "query": "",
+  "load": 400,
+  "error": "1:46: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!('ab'.matches(/^ab$/i))",
+  "query": "",
+  "load": 400,
+  "error": "1:48: illegal character\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "'ab'.matches(/ab/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('ab'.matches(/ab/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "'ab'.matches(/a\r\nb/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/a\r\nb/))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/[\r\n]/)",
+  "query": "",
+  "load": 400,
+  "error": "1:41: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/[\r\n]/))",
+  "query": "",
+  "load": 400,
+  "error": "1:43: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'ab'.matches(/a\\\r\nb/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('ab'.matches(/a\\\r\nb/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'ab'.matches(/^ab$/i\r\n)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!('ab'.matches(/^ab$/i\r\n))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ab'.matches(/ab\r\n/)",
+  "query": "",
+  "load": 400,
+  "error": "1:42: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/ab\r\n/))",
+  "query": "",
+  "load": 400,
+  "error": "1:44: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "auth != null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== null",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== null)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== true",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== true)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === false",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === false)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth == 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== 0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== 5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== 5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == 2.5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == 2.5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != 2.5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != 2.5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === 2.5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === 2.5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== 2.5",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== 2.5)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == -0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == -0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != -0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != -0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === -0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === -0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== -0",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== -0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == 'a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == 'a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != 'a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != 'a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === 'a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === 'a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== 'a'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== 'a')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == ''",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == '')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != ''",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != '')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === ''",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === '')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== ''",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== '')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == '5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == '5')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != '5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != '5')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === '5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === '5')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== '5'",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== '5')",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('x').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('x').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth === data.child('x').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === data.child('x').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== data.child('x').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('x').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('n').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('n').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != data.child('n').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != data.child('n').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === data.child('n').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === data.child('n').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== data.child('n').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('n').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('d').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('d').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != data.child('d').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != data.child('d').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === data.child('d').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === data.child('d').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== data.child('d').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('d').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('z').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('z').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != data.child('z').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != data.child('z').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === data.child('z').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === data.child('z').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== data.child('z').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('z').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('s').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('s').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != data.child('s').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != data.child('s').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === data.child('s').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === data.child('s').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== data.child('s').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('s').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('b').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('b').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth === data.child('b').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === data.child('b').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== data.child('b').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('b').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('o').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('o').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != data.child('o').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != data.child('o').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === data.child('o').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === data.child('o').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== data.child('o').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('o').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.child('arr').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.child('arr').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != data.child('arr').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != data.child('arr').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth !== data.child('arr').val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.child('arr').val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data.val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == data.val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != data.val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != data.val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth !== data.val()",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== data.val())",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == data",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth == data)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth != data",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth != data)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth === data",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth === data)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth !== data",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth !== data)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth == root",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth == root)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth != root",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth != root)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth === root",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth === root)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid == expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth !== root",
+  "query": "",
+  "load": 400,
+  "error": "1:25: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "!(auth !== root)",
+  "query": "",
+  "load": 400,
+  "error": "1:27: Invalid != expression: right operand is not a number, boolean, string, or null.\n",
+  "read": null,
+  "fireemu": "refuses"
+ },
+ {
+  "expr": "auth == auth",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth == auth)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth != auth",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth != auth)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth === auth",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth === auth)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == auth.uid",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == auth.uid)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != auth.uid",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != auth.uid)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === auth.uid",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === auth.uid)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== auth.uid",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== auth.uid)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == auth.token.n",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == auth.token.n)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != auth.token.n",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != auth.token.n)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === auth.token.n",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === auth.token.n)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== auth.token.n",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== auth.token.n)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == auth.token.roles",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == auth.token.roles)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != auth.token.roles",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != auth.token.roles)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === auth.token.roles",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === auth.token.roles)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== auth.token.roles",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== auth.token.roles)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == auth.token.missing",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == auth.token.missing)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != auth.token.missing",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != auth.token.missing)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === auth.token.missing",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === auth.token.missing)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== auth.token.missing",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== auth.token.missing)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == now",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == now)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != now",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != now)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === now",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === now)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== now",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== now)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == query.orderByKey",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == query.orderByKey)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != query.orderByKey",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != query.orderByKey)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === query.orderByKey",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === query.orderByKey)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== query.orderByKey",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== query.orderByKey)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth == (0 / 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth == (0 / 0))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth != (0 / 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != (0 / 0))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth === (0 / 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!(auth === (0 / 0))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "auth !== (0 / 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== (0 / 0))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth != (1 / 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth != (1 / 0))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "auth !== (1 / 0)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200
+ },
+ {
+  "expr": "!(auth !== (1 / 0))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
  }
 ]

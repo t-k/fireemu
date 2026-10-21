@@ -224,8 +224,8 @@ fn a_built_import_holds_neither_its_text_nor_a_parsed_copy() {
         "the built import retains its padded text"
     );
     assert!(
-        !debug.contains("Object("),
-        "the built import retains parsed JSON"
+        !debug.contains("Object(") && !debug.contains("Object {"),
+        "the built import retains parsed JSON (Json::Object: Object( or serde_json::Value::Object: Object {{)"
     );
     let mut db = Database::new(RestOptions::default(), 1);
     db.install_import(import, NOW).unwrap();

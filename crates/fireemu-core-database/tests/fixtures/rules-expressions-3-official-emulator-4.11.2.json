@@ -78670,16 +78670,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -​- 1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "'\\'Hello'\u0001.beginsWith('H')==\"\\\"\"",
@@ -78886,16 +78884,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -- 1 == 6",
   "query": "",
   "load": 400,
   "error": "1:29: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('s').val()== '\\400'",
@@ -80006,8 +80002,7 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.token.aⓐ=='z'",
@@ -86464,16 +86459,14 @@
   "query": "",
   "load": 400,
   "error": "1:32: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 +​+1 == 6",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "\"a⁦\"<\"a'",
@@ -91497,16 +91490,14 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -​-1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 <​< 2 == 4",
@@ -91960,32 +91951,28 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -­- 1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -­-1 == 6",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -­-1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 <­< 2 == 4",
@@ -92409,32 +92396,28 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -⁠- 1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -⁠-1 == 6",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -⁠-1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 <⁠< 2 == 4",
@@ -92860,32 +92843,28 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -᠎- 1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -᠎-1 == 6",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -᠎-1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 <᠎< 2 == 4",
@@ -93290,32 +93269,28 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -⁯- 1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -⁯-1 == 6",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -⁯-1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 <⁯< 2 == 4",
@@ -94309,32 +94284,28 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -؀- 1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -؀-1 == 6",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -؀-1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "1 <؀< 2 == 4",
@@ -97705,16 +97676,14 @@
   "query": "",
   "load": 400,
   "error": "1:28: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 -- 1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:31: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 - -1 == 4",
@@ -97735,16 +97704,14 @@
   "query": "",
   "load": 400,
   "error": "1:28: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5++1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 + +1 == 6",
@@ -97767,32 +97734,28 @@
   "query": "",
   "load": 400,
   "error": "1:30: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5 +​+1 == 6)",
   "query": "",
   "load": 400,
   "error": "1:32: Invalid increment operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5---1 == 4",
   "query": "",
   "load": 400,
   "error": "1:28: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(5---1 == 4)",
   "query": "",
   "load": 400,
   "error": "1:30: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 - --1 == 6",
@@ -97889,32 +97852,28 @@
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '--' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid-- == 1)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '--' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "auth.uid++ == 1",
   "query": "",
   "load": 400,
   "error": "1:25: Rule expressions may not contain '++' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "!(auth.uid++ == 1)",
   "query": "",
   "load": 400,
   "error": "1:27: Rule expressions may not contain '++' operator.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "data.child('n').val() - -1 == 6",
@@ -97943,8 +97902,7 @@
   "query": "",
   "load": 400,
   "error": "1:32: Invalid decrement operand.\n",
-  "read": null,
-  "fireemu": "refuses"
+  "read": null
  },
  {
   "expr": "5 -/**/-1 == 6",
@@ -100844,5 +100802,92 @@
   "load": 200,
   "error": null,
   "read": 401
+ },
+ {
+  "expr": "'ab'.matches(/a\\.\nb/)",
+  "query": "",
+  "load": 400,
+  "error": "1:44: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/a\\.\nb/))",
+  "query": "",
+  "load": 400,
+  "error": "1:46: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'a.b'.matches(/a\\.\r\nb/)",
+  "query": "",
+  "load": 400,
+  "error": "1:45: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('a.b'.matches(/a\\.\r\nb/))",
+  "query": "",
+  "load": 400,
+  "error": "1:47: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "'a\\nb'.matches(/a\\\r\nb/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "!('a\\nb'.matches(/a\\\r\nb/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'a\\rb'.matches(/a\\\rb/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "!('a\\rb'.matches(/a\\\rb/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "'a\\nb'.matches(/a\\\nb/)",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 200,
+  "fireemu": "denies"
+ },
+ {
+  "expr": "!('a\\nb'.matches(/a\\\nb/))",
+  "query": "",
+  "load": 200,
+  "error": null,
+  "read": 401
+ },
+ {
+  "expr": "'ab'.matches(/a\\x\nb/)",
+  "query": "",
+  "load": 400,
+  "error": "1:44: unterminated regular expression literal\n",
+  "read": null
+ },
+ {
+  "expr": "!('ab'.matches(/a\\x\nb/))",
+  "query": "",
+  "load": 400,
+  "error": "1:46: unterminated regular expression literal\n",
+  "read": null
  }
 ]

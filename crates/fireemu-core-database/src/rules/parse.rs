@@ -656,12 +656,15 @@ fn update_refusal(op: &str, operand: &Expr, at: usize) -> ExprError {
         operand.kind,
         ExprKind::Name(_) | ExprKind::Member(..) | ExprKind::Index(..)
     );
-    let message = match (assignable, op) {
-        (true, _) => format!("Rule expressions may not contain '{op}' operator."),
-        (false, "--") => "Invalid decrement operand.".to_owned(),
-        (false, _) => "Invalid increment operand.".to_owned(),
-    };
-    ExprError::new(at, message)
+    match (assignable, op) {
+        // The rules check reports a forbidden operator where its operand starts.
+        (true, _) => ExprError::new(
+            operand.at,
+            format!("Rule expressions may not contain '{op}' operator."),
+        ),
+        (false, "--") => ExprError::new(at, "Invalid decrement operand."),
+        (false, _) => ExprError::new(at, "Invalid increment operand."),
+    }
 }
 
 /// Whether `c` ends a line (and so a string literal or a `//` comment) there.
@@ -1252,9 +1255,11 @@ impl Parser<'_> {
                 self.depth -= steps;
                 // A postfix decrement or increment, refused as there; after a call the
                 // reader ends the statement instead, which the caller then refuses.
-                if let (at, Token::Punct(op @ ("--" | "++"))) = self.peek()?.clone() {
+                if let (_, Token::Punct(op @ ("--" | "++"))) = self.peek()?.clone() {
                     if !matches!(expr.kind, ExprKind::Call(..)) {
-                        return Err(update_refusal(op, &expr, at));
+                        // An invalid operand is reported where the operator ends.
+                        self.next()?;
+                        return Err(update_refusal(op, &expr, self.lexer.at));
                     }
                 }
                 return Ok(expr);

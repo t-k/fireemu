@@ -435,8 +435,12 @@ impl Reader {
 
 const INVALID_KEY: &str = r##"String can't contain ".", "#", "$", "/", "[", or "]""##;
 
+/// Whether `key` may name a rules child: not empty, none of `.#$/[]`, and no ASCII control
+/// character (the r9 structural probe: `$x\u{1}` is refused there).
 fn valid_key(key: &str) -> bool {
-    !key.is_empty() && !key.contains(['.', '#', '$', '/', '[', ']'])
+    !key.is_empty()
+        && !key.contains(['.', '#', '$', '/', '[', ']'])
+        && !key.chars().any(|c| c.is_ascii_control())
 }
 
 #[cfg(test)]
@@ -470,6 +474,11 @@ mod tests {
             (r#"{"rules":{"a":{".foo":{}}}}"#, r##"1:24: String can't contain ".", "#", "$", "/", "[", or "]""##),
             (r#"{"rules":{"a.b":{}}}"#, r##"1:18: String can't contain ".", "#", "$", "/", "[", or "]""##),
             (r#"{"rules":{".value":{}}}"#, r##"1:21: String can't contain ".", "#", "$", "/", "[", or "]""##),
+            (
+                // As the probe sent it: JSON escapes the control character.
+                "{\"rules\": {\"t\": {\"$x\\u0001\": {\".read\": \"$x\\u0001 == 'k'\"}}}}",
+                r##"1:57: String can't contain ".", "#", "$", "/", "[", or "]""##,
+            ),
             (r#"{"rules":{"":{}}}"#, "1:11: Unexpected empty string."),
             (r#"{"rules":{".read":"\"a\" == 1 +"}}"#, "1:32: Unexpected end of expression"),
             (r#"{"rules":{".read":"'é' == 1 +"}}"#, "1:30: Unexpected end of expression"),

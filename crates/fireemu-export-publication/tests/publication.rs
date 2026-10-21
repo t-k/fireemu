@@ -1290,3 +1290,46 @@ fn the_stage_writer_never_follows_a_link_planted_inside_the_stage() {
     );
     assert_eq!(std::fs::read_dir(&victim).unwrap().count(), 1);
 }
+
+/// The previous export is opened relative to the held parent: none when the target was absent,
+/// the target's own directory when present, and a refusal once the target was replaced.
+#[cfg(unix)]
+#[test]
+fn the_previous_export_is_the_target_the_stage_captured() {
+    let root = TestRoot::new("previous-export");
+    let absent = PublicationStage::create(&root.target(), |_| Ok(())).unwrap();
+    assert!(absent.previous_export().unwrap().is_none());
+    drop(absent);
+    let target = root.target();
+    create_private_dir(&target);
+    write(&target, "notes.txt", "kept");
+    let present = PublicationStage::create(&target, |_| Ok(())).unwrap();
+    let previous = present.previous_export().unwrap().unwrap();
+    let names: Vec<String> = rustix::fs::Dir::read_from(&previous)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "." && name != "..")
+        .collect();
+    assert_eq!(names, ["notes.txt"]);
+    std::fs::rename(&target, root.0.join("away")).unwrap();
+    create_private_dir(&target);
+    let error = present.previous_export().unwrap_err();
+    assert!(error.contains("changed"), "{error}");
+}
+
+/// A file the stage writer makes does not leak into a child process.
+#[cfg(unix)]
+#[test]
+fn a_stage_file_closes_on_exec() {
+    let root = TestRoot::new("stage-cloexec");
+    let stage = PublicationStage::create(&root.target(), |_| Ok(())).unwrap();
+    let file = stage
+        .stage_dir()
+        .unwrap()
+        .create_file(Path::new("a/b"))
+        .unwrap();
+    assert!(rustix::io::fcntl_getfd(&file)
+        .unwrap()
+        .contains(rustix::io::FdFlags::CLOEXEC));
+    assert!(stage.root().join("a/b").is_file());
+}

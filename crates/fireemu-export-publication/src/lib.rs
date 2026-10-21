@@ -1380,6 +1380,24 @@ mod mount_point_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Inside a mount point the previous export is the target itself, read through its held
+    /// descriptor.
+    #[test]
+    fn the_previous_export_of_a_mount_point_is_the_target_itself() {
+        let root = scratch("previous");
+        let (_target, stage) = staged(&root);
+        let previous = stage.previous_export().unwrap().unwrap();
+        let mut names: Vec<String> = rustix::fs::Dir::read_from(&previous)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "." && name != ".." && !is_publication_entry(name.as_ref()))
+            .collect();
+        names.sort();
+        assert_eq!(names, ["auth_export", "firebase-export-metadata.json"]);
+        drop(stage);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn an_unpublished_stage_inside_a_mount_point_is_removed_and_the_target_kept() {
         let root = scratch("drop");

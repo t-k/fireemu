@@ -168,9 +168,69 @@ fn a_link_planted_after_the_preflight_is_refused_when_exporting() {
     assert_eq!(resolved, tmp.join(late.0.file_name().unwrap()).join("data"));
     assert_eq!(resolve(&target).unwrap(), resolved);
     symlink(victim.path(), &late.0).unwrap();
-    for path in [&target, &resolved] {
-        let error = PublicationStage::create(path, |_| Ok(())).unwrap_err();
-        assert!(error.contains("symlink"), "{}: {error}", path.display());
+    // The typed path is walked again and meets the link; the resolved one uses the directory the
+    // preflight holds and makes the missing name with `mkdirat`, which the link already takes.
+    let error = PublicationStage::create(&target, |_| Ok(())).unwrap_err();
+    assert!(error.contains("symlink"), "{error}");
+    let error = PublicationStage::create(&resolved, |_| Ok(())).unwrap_err();
+    assert!(error.contains("File exists"), "{error}");
+    assert!(is_empty(victim.path()));
+}
+
+/// Another user swaps a name they own in `/tmp` between a directory and a link to the victim's
+/// directory while the export runs (r2 review M1). Each preflight and each stage either refuses
+/// or lands in the swapped directory; nothing is ever made in the victim's directory.
+#[test]
+fn a_directory_swapped_with_a_link_in_a_loop_never_redirects_the_export() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let Some(_) = system_tmp() else { return };
+    let victim = TrustedTempDir::new("shared-tmp-swap-victim");
+    let name = TmpName::dir("swap", 0o700);
+    let other = TmpName::link("swap-link", victim.path());
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let swapper = {
+        let (a, b, stop) = (name.0.clone(), other.0.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut swaps = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                if rustix::fs::renameat_with(
+                    rustix::fs::CWD,
+                    &a,
+                    rustix::fs::CWD,
+                    &b,
+                    rustix::fs::RenameFlags::EXCHANGE,
+                )
+                .is_ok()
+                {
+                    swaps += 1;
+                }
+            }
+            swaps
+        })
+    };
+    let tries = 4000;
+    let mut landed = 0;
+    for attempt in 0..tries {
+        // One name, so the preflight table keeps one held directory, not one per try.
+        let target = name.0.join("data");
+        if preflight(&target).is_ok() {
+            landed += 1;
+        }
+        if let Ok(stage) = PublicationStage::create(&target, |_| Ok(())) {
+            assert!(
+                !stage
+                    .root()
+                    .starts_with(std::fs::canonicalize(victim.path()).unwrap()),
+                "{}",
+                stage.root().display()
+            );
+            drop(stage);
+        }
+        assert!(is_empty(victim.path()), "attempt {attempt}");
     }
+    stop.store(true, Ordering::Relaxed);
+    let swaps = swapper.join().unwrap();
+    assert!(swaps > 0, "the swap ran");
+    eprintln!("{tries} tries, {landed} preflights accepted, {swaps} swaps");
     assert!(is_empty(victim.path()));
 }

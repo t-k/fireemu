@@ -26,8 +26,18 @@ pub(crate) fn enforces_ownership(flags: u32) -> bool {
 }
 
 /// The mount flags and the mount point of the volume that holds `path`.
+#[cfg(test)]
 pub(crate) fn mount_of(path: &Path) -> Result<Mount, String> {
-    let stat = rustix::fs::statfs(path).map_err(|error| error.to_string())?;
+    mount_from(&rustix::fs::statfs(path).map_err(|error| error.to_string())?)
+}
+
+/// The mount flags and the mount point of the volume that holds the directory `directory`
+/// names (`fstatfs` on the descriptor the walk holds: nothing is resolved by path).
+pub(crate) fn mount_of_fd(directory: std::os::fd::BorrowedFd<'_>) -> Result<Mount, String> {
+    mount_from(&rustix::fs::fstatfs(directory).map_err(|error| error.to_string())?)
+}
+
+fn mount_from(stat: &rustix::fs::StatFs) -> Result<Mount, String> {
     // `f_mntonname` is a NUL-terminated array filled in by the kernel; an unterminated one is
     // reported as unreadable rather than read past its end.
     let bytes: Vec<u8> = stat

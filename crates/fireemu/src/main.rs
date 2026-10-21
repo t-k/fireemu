@@ -3263,7 +3263,8 @@ impl Exporter {
 
 impl hub::ExportRunner for Exporter {
     fn export(&self, path: &Path, initiated_by: &str) -> Result<Vec<String>, String> {
-        import_export::may_overwrite(path)?;
+        // The overwrite policy runs inside the export, on the resolved target, after its owner
+        // and mode were checked.
         import_export::export(path, self.products, &self.endpoints(), initiated_by)
             .map_err(|e| e.to_string())?;
         Ok(Vec::new())

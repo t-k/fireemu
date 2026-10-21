@@ -1076,3 +1076,56 @@ fn preflight_refuses_a_parent_that_cannot_create_the_export() {
     );
     assert!(!root.0.join("missing").exists());
 }
+
+/// A stage created for the path a preflight resolved uses the directory that preflight holds:
+/// once the directory is renamed away and a link put in its place, nothing goes through the link
+/// (r3 ruling 2). The stage is made in the held directory; where a later step still names it by
+/// path (the macOS stage ACL, the caller's writes into the stage), that step fails instead.
+#[cfg(unix)]
+#[test]
+fn a_stage_for_a_preflighted_path_uses_the_held_directory() {
+    use std::os::unix::fs::symlink;
+    let root = TestRoot::new("held-parent");
+    let parent = root.0.join("parent");
+    create_private_dir(&parent);
+    let elsewhere = root.0.join("elsewhere");
+    create_private_dir(&elsewhere);
+    let resolved = fireemu_export_publication::preflight(&parent.join("export")).unwrap();
+    let moved = root.0.join("moved");
+    std::fs::rename(&parent, &moved).unwrap();
+    symlink(&elsewhere, &parent).unwrap();
+    match PublicationStage::create(&resolved, |_| Ok(())) {
+        Ok(stage) => {
+            assert_eq!(
+                std::fs::read_dir(&moved).unwrap().count(),
+                1,
+                "the stage is in the held directory"
+            );
+            drop(stage);
+        }
+        Err(error) => assert!(error.contains("stage"), "{error}"),
+    }
+    assert_eq!(
+        std::fs::read_dir(&elsewhere).unwrap().count(),
+        0,
+        "nothing went through the link"
+    );
+    assert!(!elsewhere.join("export").exists());
+}
+
+/// The stage names the target it replaces by its resolved path, which is where a caller reads
+/// the previous export from (r2 review S1).
+#[cfg(unix)]
+#[test]
+fn a_stage_names_its_target_by_the_resolved_path() {
+    use std::os::unix::fs::symlink;
+    let root = TestRoot::new("resolved-target");
+    let real = root.0.join("real");
+    create_private_dir(&real);
+    symlink(&real, root.0.join("link")).unwrap();
+    let stage = PublicationStage::create(&root.0.join("link/export"), |_| Ok(())).unwrap();
+    assert_eq!(
+        stage.target(),
+        std::fs::canonicalize(&real).unwrap().join("export")
+    );
+}

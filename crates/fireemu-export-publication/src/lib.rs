@@ -20,9 +20,15 @@
 //! and every symlink on the export path is judged where it is met (see `parent`). Staged export publication is
 //! unavailable on Windows and fails before creating or modifying any export path.
 
+#[cfg(unix)]
+use std::ffi::{OsStr, OsString};
+#[cfg(unix)]
+use std::os::fd::{AsFd as _, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
+use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
 mod acl;
@@ -62,26 +68,64 @@ pub fn is_publication_entry(name: &std::ffi::OsStr) -> bool {
 struct TargetIdentity {
     present: bool,
     #[cfg(unix)]
-    device: u64,
+    device: rustix::fs::Dev,
     #[cfg(unix)]
     inode: u64,
 }
 
+/// A destination a preflight walked and judged, held for the life of the process: an export of
+/// its resolved path later (`--export-on-exit`) uses these descriptors and resolves nothing again.
+#[cfg(unix)]
+struct Held {
+    target: PathBuf,
+    anchor: parent::Anchor,
+    missing: Vec<OsString>,
+}
+
+#[cfg(unix)]
+static HELD: Mutex<Vec<Held>> = Mutex::new(Vec::new());
+
+/// A second descriptor for the same open directory.
+#[cfg(unix)]
+fn duplicate(fd: BorrowedFd<'_>) -> Result<OwnedFd, String> {
+    rustix::io::fcntl_dupfd_cloexec(fd, 0)
+        .map_err(|error| format!("cannot hold the export directory: {error}"))
+}
+
+/// The walk a preflight registered for `target` (its resolved path), with fresh descriptors.
+#[cfg(unix)]
+fn held(target: &Path) -> Result<Option<parent::Walked>, String> {
+    let table = HELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(held) = table.iter().find(|held| held.target == target) else {
+        return Ok(None);
+    };
+    Ok(Some(parent::Walked {
+        anchor: parent::Anchor {
+            fd: duplicate(held.anchor.fd.as_fd())?,
+            path: held.anchor.path.clone(),
+            below_shared: held.anchor.below_shared,
+        },
+        missing: held.missing.clone(),
+    }))
+}
+
 /// Checks the existing export namespace without creating, deleting or changing any path.
-/// Missing parent components are inspected through their nearest existing ancestor. This is
-/// only an early diagnostic: stage creation and publication must still revalidate the namespace.
-/// The caller must separately check its export overwrite/content policy.
+/// Missing parent components are inspected through their nearest existing ancestor. The caller
+/// must separately check its export overwrite/content policy.
 ///
 /// Returns the export path with every symlink on it resolved (each one judged as the export
-/// judges it): a caller that exports later (`--export-on-exit`) keeps this path, so a link made
-/// on the way after the preflight is never followed.
+/// judges it). The walked directory stays open for the life of the process: a later
+/// [`PublicationStage::create`] of the returned path (`--export-on-exit`) uses it instead of
+/// resolving the path again, so nothing made on the way while the suite runs is followed.
 #[cfg(unix)]
 pub fn preflight(target: &Path) -> Result<PathBuf, String> {
     preflight_with(target, &is_mount_root)
 }
 
-/// The export path with every symlink on it resolved, each one judged as an export judges it,
-/// without checking anything else; components that do not exist yet are kept as given.
+/// The export path with every symlink on it resolved, each one judged as an export judges it;
+/// components that do not exist yet are kept as given.
 #[cfg(unix)]
 pub fn resolve(target: &Path) -> Result<PathBuf, String> {
     let target = std::path::absolute(target)
@@ -92,11 +136,8 @@ pub fn resolve(target: &Path) -> Result<PathBuf, String> {
     let name = target
         .file_name()
         .ok_or("the export path has no directory name")?;
-    let (existing, missing) = parent::walk(parent)?;
-    Ok(missing
-        .iter()
-        .fold(existing, |path, component| path.join(component))
-        .join(name))
+    let walked = parent::walk(parent, &parent::system_volume_check)?;
+    Ok(resolved_target(&walked, name))
 }
 
 /// Resolution is unsupported on Windows, as publication is.
@@ -108,19 +149,39 @@ pub fn resolve(_target: &Path) -> Result<PathBuf, String> {
     )
 }
 
+#[cfg(unix)]
+fn resolved_target(walked: &parent::Walked, name: &OsStr) -> PathBuf {
+    walked
+        .missing
+        .iter()
+        .fold(walked.anchor.path.clone(), |path, component| {
+            path.join(component)
+        })
+        .join(name)
+}
+
+/// What `fstatat(AT_SYMLINK_NOFOLLOW)` says about `name` in `directory`.
+#[cfg(unix)]
+fn stat_at(directory: BorrowedFd<'_>, name: &OsStr) -> rustix::io::Result<rustix::fs::Stat> {
+    rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+}
+
 /// Refuses a present export target that another user could have made (see
 /// [`parent::target_error`]).
 #[cfg(unix)]
-fn check_present_target(target: &Path, parent: &Path) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let metadata = std::fs::symlink_metadata(target)
+fn check_present_target(
+    directory: BorrowedFd<'_>,
+    name: &OsStr,
+    path: &Path,
+    below_shared: bool,
+) -> Result<(), String> {
+    let stat = stat_at(directory, name)
         .map_err(|error| format!("cannot inspect the export target: {error}"))?;
     match parent::target_error(
-        target,
-        metadata.uid(),
-        metadata.mode(),
-        parent::below_shared(parent)?,
+        path,
+        stat.st_uid,
+        parent::mode_bits(&stat),
+        below_shared,
         rustix::process::geteuid().as_raw(),
     ) {
         Some(error) => Err(error),
@@ -128,66 +189,77 @@ fn check_present_target(target: &Path, parent: &Path) -> Result<(), String> {
     }
 }
 
+/// Opens a present export target as a directory, without following a link.
 #[cfg(unix)]
-fn preflight_with(
-    target: &Path,
-    mount_root: &dyn Fn(&Path, &Path) -> Result<bool, String>,
-) -> Result<PathBuf, String> {
+fn open_target(directory: BorrowedFd<'_>, name: &OsStr) -> Result<OwnedFd, String> {
+    rustix::fs::openat(
+        directory,
+        name,
+        parent::search_flags(),
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|error| format!("the export target changed while it was checked: {error}"))
+}
+
+/// Whether the effective user may make entries in the directory `directory` holds.
+#[cfg(unix)]
+fn may_write_in(directory: BorrowedFd<'_>, path: &Path) -> Result<(), String> {
+    rustix::fs::accessat(
+        directory,
+        ".",
+        rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+        rustix::fs::AtFlags::EACCESS,
+    )
+    .map_err(|error| format!("cannot create an export below {}: {error}", path.display()))
+}
+
+/// The test of a mount point, relative to the descriptor of the directory holding the target.
+#[cfg(unix)]
+type MountRoot<'a> = &'a dyn Fn(BorrowedFd<'_>, &OsStr) -> Result<bool, String>;
+
+#[cfg(unix)]
+fn preflight_with(target: &Path, mount_root: MountRoot<'_>) -> Result<PathBuf, String> {
     let target = std::path::absolute(target)
         .map_err(|error| format!("cannot resolve the export path: {error}"))?;
     let parent = target
         .parent()
         .ok_or("the export path has no parent directory")?;
-    let (existing, missing) = parent::inspect_parent(parent, &parent::system_volume_check)?;
     let name = target
         .file_name()
         .ok_or("the export path has no directory name")?;
-    let resolved = missing
-        .iter()
-        .fold(existing.clone(), |path, component| path.join(component))
-        .join(name);
-    if missing.is_empty() {
-        let target = existing.join(name);
-        let identity = target_identity(&target)?;
+    let walked = parent::inspect_parent(parent, &parent::system_volume_check)?;
+    let resolved = resolved_target(&walked, name);
+    let anchor = &walked.anchor;
+    let mut write_below = anchor.fd.as_fd();
+    let opened;
+    if walked.missing.is_empty() {
+        let identity = target_identity_at(anchor.fd.as_fd(), name)?;
         if identity.present {
-            check_present_target(&target, &existing)?;
-            parent::system_volume_check(&target)?;
-            if mount_root(&target, &existing)? {
-                parent::trusted_ancestors(&target, &parent::system_volume_check)?;
-                rustix::fs::accessat(
-                    rustix::fs::CWD,
-                    &target,
-                    rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
-                    rustix::fs::AtFlags::EACCESS,
-                )
-                .map_err(|error| {
-                    format!(
-                        "cannot create an export inside {}: {error}",
-                        target.display()
-                    )
-                })?;
-                return Ok(resolved);
+            check_present_target(anchor.fd.as_fd(), name, &resolved, anchor.below_shared)?;
+            opened = open_target(anchor.fd.as_fd(), name)?;
+            parent::system_volume_check(&resolved, opened.as_fd())?;
+            if mount_root(anchor.fd.as_fd(), name)? {
+                // The stage is made inside the target, which must pass what its ancestors pass.
+                parent::judge(
+                    opened.as_fd(),
+                    &resolved,
+                    &parent::system_volume_check,
+                    rustix::process::geteuid().as_raw(),
+                )?;
+                write_below = opened.as_fd();
             }
         }
     }
-    let access = rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK;
-    let access = if missing.is_empty() {
-        access
-    } else {
-        access | rustix::fs::Access::READ_OK
-    };
-    rustix::fs::accessat(
-        rustix::fs::CWD,
-        &existing,
-        access,
-        rustix::fs::AtFlags::EACCESS,
-    )
-    .map_err(|error| {
-        format!(
-            "cannot create an export below {}: {error}",
-            existing.display()
-        )
-    })?;
+    may_write_in(write_below, &resolved)?;
+    let mut table = HELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    table.retain(|held| held.target != resolved);
+    table.push(Held {
+        target: resolved.clone(),
+        anchor: walked.anchor,
+        missing: walked.missing,
+    });
     Ok(resolved)
 }
 
@@ -203,8 +275,19 @@ pub fn preflight(_target: &Path) -> Result<PathBuf, String> {
 /// An owner-only sibling directory that is not publishable until marked complete.
 #[derive(Debug)]
 pub struct PublicationStage {
+    /// The resolved export path.
     #[cfg(unix)]
     target: PathBuf,
+    /// The directory holding the target, held since the walk.
+    #[cfg(unix)]
+    parent: OwnedFd,
+    #[cfg(unix)]
+    target_name: OsString,
+    /// The directory holding the stage: the parent, or the target when it is a mount point.
+    #[cfg(unix)]
+    holder: OwnedFd,
+    #[cfg(unix)]
+    stage_name: OsString,
     root: PathBuf,
     expected_target: TargetIdentity,
     #[cfg(unix)]
@@ -219,6 +302,9 @@ impl PublicationStage {
     ///
     /// The validator runs between two identity observations. A target replaced while its overwrite
     /// policy is being checked is rejected, and the captured identity is checked again at publish.
+    /// A target whose resolved path a [`preflight`] returned uses the directory that preflight
+    /// holds; any other is walked now. Everything after the walk is relative to the held parent
+    /// directory.
     #[cfg(unix)]
     pub fn create(
         target: &Path,
@@ -232,61 +318,93 @@ impl PublicationStage {
     fn create_with(
         target: &Path,
         validate_target: impl FnOnce(&Path) -> Result<(), String>,
-        mount_root: &dyn Fn(&Path, &Path) -> Result<bool, String>,
+        mount_root: MountRoot<'_>,
     ) -> Result<Self, String> {
         // A one-element relative name such as `out` has the empty path as its parent, and
         // every operation on "" fails with ENOENT. Resolving against the working directory
         // here means no caller can lose an export by passing a bare directory name.
-        let target = &std::path::absolute(target)
+        let target = std::path::absolute(target)
             .map_err(|error| format!("cannot resolve the export path: {error}"))?;
-        let parent = target
+        let parent_path = target
             .parent()
             .ok_or_else(|| "the export path has no parent directory".to_owned())?;
-        let parent = parent::prepare_and_validate_parent(parent)?;
         let target_name = target
             .file_name()
-            .ok_or_else(|| "the export path has no directory name".to_owned())?;
-        let target = parent.join(target_name);
-        let expected_target = target_identity(&target)?;
+            .ok_or_else(|| "the export path has no directory name".to_owned())?
+            .to_owned();
+        let walked = match held(&target)? {
+            Some(walked) => {
+                // Judged again through the held descriptor: its owner may have changed it.
+                parent::judge_held(
+                    walked.anchor.fd.as_fd(),
+                    &walked.anchor.path,
+                    &parent::system_volume_check,
+                    rustix::process::geteuid().as_raw(),
+                )?;
+                walked
+            }
+            None => parent::inspect_parent(parent_path, &parent::system_volume_check)?,
+        };
+        let anchor = parent::complete(walked, &parent::system_volume_check, &|_| {})?;
+        let target = anchor.path.join(&target_name);
+        let expected_target = target_identity_at(anchor.fd.as_fd(), &target_name)?;
         // Before the overwrite policy reads anything in it.
-        if expected_target.present {
-            check_present_target(&target, &parent)?;
-        }
-        // An existing destination can itself be a mount point (a volume mounted at the export path).
-        #[cfg(target_os = "macos")]
-        if expected_target.present {
-            parent::system_volume_check(&target)?;
-        }
+        let opened_target = if expected_target.present {
+            check_present_target(
+                anchor.fd.as_fd(),
+                &target_name,
+                &target,
+                anchor.below_shared,
+            )?;
+            let opened = open_target(anchor.fd.as_fd(), &target_name)?;
+            // An existing destination can itself be a mount point (a volume mounted there).
+            parent::system_volume_check(&target, opened.as_fd())?;
+            Some(opened)
+        } else {
+            None
+        };
         validate_target(&target)?;
-        if !identity_matches_path(&target, &expected_target)? {
+        if target_identity_at(anchor.fd.as_fd(), &target_name)? != expected_target {
             return Err(
                 "the export target changed while its overwrite policy was checked; it was left unchanged"
                     .to_owned(),
             );
         }
-        let placement = if expected_target.present && mount_root(&target, &parent)? {
+        let placement = if expected_target.present && mount_root(anchor.fd.as_fd(), &target_name)? {
             Placement::InsideMountPoint
         } else {
             Placement::Sibling
         };
-        let root = match placement {
-            Placement::Sibling => create_stage_sibling(&target, &parent)?,
-            // The stage is made inside the target, so the target itself must pass the checks
-            // its ancestors pass.
-            Placement::InsideMountPoint => {
-                let inside = parent::prepare_and_validate_parent(&target)?;
-                if inside != target {
-                    return Err(
-                        "the export target changed while its overwrite policy was checked; it was left unchanged"
-                            .to_owned(),
-                    );
-                }
-                create_private_child(&target, "stage")?
+        let mount_target = opened_target.filter(|_| placement == Placement::InsideMountPoint);
+        let (holder, stage_name, root) = if let Some(opened) = mount_target {
+            // The stage is made inside the target, so the target itself must pass the
+            // checks its ancestors pass.
+            parent::judge(
+                opened.as_fd(),
+                &target,
+                &parent::system_volume_check,
+                rustix::process::geteuid().as_raw(),
+            )?;
+            if identity_of(opened.as_fd())? != expected_target {
+                return Err(
+                    "the export target changed while its overwrite policy was checked; it was left unchanged"
+                        .to_owned(),
+                );
             }
+            let (stage_name, root) = create_private_child(opened.as_fd(), &target, "stage")?;
+            (opened, stage_name, root)
+        } else {
+            let (stage_name, root) =
+                create_stage_sibling(anchor.fd.as_fd(), &anchor.path, &target_name)?;
+            (duplicate(anchor.fd.as_fd())?, stage_name, root)
         };
-        let owned_stage = stage_identity(&root)?;
+        let owned_stage = target_identity_at(holder.as_fd(), &stage_name)?;
         Ok(Self {
             target,
+            parent: anchor.fd,
+            target_name,
+            holder,
+            stage_name,
             root,
             expected_target,
             owned_stage,
@@ -313,6 +431,21 @@ impl PublicationStage {
         &self.root
     }
 
+    /// The export path, resolved: what the publication replaces. A caller that reads the previous
+    /// export (to keep entries it does not manage) reads it here, never by the path it was given.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn target(&self) -> &Path {
+        &self.target
+    }
+
+    /// The export path; publication is unavailable on Windows.
+    #[cfg(not(unix))]
+    #[must_use]
+    pub fn target(&self) -> &Path {
+        &self.root
+    }
+
     /// Whether a target directory existed when this stage was created.
     #[must_use]
     pub const fn target_was_present(&self) -> bool {
@@ -332,8 +465,10 @@ impl Drop for PublicationStage {
             return;
         }
         #[cfg(unix)]
-        if target_identity(&self.root).is_ok_and(|identity| identity == self.owned_stage) {
-            let _ = std::fs::remove_dir_all(&self.root);
+        if target_identity_at(self.holder.as_fd(), &self.stage_name)
+            .is_ok_and(|identity| identity == self.owned_stage)
+        {
+            let _ = parent::remove_tree_at(self.holder.as_fd(), &self.stage_name);
         }
     }
 }
@@ -346,37 +481,39 @@ impl CompletePublicationStage {
     /// Atomically publishes the complete stage if the target identity is unchanged.
     #[cfg(unix)]
     pub fn publish(mut self) -> Result<(), String> {
-        if !identity_matches_path(&self.0.root, &self.0.owned_stage)? {
+        let stage = &self.0;
+        if target_identity_at(stage.holder.as_fd(), &stage.stage_name)? != stage.owned_stage {
             return Err(
                 "the owned export stage changed before publication; it was not published"
                     .to_owned(),
             );
         }
-        if self.0.placement == Placement::InsideMountPoint {
-            if !identity_matches_path(&self.0.target, &self.0.expected_target)? {
+        if stage.placement == Placement::InsideMountPoint {
+            if identity_of(stage.holder.as_fd())? != stage.expected_target {
                 return Err(
                     "the export target changed after it was checked; it was left unchanged"
                         .to_owned(),
                 );
             }
-            publish_into_mount_point(&self.0.root, &self.0.target)?;
+            publish_into_mount_point(stage.holder.as_fd(), &stage.target, &stage.stage_name)?;
             self.0.armed = false;
             return Ok(());
         }
+        let parent = stage.parent.as_fd();
         publish_stage(
-            &self.0.root,
-            &self.0.target,
-            &self.0.expected_target,
-            &self.0.owned_stage,
+            parent,
+            &stage.stage_name,
+            &stage.target_name,
+            &stage.expected_target,
         )?;
-        if self.0.expected_target.present {
-            if !identity_matches_path(&self.0.root, &self.0.expected_target)? {
+        if stage.expected_target.present {
+            if target_identity_at(parent, &stage.stage_name)? != stage.expected_target {
                 return Err(
                     "the displaced export target changed before cleanup; it was not removed"
                         .to_owned(),
                 );
             }
-            std::fs::remove_dir_all(&self.0.root)
+            parent::remove_tree_at(parent, &stage.stage_name)
                 .map_err(|error| format!("cannot remove the displaced export target: {error}"))?;
         }
         self.0.armed = false;
@@ -400,104 +537,110 @@ impl CompletePublicationStage {
 }
 
 #[cfg(unix)]
-fn target_identity(path: &Path) -> Result<TargetIdentity, String> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(TargetIdentity {
-                present: false,
-                #[cfg(unix)]
-                device: 0,
-                #[cfg(unix)]
-                inode: 0,
-            });
+fn identity_from(stat: &rustix::fs::Stat) -> Result<TargetIdentity, String> {
+    match rustix::fs::FileType::from_raw_mode(stat.st_mode) {
+        rustix::fs::FileType::Symlink => {
+            Err("the export target is a symlink, which an export never follows".to_owned())
         }
-        Err(error) => return Err(format!("cannot inspect the export target: {error}")),
-    };
-    if metadata.file_type().is_symlink() {
-        return Err("the export target is a symlink, which an export never follows".to_owned());
+        rustix::fs::FileType::Directory => Ok(TargetIdentity {
+            present: true,
+            device: stat.st_dev,
+            inode: stat.st_ino,
+        }),
+        _ => Err("the export target is not a directory".to_owned()),
     }
-    if !metadata.file_type().is_dir() {
-        return Err("the export target is not a directory".to_owned());
+}
+
+/// The identity of the entry `name` in `directory`, without following a link.
+#[cfg(unix)]
+fn target_identity_at(directory: BorrowedFd<'_>, name: &OsStr) -> Result<TargetIdentity, String> {
+    match stat_at(directory, name) {
+        Ok(stat) => identity_from(&stat),
+        Err(rustix::io::Errno::NOENT) => Ok(TargetIdentity {
+            present: false,
+            device: 0,
+            inode: 0,
+        }),
+        Err(error) => Err(format!("cannot inspect the export target: {error}")),
     }
-    Ok(TargetIdentity {
-        present: true,
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
 }
 
+/// The identity of the directory a descriptor holds.
 #[cfg(unix)]
-fn identity_matches_path(path: &Path, expected: &TargetIdentity) -> Result<bool, String> {
-    Ok(target_identity(path)? == *expected)
+fn identity_of(directory: BorrowedFd<'_>) -> Result<TargetIdentity, String> {
+    let stat = rustix::fs::fstat(directory)
+        .map_err(|error| format!("cannot inspect the export target: {error}"))?;
+    identity_from(&stat)
 }
 
+/// Makes the stage beside the target, in the held parent directory.
 #[cfg(unix)]
-fn stage_identity(path: &Path) -> Result<TargetIdentity, String> {
-    target_identity(path)
-}
-
-#[cfg(unix)]
-fn create_stage_sibling(target: &Path, parent: &Path) -> Result<PathBuf, String> {
-    let name = target
-        .file_name()
-        .map_or_else(|| "export".into(), |name| name.to_string_lossy());
+fn create_stage_sibling(
+    parent: BorrowedFd<'_>,
+    parent_path: &Path,
+    target_name: &OsStr,
+) -> Result<(OsString, PathBuf), String> {
+    let name = target_name.to_string_lossy();
     for _ in 0..32 {
         let id = NEXT_STAGE_ID.fetch_add(1, Ordering::Relaxed);
-        let stage = parent.join(format!(".{name}.fireemu-stage-{}-{id}", std::process::id()));
-        match create_private_stage(&stage) {
+        let stage = OsString::from(format!(".{name}.fireemu-stage-{}-{id}", std::process::id()));
+        match create_private_stage(parent, &stage) {
             Ok(()) => {
+                let path = parent_path.join(&stage);
                 // The stage starts with no ACL of its own: it must not inherit one from its parent.
                 #[cfg(target_os = "macos")]
-                if let Err(error) = acl::clear_stage_acl(&stage) {
-                    let _ = std::fs::remove_dir(&stage);
+                if let Err(error) = acl::clear_stage_acl(&path) {
+                    let _ = rustix::fs::unlinkat(parent, &stage, rustix::fs::AtFlags::REMOVEDIR);
                     return Err(error);
                 }
-                return Ok(stage);
+                return Ok((stage, path));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(rustix::io::Errno::EXIST) => {}
             Err(error) => return Err(format!("cannot create private export stage: {error}")),
         }
     }
     Err("cannot allocate a unique private export stage".to_owned())
 }
 
-/// Creates an owner-only `.fireemu-<kind>-<pid>-<n>` directory inside `directory`.
+/// Creates an owner-only `.fireemu-<kind>-<pid>-<n>` directory inside the directory `directory`
+/// holds (`directory_path` names it in messages).
 #[cfg(unix)]
-fn create_private_child(directory: &Path, kind: &str) -> Result<PathBuf, String> {
+fn create_private_child(
+    directory: BorrowedFd<'_>,
+    directory_path: &Path,
+    kind: &str,
+) -> Result<(OsString, PathBuf), String> {
     for _ in 0..32 {
         let id = NEXT_STAGE_ID.fetch_add(1, Ordering::Relaxed);
-        let child = directory.join(format!(".fireemu-{kind}-{}-{id}", std::process::id()));
-        match create_private_stage(&child) {
+        let child = OsString::from(format!(".fireemu-{kind}-{}-{id}", std::process::id()));
+        match create_private_stage(directory, &child) {
             Ok(()) => {
+                let path = directory_path.join(&child);
                 #[cfg(target_os = "macos")]
-                if let Err(error) = acl::clear_stage_acl(&child) {
-                    let _ = std::fs::remove_dir(&child);
+                if let Err(error) = acl::clear_stage_acl(&path) {
+                    let _ = rustix::fs::unlinkat(directory, &child, rustix::fs::AtFlags::REMOVEDIR);
                     return Err(error);
                 }
-                return Ok(child);
+                return Ok((child, path));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(rustix::io::Errno::EXIST) => {}
             Err(error) => return Err(format!("cannot create private export {kind}: {error}")),
         }
     }
     Err(format!("cannot allocate a unique private export {kind}"))
 }
 
-/// Whether `target` is the root of a mount, which `rename(2)` refuses to move (`EBUSY` or
-/// `EXDEV`): a different device than its parent's, or, on Linux, a bind mount of the same one.
+/// Whether the entry `name` of `directory` is the root of a mount, which `rename(2)` refuses to
+/// move (`EBUSY` or `EXDEV`): a different device than the directory's, or, on Linux, a bind
+/// mount of the same one.
 #[cfg(unix)]
-fn is_mount_root(target: &Path, parent: &Path) -> Result<bool, String> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let target_device = std::fs::symlink_metadata(target)
+fn is_mount_root(directory: BorrowedFd<'_>, name: &OsStr) -> Result<bool, String> {
+    let target_device = stat_at(directory, name)
         .map_err(|error| format!("cannot inspect the export target: {error}"))?
-        .dev();
-    let parent_device = std::fs::metadata(parent)
+        .st_dev;
+    let parent_device = rustix::fs::fstat(directory)
         .map_err(|error| format!("cannot inspect the export parent: {error}"))?
-        .dev();
+        .st_dev;
     if target_device != parent_device {
         return Ok(true);
     }
@@ -505,8 +648,8 @@ fn is_mount_root(target: &Path, parent: &Path) -> Result<bool, String> {
     {
         use rustix::fs::{statx, AtFlags, StatxAttributes, StatxFlags};
         if let Ok(status) = statx(
-            rustix::fs::CWD,
-            target,
+            directory,
+            name,
             AtFlags::SYMLINK_NOFOLLOW,
             StatxFlags::BASIC_STATS,
         ) {
@@ -521,42 +664,100 @@ fn is_mount_root(target: &Path, parent: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-/// Replaces what `target` holds with what `stage` (a directory inside it) holds, by renames on
-/// the target's own volume.
+/// Moves the entry `name` from one held directory to another (same name on both sides).
+#[cfg(unix)]
+type MoveEntry<'a> = &'a dyn Fn(BorrowedFd<'_>, &OsStr, BorrowedFd<'_>) -> std::io::Result<()>;
+
+#[cfg(unix)]
+fn rename_entry(from: BorrowedFd<'_>, name: &OsStr, to: BorrowedFd<'_>) -> std::io::Result<()> {
+    rustix::fs::renameat(from, name, to, name).map_err(std::io::Error::from)
+}
+
+/// Opens a directory below a held one for reading, without following a link.
+#[cfg(unix)]
+fn open_listable(directory: BorrowedFd<'_>, name: &OsStr) -> rustix::io::Result<OwnedFd> {
+    rustix::fs::openat(
+        directory,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+}
+
+/// Replaces what the target (a mount point, held) holds with what its stage (a directory inside
+/// it) holds, by renames on the target's own volume, relative to held descriptors.
 ///
 /// The old manifest leaves first and the new one arrives last, so a directory caught in the
 /// middle never holds a manifest beside a partial tree. A failure moves back what was moved;
 /// when that fails too, the message names where the old export is.
 #[cfg(unix)]
-fn publish_into_mount_point(stage: &Path, target: &Path) -> Result<(), String> {
-    publish_into_mount_point_with(stage, target, &|from, to| std::fs::rename(from, to))
+fn publish_into_mount_point(
+    target: BorrowedFd<'_>,
+    target_path: &Path,
+    stage_name: &OsStr,
+) -> Result<(), String> {
+    publish_into_mount_point_with(target, target_path, stage_name, &rename_entry)
 }
 
-/// [`publish_into_mount_point`] with the rename of each entry passed in (the tests interrupt it).
+/// [`publish_into_mount_point`] with the move of each entry passed in (the tests interrupt it).
 #[cfg(unix)]
 fn publish_into_mount_point_with(
-    stage: &Path,
-    target: &Path,
-    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+    target: BorrowedFd<'_>,
+    target_path: &Path,
+    stage_name: &OsStr,
+    rename: MoveEntry<'_>,
 ) -> Result<(), String> {
-    let displaced = create_private_child(target, "displaced")?;
-    let mut moved_out: Vec<std::ffi::OsString> = Vec::new();
-    let current = |name: &std::ffi::OsStr| {
-        let path = target.join(name);
-        path != stage && path != displaced
+    let cannot_open = |name: &OsStr, error: rustix::io::Errno| {
+        format!("cannot open {}: {error}", target_path.join(name).display())
     };
-    let mut moved_in: Vec<std::ffi::OsString> = Vec::new();
-    let result = move_entries(target, &displaced, current, false, rename, &mut moved_out)
-        .and_then(|()| move_entries(stage, target, |_| true, true, rename, &mut moved_in));
+    let (displaced_name, displaced_path) = create_private_child(target, target_path, "displaced")?;
+    let stage =
+        open_listable(target, stage_name).map_err(|error| cannot_open(stage_name, error))?;
+    let displaced = open_listable(target, &displaced_name)
+        .map_err(|error| cannot_open(&displaced_name, error))?;
+    let listable = open_listable(target, OsStr::new("."))
+        .map_err(|error| cannot_open(OsStr::new("."), error))?;
+    let stage_path = target_path.join(stage_name);
+    let mut moved_out: Vec<OsString> = Vec::new();
+    let current = |name: &OsStr| name != stage_name && name != displaced_name;
+    let mut moved_in: Vec<OsString> = Vec::new();
+    let result = move_entries(
+        (listable.as_fd(), target_path),
+        displaced.as_fd(),
+        current,
+        false,
+        rename,
+        &mut moved_out,
+    )
+    .and_then(|()| {
+        move_entries(
+            (stage.as_fd(), &stage_path),
+            target,
+            |_| true,
+            true,
+            rename,
+            &mut moved_in,
+        )
+    });
     if let Err(error) = result {
         return Err(roll_back(
-            stage, target, &displaced, &moved_in, &moved_out, rename, &error,
+            target,
+            stage.as_fd(),
+            displaced.as_fd(),
+            &displaced_path,
+            &moved_in,
+            &moved_out,
+            rename,
+            &error,
         ));
     }
     // The new export is in place; a displaced tree that cannot be removed now is a publication
     // entry, which the next export moves out and removes with the rest.
-    let _ = std::fs::remove_dir(stage);
-    let _ = std::fs::remove_dir_all(&displaced);
+    let _ = rustix::fs::unlinkat(target, stage_name, rustix::fs::AtFlags::REMOVEDIR);
+    let _ = parent::remove_tree_at(target, &displaced_name);
     Ok(())
 }
 
@@ -565,107 +766,118 @@ fn publish_into_mount_point_with(
 /// other entry is back: a target whose rollback fails part-way holds no manifest, so an import
 /// refuses it rather than reading a mixture of the two exports.
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn roll_back(
-    stage: &Path,
-    target: &Path,
-    displaced: &Path,
-    moved_in: &[std::ffi::OsString],
-    moved_out: &[std::ffi::OsString],
-    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+    target: BorrowedFd<'_>,
+    stage: BorrowedFd<'_>,
+    displaced: BorrowedFd<'_>,
+    displaced_path: &Path,
+    moved_in: &[OsString],
+    moved_out: &[OsString],
+    rename: MoveEntry<'_>,
     error: &str,
 ) -> String {
     let mut restored = true;
     for name in moved_in.iter().rev() {
-        restored &= rename(&target.join(name), &stage.join(name)).is_ok();
+        restored &= rename(target, name, stage).is_ok();
     }
     let (manifest, data): (Vec<_>, Vec<_>) =
         moved_out.iter().partition(|name| *name == MANIFEST_NAME);
     for name in data {
-        restored &= rename(&displaced.join(name), &target.join(name)).is_ok();
+        restored &= rename(displaced, name, target).is_ok();
     }
     if restored {
         for name in manifest {
-            restored &= rename(&displaced.join(name), &target.join(name)).is_ok();
+            restored &= rename(displaced, name, target).is_ok();
         }
     }
     if restored {
-        let _ = std::fs::remove_dir(displaced);
+        if let Some(name) = displaced_path.file_name() {
+            let _ = rustix::fs::unlinkat(target, name, rustix::fs::AtFlags::REMOVEDIR);
+        }
         return format!(
             "publication into the mount point failed ({error}); the prior export was restored"
         );
     }
     format!(
         "publication into the mount point failed ({error}), and the prior export could not be restored; it is in {}, and the export directory holds no {MANIFEST_NAME}",
-        displaced.display()
+        displaced_path.display()
     )
 }
 
-/// Renames every entry of `from` that `keep` selects into `to`, the manifest last when
-/// `manifest_last` (entering the target) and first otherwise (leaving it). Each moved name is
-/// pushed onto `moved`.
+/// Moves every entry of `from` (held for reading; its path names it in messages) that `keep`
+/// selects into `to`, the manifest last when `manifest_last` (entering the target) and first
+/// otherwise (leaving it). Each moved name is pushed onto `moved`.
 #[cfg(unix)]
 fn move_entries(
-    from: &Path,
-    to: &Path,
-    keep: impl Fn(&std::ffi::OsStr) -> bool,
+    from: (BorrowedFd<'_>, &Path),
+    to: BorrowedFd<'_>,
+    keep: impl Fn(&OsStr) -> bool,
     manifest_last: bool,
-    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
-    moved: &mut Vec<std::ffi::OsString>,
+    rename: MoveEntry<'_>,
+    moved: &mut Vec<OsString>,
 ) -> Result<(), String> {
-    let mut names = std::fs::read_dir(from)
-        .map_err(|error| format!("cannot read {}: {error}", from.display()))?
-        .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("cannot read {}: {error}", from.display()))?;
+    use std::os::unix::ffi::OsStrExt as _;
+    let (from, from_path) = from;
+    let cannot_read =
+        |error: rustix::io::Errno| format!("cannot read {}: {error}", from_path.display());
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(from).map_err(cannot_read)? {
+        let entry = entry.map_err(cannot_read)?;
+        let name = entry.file_name().to_bytes();
+        if name != b"." && name != b".." {
+            names.push(OsStr::from_bytes(name).to_owned());
+        }
+    }
     names.retain(|name| keep(name));
     names.sort_by_key(|name| (name == MANIFEST_NAME) == manifest_last);
     for name in names {
-        rename(&from.join(&name), &to.join(&name))
-            .map_err(|error| format!("cannot move {}: {error}", from.join(&name).display()))?;
+        rename(from, &name, to)
+            .map_err(|error| format!("cannot move {}: {error}", from_path.join(&name).display()))?;
         moved.push(name);
     }
     Ok(())
 }
 
 #[cfg(unix)]
-fn create_private_stage(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new().mode(0o700).create(path)
+fn create_private_stage(directory: BorrowedFd<'_>, name: &OsStr) -> rustix::io::Result<()> {
+    rustix::fs::mkdirat(directory, name, rustix::fs::Mode::from_raw_mode(0o700))
 }
 
 #[cfg(unix)]
 fn publish_stage(
-    stage: &Path,
-    target: &Path,
+    parent: BorrowedFd<'_>,
+    stage: &OsStr,
+    target: &OsStr,
     expected: &TargetIdentity,
-    owned_stage: &TargetIdentity,
 ) -> Result<(), String> {
-    if !identity_matches_path(target, expected)? {
+    if target_identity_at(parent, target)? != *expected {
         return Err(
             "the export target changed after it was checked; it was left unchanged".to_owned(),
         );
     }
-    atomic_publish(stage, target, expected.present, owned_stage)?;
+    atomic_publish(parent, stage, target, expected.present)?;
     if expected.present {
-        verify_displaced_target_or_rollback(stage, target, expected)?;
+        verify_displaced_target_or_rollback(parent, stage, target, expected)?;
     }
     Ok(())
 }
 
 #[cfg(unix)]
 fn verify_displaced_target_or_rollback(
-    stage: &Path,
-    target: &Path,
+    parent: BorrowedFd<'_>,
+    stage: &OsStr,
+    target: &OsStr,
     expected: &TargetIdentity,
 ) -> Result<(), String> {
-    let displaced = identity_matches_path(stage, expected);
+    let displaced = target_identity_at(parent, stage).map(|identity| identity == *expected);
     if displaced.as_ref().is_ok_and(|matches| *matches) {
         return Ok(());
     }
     let detail = displaced
         .err()
         .unwrap_or_else(|| "the displaced target has a different identity".to_owned());
-    match atomic_publish(stage, target, true, expected) {
+    match atomic_publish(parent, stage, target, true) {
         Ok(()) => Err(format!(
             "the export target changed during publication ({detail}); the prior target was restored"
         )),
@@ -677,13 +889,13 @@ fn verify_displaced_target_or_rollback(
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn atomic_publish(
-    stage: &Path,
-    target: &Path,
+    parent: BorrowedFd<'_>,
+    stage: &OsStr,
+    target: &OsStr,
     target_present: bool,
-    _owned_stage: &TargetIdentity,
 ) -> Result<(), String> {
     rename_for(target_present, |flags| {
-        rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
+        rustix::fs::renameat_with(parent, stage, parent, target, flags)
     })
 }
 
@@ -722,7 +934,7 @@ fn publication_error(error: rustix::io::Errno) -> String {
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::{
-        atomic_publish, publication_error, rename_for, target_identity,
+        atomic_publish, publication_error, rename_for, target_identity_at,
         verify_displaced_target_or_rollback,
     };
 
@@ -792,6 +1004,7 @@ mod tests {
 
     #[test]
     fn a_post_check_identity_race_is_atomically_rolled_back() {
+        use std::os::fd::AsFd as _;
         let root = std::env::temp_dir().join(format!(
             "fireemu-publication-rollback-{}",
             std::process::id()
@@ -803,15 +1016,28 @@ mod tests {
         let stage = root.join("stage");
         std::fs::create_dir(&target).unwrap();
         std::fs::write(target.join("old"), b"old").unwrap();
-        let expected = target_identity(&target).unwrap();
+        let held = rustix::fs::openat(
+            rustix::fs::CWD,
+            &root,
+            crate::parent::search_flags(),
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap();
+        let expected = target_identity_at(held.as_fd(), "target".as_ref()).unwrap();
         std::fs::rename(&target, &displaced).unwrap();
         std::fs::create_dir(&target).unwrap();
         std::fs::write(target.join("attacker"), b"unchanged").unwrap();
         std::fs::create_dir(&stage).unwrap();
         std::fs::write(stage.join("new"), b"new").unwrap();
 
-        atomic_publish(&stage, &target, true, &expected).unwrap();
-        let error = verify_displaced_target_or_rollback(&stage, &target, &expected).unwrap_err();
+        atomic_publish(held.as_fd(), "stage".as_ref(), "target".as_ref(), true).unwrap();
+        let error = verify_displaced_target_or_rollback(
+            held.as_fd(),
+            "stage".as_ref(),
+            "target".as_ref(),
+            &expected,
+        )
+        .unwrap_err();
 
         assert!(error.contains("prior target was restored"), "{error}");
         assert_eq!(
@@ -825,10 +1051,10 @@ mod tests {
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn atomic_publish(
-    stage: &Path,
-    target: &Path,
+    parent: BorrowedFd<'_>,
+    stage: &OsStr,
+    target: &OsStr,
     target_present: bool,
-    _owned_stage: &TargetIdentity,
 ) -> Result<(), String> {
     if target_present {
         return Err(
@@ -836,7 +1062,7 @@ fn atomic_publish(
                 .to_owned(),
         );
     }
-    std::fs::rename(stage, target)
+    rustix::fs::renameat(parent, stage, parent, target)
         .map_err(|error| format!("cannot atomically publish the export directory: {error}"))
 }
 
@@ -888,7 +1114,26 @@ mod mount_point_tests {
     }
 
     use super::{is_mount_root, is_publication_entry, move_entries, PublicationStage};
+    use std::ffi::OsStr;
+    use std::os::fd::{AsFd as _, BorrowedFd, OwnedFd};
     use std::path::{Path, PathBuf};
+
+    /// A directory held for reading, as publication holds the ones it moves entries between.
+    fn held(path: &Path) -> OwnedFd {
+        rustix::fs::openat(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap()
+    }
+
+    fn plain(from: BorrowedFd<'_>, name: &OsStr, to: BorrowedFd<'_>) -> std::io::Result<()> {
+        rustix::fs::renameat(from, name, to, name).map_err(std::io::Error::from)
+    }
 
     /// A private directory under a trusted per-user base: staging refuses an ancestor that other
     /// users can write, such as Linux's `/tmp`. Each test removes the directory itself.
@@ -1002,15 +1247,39 @@ mod mount_point_tests {
         for name in ["a", "firebase-export-metadata.json", "z"] {
             std::fs::write(from.join(name), b"").unwrap();
         }
-        let plain = |from: &Path, to: &Path| std::fs::rename(from, to);
+        let (from_fd, to_fd) = (held(&from), held(&to));
         let mut moved = Vec::new();
-        move_entries(&from, &to, |_| true, false, &plain, &mut moved).unwrap();
+        move_entries(
+            (from_fd.as_fd(), &from),
+            to_fd.as_fd(),
+            |_| true,
+            false,
+            &plain,
+            &mut moved,
+        )
+        .unwrap();
         assert_eq!(moved[0], "firebase-export-metadata.json");
         let mut moved = Vec::new();
-        move_entries(&to, &from, |_| true, true, &plain, &mut moved).unwrap();
+        move_entries(
+            (to_fd.as_fd(), &to),
+            from_fd.as_fd(),
+            |_| true,
+            true,
+            &plain,
+            &mut moved,
+        )
+        .unwrap();
         assert_eq!(moved[2], "firebase-export-metadata.json");
         let mut moved = Vec::new();
-        move_entries(&from, &to, |name| name != "a", true, &plain, &mut moved).unwrap();
+        move_entries(
+            (from_fd.as_fd(), &from),
+            to_fd.as_fd(),
+            |name| name != "a",
+            true,
+            &plain,
+            &mut moved,
+        )
+        .unwrap();
         assert_eq!(moved, ["z", "firebase-export-metadata.json"]);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1019,11 +1288,11 @@ mod mount_point_tests {
     fn a_directory_on_another_device_is_a_mount_root_and_an_ordinary_one_is_not() {
         let root = scratch("detect");
         std::fs::create_dir(root.join("plain")).unwrap();
-        assert!(!is_mount_root(&root.join("plain"), &root).unwrap());
+        assert!(!is_mount_root(held(&root).as_fd(), "plain".as_ref()).unwrap());
         #[cfg(target_os = "macos")]
-        assert!(is_mount_root(Path::new("/dev"), Path::new("/")).unwrap());
+        assert!(is_mount_root(held(Path::new("/")).as_fd(), "dev".as_ref()).unwrap());
         #[cfg(target_os = "linux")]
-        assert!(is_mount_root(Path::new("/proc"), Path::new("/")).unwrap());
+        assert!(is_mount_root(held(Path::new("/")).as_fd(), "proc".as_ref()).unwrap());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1037,20 +1306,23 @@ mod mount_point_tests {
         std::fs::create_dir(&target).unwrap();
         std::fs::write(target.join("firebase-export-metadata.json"), b"old").unwrap();
         std::fs::write(target.join("a"), b"old").unwrap();
-        let stage = super::create_private_child(&target, "stage").unwrap();
+        let target_fd = held(&target);
+        let (stage_name, stage) =
+            super::create_private_child(target_fd.as_fd(), &target, "stage").unwrap();
         std::fs::write(stage.join("firebase-export-metadata.json"), b"new").unwrap();
         std::fs::write(stage.join("b"), b"new").unwrap();
         let calls = Cell::new(0usize);
-        let rename = |from: &Path, to: &Path| {
+        let rename = |from: BorrowedFd<'_>, name: &OsStr, to: BorrowedFd<'_>| {
             let call = calls.get();
             calls.set(call + 1);
             if failing.contains(&call) {
                 Err(std::io::Error::other("injected"))
             } else {
-                std::fs::rename(from, to)
+                plain(from, name, to)
             }
         };
-        let result = super::publish_into_mount_point_with(&stage, &target, &rename);
+        let result =
+            super::publish_into_mount_point_with(target_fd.as_fd(), &target, &stage_name, &rename);
         (target, result)
     }
 
@@ -1109,9 +1381,14 @@ mod mount_point_tests {
             std::fs::create_dir(root.join(format!(".fireemu-stage-{}-{id}", std::process::id())))
                 .unwrap();
         }
-        let made = super::create_private_child(&root, "stage").unwrap();
+        let (_, made) = super::create_private_child(held(&root).as_fd(), &root, "stage").unwrap();
         assert!(made.is_dir());
-        let error = super::create_private_child(&root.join("missing"), "stage").unwrap_err();
+        // A directory removed while held takes no entry.
+        std::fs::create_dir(root.join("gone")).unwrap();
+        let gone = held(&root.join("gone"));
+        std::fs::remove_dir(root.join("gone")).unwrap();
+        let error =
+            super::create_private_child(gone.as_fd(), &root.join("gone"), "stage").unwrap_err();
         assert!(
             error.starts_with("cannot create private export stage"),
             "{error}"
@@ -1138,9 +1415,12 @@ mod mount_point_tests {
         use super::super::{
             create_private_child, is_publication_entry, publish_into_mount_point_with,
         };
+        use super::{held, plain};
         use proptest::prelude::*;
         use std::cell::Cell;
         use std::collections::BTreeMap;
+        use std::ffi::OsStr;
+        use std::os::fd::{AsFd as _, BorrowedFd};
         use std::path::Path;
 
         const MANIFEST: &str = "firebase-export-metadata.json";
@@ -1221,11 +1501,13 @@ mod mount_point_tests {
                 let new = tree(&new_names, b"new");
                 prop_assert!(old.contains_key(MANIFEST) && new.contains_key(MANIFEST));
                 write(&target, &old);
-                let stage = create_private_child(&target, "stage").unwrap();
+                let target_fd = held(&target);
+                let (stage_name, stage) =
+                    create_private_child(target_fd.as_fd(), &target, "stage").unwrap();
                 write(&stage, &new);
 
                 let calls = Cell::new(0usize);
-                let rename = |from: &Path, to: &Path| {
+                let rename = |from: BorrowedFd<'_>, name: &OsStr, to: BorrowedFd<'_>| {
                     let call = calls.get();
                     calls.set(call + 1);
                     match interruption {
@@ -1236,11 +1518,11 @@ mod mount_point_tests {
                         Interruption::FailsTwice(n, m) if call == n + 1 + m => {
                             Err(std::io::Error::other("injected in the rollback"))
                         }
-                        _ => std::fs::rename(from, to),
+                        _ => plain(from, name, to),
                     }
                 };
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    publish_into_mount_point_with(&stage, &target, &rename)
+                    publish_into_mount_point_with(target_fd.as_fd(), &target, &stage_name, &rename)
                 }));
                 let renames = old.len() + new.len();
                 let after = contents(&target);

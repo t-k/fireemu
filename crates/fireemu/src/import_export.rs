@@ -3127,7 +3127,8 @@ pub fn export(
     let staged = PublicationStage::create(dir, may_overwrite)
         .map_err(|e| ArtifactError::new("export", dir, e))?;
     if staged.target_was_present() {
-        copy_unmanaged_entries(dir, staged.root())
+        // From the resolved target the stage replaces, never by the path given again.
+        copy_unmanaged_entries(staged.target(), staged.root())
             .map_err(|e| ArtifactError::new("export", dir, e))?;
     }
     write_export_tree(staged.root(), products, endpoints, initiated_by)?;

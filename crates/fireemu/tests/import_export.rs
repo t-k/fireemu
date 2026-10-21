@@ -2943,12 +2943,6 @@ fn document_only_import_peak_rss_is_within_one_point_two_times_the_artifact() {
     );
 }
 
-/// EXPREL-1: a bare relative directory name is resolved against the working directory.
-///
-/// `--export-on-exit out` used to reach the publication stage as the one-element relative path
-/// `out`, whose parent is the empty path. Restricting the permissions of "" fails with
-/// ENOENT, so the export was never written and the command still exited with the child's
-/// status, which made a seed-refresh job look successful while refreshing nothing.
 /// The export at exit goes where the preflight resolved the path: a symlink on the way that is
 /// re-pointed while the suite runs is not followed again (export-guard review M2).
 #[cfg(unix)]
@@ -2981,6 +2975,12 @@ fn export_on_exit_writes_where_the_preflight_resolved_the_path() {
     assert!(!second.join("out").exists(), "{log}");
 }
 
+/// EXPREL-1: a bare relative directory name is resolved against the working directory.
+///
+/// `--export-on-exit out` used to reach the publication stage as the one-element relative path
+/// `out`, whose parent is the empty path. Restricting the permissions of "" fails with
+/// ENOENT, so the export was never written and the command still exited with the child's
+/// status, which made a seed-refresh job look successful while refreshing nothing.
 #[test]
 fn export_on_exit_accepts_a_bare_relative_directory_name() {
     let dir = scratch("bare-relative");

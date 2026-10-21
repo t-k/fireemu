@@ -910,13 +910,15 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
             // levels are accepted); production has not answered it, so strict gives 501 through
             // the shape gate.
             None => Ok(Expr::Constant(
-                decode_official_literal(value).map(to_micros).map_err(|e| {
-                    if e.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH") {
-                        Status::invalid_argument("Values can be at most 20 levels deep.")
-                    } else {
-                        e
-                    }
-                })?,
+                decode_official_literal(value)
+                    .map(canonical_constant)
+                    .map_err(|e| {
+                        if e.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH") {
+                            Status::invalid_argument("Values can be at most 20 levels deep.")
+                        } else {
+                            e
+                        }
+                    })?,
             )),
             // A literal holding an expression with a key that is not plain: the official
             // emulator names a reserved key before the value type; production has not answered
@@ -987,22 +989,37 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
 /// 100 elements.` past it).
 const MAX_PATH_ELEMENTS: usize = 100;
 
-/// A constant with every timestamp cut to microseconds, as production stores a value and the
-/// official emulator 1.22.0 answers it (r8 review S4).
-fn to_micros(value: fireemu_core_firestore::value::Value) -> fireemu_core_firestore::value::Value {
+/// A constant as the official emulator 1.22.0 answers it: every timestamp cut to microseconds,
+/// as production stores a value (r8 review S4), and a reference to a database root read as its
+/// documents root (`projects/p/databases/d` answers `projects/p/databases/d/documents`, and
+/// the two are equal; probed 2026-10-21).
+fn canonical_constant(
+    value: fireemu_core_firestore::value::Value,
+) -> fireemu_core_firestore::value::Value {
     use fireemu_core_firestore::value::{Timestamp, Value};
     match value {
         Value::Timestamp(t) => Timestamp::new(t.seconds(), t.nanos() / 1000 * 1000)
             .map_or(Value::Timestamp(t), Value::Timestamp),
-        Value::Array(values) => Value::Array(values.into_iter().map(to_micros).collect()),
+        Value::Reference(name) if is_database_root(&name) => {
+            Value::Reference(format!("{name}/documents"))
+        }
+        Value::Array(values) => Value::Array(values.into_iter().map(canonical_constant).collect()),
         Value::Map(fields) => Value::Map(
             fields
                 .into_iter()
-                .map(|(key, value)| (key, to_micros(value)))
+                .map(|(key, value)| (key, canonical_constant(value)))
                 .collect(),
         ),
         other => other,
     }
+}
+
+/// Whether a name is `projects/{p}/databases/{d}` with both ids present.
+fn is_database_root(name: &str) -> bool {
+    matches!(
+        name.split('/').collect::<Vec<_>>().as_slice(),
+        ["projects", project, "databases", database] if !project.is_empty() && !database.is_empty()
+    )
 }
 
 /// How many map and array levels a literal value nests.
@@ -2583,6 +2600,54 @@ mod tests {
         ];
         for (name, want) in cases {
             assert_eq!(reference_literal_error(&name), want, "{name:.120}");
+        }
+    }
+
+    /// A constant as the official emulator answers it: timestamps in microseconds and a
+    /// database root as its documents root, inside arrays and maps too (probed 2026-10-21).
+    #[test]
+    fn constants_answer_microseconds_and_the_documents_root() {
+        use fireemu_core_firestore::value::{Timestamp, Value};
+        let stamp = |nanos| Value::Timestamp(Timestamp::new(1_577_836_800, nanos).unwrap());
+        let root = |name: &str| Value::Reference(name.to_owned());
+        for (constant, want) in [
+            (stamp(123_456_789), stamp(123_456_000)),
+            (stamp(999), stamp(0)),
+            (stamp(1000), stamp(1000)),
+            (
+                root("projects/p/databases/d"),
+                root("projects/p/databases/d/documents"),
+            ),
+            (
+                root("projects/p/databases/d/documents"),
+                root("projects/p/databases/d/documents"),
+            ),
+            (
+                root("projects/p/databases/d/documents/c/d"),
+                root("projects/p/databases/d/documents/c/d"),
+            ),
+            (
+                Value::Array(vec![stamp(1_001), root("projects/p/databases/d")]),
+                Value::Array(vec![stamp(1_000), root("projects/p/databases/d/documents")]),
+            ),
+            (
+                Value::Map([("k".to_owned(), stamp(2_999))].into_iter().collect()),
+                Value::Map([("k".to_owned(), stamp(2_000))].into_iter().collect()),
+            ),
+        ] {
+            assert_eq!(canonical_constant(constant.clone()), want, "{constant:?}");
+        }
+        for (name, root) in [
+            ("projects/p/databases/d", true),
+            ("projects/p/databases/(default)", true),
+            ("projects//databases/d", false),
+            ("projects/p/databases/", false),
+            ("projects/p/databasesx/d", false),
+            ("projectsx/p/databases/d", false),
+            ("projects/p/databases/d/documents", false),
+            ("projects/p/databases", false),
+        ] {
+            assert_eq!(is_database_root(name), root, "{name}");
         }
     }
 

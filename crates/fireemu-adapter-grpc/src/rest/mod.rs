@@ -1616,7 +1616,7 @@ impl RestState {
         };
         // Bytes as the official emulator reads them, on the transcoded body (both spellings of
         // the field); base64 it refuses is its one text, and strict refuses it as unobserved.
-        let body = pipeline_json::official_bytes(&body).map_err(|()| {
+        let body = pipeline_json::official_bytes(&body).ok_or_else(|| {
             gate.answer(Status::invalid_argument("Payload isn't valid for request."))
         })?;
         let request = pipeline_json::request_from_json(database, &body)

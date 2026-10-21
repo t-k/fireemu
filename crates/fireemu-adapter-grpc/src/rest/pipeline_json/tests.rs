@@ -323,7 +323,7 @@ fn a_body_is_rewritten_with_canonical_bytes_or_refused() {
     );
     for bad in ["+_AA", "QUJD\nQUJD", "QU JD", "Q", "QQ==QUJD"] {
         assert!(
-            official_bytes(&json!({"x": [{"bytesValue": bad}]})).is_err(),
+            official_bytes(&json!({"x": [{"bytesValue": bad}]})).is_none(),
             "{bad:?}"
         );
     }

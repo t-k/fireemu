@@ -67,31 +67,31 @@ pub fn official_base64(text: &str) -> Option<Vec<u8>> {
 
 /// An `:executePipeline` body (its field names already normalized by the transcoder, so
 /// `bytes_value` reads as `bytesValue`) with every `bytesValue` decoded as the official emulator
-/// decodes it and written back as canonical base64, or `Err` when one is base64 the official
+/// decodes it and written back as canonical base64, or `None` when one is base64 the official
 /// emulator refuses. Production is unrecorded for these forms, so only this method reads bytes
 /// this way; the other methods keep the shared decoder (see
 /// docs.local/issues/open/rest-base64-skips-line-breaks-outside-execute-pipeline.md).
-pub fn official_bytes(body: &Value) -> Result<Value, ()> {
+pub fn official_bytes(body: &Value) -> Option<Value> {
     match body {
         Value::Object(object) => object
             .iter()
             .map(|(key, inner)| {
                 let value = match (key.as_str(), inner) {
-                    ("bytesValue", Value::String(text)) => Value::String(
-                        super::json::base64_encode(&official_base64(text).ok_or(())?),
-                    ),
+                    ("bytesValue", Value::String(text)) => {
+                        Value::String(super::json::base64_encode(&official_base64(text)?))
+                    }
                     _ => official_bytes(inner)?,
                 };
-                Ok((key.clone(), value))
+                Some((key.clone(), value))
             })
-            .collect::<Result<Map<String, Value>, ()>>()
+            .collect::<Option<Map<String, Value>>>()
             .map(Value::Object),
         Value::Array(values) => values
             .iter()
             .map(official_bytes)
-            .collect::<Result<Vec<_>, ()>>()
+            .collect::<Option<Vec<_>>>()
             .map(Value::Array),
-        other => Ok(other.clone()),
+        other => Some(other.clone()),
     }
 }
 

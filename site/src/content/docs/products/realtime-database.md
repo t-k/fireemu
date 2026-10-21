@@ -151,7 +151,7 @@ The official emulator reads `matches()` patterns in a dialect of its own, an aut
 | `\W` and `\D`, anywhere | `/\W/`, `/[\D]/` |
 | An escaped letter or digit other than `\d` and `\w` | `/\n/`, `/\x41/`, `/\1/` |
 | An escaped backslash inside a class | `/[\\a]/` |
-| An operator that starts an alternative | `/(|a)/`, `/^(a|*)$/` |
+| An operator that starts an alternative, or a quantifier after `^` | `/(|a)/`, `/^(a|*)$/`, `/^*/`, `/^{2}a/` |
 | The `i` flag with any character beyond ASCII in the pattern | `/^é$/i`, `/[ａ-ｚ]/i` |
 | A backslash before a line break | `/a\` followed by a new line and `b/` |
 | An escaped letter with a format character such as U+200B after the backslash | `/\` U+200B `u0061/` |
@@ -162,6 +162,10 @@ Patterns the official emulator refuses when the rules load, such as `\s`, an unc
 
 - A lone escaped surrogate in a string literal (`'\uD83D'`) is refused when the rules load; the official emulator loads it.
 - A `\u` escape in a name (`\u0061uth.uid`, `auth.\u0075id`) is refused when the rules load; the official emulator reads it as the letter.
+- An equality of two snapshots, of `auth` with itself or of `query` with itself, which the static check lets through only behind a ternary (`(c ? root : 'a') == (c ? root : 'a')`), is an error here, so the rule is false whether or not it is negated. The official emulator compares snapshots by location and `auth` and `query` by identity.
+- Where the official emulator answers a request with an internal error (500), for example a string method on a value that turns out to be a snapshot (`(c ? root : 'a').length`), Fireemu denies it.
+- A string method read without a call (`auth.uid.contains != null`) is an error here; the official emulator reads it as a function.
+- `query.orderBy`, `query.endBefore`, `query.isOrderByChild()`, the `OrderByKey`, `OrderByValue` and `OrderByPriority` names and `http.encodeURL()` are refused when the rules load; the official emulator loads them.
 - A few rules both refuse are refused with another message or at another column.
 - A pattern the official emulator cannot determinize ("could not determinize efficiently", a resource limit of its automaton library) is refused there when the rules load and loads here, where the rule is evaluated. The recorded ones are large: several counted repetitions of groups of alternatives in one pattern. Production's limit is not known, so Fireemu does not guess one.
 

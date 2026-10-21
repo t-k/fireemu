@@ -168,16 +168,11 @@ fn a_link_planted_after_the_preflight_is_refused_when_exporting() {
     assert_eq!(resolved, tmp.join(late.0.file_name().unwrap()).join("data"));
     assert_eq!(resolve(&target).unwrap(), resolved);
     symlink(victim.path(), &late.0).unwrap();
-    // The resolved path uses the directory the preflight holds and makes the missing name with
-    // `mkdirat`, which the link already takes. A typed path that differs from it (macOS `/tmp`) is
-    // walked again and meets the link; on Linux the two are the same path.
-    let error = PublicationStage::create(&resolved, |_| Ok(())).unwrap_err();
-    assert!(error.contains("File exists"), "{error}");
-    let error = PublicationStage::create(&target, |_| Ok(())).unwrap_err();
-    if target == resolved {
-        assert!(error.contains("File exists"), "{error}");
-    } else {
-        assert!(error.contains("symlink"), "{error}");
+    // Typed or resolved, the link planted at the missing name is refused: the resolved path walks
+    // the missing names again from the held directory and refuses anything but a directory.
+    for path in [&target, &resolved] {
+        let error = PublicationStage::create(path, |_| Ok(())).unwrap_err();
+        assert!(error.contains("symlink"), "{}: {error}", path.display());
     }
     assert!(is_empty(victim.path()));
 }

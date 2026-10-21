@@ -372,11 +372,14 @@ pub(crate) fn walk(parent: &Path, volume_check: VolumeCheck<'_>) -> Result<Walke
     })
 }
 
-/// Makes each missing component below `base` (a judged directory, held), private to the owner,
-/// and judges it. Every component is made with `mkdirat` relative to the descriptor above it and
-/// restricted through a descriptor opened with `O_NOFOLLOW`; a component that already exists, or
-/// that is anything but the directory just made, is refused. On a failure the components made
-/// are removed again, relative to their parents' descriptors. Returns the last directory.
+/// Makes, or enters, each missing component below `base` (a judged directory, held), and judges
+/// it. A name is looked at with `fstatat(AT_SYMLINK_NOFOLLOW)` relative to the descriptor above
+/// it: a directory that exists by now (made by an export earlier in the session, or by the user)
+/// is opened with `O_NOFOLLOW` and judged like any directory the walk enters; a missing one is
+/// made with `mkdirat`, restricted through a descriptor opened with `O_NOFOLLOW` (anything but
+/// the directory just made is refused), and judged; a link or anything else is refused. On a
+/// failure the components this call made are removed again, relative to their parents'
+/// descriptors. Returns the last directory.
 fn create_missing(
     base: BorrowedFd<'_>,
     base_path: &Path,
@@ -385,12 +388,40 @@ fn create_missing(
     expected_uid: u32,
     volume_check: VolumeCheck<'_>,
 ) -> Result<(OwnedFd, PathBuf), String> {
-    let mut made: Vec<OwnedFd> = Vec::new();
+    // Each component held, and whether this call made it.
+    let mut levels: Vec<(OwnedFd, bool)> = Vec::new();
     let mut path = base_path.to_path_buf();
     let result = (|| {
         for name in missing {
-            let above = made.last().map_or(base, |fd| fd.as_fd());
+            let above = levels.last().map_or(base, |(fd, _)| fd.as_fd());
             path.push(name);
+            match rustix::fs::statat(above, name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::Directory => {
+                    let entered = rustix::fs::openat(above, name, search_flags(), Mode::empty())
+                        .map_err(|error| {
+                            format!(
+                                "export namespace ancestor {} changed while it was checked ({error}); nothing was exported",
+                                path.display()
+                            )
+                        })?;
+                    judge(entered.as_fd(), &path, volume_check, expected_uid)?;
+                    levels.push((entered, false));
+                    continue;
+                }
+                Ok(_) => {
+                    return Err(format!(
+                        "the export parent {} appeared after the export path was checked and is not a directory (a symlink is never followed); remove it or choose another destination",
+                        path.display()
+                    ));
+                }
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => {
+                    return Err(format!(
+                        "cannot inspect the export parent {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
             rustix::fs::mkdirat(above, name, Mode::from_raw_mode(0o700)).map_err(|error| {
                 format!(
                     "cannot create private export parent {}: {error}",
@@ -420,8 +451,8 @@ fn create_missing(
                     return Err(error);
                 }
             };
-            made.push(opened);
-            let current = made.last().expect("just pushed").as_fd();
+            levels.push((opened, true));
+            let current = levels.last().expect("just pushed").0.as_fd();
             let stat = rustix::fs::fstat(current).map_err(|error| {
                 format!("cannot inspect export parent {}: {error}", path.display())
             })?;
@@ -439,16 +470,19 @@ fn create_missing(
     })();
     match result {
         Ok(()) => {
-            let last = made.pop().expect("at least one component is missing");
+            let (last, _) = levels.pop().expect("at least one component is missing");
             Ok((last, path))
         }
         Err(error) => {
             // Only directories this call made, deepest first, each relative to the one above.
-            for (depth, name) in missing.iter().enumerate().take(made.len()).rev() {
+            for (depth, name) in missing.iter().enumerate().take(levels.len()).rev() {
+                if !levels[depth].1 {
+                    continue;
+                }
                 let above = if depth == 0 {
                     base
                 } else {
-                    made[depth - 1].as_fd()
+                    levels[depth - 1].0.as_fd()
                 };
                 let _ = rustix::fs::unlinkat(above, name, AtFlags::REMOVEDIR);
             }
@@ -872,26 +906,39 @@ mod tests {
     }
 
     #[test]
-    fn a_component_that_already_exists_is_refused_and_kept() {
+    fn a_component_that_exists_by_now_is_entered_if_a_directory_and_refused_otherwise() {
         let root = TrustedTempDir::new("parent-exists");
         let existing = std::fs::canonicalize(root.path()).unwrap();
         std::fs::create_dir(existing.join("x")).unwrap();
         std::fs::write(existing.join("x/keep"), b"").unwrap();
+        std::fs::write(existing.join("file"), b"").unwrap();
+        symlink(existing.join("x"), existing.join("link")).unwrap();
         let base = open_search(&existing);
-        let error = create_missing(
+        let euid = rustix::process::geteuid().as_raw();
+        let (_, entered) = create_missing(
             base.as_fd(),
             &existing,
             &[OsString::from("x")],
             &|_| {},
-            rustix::process::geteuid().as_raw(),
+            euid,
             &accept,
         )
-        .unwrap_err();
-        assert!(
-            error.contains("cannot create private export parent"),
-            "{error}"
-        );
+        .unwrap();
+        assert_eq!(entered, existing.join("x"));
         assert!(existing.join("x/keep").exists(), "what was there is kept");
+        for name in ["file", "link"] {
+            let error = create_missing(
+                base.as_fd(),
+                &existing,
+                &[OsString::from(name)],
+                &|_| {},
+                euid,
+                &accept,
+            )
+            .unwrap_err();
+            assert!(error.contains("is not a directory"), "{name}: {error}");
+        }
+        assert!(existing.join("file").exists() && existing.join("link").exists());
     }
 
     #[test]
@@ -1185,6 +1232,22 @@ mod tests {
         same_directory(&base.join("a"), &held).unwrap();
         let error = same_directory(&base.join("b"), &held).unwrap_err();
         assert!(error.contains("changed while it was checked"), "{error}");
+    }
+
+    /// A FIFO at the name is refused at once (the open is `O_DIRECTORY`; without it the open of
+    /// a FIFO blocks until a writer appears).
+    #[test]
+    fn a_fifo_at_the_name_is_refused_without_blocking() {
+        let root = TrustedTempDir::new("remove-fifo");
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        let dir = open_search(&base);
+        assert!(std::process::Command::new("mkfifo")
+            .arg(base.join("fifo"))
+            .status()
+            .unwrap()
+            .success());
+        assert!(remove_tree_at(dir.as_fd(), OsStr::new("fifo")).is_err());
+        assert!(base.join("fifo").exists());
     }
 
     const OTHER: u32 = 4242;

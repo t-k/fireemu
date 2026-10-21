@@ -425,10 +425,60 @@ impl PublicationStage {
         )
     }
 
-    /// Private directory in which the caller constructs the complete export tree.
+    /// The stage's path, for messages: the export tree is written through [`Self::stage_dir`].
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The stage, held by descriptor, through which the caller writes the export tree.
+    #[cfg(unix)]
+    pub fn stage_dir(&self) -> Result<StageDir, String> {
+        let fd = open_listable(self.holder.as_fd(), &self.stage_name)
+            .map_err(|error| format!("cannot open the export stage: {error}"))?;
+        if identity_of(fd.as_fd())? != self.owned_stage {
+            return Err(
+                "the owned export stage changed before it was written; nothing was exported"
+                    .to_owned(),
+            );
+        }
+        Ok(StageDir {
+            fd,
+            path: self.root.clone(),
+        })
+    }
+
+    /// The stage; publication is unavailable on Windows.
+    #[cfg(not(unix))]
+    pub fn stage_dir(&self) -> Result<StageDir, String> {
+        Err("safe atomic export publication is unavailable on Windows".to_owned())
+    }
+
+    /// The export this stage replaces, opened for reading relative to the held parent (never by
+    /// its path), when one was present: what a caller keeps entries of.
+    #[cfg(unix)]
+    pub fn previous_export(&self) -> Result<Option<std::fs::File>, String> {
+        if !self.expected_target.present {
+            return Ok(None);
+        }
+        let fd = if self.placement == Placement::InsideMountPoint {
+            open_listable(self.holder.as_fd(), OsStr::new("."))
+        } else {
+            open_listable(self.parent.as_fd(), &self.target_name)
+        }
+        .map_err(|error| format!("cannot open the previous export: {error}"))?;
+        if identity_of(fd.as_fd())? != self.expected_target {
+            return Err(
+                "the export target changed after it was checked; it was left unchanged".to_owned(),
+            );
+        }
+        Ok(Some(std::fs::File::from(fd)))
+    }
+
+    /// No previous export is read on Windows.
+    #[cfg(not(unix))]
+    pub fn previous_export(&self) -> Result<Option<std::fs::File>, String> {
+        Ok(None)
     }
 
     /// The export path, resolved: what the publication replaces. A caller that reads the previous
@@ -573,6 +623,132 @@ fn identity_of(directory: BorrowedFd<'_>) -> Result<TargetIdentity, String> {
     identity_from(&stat)
 }
 
+/// Clears the ACL a new stage (`name` in the held `directory`) inherited, by `path` (macOS has no
+/// descriptor interface for it), only while `path` names that very stage: a fresh judged walk of
+/// its parent must end at a directory whose entry `name` has the stage's `(st_dev, st_ino)`, and
+/// `lstat(path)` must still have it afterwards. If the user renamed the held directory meanwhile,
+/// the old path names something else and the export refuses here, never touching it.
+#[cfg(target_os = "macos")]
+fn clear_acl_checked(directory: BorrowedFd<'_>, name: &OsStr, path: &Path) -> Result<(), String> {
+    let stage = stat_at(directory, name)
+        .map_err(|error| format!("cannot inspect the export stage: {error}"))?;
+    let changed = || {
+        format!(
+            "the export stage {} is no longer named by its path (was a directory of the export renamed?); nothing was exported",
+            path.display()
+        )
+    };
+    let holder = path.parent().ok_or_else(changed)?;
+    let walked = parent::walk(holder, &parent::system_volume_check)?;
+    if !walked.missing.is_empty() {
+        return Err(changed());
+    }
+    let named = stat_at(walked.anchor.fd.as_fd(), name).map_err(|_| changed())?;
+    if (named.st_dev, named.st_ino) != (stage.st_dev, stage.st_ino) {
+        return Err(changed());
+    }
+    acl::clear_stage_acl(path)?;
+    let after = rustix::fs::lstat(path).map_err(|_| changed())?;
+    if (after.st_dev, after.st_ino) == (stage.st_dev, stage.st_ino) {
+        Ok(())
+    } else {
+        Err(changed())
+    }
+}
+
+/// A directory of the stage, held by descriptor: what the caller writes the export through. Every
+/// directory and file it makes is made relative to a held descriptor (`mkdirat`,
+/// `openat(O_NOFOLLOW | O_CREAT | O_EXCL)`, `fchmod`), never by a path, so nothing a path could
+/// name instead is ever written. Its path is for messages only.
+#[derive(Debug)]
+pub struct StageDir {
+    #[cfg(unix)]
+    fd: OwnedFd,
+    path: PathBuf,
+}
+
+impl StageDir {
+    /// The directory's path, for messages.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The directory `relative` below this one (each `Normal` component), made owner-only where
+    /// it is missing and held; an existing one must be a directory (a link is never followed) and
+    /// is made owner-only too.
+    #[cfg(unix)]
+    pub fn create_dir(&self, relative: &Path) -> Result<Self, String> {
+        use std::path::Component;
+        let mut current = Self {
+            fd: duplicate(self.fd.as_fd())?,
+            path: self.path.clone(),
+        };
+        for component in relative.components() {
+            let Component::Normal(name) = component else {
+                return Err(format!(
+                    "cannot create {} inside the export: only plain names are allowed",
+                    relative.display()
+                ));
+            };
+            let path = current.path.join(name);
+            match rustix::fs::mkdirat(&current.fd, name, rustix::fs::Mode::from_raw_mode(0o700)) {
+                Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                Err(error) => return Err(format!("cannot create it: {error}")),
+            }
+            let fd = open_listable(current.fd.as_fd(), name).map_err(|error| {
+                format!(
+                    "cannot create it: {} is not a directory the export made ({error})",
+                    path.display()
+                )
+            })?;
+            rustix::fs::fchmod(&fd, rustix::fs::Mode::from_raw_mode(0o700))
+                .map_err(|error| format!("cannot restrict its permissions: {error}"))?;
+            current = Self { fd, path };
+        }
+        Ok(current)
+    }
+
+    /// A new owner-only file `relative` below this directory, its parents made as by
+    /// [`Self::create_dir`]. Whatever is at the name (a file, a link) is removed first and the file
+    /// created exclusively, so the write never follows a link.
+    #[cfg(unix)]
+    pub fn create_file(&self, relative: &Path) -> Result<std::fs::File, String> {
+        let name = relative
+            .file_name()
+            .ok_or_else(|| format!("{} names no file", relative.display()))?;
+        let parent = self.create_dir(relative.parent().unwrap_or(Path::new("")))?;
+        match rustix::fs::unlinkat(&parent.fd, name, rustix::fs::AtFlags::empty()) {
+            Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+            Err(error) => return Err(format!("cannot replace it: {error}")),
+        }
+        rustix::fs::openat(
+            &parent.fd,
+            name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .map(std::fs::File::from)
+        .map_err(|error| format!("cannot write it: {error}"))
+    }
+
+    /// Unavailable on Windows, where no stage is ever made.
+    #[cfg(not(unix))]
+    pub fn create_dir(&self, _relative: &Path) -> Result<Self, String> {
+        Err("safe atomic export publication is unavailable on Windows".to_owned())
+    }
+
+    /// Unavailable on Windows, where no stage is ever made.
+    #[cfg(not(unix))]
+    pub fn create_file(&self, _relative: &Path) -> Result<std::fs::File, String> {
+        Err("safe atomic export publication is unavailable on Windows".to_owned())
+    }
+}
+
 /// Makes the stage beside the target, in the held parent directory.
 #[cfg(unix)]
 fn create_stage_sibling(
@@ -589,7 +765,7 @@ fn create_stage_sibling(
                 let path = parent_path.join(&stage);
                 // The stage starts with no ACL of its own: it must not inherit one from its parent.
                 #[cfg(target_os = "macos")]
-                if let Err(error) = acl::clear_stage_acl(&path) {
+                if let Err(error) = clear_acl_checked(parent, &stage, &path) {
                     let _ = rustix::fs::unlinkat(parent, &stage, rustix::fs::AtFlags::REMOVEDIR);
                     return Err(error);
                 }
@@ -617,7 +793,7 @@ fn create_private_child(
             Ok(()) => {
                 let path = directory_path.join(&child);
                 #[cfg(target_os = "macos")]
-                if let Err(error) = acl::clear_stage_acl(&path) {
+                if let Err(error) = clear_acl_checked(directory, &child, &path) {
                     let _ = rustix::fs::unlinkat(directory, &child, rustix::fs::AtFlags::REMOVEDIR);
                     return Err(error);
                 }
@@ -918,7 +1094,12 @@ fn rename_for(
 /// network filesystems) answers `ENOTSUP`; the message then says why and what to do.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn publication_error(error: rustix::io::Errno) -> String {
-    if error == rustix::io::Errno::NOTSUP || error == rustix::io::Errno::OPNOTSUPP {
+    // A volume without the exchange or no-replace flags answers ENOTSUP, or EINVAL on Linux
+    // (some FUSE and network filesystems, older overlayfs).
+    if error == rustix::io::Errno::NOTSUP
+        || error == rustix::io::Errno::OPNOTSUPP
+        || error == rustix::io::Errno::INVAL
+    {
         format!(
             "atomic export publication is unavailable or failed: {error}; this volume does not support atomic directory rename, so export to a directory on an APFS volume (macOS) or on a local filesystem that supports it"
         )
@@ -990,6 +1171,17 @@ mod tests {
         assert!(sticky.contains("a directory of your own"), "{sticky}");
         let other = publication_error(rustix::io::Errno::IO);
         assert!(!other.contains("sticky"), "{other}");
+    }
+
+    /// Linux answers EINVAL for exchange or no-replace flags a volume lacks (FUSE, network,
+    /// older overlayfs); it gets the same remedy as ENOTSUP (r3 review S3).
+    #[test]
+    fn an_einval_rename_names_the_volume_and_the_way_out() {
+        let message = publication_error(rustix::io::Errno::INVAL);
+        assert!(
+            message.contains("does not support atomic directory rename"),
+            "{message}"
+        );
     }
 
     #[test]

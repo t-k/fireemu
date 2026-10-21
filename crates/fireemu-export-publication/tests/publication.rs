@@ -1155,3 +1155,138 @@ fn the_latest_preflight_of_a_path_is_the_one_held() {
     assert_eq!(std::fs::read_dir(&old).unwrap().count(), 0);
     drop(stage);
 }
+
+/// The missing names a preflight recorded are walked again when the export runs: a directory
+/// made meanwhile (by an earlier export of the same path, or by the user) is entered and judged,
+/// a missing one is made, and a link is refused (r3 review M1).
+#[cfg(unix)]
+#[test]
+fn missing_names_made_after_the_preflight_are_entered_and_links_refused() {
+    use std::os::unix::fs::symlink;
+    let root = TestRoot::new("held-missing");
+    let publish = |path: &Path| {
+        let stage = PublicationStage::create(path, |_| Ok(()))?;
+        write(stage.root(), "firebase-export-metadata.json", "{}");
+        stage.complete().publish()
+    };
+    // The same preflighted path exported twice.
+    let twice = fireemu_export_publication::preflight(&root.0.join("new/data")).unwrap();
+    publish(&twice).unwrap();
+    publish(&twice).unwrap();
+    assert!(twice.join("firebase-export-metadata.json").is_file());
+    // A `mkdir` between the preflight and the export.
+    let made = fireemu_export_publication::preflight(&root.0.join("new2/data")).unwrap();
+    create_private_dir(&root.0.join("new2"));
+    publish(&made).unwrap();
+    assert!(made.join("firebase-export-metadata.json").is_file());
+    // A link planted at a missing name.
+    let victim = root.0.join("victim");
+    create_private_dir(&victim);
+    let linked = fireemu_export_publication::preflight(&root.0.join("new3/data")).unwrap();
+    symlink(&victim, root.0.join("new3")).unwrap();
+    let error = publish(&linked).unwrap_err();
+    assert!(error.contains("symlink"), "{error}");
+    assert_eq!(std::fs::read_dir(&victim).unwrap().count(), 0);
+}
+
+/// After the held directory is renamed away and its old name recreated with the predictable
+/// stage names planted as links to a victim, nothing reaches the victim (r3 review M2): the stage
+/// is made and written through the held directory's descriptors, and on macOS the stage ACL step
+/// refuses because the old path no longer names the stage.
+#[cfg(unix)]
+#[test]
+fn a_renamed_held_directory_never_lets_the_export_through_a_planted_stage_name() {
+    use std::os::unix::fs::symlink;
+    let root = TestRoot::new("held-renamed");
+    let base = root.0.join("base");
+    create_private_dir(&base);
+    let victim = root.0.join("victim");
+    create_private_dir(&victim);
+    #[cfg(target_os = "macos")]
+    let acl_set = std::process::Command::new("/bin/chmod")
+        .args(["+a", "everyone deny delete"])
+        .arg(&victim)
+        .status()
+        .is_ok_and(|status| status.success());
+    let resolved = fireemu_export_publication::preflight(&base.join("data")).unwrap();
+    let moved = root.0.join("moved");
+    std::fs::rename(&base, &moved).unwrap();
+    create_private_dir(&base);
+    for id in 1..=16 {
+        symlink(
+            &victim,
+            base.join(format!(".data.fireemu-stage-{}-{id}", std::process::id())),
+        )
+        .unwrap();
+    }
+    match PublicationStage::create(&resolved, |_| Ok(())) {
+        Ok(stage) => {
+            let tree = stage.stage_dir().unwrap();
+            tree.create_dir(Path::new("auth_export")).unwrap();
+            std::io::Write::write_all(
+                &mut tree
+                    .create_file(Path::new("firebase-export-metadata.json"))
+                    .unwrap(),
+                b"{}",
+            )
+            .unwrap();
+            stage.complete().publish().unwrap();
+            assert!(moved.join("data/firebase-export-metadata.json").is_file());
+        }
+        Err(error) => {
+            eprintln!("refused: {error}");
+            assert!(error.contains("no longer named"), "{error}");
+        }
+    }
+    assert_eq!(
+        std::fs::read_dir(&victim).unwrap().count(),
+        0,
+        "the victim is untouched"
+    );
+    #[cfg(target_os = "macos")]
+    if acl_set {
+        let listing = std::process::Command::new("/bin/ls")
+            .args(["-led"])
+            .arg(&victim)
+            .output()
+            .unwrap();
+        let _ = std::process::Command::new("/bin/chmod")
+            .args(["-N"])
+            .arg(&victim)
+            .status();
+        assert!(
+            String::from_utf8_lossy(&listing.stdout).contains("deny delete"),
+            "the victim's ACL survives"
+        );
+    }
+}
+
+/// The stage's writer works through held descriptors: a link planted inside the stage at a file
+/// name is replaced, never followed, and a link at a directory name is refused.
+#[cfg(unix)]
+#[test]
+fn the_stage_writer_never_follows_a_link_planted_inside_the_stage() {
+    use std::os::unix::fs::symlink;
+    let root = TestRoot::new("stage-writer");
+    let victim = root.0.join("victim");
+    create_private_dir(&victim);
+    write(&victim, "file", "victim");
+    let stage = PublicationStage::create(&root.target(), |_| Ok(())).unwrap();
+    symlink(victim.join("file"), stage.root().join("file")).unwrap();
+    symlink(&victim, stage.root().join("dir")).unwrap();
+    let tree = stage.stage_dir().unwrap();
+    std::io::Write::write_all(&mut tree.create_file(Path::new("file")).unwrap(), b"export")
+        .unwrap();
+    assert!(tree.create_dir(Path::new("dir")).is_err());
+    assert!(tree.create_file(Path::new("dir/inner")).is_err());
+    assert!(tree.create_dir(Path::new("../escape")).is_err());
+    assert_eq!(
+        std::fs::read_to_string(victim.join("file")).unwrap(),
+        "victim"
+    );
+    assert_eq!(
+        std::fs::read_to_string(stage.root().join("file")).unwrap(),
+        "export"
+    );
+    assert_eq!(std::fs::read_dir(&victim).unwrap().count(), 1);
+}

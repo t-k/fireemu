@@ -780,8 +780,21 @@ export function matrix() {
     ["leading-lf", "\nQUJD"],
     ["trailing-lf", "QUJD\n"],
     ["mime", `${"QUJD".repeat(19)}\r\nQUJD`],
+    // Both alphabets, padding variants and other characters (review r10).
+    ["std", "+/+/"],
+    ["url", "-_-_"],
+    ["url-short", "-_8"],
+    ["mixed-plus-underscore", "+_AA"],
+    ["mixed-minus-slash", "-/AA"],
+    ["pad-3", "QQ==="],
+    ["pad-only", "===="],
+    ["pad-mid", "QQ==QUJD"],
+    ["space", "QU JD"],
+    ["tab", "QUJD\tQUJD"],
+    ["lone", "Q"],
   ]) {
     domain[`bytes-${name}`] = { bytesValue: text };
+    domain[`bytes_value-${name}`] = { bytes_value: text };
   }
   // Document functions of a root (review r9 M3).
   for (const [name, root] of [

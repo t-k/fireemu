@@ -241,8 +241,17 @@ impl Client {
         self.next_within(Duration::from_secs(5)).await
     }
 
-    /// The next frame, waiting at most `limit`.
+    /// The next frame, waiting at most `limit`. A reset reads as the end too.
     async fn next_within(&mut self, limit: Duration) -> (u8, Vec<u8>) {
+        match self.next_or_end_within(limit).await {
+            (RESET, payload) => (0xFF, payload),
+            frame => frame,
+        }
+    }
+
+    /// The next frame, waiting at most `limit`: opcode 0xFF for the end of the stream and
+    /// [`RESET`] for a reset connection.
+    async fn next_or_end_within(&mut self, limit: Duration) -> (u8, Vec<u8>) {
         tokio::time::timeout(limit, async {
             loop {
                 if self.buffer.len() >= 2 {
@@ -262,8 +271,10 @@ impl Client {
                     }
                 }
                 let mut chunk = [0u8; 4096];
-                // A reset connection (Linux answers unread data with RST) ends it like EOF.
-                let n = self.stream.read(&mut chunk).await.unwrap_or(0);
+                let n = match self.stream.read(&mut chunk).await {
+                    Ok(n) => n,
+                    Err(_) => return (RESET, Vec::new()),
+                };
                 if n == 0 {
                     return (0xFF, Vec::new());
                 }
@@ -278,6 +289,29 @@ impl Client {
         let (opcode, payload) = self.next().await;
         assert_eq!(opcode, 0x1, "{payload:?}");
         String::from_utf8(payload).unwrap()
+    }
+}
+
+/// What [`Client::next_or_end_within`] answers for a reset connection.
+const RESET: u8 = 0xFE;
+
+#[tokio::test]
+async fn a_closed_websocket_ends_with_its_data_even_when_the_client_sent_more() {
+    // The flake report of 2026-10-21: a socket closed while the client's frames sit unread is
+    // reset, and the reset loses the server's last data and its FIN (macOS may even drop the
+    // reset, leaving the client half-open). The server reads and discards what is left first.
+    let (address, _database) = start(Duration::from_secs(30)).await;
+    for _ in 0..20 {
+        let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=wl").await;
+        client.next_text().await;
+        client.send(0x8, &[0x03, 0xE8]).await;
+        for _ in 0..64 {
+            client.text(&"x".repeat(1_000)).await;
+        }
+        let (opcode, _) = client.next_or_end_within(Duration::from_secs(10)).await;
+        assert_eq!(opcode, 0x8, "the close echo");
+        let (end, _) = client.next_or_end_within(Duration::from_secs(10)).await;
+        assert_eq!(end, 0xFF, "a clean end of stream, not a reset");
     }
 }
 
@@ -906,14 +940,20 @@ async fn a_websocket_dropped_for_falling_behind_writes_what_it_registered_once()
     reader
         .text(r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/presence","d":"online"}}}"#)
         .await;
-    // Reading again lets the server finish the pushes it was writing and read that frame. The
-    // backlog is megabytes of large frames, which a loaded machine can take a while to drain.
-    loop {
-        let (opcode, _) = reader.next_within(Duration::from_secs(60)).await;
-        if opcode == 0x8 || opcode == 0xFF {
-            break;
+    // Reading again lets the server finish the pushes it was writing. The backlog is megabytes
+    // of large frames, which a loaded machine can take a while to drain; the connection then
+    // ends with a clean end of stream, never a reset (the server reads what is left first).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut drained = 0;
+    let end = loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let (opcode, payload) = reader.next_or_end_within(left).await;
+        drained += payload.len();
+        if matches!(opcode, 0x8 | 0xFF | RESET) {
+            break opcode;
         }
-    }
+    };
+    assert_ne!(end, RESET, "reset after draining {drained} bytes");
     eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
 }
 

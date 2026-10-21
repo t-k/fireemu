@@ -498,7 +498,7 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
             // The official emulator drops the connection after the shutdown message, without
             // a close frame.
             let _ = send_within(&mut socket, &frames, shared.config.realtime_idle).await;
-            let _ = tokio::time::timeout(shared.config.realtime_idle, socket.shutdown()).await;
+            linger(&mut socket).await;
             return;
         }
         Opened::Session(session, frames) => {
@@ -519,17 +519,37 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         .unwrap_or_else(PoisonError::into_inner)
         .insert(client, Sink::Socket(queue));
     run_realtime(shared, &mut socket, session, &mut pushes, limit).await;
-    // The database lock first, in the order `deliver` takes them.
-    let mut database = shared
-        .database
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    shared
-        .listeners
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&client);
-    database.close_realtime(client, (shared.config.clock)());
+    {
+        // The database lock first, in the order `deliver` takes them.
+        let mut database = shared
+            .database
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        shared
+            .listeners
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&client);
+        database.close_realtime(client, (shared.config.clock)());
+    }
+    linger(&mut socket).await;
+}
+
+/// How long a closing connection may take to read what its client still sends.
+const LINGER: Duration = Duration::from_secs(2);
+
+/// Ends a connection gracefully: the write side is shut down, then whatever the client still
+/// sends is read and discarded until it closes or [`LINGER`] passes. A socket closed with
+/// unread input is reset, which discards the data not yet sent and the end of stream, and a
+/// lost reset leaves the client waiting on a half-open connection (the flake of
+/// `a_websocket_dropped_for_falling_behind_writes_what_it_registered_once`).
+async fn linger<S: AsyncRead + AsyncWrite + Unpin>(socket: &mut S) {
+    let _ = tokio::time::timeout(LINGER, socket.shutdown()).await;
+    let mut sink = [0u8; 4096];
+    let _ = tokio::time::timeout(LINGER, async {
+        while matches!(socket.read(&mut sink).await, Ok(n) if n > 0) {}
+    })
+    .await;
 }
 
 /// Answers one prepared message under the database lock. Pushes already queued for the

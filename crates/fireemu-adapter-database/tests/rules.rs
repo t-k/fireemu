@@ -1720,3 +1720,76 @@ fn the_database_debug_says_whether_a_server_clock_is_set() {
     db.set_clock(std::sync::Arc::new(|| NOW));
     assert!(format!("{db:?}").contains("ServerClock(set)"));
 }
+
+#[test]
+fn a_read_without_a_query_is_ordered_as_its_kind_is_read() {
+    // Review r10 M32 and the r11 read-kind probes, recorded on the official emulator: a REST
+    // GET without a query is ordered by key, an event stream and every realtime read (a listen,
+    // a `get`) by priority, and the read a transaction or a conditional REST write checks not
+    // at all.
+    for (rule, get, stream, check) in [
+        ("query.orderByKey", true, false, false),
+        ("!query.orderByKey", false, true, true),
+        ("query.orderByPriority", false, true, false),
+        (
+            "!query.orderByPriority && !query.orderByValue",
+            true,
+            false,
+            true,
+        ),
+    ] {
+        let mut db = db();
+        load(
+            &mut db,
+            "rk",
+            &format!(r#"{{"rules":{{".read":"{rule}",".write":true}}}}"#),
+        );
+        call(&mut db, "PUT", "/a.json?ns=rk", OWNER, "1");
+        let expect = |allowed: bool| if allowed { 200 } else { 401 };
+        assert_eq!(
+            call(&mut db, "GET", "/a.json?ns=rk", &[], "").0,
+            expect(get),
+            "{rule} GET"
+        );
+        let streamed = match db.handle(
+            &request(
+                "GET",
+                "/a.json?ns=rk",
+                &[("Accept", "text/event-stream")],
+                "",
+            ),
+            NOW,
+        ) {
+            Handled::Stream { .. } => true,
+            Handled::Response { .. } => false,
+        };
+        assert_eq!(streamed, stream, "{rule} stream");
+        let mut session = open(&mut db, "rk");
+        let status = |allowed: bool| {
+            if allowed {
+                r#""s":"ok""#
+            } else {
+                r#""s":"permission_denied""#
+            }
+        };
+        let listened = send(&mut db, &mut session, 1, "q", r#"{"p":"/a","h":""}"#);
+        assert!(
+            listened.iter().any(|f| f.contains(status(stream))),
+            "{rule} listen {listened:?}"
+        );
+        let got = send(&mut db, &mut session, 2, "g", r#"{"p":"/a","q":{}}"#);
+        assert!(
+            got.iter().any(|f| f.contains(status(stream))),
+            "{rule} get {got:?}"
+        );
+        let transaction = send(&mut db, &mut session, 3, "p", r#"{"p":"/a","d":2,"h":"x"}"#);
+        let denied = transaction.iter().any(|f| f.contains("permission_denied"));
+        assert_eq!(!denied, check, "{rule} transaction {transaction:?}");
+        let conditional = call(&mut db, "PUT", "/a.json?ns=rk", &[("if-match", "x")], "3").0;
+        assert_eq!(
+            conditional != 401,
+            check,
+            "{rule} conditional {conditional}"
+        );
+    }
+}

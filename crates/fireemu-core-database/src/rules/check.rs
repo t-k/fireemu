@@ -171,7 +171,8 @@ fn ordering_operand(expr: &mut Expr, types: &Types) -> bool {
     let Ok(path) = Path::parse(&joined.join("/"), &crate::limits::Limits::default()) else {
         return false;
     };
-    if path.is_priority() || path.is_info() {
+    // `.priority` may end the path there; `.info` may not start it.
+    if path.is_info() {
         return false;
     }
     expr.kind = ExprKind::Ordering(path.keys().to_vec());

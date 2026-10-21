@@ -3,10 +3,11 @@
 python3 matrix.py operators <out.json>
 python3 matrix.py methods <out.json>
 python3 matrix.py fold <out.json>
+python3 matrix.py identity <out.json>
 
-Every row is an expression for `.read` of `/t` (see probe.mjs for the data and the token);
-each comes with its negation, so a difference shows in the polarity that lets a read
-through. The operands cover every kind of value the language has: null and a missing
+Every row is an expression judged in every cell probe.mjs runs (reads without and with a
+query, `.write` and `.validate`, signed in and anonymous); each comes with its negation, so a
+difference shows in the polarity that lets a request through. The operands cover every kind of value the language has: null and a missing
 child, booleans, numbers (integer, fraction, zero, -0, a NaN and an infinity), strings
 (empty, numeric), objects and arrays from the data, snapshots, `auth` and its members,
 `now` and `query` members.
@@ -107,8 +108,28 @@ def fold():
     return rows
 
 
+# Objects the official emulator compares by identity (snapshots by location, `auth` and
+# `query` as one object each) and new objects (`val()`, members of `auth`): a ternary hides
+# them from the static check (review r9 M25).
+IDENTITIES = ["root", "data", "newData", "data.parent()", "root.child('t')", "data.child('k')",
+              "root.child('t').child('o')", "data.parent().parent()", "auth", "auth.token",
+              "query", "data.val()"]
+
+
+def identity():
+    rows = []
+    for condition in ["true", "auth != null"]:
+        for left in IDENTITIES:
+            for right in IDENTITIES:
+                for op in ["==", "===", "!=", "!=="]:
+                    rows += pair(f"({condition} ? {left} : 'a') {op} ({condition} ? {right} : 'a')")
+            for op in ["==", "!="]:
+                rows += pair(f"({condition} ? {left} : 'a') {op} null")
+    return rows
+
+
 kind, out = sys.argv[1], sys.argv[2]
-rows = {"operators": operators, "methods": methods, "fold": fold}[kind]()
+rows = {"operators": operators, "methods": methods, "fold": fold, "identity": identity}[kind]()
 seen, unique = set(), []
 for row in rows:
     if row not in seen:

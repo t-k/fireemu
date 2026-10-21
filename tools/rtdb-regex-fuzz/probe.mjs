@@ -1,33 +1,97 @@
-// node probe.mjs <host:port> <corpus.json> <out.json>: loads {"rules":{"t":{".read":<expr>}}} into
-// a fresh namespace, seeds /t, reads /t as a fixed unsigned-token user, and records the load and read
-// answers, with a timeout per request; a request that times out is recorded as load "timeout".
+// node probe.mjs <host:port> <corpus.json> <out.json> [workers]
+//
+// Judges each expression in every rule context (ruling 15): `.read` without a query and with
+// one, `.write`, and `.validate` beside `.write: true`, each as a signed-in user (an unsigned
+// token) and anonymously. Each worker owns a namespace, seeds it again before every rules load
+// and write, and records per expression:
+//   loadR/loadW/loadV (and errR/errW/errV): the rules load answer of each context;
+//   ra/ru: GET /t/o, qa/qu: the same with a query, wa/wu: PUT /t/o under `.write`,
+//   va/vu: PUT /t/o under `.validate`; "a" signed in, "u" anonymous.
+// A request that times out stops the run with exit status 2.
 import { readFileSync, writeFileSync } from 'node:fs';
-const [hostPort, corpusFile, outFile] = process.argv.slice(2);
+
+const [hostPort, corpusFile, outFile, workerArg] = process.argv.slice(2);
+const workers = Number(workerArg ?? 4);
 const corpus = JSON.parse(readFileSync(corpusFile, 'utf8'));
 const e = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-const token = `${e({ alg: 'none', typ: 'JWT' })}.${e({ sub: 'u1', uid: 'u1', iat: 1, exp: 9999999999, email: 'A@b.co', admin: true, n: 3, roles: ['x'] })}.`;
-const seed = { t: { s: 'Hello', n: 5, d: 2.5, b: true, z: 0, o: { k: 'v', m: 1 }, arr: { 0: 'a', 1: 'b' }, '.priority': 7 }, u: 'u1' };
+const token = `${e({ alg: 'none', typ: 'JWT' })}.${e({ sub: 'u1', uid: 'u1', iat: 1, exp: 9999999999, email: 'A@b.co', admin: true, n: 3, roles: ['x', 'y'] })}.`;
+// `data` is /t/o: the fields the generators read, a child with a priority, an array-like
+// child, and `m` for the query's index.
+const seed = JSON.stringify({
+  t: {
+    o: {
+      s: 'Hello', n: 5, d: 2.5, b: true, z: 0, e: '', num: '5', k: 'v', m: 1,
+      o: { k: 'v', m: 1, '.priority': 3 }, arr: { 0: 'a', 1: 'b' }, '.priority': 7,
+    },
+    p: { m: 2 },
+  },
+  u: 'u1',
+});
+const written = JSON.stringify({ k: 'w', m: 2, s: 'Hi', b: false });
+const query = 'orderBy=%22m%22&startAt=0&limitToFirst=2';
+const contexts = {
+  R: (x) => ({ t: { $k: { '.read': x, '.indexOn': ['m'] } } }),
+  W: (x) => ({ t: { $k: { '.read': true, '.write': x } } }),
+  V: (x) => ({ t: { $k: { '.read': true, '.write': true, '.validate': x } } }),
+};
 const owner = { authorization: 'Bearer owner' };
-const t = () => AbortSignal.timeout(15000);
-const results = [];
-let i = 0;
-for (const entry of corpus) {
-  const expr = typeof entry === 'string' ? entry : entry.expr;
-  const ns = `fz${Date.now().toString(36)}${i++}`;
-  try {
-    await fetch(`http://${hostPort}/.json?ns=${ns}`, { method: 'PUT', headers: owner, body: JSON.stringify(seed), signal: t() });
-    const rules = JSON.stringify({ rules: { t: { '.read': expr } } });
-    const load = await fetch(`http://${hostPort}/.settings/rules.json?ns=${ns}`, { method: 'PUT', headers: owner, body: rules, signal: t() });
-    const loadText = await load.text();
-    let read = null;
-    if (load.status === 200) read = (await fetch(`http://${hostPort}/t.json?ns=${ns}&auth=${token}`, { signal: t() })).status;
-    results.push({ expr, query: '', load: load.status, error: load.status === 200 ? null : JSON.parse(loadText).error, read });
-  } catch (error) {
-    results.push({ expr, query: '', load: 'timeout', error: String(error), read: null });
-    writeFileSync(outFile, `${JSON.stringify(results, null, 1)}\n`);
-    console.log(`stopped at ${i - 1}: ${expr}`);
-    process.exit(2);
+const timeout = () => AbortSignal.timeout(15000);
+const results = new Array(corpus.length);
+
+async function status(url, init = {}) {
+  const response = await fetch(url, { ...init, signal: timeout() });
+  await response.arrayBuffer();
+  return response.status;
+}
+
+async function worker(k) {
+  const base = `http://${hostPort}`;
+  const ns = `cells${k}`;
+  const reseed = () => fetch(`${base}/.json?ns=${ns}`, { method: 'PUT', headers: owner, body: seed, signal: timeout() }).then((r) => r.arrayBuffer());
+  for (let i = k; i < corpus.length; i += workers) {
+    const entry = corpus[i];
+    const expr = typeof entry === 'string' ? entry : entry.expr;
+    const row = { expr };
+    for (const [name, rules] of Object.entries(contexts)) {
+      await reseed();
+      const load = await fetch(`${base}/.settings/rules.json?ns=${ns}`, {
+        method: 'PUT',
+        headers: owner,
+        body: JSON.stringify({ rules: rules(expr) }),
+        signal: timeout(),
+      });
+      const text = await load.text();
+      row[`load${name}`] = load.status;
+      if (load.status !== 200) {
+        try {
+          row[`err${name}`] = JSON.parse(text).error;
+        } catch {
+          row[`err${name}`] = text.slice(0, 200);
+        }
+        continue;
+      }
+      if (name === 'R') {
+        row.ra = await status(`${base}/t/o.json?ns=${ns}&auth=${token}`);
+        row.ru = await status(`${base}/t/o.json?ns=${ns}`);
+        row.qa = await status(`${base}/t/o.json?ns=${ns}&${query}&auth=${token}`);
+        row.qu = await status(`${base}/t/o.json?ns=${ns}&${query}`);
+      } else {
+        const cell = name.toLowerCase();
+        row[`${cell}a`] = await status(`${base}/t/o.json?ns=${ns}&auth=${token}`, { method: 'PUT', body: written });
+        await reseed();
+        row[`${cell}u`] = await status(`${base}/t/o.json?ns=${ns}`, { method: 'PUT', body: written });
+      }
+    }
+    results[i] = row;
   }
+}
+
+try {
+  await Promise.all(Array.from({ length: workers }, (_, k) => worker(k)));
+} catch (error) {
+  writeFileSync(outFile, `${JSON.stringify(results.filter(Boolean), null, 1)}\n`);
+  console.log(`stopped: ${error}`);
+  process.exit(2);
 }
 writeFileSync(outFile, `${JSON.stringify(results, null, 1)}\n`);
 console.log(`${results.length} expressions`);

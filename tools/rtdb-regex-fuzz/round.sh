@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# One differential round: a fresh official emulator, a generated corpus, both servers probed,
-# the answers compared. Exits 1 when a row allows on fireemu what the official emulator denies.
+# One differential round: a fresh official emulator, a generated corpus, both servers probed in
+# every cell (see probe.mjs), the answers compared. Exits 1 when a cell allows on fireemu what the
+# official emulator denies.
 #
 #   JAR=<firebase-database-emulator-v4.11.2.jar> FIREEMU=<host:port of a running fireemu> \
 #     tools/rtdb-regex-fuzz/round.sh <seed> <count> <out dir> [edges]
@@ -21,13 +22,16 @@ trap 'kill "$jar_pid" 2>/dev/null || true; wait "$jar_pid" 2>/dev/null || true' 
 until curl -s -o /dev/null "http://127.0.0.1:$jar_port/.json?ns=x"; do sleep 1; done
 python3 "$here/gen.py" "$seed" "$count" "$out/corpus-$seed.json" $edges > /dev/null
 python3 "$here/check_coverage.py" "$out/corpus-$seed.coverage.json" "${MIN_COVERAGE:-5}" $edges
-# The second, independent generator adds as many expressions, each with its negation.
+# The second and third, independent generators (the r8 and r9 reviews wrote them without
+# reference to gen.py) add as many expressions each, each with its negation.
 python3 "$here/gen2.py" "$seed" "$count" "$out/gen2-$seed.json" > /dev/null
-python3 - "$out/corpus-$seed.json" "$out/gen2-$seed.json" <<'PY'
+python3 "$here/gen9.py" "$seed" "$count" "$out/gen9-$seed.json" > /dev/null
+python3 - "$out/corpus-$seed.json" "$out/gen2-$seed.json" "$out/gen9-$seed.json" <<'PY'
 import json, sys
 rows = json.load(open(sys.argv[1], encoding="utf-8"))
-for expr in json.load(open(sys.argv[2], encoding="utf-8")):
-    rows += [expr, f"!({expr})"]
+for extra in sys.argv[2:]:
+    for expr in json.load(open(extra, encoding="utf-8")):
+        rows += [expr, f"!({expr})"]
 json.dump(rows, open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False, indent=0)
 PY
 node "$here/probe.mjs" "127.0.0.1:$jar_port" "$out/corpus-$seed.json" "$out/jar-$seed.json" &

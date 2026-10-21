@@ -38,7 +38,9 @@ def reason(expr, jar_errors, jar_cells, emu_cells):
         return "the official emulator answers 500 (an internal error); fireemu denies (ruling 15)"
     if re.search(r"\.(contains|beginsWith|endsWith|replace|toLowerCase|toUpperCase|matches)\s*[!=]", expr):
         return "a string method read without a call is an error here, a function there"
-    if "?" in expr and any(op in expr for op in ("==", "!=")) and "matches(" not in expr:
+    if re.search(r"\bauth\s*[!=]==?\s*auth\b", expr) or (
+        "?" in expr and any(op in expr for op in ("==", "!=")) and "matches(" not in expr
+    ):
         return "an equality of two snapshots, auth or query is a rule error (review r9 M25 (b))"
     if "\\u" in expr and "matches(" not in expr:
         return "a \\u escape in a name or a lone escaped surrogate is refused at load (review r5 S13)"

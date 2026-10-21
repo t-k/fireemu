@@ -3192,6 +3192,7 @@ impl ExportPath {
         }
     }
 
+    #[cfg(unix)]
     fn display(&self) -> std::path::Display<'_> {
         self.full.display()
     }
@@ -3240,7 +3241,8 @@ fn write_export_tree(
     initiated_by: &str,
 ) -> Result<(), ArtifactError> {
     let _ = initiated_by;
-    dir.create_dir().map_err(|e| ArtifactError::new("export", dir, e))?;
+    dir.create_dir()
+        .map_err(|e| ArtifactError::new("export", dir, e))?;
     let mut manifest = ExportMetadata::new(COMPATIBLE_CLI_VERSION);
 
     if products.firestore {
@@ -3255,7 +3257,8 @@ fn write_export_tree(
     if products.database {
         export_database(dir, endpoints, &mut manifest)?;
     }
-    dir.join(METADATA_FILE_NAME).write(manifest.to_json().as_bytes())
+    dir.join(METADATA_FILE_NAME)
+        .write(manifest.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("export", &dir.join(METADATA_FILE_NAME), e))?;
     Ok(())
 }
@@ -3467,12 +3470,14 @@ fn export_firestore(
         };
         let section_dir = dir.join(&path);
         let partition_dir = section_dir.join(PARTITION_DIR);
-        partition_dir.create_dir()
+        partition_dir
+            .create_dir()
             .map_err(|e| ArtifactError::new("firestore", &partition_dir, e))?;
 
         let output_path = partition_dir.join(OUTPUT_FILE);
         let mut output = std::io::BufWriter::new(
-            output_path.create_file()
+            output_path
+                .create_file()
                 .map_err(|e| ArtifactError::new("firestore", &output_path, e))?,
         );
         let (entity_count, output_bytes) = write_firestore_section(section, &mut output)
@@ -3487,7 +3492,8 @@ fn export_firestore(
             output_files: vec![OUTPUT_FILE.to_owned()],
         };
         let partition_path = partition_dir.join(PARTITION_METADATA);
-        partition_path.write(&partition.to_bytes())
+        partition_path
+            .write(&partition.to_bytes())
             .map_err(|e| ArtifactError::new("firestore", &partition_path, e))?;
 
         let overall = OverallMetadata {
@@ -3496,7 +3502,8 @@ fn export_firestore(
             byte_count: output_bytes,
         };
         let overall_path = section_dir.join(FIRESTORE_OVERALL_METADATA);
-        overall_path.write(&overall.to_bytes())
+        overall_path
+            .write(&overall.to_bytes())
             .map_err(|e| ArtifactError::new("firestore", &overall_path, e))?;
 
         let section = Section {
@@ -3644,7 +3651,9 @@ fn export_auth(
     manifest: &mut ExportMetadata,
 ) -> Result<(), ArtifactError> {
     let section_dir = dir.join(AUTH_PATH);
-    section_dir.create_dir().map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
+    section_dir
+        .create_dir()
+        .map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
     // Capture the Auth stores and the logical Blocking Functions projection under the same
     // adapter-level gate used by project configuration PATCH and blocking Auth requests. This
     // prevents an export from combining two settings generations. The gate is released before
@@ -3694,7 +3703,8 @@ fn export_auth(
         file.users.push(exported_account(store, user, None));
     }
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
-    accounts_path.write(file.to_json().as_bytes())
+    accounts_path
+        .write(file.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &accounts_path, e))?;
 
     let config = store.config();
@@ -3705,7 +3715,8 @@ fn export_auth(
         disabled_user_signup: Some(config.disabled_user_signup),
         disabled_user_deletion: Some(config.disabled_user_deletion),
     };
-    config_path.write(document.to_json().as_bytes())
+    config_path
+        .write(document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
     let project_policy = exported_password_policy(store.password_policy());
     let project_quota = store.signup_quota().config().clone();
@@ -3997,7 +4008,8 @@ fn export_database(
             )
         })?
         .export_texts();
-    section_dir.create_dir()
+    section_dir
+        .create_dir()
         .map_err(|e| ArtifactError::new("database", &section_dir, e))?;
     for (namespace, text) in texts {
         let path = section_dir.join(format!("{namespace}.json"));
@@ -4023,8 +4035,11 @@ fn export_storage(
     let section_dir = dir.join(STORAGE_PATH);
     let blobs_dir = section_dir.join(BLOBS_DIR);
     let metadata_dir = section_dir.join(METADATA_DIR);
-    blobs_dir.create_dir().map_err(|e| ArtifactError::new("storage", &blobs_dir, e))?;
-    metadata_dir.create_dir()
+    blobs_dir
+        .create_dir()
+        .map_err(|e| ArtifactError::new("storage", &blobs_dir, e))?;
+    metadata_dir
+        .create_dir()
         .map_err(|e| ArtifactError::new("storage", &metadata_dir, e))?;
 
     let store = endpoints
@@ -4072,7 +4087,8 @@ fn export_storage(
         })?;
         let id = blob_id(object.bucket.as_str(), object.name.as_str(), generation);
         let blob_path = blobs_dir.join(&id);
-        blob_path.write(store.bytes(object))
+        blob_path
+            .write(store.bytes(object))
             .map_err(|e| ArtifactError::new("storage", &blob_path, e))?;
         let document = ExportedObject {
             name: object.name.as_str().to_owned(),
@@ -4100,12 +4116,14 @@ fn export_storage(
             extra: Vec::new(),
         };
         let metadata_path = metadata_dir.join(format!("{id}.json"));
-        metadata_path.write(document.to_json().as_bytes())
+        metadata_path
+            .write(document.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("storage", &metadata_path, e))?;
     }
 
     let buckets_path = section_dir.join(BUCKETS_FILE);
-    buckets_path.write(BucketsFile { buckets }.to_json().as_bytes())
+    buckets_path
+        .write(BucketsFile { buckets }.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("storage", &buckets_path, e))?;
 
     manifest.set(
@@ -4517,8 +4535,6 @@ fn create_private_file(path: &Path) -> Result<std::fs::File, String> {
     }
     std::fs::File::create(path).map_err(|e| format!("cannot write it: {e}"))
 }
-
-
 
 /// The entries an export owns inside its directory: the metadata file and the product
 /// sections (the official names plus the deferred products' sections).
@@ -5829,6 +5845,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn unmanaged_copy_budget_is_checked_before_copying_the_next_file() {
         let root = budget_dir("unmanaged-copy-budget");
@@ -5842,16 +5859,43 @@ mod tests {
         std::fs::write(source.join("second"), b"456").unwrap();
         let mut budget = UnmanagedCopyBudget::new(5, 2);
 
+        super::copy_unmanaged_entry(&source.join("first"), &staged.join("first"), 0, &mut budget)
+            .unwrap();
+        let error = super::copy_unmanaged_entry(
+            &source.join("second"),
+            &staged.join("second"),
+            0,
+            &mut budget,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("5 byte cumulative copy limit"));
+        assert!(!destination.join("second").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn unmanaged_copy_budget_is_checked_before_copying_the_next_file() {
+        let root = budget_dir("unmanaged-copy-budget");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(source.join("first"), b"123").unwrap();
+        std::fs::write(source.join("second"), b"456").unwrap();
+        let mut budget = UnmanagedCopyBudget::new(5, 2);
+
         super::copy_unmanaged_entry(
             &source.join("first"),
-            &staged.join("first"),
+            &destination.join("first"),
             0,
             &mut budget,
         )
         .unwrap();
         let error = super::copy_unmanaged_entry(
             &source.join("second"),
-            &staged.join("second"),
+            &destination.join("second"),
             0,
             &mut budget,
         )

@@ -2,6 +2,7 @@
 
 python3 matrix.py operators <out.json>
 python3 matrix.py methods <out.json>
+python3 matrix.py fold <out.json>
 
 Every row is an expression for `.read` of `/t` (see probe.mjs for the data and the token);
 each comes with its negation, so a difference shows in the polarity that lets a read
@@ -81,8 +82,33 @@ def methods():
     return rows
 
 
+# Range endpoints at every boundary of the ASCII letter classes, for the `i` fold.
+FOLD_ENDPOINTS = [" ", "!", "0", "9", "@", "A", "B", "Y", "Z", "[", "_", "`", "a", "b", "y", "z",
+                  "{", "~"]
+SUBJECTS = [chr(c) for c in range(0x20, 0x7F)]
+
+
+def literal(c):
+    return "\\" + c if c in "\\]-^[/" else c
+
+
+def subject(c):
+    return "\\" + c if c in "\\'" else c
+
+
+def fold():
+    rows = []
+    for lo in FOLD_ENDPOINTS:
+        for hi in FOLD_ENDPOINTS:
+            if lo > hi:
+                continue
+            for c in SUBJECTS:
+                rows += pair(f"'{subject(c)}'.matches(/^[{literal(lo)}-{literal(hi)}]$/i)")
+    return rows
+
+
 kind, out = sys.argv[1], sys.argv[2]
-rows = {"operators": operators, "methods": methods}[kind]()
+rows = {"operators": operators, "methods": methods, "fold": fold}[kind]()
 seen, unique = set(), []
 for row in rows:
     if row not in seen:

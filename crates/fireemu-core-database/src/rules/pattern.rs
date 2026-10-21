@@ -263,32 +263,42 @@ fn fold_class(chars: &[char], start: usize, out: &mut String) -> Option<usize> {
     Some(i + 1)
 }
 
-/// The ranges `[lo-hi]` stands for under `i`, as the official emulator splits it; `None` for
-/// a range reversed before or after the fold.
+/// The ranges `[lo-hi]` stands for under `i`, as the official emulator's
+/// `makeCharRangeConsideringMode` builds them (read from its bytecode, pinned by recorded
+/// rows): it scans `lo..=hi` and closes a run where `isAlphabetic` changes or at `hi`, the run
+/// always starting at `lo`. A closed run of letters adds `[upper(lo)-upper(end)]` and
+/// `[lower(lo)-lower(end)]`, any other run `[lo-end]`. A run closed at `hi` ends at `hi` and
+/// takes the class of the run before it, so `[ -A]` is the plain `[ -A]`. `None` for a range
+/// reversed before or after the fold.
 fn fold_range(lo: char, hi: char) -> Option<Vec<(char, char)>> {
     if lo > hi {
         return None;
     }
     let mut ranges = Vec::new();
+    let mut letters = lo.is_ascii_alphabetic();
     let mut c = lo;
     loop {
-        let letters = c.is_ascii_alphabetic();
-        let mut end = c;
-        while end < hi && next_char(end).is_ascii_alphabetic() == letters {
-            end = next_char(end);
+        if c.is_ascii_alphabetic() != letters || c == hi {
+            let end = if c == hi { c } else { previous_char(c) };
+            if letters {
+                ranges.push((lo.to_ascii_uppercase(), end.to_ascii_uppercase()));
+                ranges.push((lo.to_ascii_lowercase(), end.to_ascii_lowercase()));
+            } else {
+                ranges.push((lo, end));
+            }
+            letters = c.is_ascii_alphabetic();
         }
-        if letters {
-            ranges.push((lo.to_ascii_uppercase(), end.to_ascii_uppercase()));
-            ranges.push((lo.to_ascii_lowercase(), end.to_ascii_lowercase()));
-        } else {
-            ranges.push((lo, end));
-        }
-        if end == hi {
+        if c == hi {
             break;
         }
-        c = next_char(end);
+        c = next_char(c);
     }
     ranges.iter().all(|(a, b)| a <= b).then_some(ranges)
+}
+
+/// The ASCII character before `c` (`c` is above `lo`, so ASCII too).
+fn previous_char(c: char) -> char {
+    char::from_u32(u32::from(c).saturating_sub(1)).unwrap_or(c)
 }
 
 /// The ASCII character after `c` (`c` is below `hi`, so ASCII too).
@@ -537,8 +547,18 @@ mod tests {
         assert_eq!(matches_i("^[a-z]$", "Q"), Some(true));
         assert_eq!(matches_i("^[a-z]$", "["), Some(false));
         assert_eq!(matches_i("^[A-z]$", "_"), Some(true));
-        // `[Z-a]` folds to a run `[Z-A]`, which is reversed: an error.
-        assert_eq!(matches_i("^[Z-a]$", "Z"), None);
+        // A run closed at the end of the range takes the class of the run before it:
+        // `[ -A]` is the plain `[ -A]`, and `[Z-a]` is `[Zz]` and `[Z-a]` (recorded rows).
+        assert_eq!(matches_i("^[ -A]$", "@"), Some(true));
+        assert_eq!(matches_i("^[ -A]$", "a"), Some(false));
+        assert_eq!(matches_i("^[ -A]$", "B"), Some(false));
+        assert_eq!(matches_i("^[Z-a]$", "Z"), Some(true));
+        assert_eq!(matches_i("^[Z-a]$", "_"), Some(true));
+        assert_eq!(matches_i("^[Z-a]$", "b"), Some(false));
+        assert_eq!(matches_i("^[_-a]$", "`"), Some(true));
+        assert_eq!(matches_i("^[_-a]$", "A"), Some(false));
+        // A fold that reverses a run is an error (`[[-z]` folds a letter run to `[[-Z]`).
+        assert_eq!(matches_i("^[[-z]$", "b"), None);
         // A range reversed before folding is an error too.
         assert_eq!(matches_i("^[z-a]$", "b"), None);
     }

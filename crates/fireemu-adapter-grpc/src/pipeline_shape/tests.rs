@@ -283,6 +283,48 @@ fn a_map_that_lost_an_entry_has_no_shape() {
 }
 
 #[test]
+fn only_invalid_argument_rows_enter_the_table() {
+    let requests = r#"{"programs": [{"id": "p", "steps": [
+        {"id": "a", "rpc": "executePipeline", "body": {"structuredPipeline": {"pipeline": {"stages": [{"name": "limit", "args": [{"stringValue": "x"}]}]}}}},
+        {"id": "b", "rpc": "executePipeline", "body": {"structuredPipeline": {"pipeline": {"stages": [{"name": "offset", "args": [{"stringValue": "x"}]}]}}}}
+    ]}]}"#;
+    let production = r#"{"programs": {"p": {"steps": {
+        "a": {"status": 400, "body": [{"error": {"code": 400, "message": "A", "status": "INVALID_ARGUMENT"}}]},
+        "b": {"status": 400, "body": [{"error": {"code": 400, "message": "B", "status": "FAILED_PRECONDITION"}}]}
+    }}}}"#;
+    let table = recorded_refusals(requests, production);
+    assert_eq!(table.len(), 1);
+    assert!(table.values().flatten().all(|text| text == "A"));
+}
+
+#[test]
+fn an_unknown_member_changes_the_shape() {
+    let shape = |stage: Value| {
+        shape_of_json(&body(&json!([collection(), stage])), &KeyOrder::default()).unwrap()
+    };
+    let limit = json!({"name": "limit", "args": [{"integerValue": "1"}]});
+    let mut stage_member = limit.clone();
+    stage_member["bogus"] = json!(1);
+    assert_ne!(shape(stage_member.clone()), shape(limit.clone()));
+    let mut other_member = limit.clone();
+    other_member["other"] = json!(1);
+    assert_ne!(shape(stage_member), shape(other_member));
+    let value = |v: Value| shape(json!({"name": "limit", "args": [v]}));
+    assert_ne!(
+        value(json!({"bogusValue": 1})),
+        value(json!({"integerValue": "1"}))
+    );
+    assert_ne!(
+        value(json!({"bogusValue": 1})),
+        value(json!({"otherValue": 1}))
+    );
+    assert_ne!(
+        value(json!({"integerValue": "1", "stringValue": "x"})),
+        value(json!({"integerValue": "1"}))
+    );
+}
+
+#[test]
 fn normalized_text_puts_aside_the_project_database_and_index() {
     assert_eq!(
         normalized_text("Document parent name \"projects/demo-x/databases/entpipe1/documents/c\" lacks \"/\" at index 60."),

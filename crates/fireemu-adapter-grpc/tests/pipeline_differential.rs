@@ -328,10 +328,11 @@ fn repeated_requests_get_one_answer_under_both_profiles() {
     }
 }
 
-/// The review's round-5 rows (`r6 ` ids) answer the official emulator's text under the emulator
-/// profile: a literal `map(...)` key's type before any row (on an empty collection too) and
-/// before a repeated key, a negative count after an empty map, a literal holding a field before
-/// a `map(...)` key that is no literal.
+/// The review's round-5 and round-6 rows (`r6 ` and `r7 ` ids) answer the official emulator's
+/// text under the emulator profile: a literal `map(...)` key's type before any row (on an empty
+/// collection too) and before a repeated key, a negative count after an empty map, a literal
+/// holding a field before a `map(...)` key that is no literal or a reserved alias, a failing
+/// constant reference without rows, the reference and collection-name texts.
 #[test]
 fn the_round_five_rows_answer_the_official_texts_under_the_emulator_profile() {
     let (corpus, order) = read_ordered("fs-ent-pipeline-differential.json");
@@ -345,7 +346,8 @@ fn the_round_five_rows_answer_the_official_texts_under_the_emulator_profile() {
     assert_eq!(status, 200, "{body}");
     let mut checked = 0;
     for (at, row) in corpus["rows"].as_array().unwrap().iter().enumerate() {
-        if !row["id"].as_str().unwrap().starts_with("r6 ") {
+        let id = row["id"].as_str().unwrap();
+        if !id.starts_with("r6 ") && !id.starts_with("r7 ") {
             continue;
         }
         let request = json!({"structuredPipeline": {"pipeline": {"stages": row["stages"]}}});
@@ -362,5 +364,5 @@ fn the_round_five_rows_answer_the_official_texts_under_the_emulator_profile() {
         assert_eq!(answer(status, &body), official(row), "{}", row["id"]);
         checked += 1;
     }
-    assert_eq!(checked, 9);
+    assert_eq!(checked, 20);
 }

@@ -7378,7 +7378,8 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
 }
 
 /// Owner first, as over gRPC, also on Enterprise; and a body field the request does not have
-/// is refused by the strict transcoder only.
+/// is refused: with the official emulator's text under the emulator profile, UNIMPLEMENTED
+/// under strict.
 #[test]
 fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
     let s = enterprise_state(
@@ -7403,18 +7404,28 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
         &format!("{DOCS}:executePipeline"),
         extra.clone(),
     );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(
-        stream_error(&body)["error"]["message"],
-        "Invalid JSON payload received. Unknown name \"bogus\" at 'structured_pipeline': Cannot find field."
+    // Strict: the transcoder's text was recorded for other methods only, so the refusal goes
+    // through the shape gate (ruling (c) of the PX1d r6 review) and is UNIMPLEMENTED.
+    assert_eq!(status, 501, "{body}");
+    assert!(
+        stream_error(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Invalid JSON payload received. Unknown name \"bogus\" at 'structured_pipeline': Cannot find field."),
+        "{body}"
     );
+    // The emulator profile refuses it as the official emulator 1.22.0 does.
     let (status, body) = call(
         &enterprise_state(false, None),
         "POST",
         &format!("{DOCS}:executePipeline"),
         extra,
     );
-    assert_eq!(status, 200, "{body}");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
+        "Payload isn't valid for request."
+    );
     // On Standard only strict has the route (production's refusal); the emulator profile keeps
     // its plain 404.
     let (status, body) = call(

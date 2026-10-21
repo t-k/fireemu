@@ -536,6 +536,11 @@ fn recorded_refusals(requests: &str, production: &str) -> HashMap<String, HashSe
                 .as_array()
                 .and_then(|a| a.first())
                 .unwrap_or(&answer["body"]);
+            // Only an INVALID_ARGUMENT row answers a refusal the gate lets through (another
+            // status on HTTP 400, such as FAILED_PRECONDITION, is no evidence for it).
+            if element["error"]["status"] != "INVALID_ARGUMENT" {
+                continue;
+            }
             let Some(message) = element["error"]["message"].as_str() else {
                 continue;
             };

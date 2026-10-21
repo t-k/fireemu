@@ -123,6 +123,24 @@ pub fn validate_pipeline(
             options,
         });
     }
+    // A collection stage naming a document: the official emulator's text (1.22.0, probed
+    // 2026-10-21); strict answers it only where the shape rule lets it.
+    if let Some(first) = pipeline.stages.first().filter(|s| s.name == "collection") {
+        if let Some(pb::value::ValueType::ReferenceValue(name)) =
+            first.args.first().and_then(|a| a.value_type.as_ref())
+        {
+            let segments = name.trim_start_matches('/').split('/').count();
+            if first.args.len() == 1 && segments % 2 == 0 && !name.contains("//") {
+                let index = if name.starts_with('/') { name.len() } else { 0 };
+                return Err(with_code(
+                    Status::invalid_argument(format!(
+                        "Collection name \"{name}\" lacks \"/\" at index {index}."
+                    )),
+                    "FS_PIPE_INVALID",
+                ));
+            }
+        }
+    }
     canonicalize(&specs).map_err(|e| {
         let (status, code) = match &e {
             PipelineError::UnknownStage(_) => (
@@ -690,12 +708,40 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
     }
 }
 
+/// The refusal of a call that reads no field, evaluated once before any row (its answer is the
+/// same for every row): `None` when it answers a value.
+fn constant_call_error(expr: &Expr) -> Option<Status> {
+    fn reads_field(expr: &Expr) -> bool {
+        match expr {
+            Expr::Field(_) => true,
+            Expr::Constant(_) => false,
+            Expr::Call { args, .. } => args.iter().any(reads_field),
+        }
+    }
+    if reads_field(expr) {
+        return None;
+    }
+    let row = pipeline_exec::Row {
+        path: DocumentPath::parse(
+            &fireemu_core_types::ids::ProjectId::try_new("p").ok()?,
+            &fireemu_core_types::ids::DatabaseId::try_new("(default)").ok()?,
+            "c/d",
+        )
+        .ok()?,
+        fields: std::collections::BTreeMap::new(),
+    };
+    match expr.eval_in(&row, Unrecorded::Refuse) {
+        pipeline_exec::Eval::Error(error) => Some(eval_status(&error)),
+        _ => None,
+    }
+}
+
 /// The `map(...)` key checks of an operand, made after every other check of the whole operand
 /// (the official emulator 1.22.0 answers a literal holding a field, a nonexistent function or
 /// an argument count anywhere in the operand first; `PX1d` r5 review S2), in document order: a
 /// key that is no literal (FS-ENT-ORACLE O-4 `o4/functions#map-key-*-field`), then a literal
 /// key of another type than a string, which is refused before any row is read, as the official
-/// emulator refuses it on an empty collection (review M3). A reference or map key keeps the
+/// emulator refuses it on an empty collection (review M3). A reference or vector key keeps the
 /// per-row answer, whose type names differ.
 fn map_key_error(value: &pb::Value) -> Option<Status> {
     use pb::value::ValueType as V;
@@ -718,9 +764,13 @@ fn map_key_error(value: &pb::Value) -> Option<Status> {
                 | V::TimestampValue(_)
                 | V::BytesValue(_)
                 | V::GeoPointValue(_)
-                | V::ArrayValue(_)),
+                | V::ArrayValue(_)
+                | V::MapValue(_)),
             ) = &key.value_type
             {
+                if is_vector_literal(key) {
+                    continue;
+                }
                 return Some(Status::invalid_argument(format!(
                     "map key must be of type STRING, given type is {}",
                     official_type_name(Some(kind))
@@ -796,8 +846,16 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                     _ => decode_operand_tree(arg, unrecorded),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Expr::call(&function.name, args, Placement::Value)
-                .map_err(|e| expr_status(e, unrecorded))
+            let expr = Expr::call(&function.name, args, Placement::Value)
+                .map_err(|e| expr_status(e, unrecorded))?;
+            // Under strict a call of constants that fails is refused before any row is read,
+            // so it never falls through to an empty answer (ruling of 2026-10-21, PX1d r6 (d)).
+            if unrecorded == Unrecorded::Refuse {
+                if let Some(error) = constant_call_error(&expr) {
+                    return Err(error);
+                }
+            }
+            Ok(expr)
         }
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
@@ -895,13 +953,15 @@ fn decode_official_literal(
         }
     }
     let typed = |key: &str, map: &pb::Value| key == "__type__" && !is_vector_literal(map);
-    if has(value, &|key, _| key.is_empty()) {
-        return Err(Status::invalid_argument("Property names cannot be empty."));
-    }
+    // A reserved key is named before an empty one, at any depth (the official emulator 1.22.0,
+    // PX1d r5 review order probes).
     if let Some(key) = reserved_key(value) {
         return Err(Status::invalid_argument(format!(
             "field name '{key}' is reserved."
         )));
+    }
+    if has(value, &|key, _| key.is_empty()) {
+        return Err(Status::invalid_argument("Property names cannot be empty."));
     }
     if !has(value, &typed) {
         return crate::decode::decode_value(value)
@@ -973,6 +1033,17 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
 /// units, as the official emulator's Java does). The documents root is a reference too.
 fn reference_literal_error(name: &str) -> Option<String> {
     let units = |text: &str| text.encode_utf16().count();
+    // A name of the documents-relative form (`/c`): the official emulator 1.22.0 does not
+    // recognize it (probed 2026-10-21).
+    if name.starts_with('/') {
+        return Some(format!("Document parent \"{name}\" not recognized."));
+    }
+    if name == "projects" {
+        return Some(format!(
+            "Document parent name \"{name}\" lacks \"/\" at index {}.",
+            name.len()
+        ));
+    }
     if !name.starts_with("projects/") {
         return Some(format!(
             "Document parent name \"{name}\" lacks \"projects\" at index 0."
@@ -1252,26 +1323,27 @@ fn decode_select(
         entries.sort_by_key(|(alias, _)| order.iter().position(|k| k == *alias));
         in_wire_order = true;
     }
-    let mut paths = Vec::with_capacity(map.fields.len());
-    for (alias, value) in entries {
+    // The official emulator 1.22.0 checks every alias's path first, then every value's
+    // static checks (a literal holding an expression, a function's existence and argument
+    // count, then the `map(...)` keys), then the reserved names (PX1d r6 review S2).
+    for (alias, value) in &entries {
         if value.value_type.is_none() {
             return Err(Status::unimplemented(
                 "select expressions are unsupported locally",
             ));
         }
-        paths.push((alias, value, decode_alias(alias)?));
+        parse_alias(alias)?;
     }
-    let mut aliases = Vec::with_capacity(paths.len());
-    for (alias, value, path) in &paths {
-        aliases.push((
-            *alias,
-            path.clone(),
-            decode_operand_tree(value, unrecorded)?,
-        ));
+    let mut exprs = Vec::with_capacity(entries.len());
+    for (_, value) in &entries {
+        exprs.push(decode_operand_tree(value, unrecorded)?);
     }
-    // The `map(...)` key checks come after every value's other checks (PX1d r5 review H8).
-    if let Some(error) = paths.iter().find_map(|(_, value, _)| map_key_error(value)) {
+    if let Some(error) = entries.iter().find_map(|(_, value)| map_key_error(value)) {
         return Err(error);
+    }
+    let mut aliases = Vec::with_capacity(entries.len());
+    for ((alias, _), expr) in entries.iter().zip(exprs) {
+        aliases.push((*alias, decode_alias(alias)?, expr));
     }
     if aliases.is_empty() {
         // FS-ENT-ORACLE O-4 `o4/stages#select-empty-map`.

@@ -1516,9 +1516,6 @@
      {
       "name": "projects/demo-app/databases/(default)/documents/c/d",
       "fields": {
-       "top": {
-        "stringValue": "t"
-       },
        "i": {
         "integerValue": "1"
        },
@@ -1527,10 +1524,13 @@
        },
        "dbl": {
         "doubleValue": 1.5
+       },
+       "top": {
+        "stringValue": "t"
        }
       },
-      "createTime": "2026-10-21T02:24:49.241495Z",
-      "updateTime": "2026-10-21T02:24:49.241495Z"
+      "createTime": "2026-10-21T03:28:40.250222Z",
+      "updateTime": "2026-10-21T03:28:40.250222Z"
      }
     ]
    }
@@ -7067,9 +7067,6 @@
      {
       "name": "projects/demo-app/databases/(default)/documents/c/d",
       "fields": {
-       "top": {
-        "stringValue": "t"
-       },
        "i": {
         "integerValue": "1"
        },
@@ -7078,10 +7075,13 @@
        },
        "dbl": {
         "doubleValue": 1.5
+       },
+       "top": {
+        "stringValue": "t"
        }
       },
-      "createTime": "2026-10-21T02:24:49.241495Z",
-      "updateTime": "2026-10-21T02:24:49.241495Z"
+      "createTime": "2026-10-21T03:28:40.250222Z",
+      "updateTime": "2026-10-21T03:28:40.250222Z"
      }
     ]
    }
@@ -12465,18 +12465,6 @@
        "v": {
         "mapValue": {
          "fields": {
-          "top": {
-           "stringValue": "t"
-          },
-          "__name__": {
-           "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
-          },
-          "__create_time__": {
-           "timestampValue": "2026-10-21T02:24:49.241495Z"
-          },
-          "__update_time__": {
-           "timestampValue": "2026-10-21T02:24:49.241495Z"
-          },
           "i": {
            "integerValue": "1"
           },
@@ -12485,6 +12473,18 @@
           },
           "dbl": {
            "doubleValue": 1.5
+          },
+          "top": {
+           "stringValue": "t"
+          },
+          "__name__": {
+           "referenceValue": "projects/demo-app/databases/(default)/documents/c/d"
+          },
+          "__create_time__": {
+           "timestampValue": "2026-10-21T03:28:40.250222Z"
+          },
+          "__update_time__": {
+           "timestampValue": "2026-10-21T03:28:40.250222Z"
           }
          }
         }
@@ -400940,9 +400940,6 @@
      {
       "name": "projects/demo-app/databases/(default)/documents/c/d",
       "fields": {
-       "top": {
-        "stringValue": "t"
-       },
        "i": {
         "integerValue": "1"
        },
@@ -400951,10 +400948,13 @@
        },
        "dbl": {
         "doubleValue": 1.5
+       },
+       "top": {
+        "stringValue": "t"
        }
       },
-      "createTime": "2026-10-21T02:24:49.241495Z",
-      "updateTime": "2026-10-21T02:24:49.241495Z"
+      "createTime": "2026-10-21T03:28:40.250222Z",
+      "updateTime": "2026-10-21T03:28:40.250222Z"
      }
     ]
    }
@@ -406426,6 +406426,422 @@
    "official": {
     "status": 400,
     "message": "The 'add_fields(...)' stage requires at least one field."
+   }
+  },
+  {
+   "id": "r7 collection_id(collection ref) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "collection_id",
+           "args": [
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r7 parent(collection ref) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "parent",
+           "args": [
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r7 document_id(collection ref) after a where that keeps no row",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "equal",
+        "args": [
+         {
+          "fieldReferenceValue": "i"
+         },
+         {
+          "integerValue": "99"
+         }
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "referenceValue": "projects/demo-app/databases/(default)/documents/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."
+   }
+  },
+  {
+   "id": "r7 map({}, 2) on an empty collection",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/empty"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "mapValue": {}
+            },
+            {
+             "integerValue": "2"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is MAP"
+   }
+  },
+  {
+   "id": "r7 map(1, i) after a where that keeps no row",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "where",
+     "args": [
+      {
+       "functionValue": {
+        "name": "equal",
+        "args": [
+         {
+          "fieldReferenceValue": "i"
+         },
+         {
+          "integerValue": "99"
+         }
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "map",
+           "args": [
+            {
+             "integerValue": "1"
+            },
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "map key must be of type STRING, given type is LONG"
+   }
+  },
+  {
+   "id": "r7 document_id(/c) relative reference",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "referenceValue": "/c"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent \"/c\" not recognized."
+   }
+  },
+  {
+   "id": "r7 document_id(projects) reference",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "v": {
+          "functionValue": {
+           "name": "document_id",
+           "args": [
+            {
+             "referenceValue": "projects"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Document parent name \"projects\" lacks \"/\" at index 8."
+   }
+  },
+  {
+   "id": "r7 collection stage naming a document",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c/d"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection name \"/c/d\" lacks \"/\" at index 4."
+   }
+  },
+  {
+   "id": "r7 collection stage naming a document without a slash",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "c/d"
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Collection name \"c/d\" lacks \"/\" at index 0."
+   }
+  },
+  {
+   "id": "r7 select reserved alias after a literal holding a field",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "fieldReferenceValue": "i"
+         },
+         "a": {
+          "arrayValue": {
+           "values": [
+            {
+             "fieldReferenceValue": "i"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Value type is not supported: FIELD_REFERENCE_VALUE"
+   }
+  },
+  {
+   "id": "r7 select alias syntax before a reserved alias",
+   "stages": [
+    {
+     "name": "collection",
+     "args": [
+      {
+       "referenceValue": "/c"
+      }
+     ]
+    },
+    {
+     "name": "select",
+     "args": [
+      {
+       "mapValue": {
+        "fields": {
+         "__x__": {
+          "fieldReferenceValue": "i"
+         },
+         "a..b": {
+          "fieldReferenceValue": "i"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "official": {
+    "status": 400,
+    "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
    }
   }
  ]

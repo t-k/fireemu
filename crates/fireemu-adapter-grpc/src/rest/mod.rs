@@ -1594,15 +1594,24 @@ impl RestState {
                 error
             }
         };
-        let body = self.transcoded("executePipeline", body).map_err(nesting)?;
         // Strict answers a refusal only for a request of a shape production refused, with
-        // production's text (coordinator ruling of 2026-10-21).
+        // production's text (coordinator ruling of 2026-10-21), the transcoder's refusals
+        // included (ruling (c) of the r6 review).
         let gate = if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
             crate::pipeline_shape::RefusalGate::Recorded(crate::pipeline_shape::shape_of_json(
-                &body, key_order,
+                body, key_order,
             ))
         } else {
             crate::pipeline_shape::RefusalGate::Open
+        };
+        let body = if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
+            self.transcoded("executePipeline", body)
+                .map_err(|error| gate.answer(nesting(error)))?
+        } else {
+            // The official emulator 1.22.0 refuses a body its transcoder rejects (an unknown
+            // member, a malformed value, two kinds in one value) with one text.
+            transcode::check_body("executePipeline", body)
+                .map_err(|_| Status::invalid_argument("Payload isn't valid for request."))?
         };
         let request = pipeline_json::request_from_json(database, &body)
             .map_err(|e| gate.answer(nesting(bad(&e))))?;

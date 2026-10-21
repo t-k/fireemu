@@ -792,7 +792,8 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
             label: "{\"\": 1, __x__: 1}",
             stages: vec![select(map(vec![("", int(1)), ("__x__", int(1))]))],
             strict: None,
-            emulator: (400, "Property names cannot be empty."),
+            // The official emulator 1.22.0 names the reserved key first, in either order.
+            emulator: (400, "field name '__x__' is reserved."),
         },
         Case {
             label: "{__b__: 1, __a__: 1}",
@@ -1788,6 +1789,70 @@ fn a_map_key_type_is_refused_before_any_row() {
         );
         if !strict {
             assert_eq!(got, (400, long.to_owned()));
+        }
+    }
+}
+
+/// A call of constants that fails is refused before any row (`PX1d` r6 review M1, ruling (d)):
+/// on an empty collection and after a `where` that keeps no row, strict answers the recorded
+/// text for a recorded shape and 501 otherwise, never 200; the emulator profile answers the
+/// official text.
+#[test]
+fn a_failing_constant_call_is_refused_without_rows() {
+    let collection = format!("{DOCS}/c");
+    let lacks = format!(
+        "Document parent name \"{collection}\" lacks \"/\" at index {}.",
+        collection.len()
+    );
+    let reference = json!({ "referenceValue": collection });
+    let none = stage("where", vec![func("equal", vec![field("i"), int(99)])]);
+    for strict in [true, false] {
+        let empty = state(strict);
+        let seeded = seeded(strict);
+        for (label, value, text, recorded) in [
+            (
+                "collection_id(collection)",
+                func("collection_id", vec![reference.clone()]),
+                lacks.as_str(),
+                true,
+            ),
+            (
+                "parent(collection)",
+                func("parent", vec![reference.clone()]),
+                lacks.as_str(),
+                true,
+            ),
+            (
+                "document_id(collection)",
+                func("document_id", vec![reference.clone()]),
+                lacks.as_str(),
+                false,
+            ),
+            (
+                "map({}, 2)",
+                func("map", vec![map(vec![]), int(2)]),
+                "map key must be of type STRING, given type is MAP",
+                false,
+            ),
+        ] {
+            for (place, got) in [
+                ("empty", answer(&empty, &[select(value.clone())])),
+                (
+                    "filtered",
+                    answer(&seeded, &[none.clone(), select(value.clone())]),
+                ),
+            ] {
+                assert_ne!(got.0, 200, "strict={strict} {label} {place}");
+                if strict && !recorded {
+                    assert_eq!(got.0, 501, "{label} {place}: {got:?}");
+                } else if !(strict && place == "filtered") {
+                    assert_eq!(
+                        got,
+                        (400, text.to_owned()),
+                        "strict={strict} {label} {place}"
+                    );
+                }
+            }
         }
     }
 }

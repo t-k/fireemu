@@ -2,8 +2,9 @@
 // PX1d review): it draws pipelines from the grammar fireemu accepts (stages, literals, vectors,
 // `__type__` and reserved keys, aliases, functions with options, nesting), sends each to one
 // loopback target and saves the answers, then compares the official emulator's answers with
-// fireemu's under both profiles. Local use only: CI cannot run the official emulator, so the
-// interesting rows go into conformance/fs-ent-pipeline-differential.json (differential.mjs).
+// fireemu's under both profiles. `collect` sends each drawn pipeline in four variants: as
+// drawn (keys in a drawn order), every map reversed, and both on an empty collection. Local
+// use only: CI cannot run the official emulator, so the interesting rows go into conformance/fs-ent-pipeline-differential.json (differential.mjs).
 //
 //   FIRESTORE_EMULATOR_HOST=127.0.0.1:<port> node src/fs-ent-pipeline/differential-sweep.mjs \
 //     collect <seed> <count> <answers.json>
@@ -208,9 +209,7 @@ export function grammar(random) {
     }
   };
   return () => {
-    // A share of the rows reads an empty collection, where only static checks can refuse.
-    const input = chance(0.15) ? "/empty" : "/c";
-    const stages = [{ name: "collection", args: [{ referenceValue: input }] }];
+    const stages = [{ name: "collection", args: [{ referenceValue: "/c" }] }];
     const n = 1 + Math.floor(random() * 3);
     for (let i = 0; i < n; i += 1) stages.push(stage());
     if (chance(0.05)) stages.at(-1).options = { x: int(1) };
@@ -271,12 +270,37 @@ async function send(host, pipelines) {
   return rows;
 }
 
+/** Every `fields` and `options` map of a value with its entries in reverse order. */
+function reversedMaps(value) {
+  if (Array.isArray(value)) return value.map(reversedMaps);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, inner]) => [
+      key,
+      (key === "fields" || key === "options") && inner && typeof inner === "object" && !Array.isArray(inner)
+        ? Object.fromEntries(Object.entries(inner).reverse().map(([k, v]) => [k, reversedMaps(v)]))
+        : reversedMaps(inner),
+    ]),
+  );
+}
+
+/** The same stages reading an empty collection, where only checks made before any row refuse. */
+const onEmpty = (stages) => [{ name: "collection", args: [{ referenceValue: "/empty" }] }, ...stages.slice(1)];
+
 async function collect(host, seed, count, out) {
   const next = grammar(generator(Number(seed)));
-  const pipelines = Array.from({ length: Number(count) }, (_, i) => ({
-    id: `sweep-${seed}-${i}`,
-    stages: next(),
-  }));
+  // Each pipeline in four variants (PX1d r6 review S3): as drawn (G), every map reversed (R),
+  // and both on an empty collection (EG, ER).
+  const pipelines = Array.from({ length: Number(count) }, (_, i) => {
+    const stages = next();
+    const reversed = reversedMaps(stages);
+    return [
+      { id: `sweep-${seed}-${i}-G`, stages },
+      { id: `sweep-${seed}-${i}-R`, stages: reversed },
+      { id: `sweep-${seed}-${i}-EG`, stages: onEmpty(stages) },
+      { id: `sweep-${seed}-${i}-ER`, stages: onEmpty(reversed) },
+    ];
+  }).flat();
   const rows = await send(host, pipelines);
   await writeFile(out, JSON.stringify({ seed: Number(seed), count: Number(count), rows }));
   console.log(JSON.stringify({ seed: Number(seed), count: rows.length }));

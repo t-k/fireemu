@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use fireemu_core_database::rules::{Requester, Rules, RulesError};
+use fireemu_core_database::rules::{ReadKind, Requester, Rules, RulesError};
 use fireemu_core_database::{Json, Path, QueryParams, Tree};
 
 use crate::json_text::{render, Style};
@@ -215,6 +215,7 @@ impl Database {
         namespace: &str,
         path: &Path,
         query: Option<&QueryParams>,
+        kind: ReadKind,
         access: &Access,
         now: i64,
     ) -> bool {
@@ -227,7 +228,9 @@ impl Database {
         let auth = access.auth();
         let requester = Requester { auth: &auth, now };
         let root = self.tree(namespace).and_then(Tree::root);
-        loaded.rules.can_read(root, path, query, &requester)
+        loaded
+            .rules
+            .can_read_as(root, path, query, kind, &requester)
     }
 
     /// Whether `access` may make `op` in `namespace` now. A write the tree refuses is left to
@@ -347,7 +350,14 @@ impl Database {
             .collect();
         for (id, owner, path, query) in listens {
             let access = self.client_access(owner);
-            if !self.may_read(namespace, &path, query.as_ref(), &access, now) {
+            if !self.may_read(
+                namespace,
+                &path,
+                query.as_ref(),
+                ReadKind::Stream,
+                &access,
+                now,
+            ) {
                 self.drop_listen(id);
                 self.push_raw(owner, cancel_frame(&path, query.as_ref()));
             }
@@ -355,7 +365,14 @@ impl Database {
         let mut events = Vec::new();
         if client.is_none() {
             for (id, path, query, access) in self.subscription_entries(namespace) {
-                if !self.may_read(namespace, &path, query.as_ref(), &access, now) {
+                if !self.may_read(
+                    namespace,
+                    &path,
+                    query.as_ref(),
+                    ReadKind::Stream,
+                    &access,
+                    now,
+                ) {
                     self.unsubscribe(id);
                     events.push((id, SseEvent::cancel()));
                 }

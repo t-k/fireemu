@@ -13,6 +13,9 @@ version = lines[0].split()[1]
 tables = {}
 for line in lines[1:]:
     name, *ranges = line.split()
+    # The case mappings are checked by a test against the fixture, not generated.
+    if name.endswith("_map"):
+        continue
     tables[name] = [tuple(int(x, 16) for x in r.split("-")) for r in ranges]
 
 out = [
@@ -46,6 +49,24 @@ out += [
     "            }",
     "        })",
     "        .is_ok()",
+    "}",
+    "",
+    "/// `Character.digit(c, 10)`: the value of a decimal digit, which `Integer.parseInt` reads; each",
+    "/// range is whole runs of the digits 0 to 9.",
+    "pub(crate) fn decimal_digit(c: char) -> Option<u32> {",
+    "    let unit = u16::try_from(u32::from(c)).ok()?;",
+    "    let index = DECIMAL_DIGIT",
+    "        .binary_search_by(|&(lo, hi)| {",
+    "            if hi < unit {",
+    "                std::cmp::Ordering::Less",
+    "            } else if lo > unit {",
+    "                std::cmp::Ordering::Greater",
+    "            } else {",
+    "                std::cmp::Ordering::Equal",
+    "            }",
+    "        })",
+    "        .ok()?;",
+    "    Some(u32::from(unit - DECIMAL_DIGIT[index].0) % 10)",
     "}",
     "",
     "/// `Character.isJavaIdentifierStart`; false outside the Basic Multilingual Plane, where the",

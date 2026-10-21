@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub use check::RuleKind;
-pub use eval::Snapshot;
+pub use eval::{ReadKind, Snapshot};
 pub use parse::ExprError;
 
 use crate::json::Json;
@@ -134,12 +134,26 @@ impl Rules {
         })
     }
 
-    /// Whether `requester` may read `path` (with `query`, for a query) in the tree `root`.
+    /// Whether `requester` may read `path` (with `query`, for a query) in the tree `root` with
+    /// a REST `GET`.
     pub fn can_read(
         &self,
         root: Option<&Node>,
         path: &Path,
         query: Option<&QueryParams>,
+        requester: &Requester<'_>,
+    ) -> bool {
+        self.can_read_as(root, path, query, ReadKind::Get, requester)
+    }
+
+    /// [`Rules::can_read`] for a read of `kind`, which decides the ordering a read without a
+    /// query has.
+    pub fn can_read_as(
+        &self,
+        root: Option<&Node>,
+        path: &Path,
+        query: Option<&QueryParams>,
+        kind: ReadKind,
         requester: &Requester<'_>,
     ) -> bool {
         let mut wildcards = BTreeMap::new();
@@ -161,6 +175,7 @@ impl Rules {
                     },
                     new_data: None,
                     query,
+                    read_kind: kind,
                     wildcards: &wildcards,
                 };
                 if run(rule, &scope) {
@@ -241,6 +256,7 @@ impl Rules {
                 path: at.clone(),
             }),
             query: None,
+            read_kind: ReadKind::Check,
             wildcards,
         }
     }
@@ -464,6 +480,84 @@ mod java_chars_tests {
                 checked += 1;
             }
             assert_eq!(checked, 0x1_0000 - 0x800);
+        }
+    }
+
+    #[test]
+    fn every_bmp_code_unit_has_the_digit_value_java_21_reads() {
+        let ranges = ranges("decimal_digit");
+        for code in 0..=0xFFFF_u32 {
+            let Some(c) = char::from_u32(code) else {
+                continue;
+            };
+            let java = ranges
+                .iter()
+                .find(|&&(lo, hi)| (lo..=hi).contains(&code))
+                .map(|&(lo, _)| (code - lo) % 10);
+            assert_eq!(java_chars::decimal_digit(c), java, "U+{code:04X}");
+        }
+        assert_eq!(java_chars::decimal_digit('\u{1d7cf}'), None);
+    }
+
+    /// Java's case mappings of every BMP code unit that has one, from the fixture.
+    fn case_map(name: &str) -> std::collections::BTreeMap<char, String> {
+        let fixture = include_str!("../../tests/fixtures/java21-chars.txt");
+        let line = fixture
+            .lines()
+            .find(|line| line.split_whitespace().next() == Some(name))
+            .unwrap_or_else(|| panic!("{name} is in the fixture"));
+        line.split_whitespace()
+            .skip(1)
+            .map(|entry| {
+                let (from, to) = entry.split_once('>').unwrap();
+                let unit = |hex: &str| u16::from_str_radix(hex, 16).unwrap();
+                let to: Vec<u16> = to.split(',').map(unit).collect();
+                (
+                    char::from_u32(u32::from(unit(from))).unwrap(),
+                    String::from_utf16(&to).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_bmp_code_unit_changes_case_as_java_21_changes_it() {
+        for (name, lower) in [("lower_map", true), ("upper_map", false)] {
+            let java = case_map(name);
+            let mut differ = Vec::new();
+            for code in 0..=0xFFFF_u32 {
+                let Some(c) = char::from_u32(code) else {
+                    continue;
+                };
+                let expected = java.get(&c).cloned().unwrap_or_else(|| c.to_string());
+                match super::eval::java_case(&c.to_string(), lower) {
+                    Some(got) => assert_eq!(got, expected, "{name} U+{code:04X}"),
+                    None => differ.push(c),
+                }
+            }
+            // The code units refused are those Rust's tables and Java 21's map differently.
+            for c in differ {
+                let rust = if lower {
+                    c.to_lowercase().collect::<String>()
+                } else {
+                    c.to_uppercase().collect::<String>()
+                };
+                let expected = java.get(&c).cloned().unwrap_or_else(|| c.to_string());
+                let other = if lower {
+                    c.to_uppercase().collect::<String>()
+                } else {
+                    c.to_lowercase().collect::<String>()
+                };
+                let other_java = case_map(if lower { "upper_map" } else { "lower_map" })
+                    .get(&c)
+                    .cloned()
+                    .unwrap_or_else(|| c.to_string());
+                assert!(
+                    rust != expected || other != other_java,
+                    "{name} refuses U+{:04X}, which both map alike",
+                    u32::from(c)
+                );
+            }
         }
     }
 

@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_database::hash::node_hash;
+use fireemu_core_database::rules::ReadKind;
 use fireemu_core_database::server_value::resolve;
 use fireemu_core_database::{
     Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, QueryParams, ServerValueContext,
@@ -574,7 +575,14 @@ impl Session {
         };
         // The rules come before the index, so a caller who may not read learns nothing
         // about it (the official emulator's order, review S6).
-        if !db.may_read(&self.namespace, &path, query.as_ref(), &self.access, now) {
+        if !db.may_read(
+            &self.namespace,
+            &path,
+            query.as_ref(),
+            ReadKind::Stream,
+            &self.access,
+            now,
+        ) {
             return Err(Self::denied());
         }
         if let Some(query) = &query {
@@ -621,7 +629,14 @@ impl Session {
             Some(Json::Object(q)) => wire_query(q)?,
             _ => None,
         };
-        if !db.may_read(&self.namespace, &path, query.as_ref(), &self.access, now) {
+        if !db.may_read(
+            &self.namespace,
+            &path,
+            query.as_ref(),
+            ReadKind::Stream,
+            &self.access,
+            now,
+        ) {
             return Err(Self::denied());
         }
         let followed = query.clone();
@@ -683,6 +698,7 @@ impl Session {
                 &self.namespace,
                 &path,
                 None,
+                ReadKind::Check,
                 &self.access,
                 context.now_millis,
             )

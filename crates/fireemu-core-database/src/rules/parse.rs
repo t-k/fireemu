@@ -631,7 +631,15 @@ impl Lexer<'_> {
             let saved = self.at;
             self.skip_format();
             match self.chars.get(self.at) {
+                // The reader takes the JavaScript flags `g`, `i`, `m` and `y` and refuses any
+                // other letter where it stands; the check then takes `i` alone (review r10 M28).
                 Some(&c) if c.is_ascii_alphabetic() => {
+                    if !matches!(c, 'g' | 'i' | 'm' | 'y') {
+                        return Err(ExprError::new(
+                            self.at + 1,
+                            "invalid flag after regular expression",
+                        ));
+                    }
                     flags.push(c);
                     self.at += 1;
                 }
@@ -640,6 +648,12 @@ impl Lexer<'_> {
                     break;
                 }
             }
+        }
+        if !flags.is_empty() && flags != "i" {
+            return Err(ExprError::new(
+                start,
+                "regular expressions do not support flags other than i",
+            ));
         }
         check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
         check_groups_and_counts(&pattern).map_err(|message| ExprError::new(start, message))?;

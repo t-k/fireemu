@@ -891,6 +891,47 @@ const FORMAT: &[(u16, u16)] = &[
     (0xFFF9, 0xFFFB),
 ];
 
+/// `decimal_digit` ranges, inclusive.
+const DECIMAL_DIGIT: &[(u16, u16)] = &[
+    (0x0030, 0x0039),
+    (0x0660, 0x0669),
+    (0x06F0, 0x06F9),
+    (0x07C0, 0x07C9),
+    (0x0966, 0x096F),
+    (0x09E6, 0x09EF),
+    (0x0A66, 0x0A6F),
+    (0x0AE6, 0x0AEF),
+    (0x0B66, 0x0B6F),
+    (0x0BE6, 0x0BEF),
+    (0x0C66, 0x0C6F),
+    (0x0CE6, 0x0CEF),
+    (0x0D66, 0x0D6F),
+    (0x0DE6, 0x0DEF),
+    (0x0E50, 0x0E59),
+    (0x0ED0, 0x0ED9),
+    (0x0F20, 0x0F29),
+    (0x1040, 0x1049),
+    (0x1090, 0x1099),
+    (0x17E0, 0x17E9),
+    (0x1810, 0x1819),
+    (0x1946, 0x194F),
+    (0x19D0, 0x19D9),
+    (0x1A80, 0x1A89),
+    (0x1A90, 0x1A99),
+    (0x1B50, 0x1B59),
+    (0x1BB0, 0x1BB9),
+    (0x1C40, 0x1C49),
+    (0x1C50, 0x1C59),
+    (0xA620, 0xA629),
+    (0xA8D0, 0xA8D9),
+    (0xA900, 0xA909),
+    (0xA9D0, 0xA9D9),
+    (0xA9F0, 0xA9F9),
+    (0xAA50, 0xAA59),
+    (0xABF0, 0xABF9),
+    (0xFF10, 0xFF19),
+];
+
 fn in_ranges(ranges: &[(u16, u16)], c: char) -> bool {
     let Ok(unit) = u16::try_from(u32::from(c)) else {
         return false;
@@ -906,6 +947,24 @@ fn in_ranges(ranges: &[(u16, u16)], c: char) -> bool {
             }
         })
         .is_ok()
+}
+
+/// `Character.digit(c, 10)`: the value of a decimal digit, which `Integer.parseInt` reads; each
+/// range is whole runs of the digits 0 to 9.
+pub(crate) fn decimal_digit(c: char) -> Option<u32> {
+    let unit = u16::try_from(u32::from(c)).ok()?;
+    let index = DECIMAL_DIGIT
+        .binary_search_by(|&(lo, hi)| {
+            if hi < unit {
+                std::cmp::Ordering::Less
+            } else if lo > unit {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .ok()?;
+    Some(u32::from(unit - DECIMAL_DIGIT[index].0) % 10)
 }
 
 /// `Character.isJavaIdentifierStart`; false outside the Basic Multilingual Plane, where the

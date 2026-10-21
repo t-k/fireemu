@@ -16,6 +16,7 @@ use fireemu_core_database::key::validate_key;
 use fireemu_core_database::node::VALUE_KEY;
 use fireemu_core_database::path::PRIORITY_KEY;
 use fireemu_core_database::push_id::PushIdGenerator;
+use fireemu_core_database::rules::ReadKind;
 use fireemu_core_database::server_value::{resolve, stored_priority, SERVER_VALUE_KEY};
 use fireemu_core_database::{
     Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, Priority, QueryParams,
@@ -548,6 +549,8 @@ impl Database {
         }
     }
 
+    // One request's path through the checks, in the official emulator's order.
+    #[allow(clippy::too_many_lines)]
     fn dispatch(
         &mut self,
         request: &HttpRequest,
@@ -604,7 +607,9 @@ impl Database {
             request::query(&params, output.shallow)?
         };
         // The rules come before the index (the official emulator's order, review S6).
-        if !writing && !self.may_read(&namespace, &path, query.as_ref(), &access, now_millis) {
+        let kind = read_kind(streaming);
+        if !writing && !self.may_read(&namespace, &path, query.as_ref(), kind, &access, now_millis)
+        {
             return Err(read_refused(streaming));
         }
         if let Some(query) = &query {
@@ -668,7 +673,16 @@ impl Database {
                 let op = WriteOp::Set(&call.path, value);
                 self.may_write(&call.namespace, &op, &call.access, now)
             });
-            if !writable || !self.may_read(&call.namespace, &call.path, None, &call.access, now) {
+            if !writable
+                || !self.may_read(
+                    &call.namespace,
+                    &call.path,
+                    None,
+                    ReadKind::Check,
+                    &call.access,
+                    now,
+                )
+            {
                 return Err(Refusal::new(401, "Permission denied"));
             }
         }
@@ -1437,6 +1451,15 @@ fn parse_ordered(text: &str) -> ParsedBody {
             json: Err(err),
             order: Vec::new(),
         },
+    }
+}
+
+/// The kind of a REST read: an event stream, or a plain `GET`.
+fn read_kind(streaming: bool) -> ReadKind {
+    if streaming {
+        ReadKind::Stream
+    } else {
+        ReadKind::Get
     }
 }
 

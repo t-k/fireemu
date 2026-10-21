@@ -189,11 +189,13 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
     let wake = Arc::new(tokio::sync::Notify::new());
     {
         let wake = Arc::clone(&wake);
-        shared
+        let mut database = shared
             .database
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .set_waker(Arc::new(move || wake.notify_one()));
+            .unwrap_or_else(PoisonError::into_inner);
+        database.set_waker(Arc::new(move || wake.notify_one()));
+        // A reset or restore judges the open reads at the server time too (review r9 M27).
+        database.set_clock(Arc::clone(&shared.config.clock));
     }
     // The task ends with this server (the guard aborts it when `serve` is dropped).
     let _flusher = AbortOnDrop({

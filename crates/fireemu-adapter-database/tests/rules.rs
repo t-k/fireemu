@@ -1576,3 +1576,73 @@ fn a_long_chain_loads_and_is_evaluated_on_a_worker_stack() {
         }
     });
 }
+
+#[test]
+fn a_restore_or_a_reset_cancels_the_reads_its_data_no_longer_allows() {
+    // Review r9 M27: a session snapshot restore or a reset changes the data under open reads
+    // as a write does, so the reads the rules no longer allow are cancelled before any data
+    // is sent (the official emulator has no snapshots; this follows its writes).
+    for reset in [false, true] {
+        let mut db = db();
+        let clock_reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reads = clock_reads.clone();
+        db.set_clock(std::sync::Arc::new(move || {
+            reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            LATER
+        }));
+        load(
+            &mut db,
+            "dr",
+            r#"{"rules":{"doc":{".read":"data.child('open').val() == true && now < 1792464734000"}}}"#,
+        );
+        call(
+            &mut db,
+            "PUT",
+            "/.json?ns=dr",
+            OWNER,
+            r#"{"doc":{"open":false,"secret":"HIDDEN"}}"#,
+        );
+        let snapshot = db.capture_namespaces_where(|ns| ns == "dr");
+        call(
+            &mut db,
+            "PUT",
+            "/.json?ns=dr",
+            OWNER,
+            r#"{"doc":{"open":true,"secret":"visible"}}"#,
+        );
+        let mut listener = open(&mut db, "dr");
+        let client = listener.client();
+        send(&mut db, &mut listener, 1, "q", r#"{"p":"/doc","h":""}"#);
+        let stream = match db.handle(
+            &request(
+                "GET",
+                "/doc.json?ns=dr",
+                &[("Accept", "text/event-stream")],
+                "",
+            ),
+            NOW,
+        ) {
+            Handled::Stream { id, .. } => id,
+            Handled::Response { response, .. } => panic!("{response:?}"),
+        };
+        pushes_to(&mut db, client);
+        db.drain_events();
+        let before = clock_reads.load(std::sync::atomic::Ordering::SeqCst);
+        if reset {
+            db.clear_namespaces_where(|ns| ns == "dr");
+        } else {
+            db.restore_namespaces_where(|ns| ns == "dr", &snapshot);
+        }
+        assert!(clock_reads.load(std::sync::atomic::Ordering::SeqCst) > before);
+        assert_eq!(
+            pushes_to(&mut db, client),
+            vec![r#"{"t":"d","d":{"b":{"p":"doc","q":null},"a":"c"}}"#.to_owned()],
+            "reset {reset}"
+        );
+        assert_eq!(
+            db.drain_events(),
+            vec![(stream, SseEvent::cancel())],
+            "reset {reset}"
+        );
+    }
+}

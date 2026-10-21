@@ -302,6 +302,7 @@ pub struct Database {
     events: Vec<(u64, SseEvent)>,
     /// Called when pushes or events wait outside a request, so the server delivers them.
     waker: Waker,
+    clock: ServerClock,
     /// The writes each realtime connection registered for its end, with its namespace.
     on_disconnect: BTreeMap<u64, (String, Pending)>,
     /// The rules loaded per namespace.
@@ -313,6 +314,32 @@ pub struct Database {
 /// The server's callback for messages that wait outside a request.
 #[derive(Clone, Default)]
 struct Waker(Option<std::sync::Arc<dyn Fn() + Send + Sync>>);
+
+/// The server time for changes made outside a request (a session reset or restore): the
+/// server's clock once it serves, the system clock before.
+#[derive(Clone, Default)]
+struct ServerClock(Option<std::sync::Arc<dyn Fn() -> i64 + Send + Sync>>);
+
+impl ServerClock {
+    fn now(&self) -> i64 {
+        match &self.0 {
+            Some(clock) => clock(),
+            None => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX)),
+        }
+    }
+}
+
+impl std::fmt::Debug for ServerClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "ServerClock(set)"
+        } else {
+            "ServerClock(system)"
+        })
+    }
+}
 
 impl std::fmt::Debug for Waker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -343,6 +370,7 @@ impl Database {
             session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
             events: Vec::new(),
             waker: Waker::default(),
+            clock: ServerClock::default(),
             on_disconnect: BTreeMap::new(),
             rules: BTreeMap::new(),
             client_access: BTreeMap::new(),
@@ -1055,6 +1083,11 @@ impl Database {
         self.waker = Waker(Some(waker));
     }
 
+    /// Sets the server time used for changes made outside a request.
+    pub fn set_clock(&mut self, clock: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>) {
+        self.clock = ServerClock(Some(clock));
+    }
+
     /// Empties every namespace `cleared` accepts, as a session reset does: their streams and
     /// listens see the data go, through the waker, and the onDisconnect writes registered for
     /// them are dropped, so a connection from before the reset never writes into the new
@@ -1073,6 +1106,7 @@ impl Database {
         if names.is_empty() {
             return;
         }
+        let now = self.clock.now();
         for name in names {
             let limits = self.options.limits;
             self.namespace(&name).tree = Tree::new(limits);
@@ -1080,8 +1114,9 @@ impl Database {
                 path: Path::root(),
                 effective: true,
             };
-            // A reset leaves nothing to read; the next write looks at the rules again.
-            let events = self.notify_views(&name, &change);
+            // As a write would: the reads the rules no longer allow are cancelled first
+            // (review r9 M27).
+            let events = self.notify(&name, &change, now);
             self.events.extend(events);
         }
         if let Some(waker) = &self.waker.0 {
@@ -1134,6 +1169,7 @@ impl Database {
             .cloned()
             .collect();
         names.extend(snapshot.trees.keys().filter(|name| owned(name)).cloned());
+        let now = self.clock.now();
         for name in names {
             let limits = self.options.limits;
             self.namespace(&name).tree = snapshot
@@ -1145,7 +1181,9 @@ impl Database {
                 path: Path::root(),
                 effective: true,
             };
-            let events = self.notify_views(&name, &change);
+            // As a write would: the reads the rules no longer allow are cancelled before the
+            // restored data reaches the others (review r9 M27).
+            let events = self.notify(&name, &change, now);
             self.events.extend(events);
         }
         if let Some(waker) = &self.waker.0 {

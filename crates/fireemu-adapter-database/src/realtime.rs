@@ -938,6 +938,16 @@ fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure
     if q.is_empty() {
         return Ok(None);
     }
+    // The official emulator refuses a query with a field it does not know, or an inclusive
+    // flag that is no boolean (review r11 M42); a limit needs its side.
+    const FIELDS: [&str; 9] = ["i", "sp", "sn", "sin", "ep", "en", "ein", "l", "vf"];
+    if q.keys().any(|key| !FIELDS.contains(&key.as_str()))
+        || ["sin", "ein"]
+            .iter()
+            .any(|flag| q.get(*flag).is_some_and(|v| !matches!(v, Json::Bool(_))))
+    {
+        return Err(Failure::Malformed);
+    }
     let order_by = match q.get("i") {
         None => OrderBy::Priority,
         Some(Json::String(index)) => match index.as_str() {
@@ -966,9 +976,13 @@ fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure
             .ok()
             .filter(|l| *l > 0)
             .ok_or_else(|| invalid("Invalid query limit"))?;
+        // Without `vf` or with another side, the official emulator's rules see neither
+        // `limitToFirst` nor `limitToLast`; that is not reproduced, so the query is refused
+        // (ruling 18, a listed difference). The SDKs always send the side.
         query.limit = Some(match q.get("vf") {
             Some(Json::String(side)) if side == "r" => Limit::Last(limit),
-            _ => Limit::First(limit),
+            Some(Json::String(side)) if side == "l" => Limit::First(limit),
+            _ => return Err(Failure::Malformed),
         });
     }
     Ok(Some(query))

@@ -2074,3 +2074,37 @@ fn a_priority_written_through_its_path_is_no_number_to_order_or_add() {
     );
     assert_eq!(call(&mut db, "GET", "/.json?ns=pr", &[], "").0, 200);
 }
+
+#[test]
+fn a_realtime_query_with_an_unknown_or_malformed_field_is_refused() {
+    // Review r11 M42, recorded on the official emulator: an unknown query field and a
+    // non-boolean inclusive flag are errors there; a limit without a known side is read
+    // otherwise there and refused here (a listed difference). The SDK's own forms are served.
+    let mut db = db();
+    load(
+        &mut db,
+        "wq",
+        r#"{"rules":{".read":true,"a":{".indexOn":["m"]}}}"#,
+    );
+    call(&mut db, "PUT", "/a.json?ns=wq", OWNER, r#"{"x":{"m":1}}"#);
+    for (r, query, served) in [
+        (1, r#"{"i":"m","l":2,"vf":"l"}"#, true),
+        (2, r#"{"i":"m","sp":1,"sin":true}"#, true),
+        (3, r#"{"i":"m","l":2}"#, false),
+        (4, r#"{"i":"m","l":2,"vf":"x"}"#, false),
+        (5, r#"{"i":"m","sp":1,"sin":"b"}"#, false),
+        (6, r#"{"i":"m","sp":1,"ein":1}"#, false),
+        (7, r#"{"i":"m","zz":1}"#, false),
+    ] {
+        let mut session = open(&mut db, "wq");
+        let frames = send(
+            &mut db,
+            &mut session,
+            r,
+            "q",
+            &format!(r#"{{"p":"/a","q":{query},"t":{r},"h":""}}"#),
+        );
+        let ok = frames.iter().any(|f| f.contains(r#""s":"ok""#));
+        assert_eq!(ok, served, "{query}: {frames:?}");
+    }
+}

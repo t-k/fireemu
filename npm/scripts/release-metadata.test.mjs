@@ -11,17 +11,18 @@ import { PLATFORMS } from "../platforms/platforms.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const repositoryUrl = "https://github.com/t-k/fireemu";
+const homepageUrl = "https://t-k.github.io/fireemu/";
 const retiredRepositoryPath = ["github.com", "reckona", "fireemu"].join("/");
 
 test("every public distribution reference names the canonical repository", () => {
   const launcher = JSON.parse(readFileSync(resolve(repoRoot, "npm/fireemu/package.json"), "utf8"));
-  assert.equal(launcher.homepage, `${repositoryUrl}#readme`);
+  assert.equal(launcher.homepage, homepageUrl);
   assert.equal(launcher.bugs, `${repositoryUrl}/issues`);
   assert.equal(launcher.repository.url, `git+${repositoryUrl}.git`);
 
   for (const platform of PLATFORMS) {
     const manifest = platformManifest(platform, "1.2.3");
-    assert.equal(manifest.homepage, `${repositoryUrl}#readme`);
+    assert.equal(manifest.homepage, homepageUrl);
     assert.equal(manifest.repository.url, `git+${repositoryUrl}.git`);
   }
 

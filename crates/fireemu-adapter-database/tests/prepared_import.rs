@@ -108,6 +108,33 @@ fn server_values_in_a_prepared_import_resolve_when_it_is_installed() {
 }
 
 #[test]
+fn a_prepared_import_names_its_namespace_as_the_server_keeps_it() {
+    let import = prepare_import("Demo-App", "1".to_owned(), &Limits::default()).unwrap();
+    assert_eq!(import.namespace(), "demo-app");
+    let deferred = prepare_import(
+        "Demo-App",
+        r#"{".sv":"timestamp"}"#.to_owned(),
+        &Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(deferred.namespace(), "demo-app");
+}
+
+#[test]
+fn a_file_with_server_values_is_checked_against_the_given_limits() {
+    let limits = Limits {
+        max_depth: 2,
+        ..Limits::default()
+    };
+    let deep = r#"{"a":{"b":{"c":{".sv":"timestamp"}}}}"#;
+    assert!(prepare_import("p", deep.to_owned(), &Limits::default()).is_ok());
+    assert!(prepare_import("p", deep.to_owned(), &limits).is_err());
+    let shallow = prepare_import("p", r#"{"a":{".sv":"timestamp"}}"#.to_owned(), &limits).unwrap();
+    // Until it is installed it holds the text, whose server values resolve then.
+    assert_eq!(shallow.retained_bytes(), 25);
+}
+
+#[test]
 fn an_import_checked_against_other_limits_is_not_installed() {
     let limits = Limits {
         max_depth: 3,
@@ -140,7 +167,8 @@ fn a_prepared_import_holds_its_tree_in_a_bounded_size() {
     text.push_str("}}");
     let import = prepare_import("p", text.clone(), &Limits::default()).unwrap();
     let held = import.retained_bytes();
-    assert!(held > 0);
+    // At least every key and string it holds, at most a few times the text.
+    assert!(held >= text.len() as u64, "{held}");
     assert!(
         held <= 8 * text.len() as u64,
         "{held} bytes held for {} bytes of text",

@@ -91,13 +91,10 @@ impl Tree {
 
     /// Replaces the whole tree with `root`, as a write of it at the root would: a value equal
     /// to what is stored leaves the stored form in place (1.0 written over 1 leaves 1).
-    /// Returns whether anything was replaced.
-    pub fn replace_root(&mut self, root: Option<Node>) -> bool {
-        if root == self.root {
-            return false;
+    pub fn replace_root(&mut self, root: Option<Node>) {
+        if root != self.root {
+            self.root = root;
         }
-        self.root = root;
-        true
     }
 
     /// Applies a multipath update at `base`: each key of `entries` is a path relative to

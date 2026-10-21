@@ -4,11 +4,12 @@
 //! official emulator (firebase-database-emulator v4.11.2) does with them: a write at a path
 //! replaces what was registered at and below it, a write below a registered value changes that
 //! value, and cancelling below a registered value splits it into its children first (below a
-//! leaf it changes nothing). When the connection ends, every registered value becomes one
-//! entry of a single update at the root, so the update is applied whole or not at all. Values
-//! keep their server-value placeholders until then.
+//! leaf it changes nothing). Each value also remembers the merges (`om`) it came from: when
+//! the connection ends, a value is judged with newData holding every registered value and
+//! again with only the merges it came from (`Database::close_realtime`). Values keep their
+//! server-value placeholders until then.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_database::Json;
 
@@ -17,23 +18,35 @@ use fireemu_core_database::Json;
 pub(crate) struct Pending {
     /// The value registered at this path, which covers everything below it.
     value: Option<Json>,
+    /// The merges the value came from, by the number [`Pending::merge`] gave them.
+    merges: BTreeSet<u64>,
     /// The paths below, when no value covers them.
     children: BTreeMap<String, Pending>,
+    /// At the root: how many merges were registered.
+    merge_count: u64,
 }
 
 impl Pending {
-    /// Registers `data` for the path `keys`.
-    pub(crate) fn remember(&mut self, keys: &[String], data: Json) {
+    /// A number for a merge about to be registered, for [`Pending::remember`].
+    pub(crate) fn merge(&mut self) -> u64 {
+        self.merge_count += 1;
+        self.merge_count
+    }
+
+    /// Registers `data` for the path `keys`, as an entry of `merge` when it is one.
+    pub(crate) fn remember(&mut self, keys: &[String], data: Json, merge: Option<u64>) {
         if keys.is_empty() {
             self.value = Some(data);
+            self.merges = merge.into_iter().collect();
             self.children.clear();
         } else if let Some(value) = self.value.take() {
             self.value = Some(update_child(value, keys, data));
+            self.merges.extend(merge);
         } else {
             self.children
                 .entry(keys[0].clone())
                 .or_default()
-                .remember(&keys[1..], data);
+                .remember(&keys[1..], data, merge);
         }
     }
 
@@ -49,8 +62,11 @@ impl Pending {
                 self.value = Some(value);
                 return false;
             }
+            let merges = std::mem::take(&mut self.merges);
             for (key, child) in children_of(value) {
-                self.remember(&[key], child);
+                let split = self.children.entry(key).or_default();
+                split.remember(&[], child, None);
+                split.merges.clone_from(&merges);
             }
             return self.forget(keys);
         }
@@ -63,15 +79,24 @@ impl Pending {
     }
 
     /// Every registered value with its path, in key order.
+    #[cfg(test)]
     pub(crate) fn entries(&self) -> Vec<(Vec<String>, Json)> {
+        self.entries_with_merges()
+            .into_iter()
+            .map(|(keys, value, _)| (keys, value))
+            .collect()
+    }
+
+    /// Every registered value with its path and the merges it came from, in key order.
+    pub(crate) fn entries_with_merges(&self) -> Vec<Entry> {
         let mut entries = Vec::new();
         self.collect(&mut Vec::new(), &mut entries);
         entries
     }
 
-    fn collect(&self, prefix: &mut Vec<String>, entries: &mut Vec<(Vec<String>, Json)>) {
+    fn collect(&self, prefix: &mut Vec<String>, entries: &mut Vec<Entry>) {
         if let Some(value) = &self.value {
-            entries.push((prefix.clone(), value.clone()));
+            entries.push((prefix.clone(), value.clone(), self.merges.clone()));
             return;
         }
         for (key, child) in &self.children {
@@ -81,6 +106,9 @@ impl Pending {
         }
     }
 }
+
+/// A registered value: its path, the value and the merges it came from.
+pub(crate) type Entry = (Vec<String>, Json, BTreeSet<u64>);
 
 const PRIORITY: &str = ".priority";
 const VALUE: &str = ".value";
@@ -180,6 +208,39 @@ mod tests {
     }
 
     #[test]
+    fn a_value_keeps_the_merges_it_came_from() {
+        let merges = |pending: &Pending| -> Vec<(String, Vec<u64>)> {
+            pending
+                .entries_with_merges()
+                .into_iter()
+                .map(|(k, _, m)| (k.join("/"), m.into_iter().collect()))
+                .collect()
+        };
+        let mut pending = Pending::default();
+        let first = pending.merge();
+        pending.remember(&keys("a"), json("1"), Some(first));
+        pending.remember(&keys("b"), json(r#"{"c":1,"d":2}"#), Some(first));
+        assert_eq!(
+            merges(&pending),
+            [("a".into(), vec![1]), ("b".into(), vec![1])]
+        );
+        // A set replaces a value and what it came from; a write below keeps both.
+        pending.remember(&keys("a"), json("2"), None);
+        let second = pending.merge();
+        pending.remember(&keys("b/c"), json("3"), Some(second));
+        assert_eq!(
+            merges(&pending),
+            [("a".into(), vec![]), ("b".into(), vec![1, 2])]
+        );
+        // Cancelling below a value splits it, and the parts keep its merges.
+        pending.forget(&keys("b/c"));
+        assert_eq!(
+            merges(&pending),
+            [("a".into(), vec![]), ("b/d".into(), vec![1, 2])]
+        );
+    }
+
+    #[test]
     fn a_child_update_follows_node_rules() {
         assert_eq!(
             update_child(json("5"), &keys("c"), json("3")),
@@ -241,16 +302,16 @@ mod tests {
     #[test]
     fn forgetting_splits_values_and_prunes_empty_branches() {
         let mut pending = Pending::default();
-        pending.remember(&keys("x/y"), json("1"));
+        pending.remember(&keys("x/y"), json("1"), None);
         assert!(pending.forget(&keys("x/y")));
         assert!(pending.entries().is_empty());
-        pending.remember(&keys("a"), json(r#"{"b":1,"c":2,".priority":3}"#));
+        pending.remember(&keys("a"), json(r#"{"b":1,"c":2,".priority":3}"#), None);
         assert!(!pending.forget(&keys("a/b")));
         assert_eq!(entries(&pending), vec![("a/c".to_owned(), "2".to_owned())]);
         // Forgetting what was never registered keeps the rest.
         assert!(!pending.forget(&keys("q/r")));
         assert_eq!(entries(&pending), vec![("a/c".to_owned(), "2".to_owned())]);
-        pending.remember(&keys("l"), json("5"));
+        pending.remember(&keys("l"), json("5"), None);
         pending.forget(&keys("l/x"));
         assert_eq!(entries(&pending).len(), 2);
         assert!(pending.forget(&[]));
@@ -298,7 +359,7 @@ mod tests {
             let mut one_by_one = Tree::new(Limits::default());
             for (keys, value) in &writes {
                 let keys: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
-                pending.remember(&keys, value.clone());
+                pending.remember(&keys, value.clone(), None);
                 one_by_one
                     .set(&Path::from_keys(keys.iter().cloned()), value, context)
                     .unwrap();
@@ -324,7 +385,7 @@ mod tests {
     #[test]
     fn a_null_value_is_an_entry_and_splits_into_nothing() {
         let mut pending = Pending::default();
-        pending.remember(&keys("a"), Json::Null);
+        pending.remember(&keys("a"), Json::Null, None);
         assert_eq!(entries(&pending), vec![("a".to_owned(), "null".to_owned())]);
         assert!(pending.forget(&keys("a/b")));
         assert!(pending.entries().is_empty());

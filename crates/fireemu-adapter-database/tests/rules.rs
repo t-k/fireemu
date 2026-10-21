@@ -2110,6 +2110,46 @@ fn an_on_disconnect_merge_is_judged_as_its_entries_when_registered() {
 }
 
 #[test]
+fn an_on_disconnect_merge_runs_only_as_the_update_it_was_registered_as() {
+    // Recorded on the official emulator (review r11 hand3, rerun in r12): each entry of the
+    // merge passes alone, so it registers, but the merge as one update does not, so nothing
+    // of it is written when the connection ends. A separate set still runs (review M4).
+    let mut db = db();
+    load(
+        &mut db,
+        "odu",
+        r#"{"rules":{".read":true,"t":{"$k":{".write":true,".validate":"!(newData.child('a').val() == newData.child('b').val())"}}}}"#,
+    );
+    call(
+        &mut db,
+        "PUT",
+        "/t.json?ns=odu",
+        OWNER,
+        r#"{"o":{"a":1,"b":2},"p":{"a":1,"b":2}}"#,
+    );
+    let mut session = open(&mut db, "odu");
+    assert_eq!(
+        send(
+            &mut db,
+            &mut session,
+            1,
+            "om",
+            r#"{"p":"/t/o","d":{"a":5,"b":5}}"#
+        ),
+        vec![reply(1, "ok", r#""""#)]
+    );
+    assert_eq!(
+        send(&mut db, &mut session, 2, "o", r#"{"p":"/t/p/a","d":7}"#),
+        vec![reply(2, "ok", r#""""#)]
+    );
+    db.close_realtime(session.client(), LATER);
+    assert_eq!(
+        call(&mut db, "GET", "/t.json?ns=odu", OWNER, "").1,
+        r#"{"o":{"a":1,"b":2},"p":{"a":7,"b":2}}"#
+    );
+}
+
+#[test]
 fn a_rules_change_judges_an_event_stream_with_the_query_it_follows() {
     // An event stream with a filtered query stays open after a rules change that allows that
     // query, and is cancelled by one that does not (review r11 M37).

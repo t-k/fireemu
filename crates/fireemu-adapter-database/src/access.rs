@@ -280,6 +280,46 @@ impl Database {
             .can_write(before.root(), after.root(), &written, &requester)
     }
 
+    /// Which of `entries`, made together as one update at the root, `access` may make: each
+    /// judged at its own path, with newData holding all of them. An update the tree refuses
+    /// is left to the caller.
+    pub(crate) fn allowed_within(
+        &self,
+        namespace: &str,
+        entries: &[(String, Json)],
+        access: &Access,
+        now: i64,
+    ) -> Vec<bool> {
+        if self.bypasses(access) {
+            return vec![true; entries.len()];
+        }
+        let Some(loaded) = self.loaded_rules(namespace) else {
+            return vec![self.options().rules == RulesMode::AllowAll; entries.len()];
+        };
+        let limits = self.options().limits;
+        let before = self
+            .tree(namespace)
+            .cloned()
+            .unwrap_or_else(|| Tree::new(limits));
+        let mut after = before.clone();
+        let context = fireemu_core_database::ServerValueContext { now_millis: now };
+        if after.update(&Path::root(), entries, context).is_err() {
+            return vec![true; entries.len()];
+        }
+        let auth = access.auth();
+        let requester = Requester { auth: &auth, now };
+        entries
+            .iter()
+            .map(|(key, _)| {
+                Path::parse(key, &limits).is_ok_and(|path| {
+                    loaded
+                        .rules
+                        .can_write(before.root(), after.root(), &[path], &requester)
+                })
+            })
+            .collect()
+    }
+
     /// The rules text of `namespace`: what was loaded, or the default the official emulator
     /// answers (open, or closed under `productionExact`).
     pub fn rules_text(&self, namespace: &str) -> String {

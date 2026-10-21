@@ -7466,6 +7466,73 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
     }
 }
 
+/// A `bytesValue` with a line break (CR, LF, CRLF, a MIME break after 76 characters) is
+/// refused by the official emulator 1.22.0 with `Payload isn't valid for request.`; strict
+/// answers it with UNIMPLEMENTED (review r9 M2). Other methods keep the shared decoder, which
+/// skips line breaks, until production is observed (a commit pins that).
+#[test]
+fn rest_execute_pipeline_refuses_base64_line_breaks() {
+    let mime = format!("{}\r\n{}", "QUJD".repeat(19), "QUJD");
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        for text in [
+            "QUJD\nQUJD",
+            "QUJD\rQUJD",
+            "QUJD\r\nQUJD",
+            "\nQUJD",
+            "QUJD\n",
+            mime.as_str(),
+        ] {
+            for literal in [
+                json!({"bytesValue": text}),
+                json!({"arrayValue": {"values": [{"bytesValue": text}]}}),
+                json!({"mapValue": {"fields": {"k": {"bytesValue": text}}}}),
+            ] {
+                let stages = json!([
+                    {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+                    {"name": "select", "args": [{"mapValue": {"fields": {"v": literal}}}]}
+                ]);
+                let (status, body) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:executePipeline"),
+                    pipeline_body(&stages),
+                );
+                if strict {
+                    assert_eq!(status, 501, "{text:?}: {body}");
+                } else {
+                    assert_eq!(status, 400, "{text:?}: {body}");
+                    assert_eq!(
+                        stream_error(&body)["error"]["message"],
+                        "Payload isn't valid for request.",
+                        "{text:?}"
+                    );
+                }
+            }
+        }
+        // Without a line break the bytes are answered.
+        let stages = json!([
+            {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+            {"name": "select", "args": [{"mapValue": {"fields": {"v": {"bytesValue": "QUJDQUJD"}}}}]}
+        ]);
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            pipeline_body(&stages),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        // A commit still reads a line break as the shared decoder does (no production row yet).
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/b64/x", "fields": {"v": {"bytesValue": "QUJD\nQUJD"}}}}]}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+    }
+}
+
 /// The strict transcoder accepts every field of the request message (camelCase or the proto
 /// names), so each body reaches validation or compilation and none answers `Unknown name`;
 /// `requestOptions` is accepted and ignored on both profiles.

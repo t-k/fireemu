@@ -943,8 +943,9 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
     }
 }
 
-/// Under strict, a reference constant that names a document outside the request's own project
-/// and database, more than 100 key path elements, or an id that matches production's
+/// Under strict, a reference constant that names no document of the request's own project and
+/// database (another database, the database root or the documents root), more than 100 key
+/// path elements, or an id that matches production's
 /// documented reserved pattern `__.*__` (`____` included, which the official emulator accepts)
 /// is refused as unobserved before any row (ruling of 2026-10-21 for `PX1d` r8: production's
 /// documented limits).
@@ -952,10 +953,10 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => {
-            let inside = name == own
-                || name
-                    .strip_prefix(own)
-                    .is_some_and(|rest| rest.starts_with('/'));
+            // The documents root names no document, and production recorded none (review r9 M3).
+            let inside = name
+                .strip_prefix(own)
+                .is_some_and(|rest| rest.starts_with('/'));
             // A key path element is a collection id and a document id.
             let path = name
                 .strip_prefix(own)
@@ -965,7 +966,7 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
             let reserved = path.split('/').any(is_reserved_name);
             (!inside || elements > MAX_PATH_ELEMENTS || reserved).then(|| {
                 Status::unimplemented(
-                    "a reference outside the request's database, longer than 100 key path elements or with a reserved-looking id is not observed locally",
+                    "a reference that names no document of the request's database, longer than 100 key path elements or with a reserved-looking id is not observed locally",
                 )
             })
         }
@@ -1129,8 +1130,16 @@ fn decode_official_literal(
 /// literals holds (arrays in order, maps in key order: the wire map keeps no order), in its
 /// order of checks: a `__type__` that is no string, then for a vector a missing `value`, a
 /// `value` that is no array, another key, no element, an element that is no double, a NaN
-/// element (firebase-tools 15.28.2, Firestore emulator 1.22.0).
+/// element (firebase-tools 15.28.2, Firestore emulator 1.22.0). The field path inside the
+/// literal (its keys joined with `.`, UTF-8 bytes) holds at most 1500 bytes.
 fn literal_value_error(value: &pb::Value) -> Option<String> {
+    literal_value_error_below(value, None)
+}
+
+/// [`literal_value_error`] for a value at the field path of `path_bytes` bytes inside the
+/// literal (`None` at its top). An array keeps the path of the map around it; a vector's own
+/// keys are not a path (review r9 M1, probed against 1.22.0).
+fn literal_value_error_below(value: &pb::Value, path_bytes: Option<usize>) -> Option<String> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => reference_literal_error(name),
@@ -1140,7 +1149,10 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
         Some(V::BytesValue(bytes)) if bytes.len() > MAX_VALUE_BYTES => {
             Some("Bytes values can be at most 1,048,487 bytes.".to_owned())
         }
-        Some(V::ArrayValue(array)) => array.values.iter().find_map(literal_value_error),
+        Some(V::ArrayValue(array)) => array
+            .values
+            .iter()
+            .find_map(|inner| literal_value_error_below(inner, path_bytes)),
         Some(V::MapValue(map)) => {
             if let Some(kind) = map
                 .fields
@@ -1155,15 +1167,16 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
             if is_vector_literal(value) {
                 return vector_error(map).map(str::to_owned);
             }
+            let below = |key: &str| path_bytes.map_or(key.len(), |bytes| bytes + 1 + key.len());
             if let Some(key) = ordered_keys(&map.fields)
                 .into_iter()
-                .find(|key| key.len() > MAX_ID_BYTES)
+                .find(|key| below(key) > MAX_ID_BYTES)
             {
                 return Some(format!("Field name '{key}' can be at most 1,500 bytes."));
             }
             let keys = ordered_keys(&map.fields);
             keys.into_iter()
-                .find_map(|key| literal_value_error(&map.fields[key]))
+                .find_map(|key| literal_value_error_below(&map.fields[key], Some(below(key))))
         }
         _ => None,
     }
@@ -2674,7 +2687,7 @@ mod tests {
         };
         for (name, outside) in [
             (format!("{own}/c/d"), false),
-            (own.to_owned(), false),
+            (own.to_owned(), true),
             (format!("{own}/{}", deep(200)), false),
             (format!("{own}/{}", deep(201)), false),
             (format!("{own}/{}", deep(202)), true),
@@ -2733,6 +2746,79 @@ mod tests {
         ] {
             assert!(reference_outside(&holder, own).is_some(), "{holder:?}");
         }
+    }
+
+    /// The field path inside a literal (its keys joined with `.`, UTF-8 bytes) holds at most
+    /// 1500 bytes; the official emulator 1.22.0 names the key that crosses (review r9 M1). An
+    /// array keeps the path of the map around it, and a vector's own keys do not count.
+    #[test]
+    fn a_literal_field_path_holds_at_most_1500_bytes() {
+        use pb::value::ValueType as V;
+        fn map(entries: Vec<(String, pb::Value)>) -> pb::Value {
+            pb::Value {
+                value_type: Some(V::MapValue(pb::MapValue {
+                    fields: entries.into_iter().collect(),
+                })),
+            }
+        }
+        let one = || pb::Value {
+            value_type: Some(V::IntegerValue(1)),
+        };
+        let array = |values: Vec<pb::Value>| pb::Value {
+            value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+        };
+        let vector = || {
+            map(vec![
+                (
+                    "__type__".to_owned(),
+                    pb::Value {
+                        value_type: Some(V::StringValue("__vector__".to_owned())),
+                    },
+                ),
+                (
+                    "value".to_owned(),
+                    array(vec![pb::Value {
+                        value_type: Some(V::DoubleValue(1.0)),
+                    }]),
+                ),
+            ])
+        };
+        let a = |n: usize| "a".repeat(n);
+        let nested = |outer: &str, inner: String, leaf: pb::Value| {
+            map(vec![(outer.to_owned(), map(vec![(inner, leaf)]))])
+        };
+        let too_long = |key: &str| Some(format!("Field name '{key}' can be at most 1,500 bytes."));
+        for (literal, want) in [
+            (nested("a", a(1498), one()), None),
+            (nested("a", a(1499), one()), too_long(&a(1499))),
+            (nested("a", a(1500), one()), too_long(&a(1500))),
+            (nested("ab", a(1498), one()), too_long(&a(1498))),
+            (
+                map(vec![("a".to_owned(), nested("b", a(1497), one()))]),
+                too_long(&a(1497)),
+            ),
+            (nested(&a(1499), "b".to_owned(), one()), too_long("b")),
+            (nested("x.y", a(1497), one()), too_long(&a(1497))),
+            (array(vec![nested("a", a(1499), one())]), too_long(&a(1499))),
+            (
+                map(vec![(
+                    "a".to_owned(),
+                    array(vec![map(vec![(a(1499), one())])]),
+                )]),
+                too_long(&a(1499)),
+            ),
+            (array(vec![map(vec![(a(1500), one())])]), None),
+            (nested("a", a(1498), vector()), None),
+            (map(vec![(a(1500), one()), ("b".to_owned(), one())]), None),
+        ] {
+            assert_eq!(literal_value_error(&literal), want, "{literal:.200?}");
+        }
+        // Fifteen nested keys of 100 bytes: the fifteenth crosses (1514 bytes).
+        let mut deep = one();
+        for _ in 0..15 {
+            deep = map(vec![(a(100), deep)]);
+        }
+        assert_eq!(literal_value_error(&deep), too_long(&a(100)));
     }
 
     /// Value limits of production, as the official emulator 1.22.0 answers them.

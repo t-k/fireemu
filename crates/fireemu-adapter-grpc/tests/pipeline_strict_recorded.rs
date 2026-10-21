@@ -1896,3 +1896,92 @@ fn later_checks_answer_before_an_empty_key_a_reserved_alias_or_a_map_key_type() 
         assert_eq!(answer(&state, &stages), (400, text.to_owned()), "{label}");
     }
 }
+
+/// The documents root and the database root name no document and no production row holds
+/// them, so strict refuses every function of them (review r9 M3); the emulator profile answers
+/// what the official emulator 1.22.0 does.
+#[test]
+fn strict_refuses_document_functions_of_a_root() {
+    let database = DOCS.trim_end_matches("/documents");
+    let mut cases = Vec::new();
+    for (root, label) in [(DOCS, "documents root"), (database, "database root")] {
+        let reference = json!({ "referenceValue": root });
+        for (function, emulator) in [
+            ("parent", (200, "")),
+            (
+                "document_id",
+                (400, "document_id(...) requires a non-empty path."),
+            ),
+            (
+                "collection_id",
+                (400, "collection_id(...) requires a non-empty path."),
+            ),
+        ] {
+            cases.push(Case {
+                label: Box::leak(format!("{function}({label})").into_boxed_str()),
+                stages: vec![select(func(function, vec![reference.clone()]))],
+                strict: None,
+                emulator,
+            });
+        }
+        let parent = func("parent", vec![reference.clone()]);
+        for (shape, value) in [
+            ("parent(parent", func("parent", vec![parent.clone()])),
+            ("array(parent", func("array", vec![parent.clone()])),
+            (
+                "equal(parent",
+                func("equal", vec![parent.clone(), json!({ "nullValue": null })]),
+            ),
+        ] {
+            cases.push(Case {
+                label: Box::leak(format!("{shape}({label}))").into_boxed_str()),
+                stages: vec![select(value)],
+                strict: None,
+                emulator: (200, ""),
+            });
+        }
+    }
+    check(cases);
+}
+
+/// A literal's field path past 1500 bytes, in every literal position: UNIMPLEMENTED under
+/// strict, the official text naming the crossing key under the emulator profile (review r9 M1).
+#[test]
+fn a_literal_field_path_past_1500_bytes_is_refused_in_every_position() {
+    let long = "a".repeat(1499);
+    let text: &'static str =
+        Box::leak(format!("Field name '{long}' can be at most 1,500 bytes.").into_boxed_str());
+    let literal = map(vec![("a", map(vec![(long.as_str(), int(1))]))]);
+    let fine = map(vec![("a", map(vec![(&long[1..], int(1))]))]);
+    let none = stage("where", vec![func("equal", vec![field("i"), int(99)])]);
+    let mut cases = Vec::new();
+    for (label, value) in [
+        ("select", literal.clone()),
+        (
+            "array",
+            json!({ "arrayValue": { "values": [literal.clone()] } }),
+        ),
+        ("equal", func("equal", vec![field("i"), literal.clone()])),
+        ("map value", func("map", vec![string("k"), literal.clone()])),
+    ] {
+        cases.push(Case {
+            label,
+            stages: vec![select(value.clone())],
+            strict: None,
+            emulator: (400, text),
+        });
+        cases.push(Case {
+            label: Box::leak(format!("{label} filtered").into_boxed_str()),
+            stages: vec![none.clone(), select(value)],
+            strict: None,
+            emulator: (400, text),
+        });
+    }
+    cases.push(Case {
+        label: "1500 bytes",
+        stages: vec![select(fine)],
+        strict: Some((200, "")),
+        emulator: (200, ""),
+    });
+    check(cases);
+}

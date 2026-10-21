@@ -31,6 +31,24 @@ const REQUEST_KEYS: &[&str] = &[
     "requestOptions",
 ];
 
+/// Whether a `bytesValue` anywhere in an `:executePipeline` body holds a line break. The shared
+/// REST decoder skips CR and LF in base64; the official emulator 1.22.0 refuses such a body with
+/// `Payload isn't valid for request.` (review r9 M2), and production is unrecorded, so only this
+/// method checks it, before the transcoder.
+pub fn bytes_hold_a_line_break(body: &Value) -> bool {
+    match body {
+        Value::Object(object) => object.iter().any(|(key, inner)| {
+            (key == "bytesValue"
+                && inner
+                    .as_str()
+                    .is_some_and(|text| text.contains(['\r', '\n'])))
+                || bytes_hold_a_line_break(inner)
+        }),
+        Value::Array(values) => values.iter().any(bytes_hold_a_line_break),
+        _ => false,
+    }
+}
+
 /// JSON → `ExecutePipelineRequest`. `database` is the URL-bound database; a body
 /// `database` must name the same one.
 pub fn request_from_json(

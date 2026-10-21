@@ -13280,3 +13280,56 @@ async fn execute_pipeline_literals_hold_at_most_twenty_levels() {
         handle.abort();
     }
 }
+
+/// The field path inside a literal holds at most 1500 bytes over gRPC too: a two-level path of
+/// 1501 bytes gets the official text under the emulator profile and UNIMPLEMENTED under strict
+/// (review r9 M1); 1500 bytes are answered.
+#[tokio::test]
+async fn execute_pipeline_literal_field_paths_hold_at_most_1500_bytes() {
+    use pb::value::ValueType as V;
+    let path = |inner: usize| pb::Value {
+        value_type: Some(V::MapValue(pb::MapValue {
+            fields: [(
+                "a".to_owned(),
+                pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue {
+                        fields: [("b".repeat(inner), i(1))].into_iter().collect(),
+                    })),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })),
+    };
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        let stages = |inner| {
+            vec![
+                pipeline_stage("collection", collection_ref("paths")),
+                pipeline_select_map(vec![("v", path(inner))]),
+            ]
+        };
+        let err = pipeline_error(&mut client, stages(1499)).await;
+        if policy == IndexValidationPolicy::Production {
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
+        } else {
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+            assert_eq!(
+                err.message(),
+                format!(
+                    "Field name '{}' can be at most 1,500 bytes.",
+                    "b".repeat(1499)
+                )
+            );
+        }
+        let response = client
+            .execute_pipeline(pipeline_request(stages(1498)))
+            .await;
+        assert!(response.is_ok(), "{policy:?}: {:?}", response.err());
+        handle.abort();
+    }
+}

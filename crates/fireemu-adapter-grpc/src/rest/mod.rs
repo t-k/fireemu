@@ -1605,6 +1605,9 @@ impl RestState {
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };
+        if pipeline_json::bytes_hold_a_line_break(body) {
+            return Err(gate.answer(Status::invalid_argument("Payload isn't valid for request.")));
+        }
         let body = if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
             self.transcoded("executePipeline", body)
                 .map_err(|error| gate.answer(nesting(error)))?

@@ -512,6 +512,22 @@ pub fn compile_pipeline_in_order(
     order: Option<&KeyOrder>,
 ) -> Result<CompiledExecution, Status> {
     let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
+    if unrecorded == Unrecorded::Refuse {
+        let own = format!(
+            "projects/{}/databases/{}/documents",
+            parent.project.as_str(),
+            parent.database.as_str()
+        );
+        if let Some(error) = pipeline
+            .stages
+            .iter()
+            .skip(1)
+            .flat_map(|stage| stage.args.iter().chain(stage.options.values()))
+            .find_map(|value| reference_outside(value, &own))
+        {
+            return Err(error);
+        }
+    }
     let _wire = WireOrderScope::enter(order);
     let mut stages = Vec::new();
     let mut last_rank = 0u8;
@@ -841,12 +857,17 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                 .args
                 .iter()
                 .map(|arg| match &arg.value_type {
+                    // Every reference constant passes the official checks first (r8 review
+                    // M1): a malformed one is refused before any row, whatever it is passed to.
                     Some(V::ReferenceValue(name))
                         if document_function && unrecorded == Unrecorded::Refuse =>
                     {
-                        Ok(Expr::Constant(
-                            fireemu_core_firestore::value::Value::Reference(name.clone()),
-                        ))
+                        match reference_literal_error(name) {
+                            Some(text) => Err(Status::invalid_argument(text)),
+                            None => Ok(Expr::Constant(
+                                fireemu_core_firestore::value::Value::Reference(name.clone()),
+                            )),
+                        }
                     }
                     _ => decode_operand_tree(arg, unrecorded),
                 })
@@ -888,15 +909,15 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
             // A literal of more than 20 levels, in the official emulator's words (1.22.0: 20
             // levels are accepted); production has not answered it, so strict gives 501 through
             // the shape gate.
-            None => Ok(Expr::Constant(decode_official_literal(value).map_err(
-                |e| {
+            None => Ok(Expr::Constant(
+                decode_official_literal(value).map(to_micros).map_err(|e| {
                     if e.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH") {
                         Status::invalid_argument("Values can be at most 20 levels deep.")
                     } else {
                         e
                     }
-                },
-            )?)),
+                })?,
+            )),
             // A literal holding an expression with a key that is not plain: the official
             // emulator names a reserved key before the value type; production has not answered
             // such a key, so strict refuses it as unobserved.
@@ -917,6 +938,66 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                     .unwrap_or_else(|| format!("Value type is not supported: {kind}")),
             )),
         },
+    }
+}
+
+/// Under strict, a reference constant that names a document outside the request's own project
+/// and database, or more than 100 path elements, is refused as unobserved before any row
+/// (ruling of 2026-10-21 for `PX1d` r8: production's documented limits; the official emulator
+/// answers both).
+fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
+    use pb::value::ValueType as V;
+    match value.value_type.as_ref() {
+        Some(V::ReferenceValue(name)) => {
+            let inside = name == own
+                || name
+                    .strip_prefix(own)
+                    .is_some_and(|rest| rest.starts_with('/'));
+            let elements = name
+                .strip_prefix(own)
+                .map_or(0, |rest| rest.split('/').count());
+            (!inside || elements > MAX_PATH_ELEMENTS + 1).then(|| {
+                Status::unimplemented(
+                    "a reference outside the request's database or longer than 100 path elements is not observed locally",
+                )
+            })
+        }
+        Some(V::ArrayValue(array)) => array.values.iter().find_map(|v| reference_outside(v, own)),
+        Some(V::MapValue(map)) => sorted_values(&map.fields)
+            .into_iter()
+            .find_map(|v| reference_outside(v, own)),
+        Some(V::FunctionValue(function)) => function
+            .args
+            .iter()
+            .chain(function.options.values())
+            .find_map(|v| reference_outside(v, own)),
+        Some(V::PipelineValue(pipeline)) => pipeline
+            .stages
+            .iter()
+            .flat_map(|stage| stage.args.iter().chain(stage.options.values()))
+            .find_map(|v| reference_outside(v, own)),
+        _ => None,
+    }
+}
+
+/// The most path elements of a document name (production's limit).
+const MAX_PATH_ELEMENTS: usize = 100;
+
+/// A constant with every timestamp cut to microseconds, as production stores a value and the
+/// official emulator 1.22.0 answers it (r8 review S4).
+fn to_micros(value: fireemu_core_firestore::value::Value) -> fireemu_core_firestore::value::Value {
+    use fireemu_core_firestore::value::{Timestamp, Value};
+    match value {
+        Value::Timestamp(t) => Timestamp::new(t.seconds(), t.nanos() / 1000 * 1000)
+            .map_or(Value::Timestamp(t), Value::Timestamp),
+        Value::Array(values) => Value::Array(values.into_iter().map(to_micros).collect()),
+        Value::Map(fields) => Value::Map(
+            fields
+                .into_iter()
+                .map(|(key, value)| (key, to_micros(value)))
+                .collect(),
+        ),
+        other => other,
     }
 }
 
@@ -1029,6 +1110,12 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => reference_literal_error(name),
+        Some(V::StringValue(text)) if text.len() > MAX_VALUE_BYTES => {
+            Some("String values can be at most 1,048,487 bytes.".to_owned())
+        }
+        Some(V::BytesValue(bytes)) if bytes.len() > MAX_VALUE_BYTES => {
+            Some("Bytes values can be at most 1,048,487 bytes.".to_owned())
+        }
         Some(V::ArrayValue(array)) => array.values.iter().find_map(literal_value_error),
         Some(V::MapValue(map)) => {
             if let Some(kind) = map
@@ -1043,6 +1130,12 @@ fn literal_value_error(value: &pb::Value) -> Option<String> {
             }
             if is_vector_literal(value) {
                 return vector_error(map).map(str::to_owned);
+            }
+            if let Some(key) = ordered_keys(&map.fields)
+                .into_iter()
+                .find(|key| key.len() > MAX_ID_BYTES)
+            {
+                return Some(format!("Field name '{key}' can be at most 1,500 bytes."));
             }
             let keys = ordered_keys(&map.fields);
             keys.into_iter()
@@ -1091,45 +1184,145 @@ fn collection_name_error(name: &str) -> Option<String> {
     })
 }
 
-/// The official emulator's refusal of a reference literal that names no document: a name that
-/// does not start with `projects`, an empty segment, or a collection (the index counts UTF-16
-/// units, as the official emulator's Java does). The documents root is a reference too.
+/// The official emulator's refusal of a reference constant (1.22.0, probed 2026-10-21; indexes
+/// count UTF-16 units, as its Java does), in its order of checks: the documents-relative form
+/// (`/c`), the `projects/{p}/databases/{d}/documents` prefix (a missing project or database id,
+/// a missing `documents`), a trailing `/`, then over the path below `documents`: an empty
+/// segment, a reserved id (`__x__`), a `.` or `..` id, an id of more than 1500 bytes, and a
+/// collection (an odd number of segments). The documents root is a reference too.
+#[allow(clippy::too_many_lines)]
 fn reference_literal_error(name: &str) -> Option<String> {
     let units = |text: &str| text.encode_utf16().count();
-    // A name of the documents-relative form (`/c`): the official emulator 1.22.0 does not
-    // recognize it (probed 2026-10-21).
     if name.starts_with('/') {
         return Some(format!("Document parent \"{name}\" not recognized."));
     }
-    if name == "projects" {
-        return Some(format!(
-            "Document parent name \"{name}\" lacks \"/\" at index {}.",
-            name.len()
-        ));
-    }
-    if !name.starts_with("projects/") {
-        return Some(format!(
-            "Document parent name \"{name}\" lacks \"projects\" at index 0."
-        ));
-    }
-    let segments: Vec<&str> = name.split('/').collect();
-    let ["projects", _, "databases", _, "documents", rest @ ..] = segments.as_slice() else {
-        return None;
+    let lacks = |what: &str, at: usize| {
+        Some(format!(
+            "Document parent name \"{name}\" lacks {what} at index {at}."
+        ))
     };
-    if let Some(empty) = rest.iter().position(|segment| segment.is_empty()) {
-        let before = segments[..5 + empty].join("/");
+    let Some(after) = name.strip_prefix("projects/") else {
+        return if name == "projects" {
+            lacks("\"/\"", units(name))
+        } else {
+            lacks("\"projects\"", 0)
+        };
+    };
+    // The prefix: each id must be present and followed by the next keyword.
+    let mut offset = "projects/".len();
+    let mut rest = after;
+    for (id, next) in [
+        ("a project id", "databases"),
+        ("a database id", "documents"),
+    ] {
+        let (value, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        if value.is_empty() {
+            return lacks(id, offset);
+        }
+        offset += units(value) + 1;
+        if tail.is_empty() && !rest.contains('/') {
+            return lacks("\"/\"", units(name));
+        }
+        let Some(tail) = tail.strip_prefix(next) else {
+            return lacks(&format!("\"{next}\""), offset);
+        };
+        offset += next.len();
+        rest = tail;
+        if next == "databases" {
+            let Some(tail) = rest.strip_prefix('/') else {
+                return lacks("\"/\"", offset);
+            };
+            offset += 1;
+            rest = tail;
+        }
+    }
+    // Below `documents`: nothing (the documents root), or `/` and a path.
+    if rest.is_empty() {
+        return None;
+    }
+    let Some(path) = rest.strip_prefix('/') else {
+        return lacks("\"/\"", offset);
+    };
+    offset += 1;
+    if path.is_empty() {
         return Some(format!(
-            "Document parent name \"{name}\" lacks a resource id at index {}.",
-            units(&before) + 1
+            "Document parent name \"{name}\" is invalid: Omit trailing \"/\"."
         ));
     }
-    (rest.len() % 2 == 1).then(|| {
+    if name.ends_with('/') {
+        return Some(format!(
+            "Document parent name \"{name}\" has invalid trailing \"/\"."
+        ));
+    }
+    let segments: Vec<&str> = path.split('/').collect();
+    let kind = |at: usize| {
+        if at % 2 == 0 {
+            "collection id"
+        } else {
+            "resource id"
+        }
+    };
+    let starts: Vec<usize> = segments
+        .iter()
+        .scan(offset, |at, segment| {
+            let start = *at;
+            *at += units(segment) + 1;
+            Some(start)
+        })
+        .collect();
+    if let Some(at) = segments.iter().position(|segment| segment.is_empty()) {
+        return lacks(&format!("a {}", kind(at)), starts[at]);
+    }
+    if let Some((at, id)) = segments
+        .iter()
+        .enumerate()
+        .find(|(_, id)| is_reserved_name(id))
+    {
+        let which = if at % 2 == 0 {
+            "Collection"
+        } else {
+            "Resource"
+        };
+        return Some(format!(
+            "{which} id \"{id}\" is invalid because it is reserved."
+        ));
+    }
+    if let Some((at, id)) = segments
+        .iter()
+        .enumerate()
+        .find(|(_, id)| matches!(**id, "." | ".."))
+    {
+        return Some(format!(
+            "Document parent name \"{name}\" contains a {} \"{id}\" at index {}.",
+            kind(at),
+            starts[at]
+        ));
+    }
+    if let Some((at, _)) = segments
+        .iter()
+        .enumerate()
+        .find(|(_, id)| id.len() > MAX_ID_BYTES)
+    {
+        return Some(if at % 2 == 0 {
+            "The kind / collection group can be at most 1,500 bytes.".to_owned()
+        } else {
+            "Path element can be at most 1,500 bytes.".to_owned()
+        });
+    }
+    (segments.len() % 2 == 1).then(|| {
         format!(
             "Document parent name \"{name}\" lacks \"/\" at index {}.",
             units(name)
         )
     })
 }
+
+/// The longest document or collection id, and the longest literal map key (production's limits).
+const MAX_ID_BYTES: usize = 1500;
+/// The largest string or bytes value (production's limit).
+const MAX_VALUE_BYTES: usize = 1_048_487;
+/// The most dimensions of a vector (production's limit).
+const MAX_VECTOR_DIMENSIONS: usize = 2048;
 
 /// The official emulator's refusal of a vector map, in its order of checks.
 fn vector_error(map: &pb::MapValue) -> Option<&'static str> {
@@ -1151,10 +1344,13 @@ fn vector_error(map: &pb::MapValue) -> Option<&'static str> {
     {
         return Some("Vector must only contain values of type 'double'");
     }
-    elements
+    if elements
         .iter()
         .any(|e| matches!(e.value_type, Some(V::DoubleValue(d)) if d.is_nan()))
-        .then_some("Vectors cannot contain NaN values.")
+    {
+        return Some("Vectors cannot contain NaN values.");
+    }
+    (elements.len() > MAX_VECTOR_DIMENSIONS).then_some("Vectors must be at most 2048 dimensions.")
 }
 
 /// A wire value's type as the official emulator names it in its `__type__` refusal (a string is
@@ -2129,6 +2325,224 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reference constants, as the official emulator 1.22.0 answered each (probed 2026-10-21).
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn reference_constants_get_the_official_texts() {
+        let d = "projects/demo-app/databases/(default)/documents";
+        let a1501 = "a".repeat(1501);
+        let a1500 = "a".repeat(1500);
+        let parent =
+            |name: &str, rest: &str| Some(format!("Document parent name \"{name}\" {rest}"));
+        let cases: Vec<(String, Option<String>)> = vec![
+            (format!("{d}/c/d"), None),
+            (d.to_owned(), None),
+            (format!("{d}/c/{a1500}"), None),
+            (format!("{d}/{a1500}/d"), None),
+            (
+                format!("{d}/__x__/d"),
+                Some("Collection id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/c/__x__"),
+                Some("Resource id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/c/__name__"),
+                Some("Resource id \"__name__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/c/d/__x__/e"),
+                Some("Collection id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/__x__"),
+                Some("Collection id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/{a1501}/__x__"),
+                Some("Resource id \"__x__\" is invalid because it is reserved.".to_owned()),
+            ),
+            (
+                format!("{d}/./d"),
+                parent(
+                    &format!("{d}/./d"),
+                    "contains a collection id \".\" at index 48.",
+                ),
+            ),
+            (
+                format!("{d}/c/."),
+                parent(
+                    &format!("{d}/c/."),
+                    "contains a resource id \".\" at index 50.",
+                ),
+            ),
+            (
+                format!("{d}/c/.."),
+                parent(
+                    &format!("{d}/c/.."),
+                    "contains a resource id \"..\" at index 50.",
+                ),
+            ),
+            (
+                format!("{d}/../d"),
+                parent(
+                    &format!("{d}/../d"),
+                    "contains a collection id \"..\" at index 48.",
+                ),
+            ),
+            (
+                format!("{d}/c/{a1501}"),
+                Some("Path element can be at most 1,500 bytes.".to_owned()),
+            ),
+            (
+                format!("{d}/{a1501}/d"),
+                Some("The kind / collection group can be at most 1,500 bytes.".to_owned()),
+            ),
+            (
+                "projects/demo-app/databases/(default)/c/d".to_owned(),
+                parent(
+                    "projects/demo-app/databases/(default)/c/d",
+                    "lacks \"documents\" at index 38.",
+                ),
+            ),
+            (
+                "projects//databases/(default)/documents/c/d".to_owned(),
+                parent(
+                    "projects//databases/(default)/documents/c/d",
+                    "lacks a project id at index 9.",
+                ),
+            ),
+            (
+                "projects/demo-app/databases//documents/c/d".to_owned(),
+                parent(
+                    "projects/demo-app/databases//documents/c/d",
+                    "lacks a database id at index 28.",
+                ),
+            ),
+            (
+                format!("{d}/c/d/"),
+                parent(&format!("{d}/c/d/"), "has invalid trailing \"/\"."),
+            ),
+            (
+                format!("{d}/c//d"),
+                parent(&format!("{d}/c//d"), "lacks a resource id at index 50."),
+            ),
+            (
+                format!("{d}/"),
+                parent(&format!("{d}/"), "is invalid: Omit trailing \"/\"."),
+            ),
+            (
+                format!("{d}/c"),
+                parent(
+                    &format!("{d}/c"),
+                    &format!("lacks \"/\" at index {}.", d.len() + 2),
+                ),
+            ),
+            (
+                "/c".to_owned(),
+                Some("Document parent \"/c\" not recognized.".to_owned()),
+            ),
+            (
+                "garbage".to_owned(),
+                parent("garbage", "lacks \"projects\" at index 0."),
+            ),
+            (
+                "projects".to_owned(),
+                parent("projects", "lacks \"/\" at index 8."),
+            ),
+            (
+                "projects/other/databases/(default)/documents/c/d".to_owned(),
+                None,
+            ),
+        ];
+        for (name, want) in cases {
+            assert_eq!(reference_literal_error(&name), want, "{name:.120}");
+        }
+    }
+
+    /// Value limits of production, as the official emulator 1.22.0 answers them.
+    #[test]
+    fn value_limits_get_the_official_texts() {
+        let string = |n: usize| pb::Value {
+            value_type: Some(pb::value::ValueType::StringValue("a".repeat(n))),
+        };
+        let bytes = |n: usize| pb::Value {
+            value_type: Some(pb::value::ValueType::BytesValue(vec![b'a'; n])),
+        };
+        assert_eq!(literal_value_error(&string(1_048_487)), None);
+        assert_eq!(
+            literal_value_error(&string(1_048_488)).as_deref(),
+            Some("String values can be at most 1,048,487 bytes.")
+        );
+        assert_eq!(literal_value_error(&bytes(1_048_487)), None);
+        assert_eq!(
+            literal_value_error(&bytes(1_048_488)).as_deref(),
+            Some("Bytes values can be at most 1,048,487 bytes.")
+        );
+        let keyed = |n: usize| pb::Value {
+            value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                fields: [("a".repeat(n), string(1))].into_iter().collect(),
+            })),
+        };
+        assert_eq!(literal_value_error(&keyed(1500)), None);
+        assert_eq!(
+            literal_value_error(&keyed(1501)),
+            Some(format!(
+                "Field name '{}' can be at most 1,500 bytes.",
+                "a".repeat(1501)
+            ))
+        );
+        let vector = |n: usize| pb::Value {
+            value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                fields: [
+                    ("__type__".to_owned(), string(0).clone()),
+                    (
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                                values: vec![
+                                    pb::Value {
+                                        value_type: Some(pb::value::ValueType::DoubleValue(1.0))
+                                    };
+                                    n
+                                ],
+                            })),
+                        },
+                    ),
+                ]
+                .into_iter()
+                .map(|(k, v)| {
+                    if k == "__type__" {
+                        (
+                            k,
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(
+                                    "__vector__".to_owned(),
+                                )),
+                            },
+                        )
+                    } else {
+                        (k, v)
+                    }
+                })
+                .collect(),
+            })),
+        };
+        assert_eq!(literal_value_error(&vector(2048)), None);
+        assert_eq!(
+            literal_value_error(&vector(2049)).as_deref(),
+            Some("Vectors must be at most 2048 dimensions.")
+        );
+        // Inside an array, the same.
+        let array = pb::Value {
+            value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                values: vec![string(1_048_488)],
+            })),
+        };
+        assert!(literal_value_error(&array).is_some());
+    }
 
     /// The collection stage's reference, as the official emulator 1.22.0 answered each form
     /// (probed 2026-10-21).

@@ -58,7 +58,7 @@ impl RefusalGate {
         let own = if database.is_empty() {
             error.message().to_owned()
         } else {
-            error.message().replace(database.as_str(), OWN_DATABASE)
+            own_database(error.message(), database)
         };
         let traced = !own.contains("projects/")
             && shape.as_deref().is_some_and(|shape| {
@@ -83,6 +83,33 @@ impl RefusalGate {
 
 /// Where a text names the request's own database while the gate checks it.
 const OWN_DATABASE: &str = "\u{1}database\u{1}";
+
+/// `message` with each `projects/{p}/databases/{d}` that is exactly the request's `database`
+/// (the whole database id, not a prefix of a longer one) put as [`OWN_DATABASE`].
+fn own_database(message: &str, database: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(at) = rest.find("projects/") {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let end = tail.find("/databases/").map_or(0, |databases| {
+            let id = &tail[databases + "/databases/".len()..];
+            databases
+                + "/databases/".len()
+                + id.find(|c: char| c == '/' || c == '"' || c.is_whitespace())
+                    .unwrap_or(id.len())
+        });
+        if end > 0 && &tail[..end] == database {
+            out.push_str(OWN_DATABASE);
+            rest = &tail[end..];
+        } else {
+            out.push_str("projects/");
+            rest = &tail["projects/".len()..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
 
 /// The shape of a REST `executePipeline` body, read with the wire order of its maps.
 #[must_use]

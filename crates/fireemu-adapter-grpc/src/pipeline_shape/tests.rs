@@ -116,6 +116,39 @@ fn a_text_may_name_the_request_database_only() {
             .code(),
         tonic::Code::Unimplemented
     );
+    // The whole database id: not a prefix of a longer one (r8 review S1).
+    for other in [
+        "projects/demo-app/databases/(default)x/documents/c",
+        "projects/demo-app/databases/(default)-x/documents/c",
+    ] {
+        assert_eq!(
+            gate.answer(lacks(other)).code(),
+            tonic::Code::Unimplemented,
+            "{other}"
+        );
+    }
+    let named = RefusalGate::Recorded(
+        shape_of_text(
+            r#"{"structuredPipeline": {"pipeline": {"stages": [{"name": "collection", "args": [{"referenceValue": "/x"}]}, {"name": "select", "args": [{"mapValue": {"fields": {"v": {"functionValue": {"name": "collection_id", "args": [{"referenceValue": "r"}]}}}}}]}]}}}"#,
+        ),
+        "projects/p/databases/db".to_owned(),
+    );
+    assert_eq!(
+        named
+            .answer(lacks("projects/p/databases/db/documents/c"))
+            .code(),
+        tonic::Code::InvalidArgument
+    );
+    assert_eq!(
+        named
+            .answer(lacks("projects/p/databases/db2/documents/c"))
+            .code(),
+        tonic::Code::Unimplemented
+    );
+    assert_eq!(
+        own_database("a projects/p/databases/db2/x", "projects/p/databases/db"),
+        "a projects/p/databases/db2/x"
+    );
 }
 
 #[test]

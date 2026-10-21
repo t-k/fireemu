@@ -10,14 +10,19 @@ import { readFile, writeFile } from "node:fs/promises";
 
 import { readFileSync } from "node:fs";
 
+import { assertCompleteFixture } from "../fs-query-index/fixture-scan.mjs";
 import { PROGRAMS } from "./corpus.mjs";
+import { isMainModule } from "../fs-query-index/main-module.mjs";
 
 export const EXPORT = new URL("../../fs-ent-pipeline-requests.json", import.meta.url);
 const FIXTURE = new URL("../../fs-ent-pipeline-production.json", import.meta.url);
 
 /** The programs the production fixture holds rows for: the replay compares only those. */
-export function recordedPrograms(programs = PROGRAMS) {
-  const recorded = JSON.parse(readFileSync(FIXTURE, "utf8")).programs;
+export function recordedPrograms(programs = PROGRAMS, fixture = FIXTURE) {
+  const recorded = assertCompleteFixture(
+    JSON.parse(readFileSync(fixture, "utf8")),
+    fixture,
+  ).programs;
   return programs.filter((program) => recorded[program.id] !== undefined);
 }
 
@@ -36,7 +41,7 @@ export function exportText(programs = recordedPrograms()) {
   return `${JSON.stringify(out)}\n`;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta)) {
   const text = exportText();
   if (process.argv[2] === "--check") {
     const current = await readFile(EXPORT, "utf8").catch(() => "");

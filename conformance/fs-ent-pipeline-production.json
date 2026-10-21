@@ -5814,6 +5814,1392 @@
         }
       }
     },
+    "fs-ent-pipeline/o4/aliases": {
+      "corpusDigest": "db8d9f20c9813708ad7673391a7a24110f6ca8a6235d1139d33d9a042c9dbdc6",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-20T10:03:26.385Z",
+      "gitSha": "26bbde22a010efec527f86ece13ee2334f6c0a07",
+      "steps": {
+        "multibyte-1497": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ": {
+                      "stringValue": "t"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multibyte-1499": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああaa": {
+                      "stringValue": "t"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multibyte-1500": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+                      "limit": "1500"
+                    },
+                    "reason": "PROPERTY_PATH_TOO_LONG"
+                  }
+                ],
+                "message": "The field reference 'ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ' is longer than 1500 bytes.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "multibyte-dotted-1499": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "mapValue": {
+                        "fields": {
+                          "あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ": {
+                            "stringValue": "t"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multibyte-plain-1500": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "reserved-first-segment": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "name-first-segment": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__name__' is reserved and can not be overwritten.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "quoted-reserved-first-segment": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o4/comparisons": {
+      "corpusDigest": "0f6161187f81caebaa8590809a6a9df640db72abfd2283d4ed0a7d5c283231df",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-20T10:03:26.385Z",
+      "gitSha": "26bbde22a010efec527f86ece13ee2334f6c0a07",
+      "steps": {
+        "cells-01": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "equal__v3__v": {
+                      "booleanValue": false
+                    },
+                    "equal__v__v3": {
+                      "booleanValue": false
+                    },
+                    "equal__v__w": {
+                      "booleanValue": false
+                    },
+                    "equal__w__v": {
+                      "booleanValue": false
+                    },
+                    "greater_than__v3__v": {
+                      "booleanValue": true
+                    },
+                    "greater_than__v__v3": {
+                      "booleanValue": false
+                    },
+                    "greater_than__v__w": {
+                      "booleanValue": true
+                    },
+                    "greater_than__w__v": {
+                      "booleanValue": false
+                    },
+                    "greater_than_or_equal__v3__v": {
+                      "booleanValue": true
+                    },
+                    "greater_than_or_equal__v__v3": {
+                      "booleanValue": false
+                    },
+                    "greater_than_or_equal__v__w": {
+                      "booleanValue": true
+                    },
+                    "greater_than_or_equal__w__v": {
+                      "booleanValue": false
+                    },
+                    "less_than__v3__v": {
+                      "booleanValue": false
+                    },
+                    "less_than__v__v3": {
+                      "booleanValue": true
+                    },
+                    "less_than__v__w": {
+                      "booleanValue": false
+                    },
+                    "less_than__w__v": {
+                      "booleanValue": true
+                    },
+                    "less_than_or_equal__v3__v": {
+                      "booleanValue": false
+                    },
+                    "less_than_or_equal__v__v3": {
+                      "booleanValue": true
+                    },
+                    "less_than_or_equal__v__w": {
+                      "booleanValue": false
+                    },
+                    "less_than_or_equal__w__v": {
+                      "booleanValue": true
+                    },
+                    "not_equal__v3__v": {
+                      "booleanValue": true
+                    },
+                    "not_equal__v__v3": {
+                      "booleanValue": true
+                    },
+                    "not_equal__v__w": {
+                      "booleanValue": true
+                    },
+                    "not_equal__w__v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o4/conditions": {
+      "corpusDigest": "4fd731a634aeb361525cdfd3e6907fd9442e6abc588838896647918f9b7a4126",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-20T10:03:26.385Z",
+      "gitSha": "26bbde22a010efec527f86ece13ee2334f6c0a07",
+      "steps": {
+        "where-integer": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-negative-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-timestamp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-geo": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-reference": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "where-vector": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o4/documents": {
+      "corpusDigest": "e69000d668e7acc65f41c98237c79387aee60cafc9771ee0a1a8eab3dd8a71f2",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-20T10:03:26.385Z",
+      "gitSha": "26bbde22a010efec527f86ece13ee2334f6c0a07",
+      "steps": {
+        "write-empty": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "get-empty": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "g": {
+                "geoPointValue": {}
+              }
+            },
+            "name": "projects/demo-fs-query-index/databases/entpipe1/documents/geo4/empty",
+            "updateTime": "<t1>"
+          }
+        },
+        "write-longitude-only": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "get-longitude-only": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "g": {
+                "geoPointValue": {
+                  "longitude": 1
+                }
+              }
+            },
+            "name": "projects/demo-fs-query-index/databases/entpipe1/documents/geo4/longitude-only",
+            "updateTime": "<t1>"
+          }
+        },
+        "write-zero-latitude": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "get-zero-latitude": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "g": {
+                "geoPointValue": {
+                  "longitude": 1
+                }
+              }
+            },
+            "name": "projects/demo-fs-query-index/databases/entpipe1/documents/geo4/zero-latitude",
+            "updateTime": "<t1>"
+          }
+        }
+      }
+    },
+    "fs-ent-pipeline/o4/functions": {
+      "corpusDigest": "517e9614478c5b6679559de508ee16a84fde8a31fa66dff9a5d4a977e11c57e9",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-20T10:03:26.385Z",
+      "gitSha": "26bbde22a010efec527f86ece13ee2334f6c0a07",
+      "steps": {
+        "document-id-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "collection-id-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "collection_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function collection_id(...) requires `Reference` but got `MAP`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "parent-boolean": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "parent"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function parent(...) requires `Reference` but got `BOOLEAN`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "collection-id-collection": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/c\" lacks \"/\" at index 60.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "parent-collection": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/c\" lacks \"/\" at index 60.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-subcollection": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/c/x/s\" lacks \"/\" at index 64.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "collection-id-subcollection": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/c/x/s\" lacks \"/\" at index 64.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-key-missing-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map keys must be constants/literals",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-key-boolean": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map key must be of type STRING, given type is BOOLEAN",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-key-string-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map keys must be constants/literals",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-repeat-first-missing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "k": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-repeat-second-missing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "k": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-repeat-both-missing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-repeat-around-missing": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map(...) constructor given duplicate key: k",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o4/literals": {
+      "corpusDigest": "f35c5dea310d67aa4941ddfa8fafd22d64074b5c66f6afa210771168cfc3ad1f",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-20T10:03:26.385Z",
+      "gitSha": "26bbde22a010efec527f86ece13ee2334f6c0a07",
+      "steps": {
+        "vector": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "__type__": {
+                            "stringValue": "__vector__"
+                          },
+                          "value": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "doubleValue": 1
+                                },
+                                {
+                                  "doubleValue": 2
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-holding-vector": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "mapValue": {
+                              "fields": {
+                                "__type__": {
+                                  "stringValue": "__vector__"
+                                },
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "doubleValue": 1
+                                      },
+                                      {
+                                        "doubleValue": 2
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "deep-literal": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "mapValue": {
+                              "fields": {
+                                "b": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "mapValue": {
+                                          "fields": {
+                                            "c": {
+                                              "arrayValue": {
+                                                "values": [
+                                                  {
+                                                    "integerValue": "1"
+                                                  },
+                                                  {
+                                                    "stringValue": "x"
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "nested-map-literal": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "mapValue": {
+                              "fields": {
+                                "b": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "1"
+                                      },
+                                      {
+                                        "mapValue": {
+                                          "fields": {
+                                            "c": {
+                                              "stringValue": "x"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "key-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Property names cannot be empty.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "key-reserved": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "key-type": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "__type__": {
+                            "stringValue": "x"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "key-dotted": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a.b": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "key-digit-first": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "1a": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "key-dash": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a-b": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-of-array-of-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-of-function": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FUNCTION_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-of-two-fields": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-of-map-of-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-three-deep-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-of-two-functions": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FUNCTION_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-field-and-function": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-function-then-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FUNCTION_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "argument-map-of-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o4/stages": {
+      "corpusDigest": "a0f78ac170d7282bd886f03b7136201902dd434e9004eddaf642ba63471f2025",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-20T10:03:26.385Z",
+      "gitSha": "26bbde22a010efec527f86ece13ee2334f6c0a07",
+      "steps": {
+        "aggregate-one-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-one-empty-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-one-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-one-unknown-function": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-one-reserved-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-one-after-limit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-empty-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "distinct-empty-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-empty-accumulator-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-empty-group-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-empty-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'add_fields(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "distinct-empty-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'distinct(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-empty-accumulators": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'aggregate(...)' stage requires at least one accumulator.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-invalid-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-alias-1500": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "limit": "1500"
+                    },
+                    "reason": "PROPERTY_PATH_TOO_LONG"
+                  }
+                ],
+                "message": "The field reference 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is longer than 1500 bytes.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-then-unknown-function": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-then-limit-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-then-add-fields-empty-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-then-select-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "limit-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "offset-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected offset to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "limit-negative": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'limit(...)' cannot have a negative value: -1",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "limit-beyond-int32": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "top": {
+                      "stringValue": "t"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/st4/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "limit-5000000000": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "top": {
+                      "stringValue": "t"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/st4/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "offset-5000000000": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        }
+      }
+    },
     "fs-ent-pipeline/px0/aliases": {
       "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
       "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",

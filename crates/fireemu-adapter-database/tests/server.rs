@@ -1101,6 +1101,28 @@ async fn owner_call(host: &str, method: &str, target: &str, body: &str) -> Optio
     Some(response)
 }
 
+async fn assert_owner_answer(
+    host: &str,
+    cell: (&str, &str),
+    request: (&str, &str, &str),
+    expected: u16,
+) {
+    let (profile, peer) = cell;
+    let (method, target, body) = request;
+    let answer = owner_call(host, method, target, body).await.unwrap();
+    assert!(
+        answer.starts_with(&format!("HTTP/1.1 {expected}")),
+        "{profile} {peer} {method} {target}: {answer}"
+    );
+    if peer == "remote" && expected == 403 {
+        assert!(
+            answer.contains("this route answers loopback peers only"),
+            "{answer}"
+        );
+    }
+    eprintln!("executed rules peer={peer} profile={profile} method={method} target={target} status={expected}");
+}
+
 #[tokio::test]
 async fn the_rules_route_answers_loopback_peers_only_however_its_path_is_written() {
     // Ruling 17 and review r11 M34/S30: a peer on another host is refused the rules route,
@@ -1115,15 +1137,23 @@ async fn the_rules_route_answers_loopback_peers_only_however_its_path_is_written
     let profiles = [
         ("emulator", Credentials::default(), RulesMode::AllowAll),
         ("strict", strict(), RulesMode::AllowAll),
-        ("strict locked", strict(), RulesMode::DenyAll),
+        ("productionExact", strict(), RulesMode::DenyAll),
     ];
     let rules_routes = [
-        "/.settings/rules.json?ns=r",
-        "//.settings/rules.json?ns=r",
-        "///.settings/rules.json?ns=r",
-        "/%2Esettings/rules.json?ns=r",
-        "/%2esettings/rules.json?ns=r",
+        ("/.settings/rules.json?ns=r", 200, 403),
+        ("//.settings/rules.json?ns=r", 200, 403),
+        ("///.settings/rules.json?ns=r", 200, 403),
+        ("/%2Esettings/rules.json?ns=r", 403, 403),
+        ("/%2esettings/rules.json?ns=r", 403, 403),
+        ("/%2F.settings/rules.json?ns=r", 403, 403),
+        ("/.settings%2Frules.json?ns=r", 403, 403),
+        ("/./.settings/rules.json?ns=r", 400, 400),
+        ("/../.settings/rules.json?ns=r", 400, 400),
+        ("/x/../.settings/rules.json?ns=r", 400, 400),
+        ("/%2E/.settings/rules.json?ns=r", 400, 400),
     ];
+    let total_cells = rules_routes.len() * 2;
+    let require_remote = std::env::var_os("FIREEMU_REQUIRE_NON_LOOPBACK_TEST").is_some();
     let remote_ip = own_non_loopback_address();
     for (profile, credentials, rules) in profiles {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -1136,42 +1166,57 @@ async fn the_rules_route_answers_loopback_peers_only_however_its_path_is_written
             },
             3,
         )));
-        tokio::spawn(serve(
+        let server = tokio::spawn(serve(
             listener,
             Arc::clone(&database),
             ServerConfig::default(),
         ));
-        // The encoded spellings reach the route too; it answers them 403 from any peer.
         let loopback = format!("127.0.0.1:{port}");
-        for target in &rules_routes[..3] {
-            let answer = owner_call(&loopback, "GET", target, "").await.unwrap();
-            assert!(
-                answer.starts_with("HTTP/1.1 200"),
-                "{profile} loopback {target}: {answer}"
-            );
+        for (target, local_status, _) in rules_routes {
+            for request in [
+                ("GET", target, ""),
+                ("PUT", target, r#"{"rules":{".read":true}}"#),
+            ] {
+                assert_owner_answer(&loopback, (profile, "loopback"), request, local_status).await;
+            }
         }
         let Some(ip) = remote_ip else {
             eprintln!("skipped the off-loopback half: this host has no non-loopback address");
+            eprintln!("rules peer summary profile={profile} loopback_cells={total_cells} remote_cells=0 skipped=true");
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(
+                !require_remote,
+                "the required non-loopback peer is unavailable for {profile}"
+            );
             continue;
         };
         let remote = std::net::SocketAddr::new(ip, port).to_string();
         let Some(answer) = owner_call(&remote, "GET", "/.json?ns=r", "").await else {
             eprintln!("skipped the off-loopback half: {remote} does not reach the server");
+            eprintln!("rules peer summary profile={profile} loopback_cells={total_cells} remote_cells=0 skipped=true");
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(
+                !require_remote,
+                "the required non-loopback peer cannot reach the server for {profile}"
+            );
             continue;
         };
         assert!(
             answer.starts_with("HTTP/1.1 200"),
             "{profile} data from {remote}: {answer}"
         );
-        for target in rules_routes {
-            for (method, body) in [("GET", ""), ("PUT", r#"{"rules":{".read":true}}"#)] {
-                let answer = owner_call(&remote, method, target, body).await.unwrap();
-                assert!(
-                    answer.starts_with("HTTP/1.1 403")
-                        && answer.contains("this route answers loopback peers only"),
-                    "{profile} {method} {target} from {remote}: {answer}"
-                );
+        for (target, _, remote_status) in rules_routes {
+            for request in [
+                ("GET", target, ""),
+                ("PUT", target, r#"{"rules":{".read":true}}"#),
+            ] {
+                assert_owner_answer(&remote, (profile, "remote"), request, remote_status).await;
             }
         }
+        eprintln!("rules peer summary profile={profile} loopback_cells={total_cells} remote_cells={total_cells} skipped=false");
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 }

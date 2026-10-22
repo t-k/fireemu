@@ -8,8 +8,7 @@ import test from 'node:test';
 
 const runner = fileURLToPath(new URL('./write_probe.mjs', import.meta.url));
 
-// Record each actual operation as the returned tree. This isolates corpus selection from
-// network timing while exercising the runner's REST, realtime and fixed-control paths.
+// Record each actual operation as the returned tree. This isolates corpus selection from network timing while exercising the runner's REST, realtime and fixed-control paths.
 const transport = `
 const trees = new Map();
 globalThis.fetch = async (input, options) => {

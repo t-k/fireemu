@@ -939,9 +939,7 @@ fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure
     if q.is_empty() {
         return Ok(None);
     }
-    // The official emulator refuses a query with a field it does not know (`FIELDS`), or an
-    // inclusive flag that is no boolean (review r11 M42); a limit needs its side. The wire
-    // types of the side and key names are checked even without a limit or bound.
+    // The official emulator refuses a query with a field it does not know (`FIELDS`), or an inclusive flag that is no boolean (review r11 M42); a limit needs its side. The wire types of the side and key names are checked even without a limit or bound.
     if q.keys().any(|key| !FIELDS.contains(&key.as_str()))
         || ["sin", "ein"]
             .iter()
@@ -1009,14 +1007,12 @@ fn wire_bound(
         Some(Json::String(name)) if name == "[MIN_NAME]" => BoundKey::Min,
         Some(Json::String(name)) if name == "[MAX_NAME]" => BoundKey::Max,
         Some(Json::String(name)) => BoundKey::Name(name.clone()),
-        Some(_) => return Err(Failure::Malformed),
-        // Without a key name a start bound begins before every key of its value and an end
-        // bound ends after all of them; exclusive bounds (startAfter, endBefore on the key
-        // index) pass the other side.
-        None => match (start, inclusive) {
+        // Without a key name a start bound begins before every key of its value and an end bound ends after all of them; exclusive bounds (startAfter, endBefore on the key index) pass the other side. An explicit null name is absent too.
+        Some(Json::Null) | None => match (start, inclusive) {
             (true, true) | (false, false) => BoundKey::Min,
             (true, false) | (false, true) => BoundKey::Max,
         },
+        Some(_) => return Err(Failure::Malformed),
     };
     Ok(Some(Bound {
         value: value.clone(),

@@ -2466,9 +2466,7 @@ fn a_value_member_holding_an_object_is_refused() {
 
 #[test]
 fn orphan_realtime_query_fields_keep_their_wire_types() {
-    // Recorded on the official emulator in r12/takeover/orphan-observe-v2: the field's
-    // type is checked even without its limit or bound. A string side without a limit and
-    // a null or string name without its bound are ignored, including an unknown side.
+    // Recorded on the official emulator in r12/takeover/orphan-observe-v2: the field's type is checked even without its limit or bound. A string side without a limit and a null or string name without its bound are ignored, including an unknown side.
     let mut db = db();
     load(
         &mut db,
@@ -2564,5 +2562,34 @@ proptest::proptest! {
         let error: serde_json::Value = serde_json::from_str(&received.replies[0]).unwrap();
         proptest::prop_assert_eq!(&error["t"], "c");
         proptest::prop_assert_eq!(&error["d"]["t"], "e");
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn a_null_realtime_bound_name_is_the_absent_name(
+        bound in -2i32..=2,
+        start in proptest::bool::ANY,
+        get in proptest::bool::ANY,
+    ) {
+        // The canonical q/g oracle tables accept null names with their bounds. Compare the reply and initial selected data, not just whether the request was authorized.
+        let judge = |null_name: bool| {
+            let mut database = db();
+            load(&mut database, "nullname", r#"{"rules":{".read":true,"a":{".indexOn":["m"]}}}"#);
+            call(&mut database, "PUT", "/a.json?ns=nullname", OWNER, r#"{"x":{"m":-1},"y":{"m":0},"z":{"m":1}}"#);
+            let (value, name) = if start { ("sp", "sn") } else { ("ep", "en") };
+            let name = if null_name { format!(r#","{name}":null"#) } else { String::new() };
+            let query = format!(r#"{{"i":"m","{value}":{bound}{name}}}"#);
+            let action = if get { "g" } else { "q" };
+            let body = if get { format!(r#"{{"p":"/a","q":{query}}}"#) }
+                else { format!(r#"{{"p":"/a","q":{query},"t":1,"h":""}}"#) };
+            let mut session = open(&mut database, "nullname");
+            let replies = send(&mut database, &mut session, 1, action, &body);
+            let pushes = pushes_to(&mut database, session.client());
+            (replies, pushes)
+        };
+        let absent = judge(false);
+        proptest::prop_assert!(absent.0.iter().any(|reply| reply.contains(r#""s":"ok""#)));
+        proptest::prop_assert_eq!(judge(true), absent);
     }
 }

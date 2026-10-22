@@ -198,9 +198,11 @@ impl Graph {
         }
         let reachable = self.reachable();
         let mut map = vec![usize::MAX; self.states.len()];
+        let mut next_id = 0;
         for &i in &reachable {
             if live[i] {
-                map[i] = map.iter().filter(|&&n| n != usize::MAX).count();
+                map[i] = next_id;
+                next_id += 1;
             }
         }
         let mut states = Vec::new();
@@ -247,7 +249,6 @@ impl Graph {
         if self.deterministic {
             return Ok(None);
         }
-        let points = self.points();
         let initial = vec![self.initial];
         let mut subsets = vec![initial.clone()];
         let mut intern = BTreeMap::from([(initial, 0)]);
@@ -257,21 +258,48 @@ impl Graph {
         let mut subset_units = 1usize;
         while cursor < subsets.len() {
             guard_count(cursor as u64 + 1, threshold)?;
-            let current = subsets[cursor].clone();
-            out[cursor].accept = current.iter().any(|&i| self.states[i].accept);
-            for (n, &lo) in points.iter().enumerate() {
-                let mut next = BTreeSet::new();
-                for &i in &current {
-                    for e in &self.states[i].edges {
-                        if e.lo <= lo && lo <= e.hi {
-                            next.insert(e.to);
+            out[cursor].accept = subsets[cursor].iter().any(|&i| self.states[i].accept);
+            // Local endpoint atoms induce exactly the same successor subsets as
+            // the jar's global atoms, without repeating unrelated endpoints.
+            let mut events: BTreeMap<u32, Vec<(usize, bool)>> = BTreeMap::new();
+            events.entry(0).or_default();
+            events.entry(65536).or_default();
+            for &i in &subsets[cursor] {
+                for edge in &self.states[i].edges {
+                    events
+                        .entry(u32::from(edge.lo))
+                        .or_default()
+                        .push((edge.to, true));
+                    events
+                        .entry(u32::from(edge.hi) + 1)
+                        .or_default()
+                        .push((edge.to, false));
+                }
+            }
+            let mut active: BTreeMap<usize, usize> = BTreeMap::new();
+            let mut events = events.into_iter().peekable();
+            while let Some((lo, changes)) = events.next() {
+                let Some(&(end, _)) = events.peek() else {
+                    break;
+                };
+                for (target, add) in changes {
+                    if add {
+                        *active.entry(target).or_default() += 1;
+                    } else {
+                        let count = active.get_mut(&target).unwrap();
+                        *count -= 1;
+                        if *count == 0 {
+                            active.remove(&target);
                         }
                     }
                 }
-                let next: Vec<_> = next.into_iter().collect();
+                let next: Vec<_> = active.keys().copied().collect();
                 let to = if let Some(&to) = intern.get(&next) {
                     to
                 } else {
+                    // Every discovered reachable subset must later be dequeued.
+                    // Refuse its inevitable guarded dequeue before queue allocation.
+                    guard_count(subsets.len() as u64 + 1, threshold)?;
                     state_bound(subsets.len() + 1)?;
                     subset_units += next.len();
                     if subset_units > PROTOTYPE_EDGES {
@@ -283,9 +311,19 @@ impl Graph {
                     out.push(State::default());
                     to
                 };
-                // The actual jar interns even the empty successor subset.
-                let hi = points.get(n + 1).map_or(u16::MAX, |&p| p - 1);
-                out[cursor].edges.push(Edge { lo, hi, to });
+                let row = &mut out[cursor].edges;
+                let hi = (end - 1) as u16;
+                if let Some(last) = row.last_mut() {
+                    if last.to == to && u32::from(last.hi) + 1 == lo {
+                        last.hi = hi;
+                        continue;
+                    }
+                }
+                row.push(Edge {
+                    lo: lo as u16,
+                    hi,
+                    to,
+                });
                 edges += 1;
                 if edges > PROTOTYPE_EDGES {
                     return Err(Failure::Inconclusive);
@@ -305,58 +343,7 @@ impl Graph {
     fn minimize(&mut self, threshold: u64) -> Result<Option<u64>, Failure> {
         let count = self.determinize(threshold)?;
         self.remove_dead();
-        let points = self.points();
-        let mut classes: Vec<usize> = self.states.iter().map(|s| usize::from(s.accept)).collect();
-        let mut work = 0usize;
-        loop {
-            let mut intern = BTreeMap::new();
-            let mut next = Vec::with_capacity(self.states.len());
-            for state in &self.states {
-                let mut signature = vec![usize::from(state.accept)];
-                for &point in &points {
-                    let target = state
-                        .edges
-                        .iter()
-                        .find(|e| e.lo <= point && point <= e.hi)
-                        .map_or(usize::MAX, |e| classes[e.to]);
-                    signature.push(target);
-                    work += 1;
-                    if work > PROTOTYPE_EDGES {
-                        return Err(Failure::Inconclusive);
-                    }
-                }
-                let next_id = intern.len();
-                let class = *intern.entry(signature).or_insert(next_id);
-                next.push(class);
-            }
-            if next == classes {
-                break;
-            }
-            classes = next;
-        }
-        let class_count = classes.iter().max().copied().unwrap_or(0) + 1;
-        let mut states = vec![State::default(); class_count];
-        let mut filled = vec![false; class_count];
-        for (i, state) in self.states.iter().enumerate() {
-            let class = classes[i];
-            if !filled[class] {
-                states[class] = State {
-                    accept: state.accept,
-                    edges: state
-                        .edges
-                        .iter()
-                        .map(|e| Edge {
-                            to: classes[e.to],
-                            ..*e
-                        })
-                        .collect(),
-                };
-                filled[class] = true;
-            }
-        }
-        self.initial = classes[self.initial];
-        self.states = states;
-        self.reduce_edges();
+        minimize::refine(self);
         Ok(count)
     }
 
@@ -772,3 +759,6 @@ mod tests;
 
 #[path = "regex_admission/java21_case.rs"]
 mod java21_case;
+
+#[path = "regex_admission/minimize.rs"]
+mod minimize;

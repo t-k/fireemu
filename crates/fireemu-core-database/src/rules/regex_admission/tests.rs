@@ -1125,3 +1125,189 @@ fn parse_error_disposes_deep_partial_trees_on_bounded_native_stack() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn locally_swept_unique_word_reaches_true_admitted_guard_boundary() {
+    let mut graph = Automaton::Singleton((0..4999).collect())
+        .expanded()
+        .unwrap();
+    graph.deterministic = false;
+    assert_eq!(graph.minimize(5000), Ok(Some(5001)));
+    assert_eq!(graph.states.len(), 5000);
+    assert!(graph.states.iter().all(|state| state.edges.len() <= 1));
+}
+
+#[test]
+fn exact_minimization_has_no_prototype_refinement_work_refusal() {
+    let mut graph = Automaton::Singleton(vec![97; 3000]).expanded().unwrap();
+    assert_eq!(graph.minimize(5000), Ok(None));
+    assert_eq!(graph.states.len(), 3001);
+}
+
+#[test]
+fn ordinary_determinization_refuses_at_discovery_before_frontier_storage() {
+    let mut states = vec![State::default(); 20002];
+    for unit in 0..20001_u16 {
+        states[0].edges.push(Edge {
+            lo: unit,
+            hi: unit,
+            to: usize::from(unit) + 1,
+        });
+        states[usize::from(unit) + 1].accept = true;
+    }
+    let mut graph = Graph {
+        states,
+        initial: 0,
+        deterministic: false,
+    };
+    assert_eq!(graph.determinize(1), Err(Failure::Resource));
+}
+
+#[test]
+fn local_sweep_preserves_overlapping_destination_reference_counts() {
+    let mut graph = Graph {
+        initial: 0,
+        deterministic: false,
+        states: vec![
+            State {
+                accept: false,
+                edges: vec![
+                    Edge {
+                        lo: 97,
+                        hi: 99,
+                        to: 1,
+                    },
+                    Edge {
+                        lo: 98,
+                        hi: 100,
+                        to: 1,
+                    },
+                ],
+            },
+            State {
+                accept: true,
+                edges: Vec::new(),
+            },
+        ],
+    };
+    assert_eq!(graph.minimize(5000), Ok(Some(3)));
+    assert_eq!(graph.states.len(), 2);
+    assert_eq!(
+        graph.states[graph.initial].edges,
+        vec![Edge {
+            lo: 97,
+            hi: 100,
+            to: 1 - graph.initial
+        }]
+    );
+    let value = Automaton::Graph(graph);
+    for unit in 0..=u16::MAX {
+        assert_eq!(accepts(&value, &[unit]), (97..=100).contains(&unit));
+    }
+}
+
+#[test]
+fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas() {
+    for code in 0..4096_usize {
+        let mut targets = [[3; 2]; 4];
+        let mut digits = code;
+        for row in targets.iter_mut().take(3) {
+            for to in row {
+                let digit = digits % 4;
+                digits /= 4;
+                *to = if digit == 0 { 3 } else { digit - 1 };
+            }
+        }
+        for mask in 0..8 {
+            let accepting = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0, false];
+            let mut different = [[false; 4]; 4];
+            for a in 0..4 {
+                for b in 0..4 {
+                    different[a][b] = accepting[a] != accepting[b];
+                }
+            }
+            loop {
+                let old = different;
+                for a in 0..4 {
+                    for b in 0..4 {
+                        different[a][b] |= (0..2).any(|c| old[targets[a][c]][targets[b][c]]);
+                    }
+                }
+                if old == different {
+                    break;
+                }
+            }
+            let mut reachable = vec![0];
+            let mut cursor = 0;
+            while cursor < reachable.len() {
+                for to in targets[reachable[cursor]] {
+                    if !reachable.contains(&to) {
+                        reachable.push(to);
+                    }
+                }
+                cursor += 1;
+            }
+            let mut representatives = Vec::new();
+            for &q in &reachable {
+                if different[q][3] && representatives.iter().all(|&r| different[q][r]) {
+                    representatives.push(q);
+                }
+            }
+            let expected = representatives.len().max(1);
+            let mut graph = Graph {
+                initial: 0,
+                deterministic: true,
+                states: (0..3)
+                    .map(|q| State {
+                        accept: accepting[q],
+                        edges: (0..2)
+                            .filter_map(|c| {
+                                (targets[q][c] != 3).then_some(Edge {
+                                    lo: 97 + c as u16,
+                                    hi: 97 + c as u16,
+                                    to: targets[q][c],
+                                })
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            };
+            assert_eq!(graph.minimize(5000), Ok(None));
+            assert_eq!(graph.states.len(), expected, "code={code} mask={mask}");
+            assert!(
+                graph
+                    .states
+                    .iter()
+                    .flat_map(|s| &s.edges)
+                    .all(|e| e.lo >= 97 && e.hi <= 98)
+            );
+            let dead = graph.states.len();
+            let mut pairs = vec![(0, graph.initial)];
+            let mut cursor = 0;
+            while cursor < pairs.len() {
+                let (a, b) = pairs[cursor];
+                assert_eq!(
+                    accepting[a],
+                    b != dead && graph.states[b].accept,
+                    "code={code} mask={mask}"
+                );
+                for c in 0..2 {
+                    let next = if b == dead {
+                        dead
+                    } else {
+                        graph.states[b]
+                            .edges
+                            .iter()
+                            .find(|e| e.lo <= 97 + c as u16 && 97 + c as u16 <= e.hi)
+                            .map_or(dead, |e| e.to)
+                    };
+                    let pair = (targets[a][c], next);
+                    if !pairs.contains(&pair) {
+                        pairs.push(pair);
+                    }
+                }
+                cursor += 1;
+            }
+        }
+    }
+}

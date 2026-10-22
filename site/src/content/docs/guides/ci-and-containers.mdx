@@ -80,7 +80,7 @@ allowNonLoopbackHosts = true
 }
 ```
 
-- Only Firestore, Authentication, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback.
-- The emulators serve without a credential, so startup prints a `warning:` line for each listener off loopback. Any client that reaches a published port can do what a local client can, including with the Admin SDK's owner credential. Publish the ports only to a network you trust.
-- Fireemu's own controls (the control API, App Check debug-token management, and the routes that load Security Rules or clear Firestore data) answer loopback peers only. Run code that uses them inside the container, or in a container that shares its network namespace, such as a Podman pod or `--network container:<name>`.
+- Only Firestore, Authentication, Storage, Functions, Eventarc, Cloud Tasks, Pub/Sub and the Realtime Database (an open gap) may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback.
+- The emulators serve without a credential, so startup prints a `warning:` line for each listener off loopback. Any client that reaches a published port can do what a local client can, including with the Admin SDK's owner credential; under the `emulator` profile any bearer token is a Realtime Database administrator for data requests, and its `/.settings/rules.json`, like the Firestore and Storage rules routes, answers loopback peers only. Publish the ports only to a network you trust.
+- Fireemu's own controls (the control API, App Check debug-token management, and the routes that load Firestore, Storage and Realtime Database Security Rules or clear Firestore data) answer loopback peers only. Run code that uses them inside the container, or in a container that shares its network namespace, such as a Podman pod or `--network container:<name>`.
 - Browser pages must still come from a loopback origin (`http://localhost:...`).

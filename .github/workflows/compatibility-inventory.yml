@@ -116,7 +116,7 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/closure_records.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_closure_records.py tools/compat-inventory/test_broad_shards.py -q
           uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.32.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020

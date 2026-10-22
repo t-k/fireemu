@@ -49,6 +49,8 @@ env:
 
 jobs:
   latest-sdk-under-exec:
+    # Bound cache tokens even when latest SDK runtime code calls the cache API directly.
+    cache-mode: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -59,9 +61,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
-      # This job runs unpinned npm packages, so it restores the Rust cache but never saves one:
-      # a cache entry written here (main scope on push and schedule) could be restored by a
-      # release build. No setup-node cache either, for the same reason.
+      # Latest SDK runtime code receives read-only cache tokens. Keep the action-level
+      # save guard too; release jobs independently avoid dependency caches.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: sdk-latest

@@ -1,8 +1,12 @@
 #!/usr/bin/env ruby
 
 require "yaml"
+require "rbconfig"
+require_relative "actions-security-contract"
 
 ROOT = File.expand_path("..", __dir__)
+ActionsSecurityContract.check!(ROOT)
+raise "Actions security regression fixtures failed" unless system(RbConfig.ruby, File.join(__dir__, "actions-security-contract.test.rb"))
 
 def assert(condition, message)
   raise message unless condition
@@ -284,7 +288,7 @@ end
 end
 
 jobs.each do |job, definition|
-  definition.fetch("steps", []).select { |step| step["uses"] == "pnpm/action-setup@v4" }.each do |step|
+  definition.fetch("steps", []).select { |step| step["uses"].to_s.start_with?("pnpm/action-setup@") }.each do |step|
     assert(step.dig("with", "version"), "#{job} must pin the pnpm version")
   end
 end

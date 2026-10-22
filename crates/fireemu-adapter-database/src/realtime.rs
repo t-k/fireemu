@@ -940,11 +940,17 @@ fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure
         return Ok(None);
     }
     // The official emulator refuses a query with a field it does not know (`FIELDS`), or an
-    // inclusive flag that is no boolean (review r11 M42); a limit needs its side.
+    // inclusive flag that is no boolean (review r11 M42); a limit needs its side. The wire
+    // types of the side and key names are checked even without a limit or bound.
     if q.keys().any(|key| !FIELDS.contains(&key.as_str()))
         || ["sin", "ein"]
             .iter()
             .any(|flag| q.get(*flag).is_some_and(|v| !matches!(v, Json::Bool(_))))
+        || q.get("vf").is_some_and(|v| !matches!(v, Json::String(_)))
+        || ["sn", "en"].iter().any(|name| {
+            q.get(*name)
+                .is_some_and(|v| !matches!(v, Json::String(_) | Json::Null))
+        })
     {
         return Err(Failure::Malformed);
     }

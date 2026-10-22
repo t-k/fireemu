@@ -2463,3 +2463,106 @@ fn a_value_member_holding_an_object_is_refused() {
         200
     );
 }
+
+#[test]
+fn orphan_realtime_query_fields_keep_their_wire_types() {
+    // Recorded on the official emulator in r12/takeover/orphan-observe-v2: the field's
+    // type is checked even without its limit or bound. A string side without a limit and
+    // a null or string name without its bound are ignored, including an unknown side.
+    let mut db = db();
+    load(
+        &mut db,
+        "orphan",
+        r#"{"rules":{".read":true,"a":{".indexOn":["m"]}}}"#,
+    );
+    let mut failures = Vec::new();
+    for action in ["q", "g"] {
+        for (query, malformed) in [
+            (r#"{"i":"m","vf":0}"#, true),
+            (r#"{"i":"m","vf":null}"#, true),
+            (r#"{"i":"m","vf":true}"#, true),
+            (r#"{"i":"m","vf":{}}"#, true),
+            (r#"{"i":"m","vf":[]}"#, true),
+            (r#"{"i":"m","sn":1}"#, true),
+            (r#"{"i":"m","sn":true}"#, true),
+            (r#"{"i":"m","sn":{}}"#, true),
+            (r#"{"i":"m","sn":[]}"#, true),
+            (r#"{"i":"m","en":1}"#, true),
+            (r#"{"i":"m","en":true}"#, true),
+            (r#"{"i":"m","en":{}}"#, true),
+            (r#"{"i":"m","en":[]}"#, true),
+            (r#"{"i":"m","vf":"l"}"#, false),
+            (r#"{"i":"m","vf":"r"}"#, false),
+            (r#"{"i":"m","vf":"x"}"#, false),
+            (r#"{"i":"m","sn":null}"#, false),
+            (r#"{"i":"m","sn":"a"}"#, false),
+            (r#"{"i":"m","en":null}"#, false),
+            (r#"{"i":"m","en":"a"}"#, false),
+        ] {
+            let mut session = open(&mut db, "orphan");
+            let body = if action == "q" {
+                format!(r#"{{"p":"/a","q":{query},"t":1,"h":""}}"#)
+            } else {
+                format!(r#"{{"p":"/a","q":{query}}}"#)
+            };
+            let frame = format!(r#"{{"t":"d","d":{{"r":1,"a":"{action}","b":{body}}}}}"#);
+            let received = session.receive(&mut db, &frame, NOW);
+            let frames: Vec<serde_json::Value> = received
+                .replies
+                .iter()
+                .map(|r| serde_json::from_str(r).unwrap())
+                .collect();
+            let allowed = frames
+                .iter()
+                .any(|r| r["t"] == "d" && r["d"]["r"] == 1 && r["d"]["b"]["s"] == "ok");
+            let errors: Vec<_> = frames
+                .iter()
+                .filter(|r| r["t"] == "c" && r["d"]["t"] == "e")
+                .collect();
+            let error_texts_match = errors.iter().all(|r| {
+                r["d"]["d"].as_str().and_then(|text| {
+                    let (client, error) =
+                        text.strip_prefix("ClientId[")?.split_once("]:ErrorId[")?;
+                    let error = error.strip_suffix("]: Error on incoming message")?;
+                    Some(client.parse::<u64>().is_ok() && error.parse::<u64>().is_ok())
+                }) == Some(true)
+            });
+            if errors.len() != usize::from(malformed)
+                || !error_texts_match
+                || allowed == malformed
+                || received.drop_connection
+                || received.close.is_some()
+            {
+                failures.push(format!("{action} {query}: {received:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+proptest::proptest! {
+    #[test]
+    fn malformed_wire_field_types_are_rejected_with_or_without_their_dependency(
+        field in 0usize..3,
+        value in 0usize..4,
+        with_dependency in proptest::bool::ANY,
+        get in proptest::bool::ANY,
+    ) {
+        let mut db = db();
+        load(&mut db, "wireproperty", r#"{"rules":{".read":true,"a":{".indexOn":["m"]}}}"#);
+        let name = ["vf", "sn", "en"][field];
+        let value = ["0", "true", "{}", "[]"][value];
+        let dependency = if with_dependency { [r#","l":2"#, r#","sp":1"#, r#","ep":1"#][field] } else { "" };
+        let query = format!(r#"{{"i":"m","{name}":{value}{dependency}}}"#);
+        let action = if get { "g" } else { "q" };
+        let mut session = open(&mut db, "wireproperty");
+        let frame = format!(r#"{{"t":"d","d":{{"r":1,"a":"{action}","b":{{"p":"/a","q":{query}}}}}}}"#);
+        let received = session.receive(&mut db, &frame, NOW);
+        proptest::prop_assert!(!received.drop_connection);
+        proptest::prop_assert!(received.close.is_none());
+        proptest::prop_assert_eq!(received.replies.len(), 1);
+        let error: serde_json::Value = serde_json::from_str(&received.replies[0]).unwrap();
+        proptest::prop_assert_eq!(&error["t"], "c");
+        proptest::prop_assert_eq!(&error["d"]["t"], "e");
+    }
+}

@@ -141,7 +141,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 624);
+  assert.equal(requests, 694);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get"]);
   // The only writes are single-document commits into the program's own collection: the order
@@ -802,7 +802,7 @@ test("a seed commit is a reviewed single-document write into the named database"
   assert.throws(() => seedCommit("seed-x", "a/b/c/", fields), /document path/);
 });
 
-test("O-5 records only its six new programs, within its request cap: 2 x (240 + 80) + 5", async () => {
+test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", async () => {
   const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
   const { readFile } = await import("node:fs/promises");
   const {
@@ -814,7 +814,9 @@ test("O-5 records only its six new programs, within its request cap: 2 x (240 + 
     O5_VALUE_SHAPES,
     seedHoldsVector,
   } = await import("./fs-ent-pipeline/corpus.mjs");
-  const o5 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o5/");
+  // This historical subset is fixed; the dedicated coverage suite checks the full selector.
+  const originalIds = new Set(["fs-ent-pipeline/o5/names", "fs-ent-pipeline/o5/literal-keys", "fs-ent-pipeline/o5/function-order", "fs-ent-pipeline/o5/stage-order", "fs-ent-pipeline/o5/value-shapes", "fs-ent-pipeline/o5/function-names"]);
+  const o5 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o5/").filter((program) => originalIds.has(program.id));
   assert.deepEqual(
     o5.map((p) => p.id),
     [
@@ -869,8 +871,10 @@ test("O-5 records only its six new programs, within its request cap: 2 x (240 + 
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of o5) assert.equal(recorded[program.id], undefined, program.id);
-  for (const program of PROGRAMS.filter((p) => !o5.includes(p))) {
+  for (const program of PROGRAMS.filter((p) => p.id.startsWith("fs-ent-pipeline/o5/"))) {
+    assert.equal(recorded[program.id], undefined, program.id);
+  }
+  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o5/"))) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
 });

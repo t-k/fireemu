@@ -41,7 +41,7 @@ use crate::decode::{parse_parent, Parent};
 use crate::encode::{decode_instant, decode_write, encode_document, encode_instant};
 use crate::gateway::Gateway;
 use crate::local::listen_tokens::{ListenResumeTokens, ResumeBoundary};
-use crate::local::{CommitNotification, LocalBackend};
+use crate::local::{CommitNotification, ListenSubscription, LocalBackend};
 use crate::rules::{write_guard, Principal, RulesEnforcer};
 
 /// The App Check credential a stream opened with (specification section 13.1).
@@ -420,9 +420,15 @@ struct TargetState {
     pending: Vec<pb::ListenResponse>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static FULL_TARGET_REFRESHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug, Clone)]
 enum RefreshInput {
     Full,
+    AddedTarget,
     Delta {
         through: CommitVersion,
         paths: BTreeSet<DocumentPath>,
@@ -443,6 +449,31 @@ pub const MAX_LISTEN_TARGETS: usize = 1000;
 /// where one request has been applied and its response batch has been constructed.
 pub(crate) trait ListenObserver: Send + Sync {
     fn exchange(&self, request: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]);
+}
+
+enum ListenEvents {
+    Global(tokio::sync::broadcast::Receiver<CommitNotification>),
+    Database(ListenSubscription),
+}
+
+impl ListenEvents {
+    async fn recv(
+        &mut self,
+    ) -> Result<CommitNotification, tokio::sync::broadcast::error::RecvError> {
+        match self {
+            Self::Global(receiver) => receiver.recv().await,
+            Self::Database(receiver) => receiver.recv().await,
+        }
+    }
+
+    fn try_recv(
+        &mut self,
+    ) -> Result<CommitNotification, tokio::sync::broadcast::error::TryRecvError> {
+        match self {
+            Self::Global(receiver) => receiver.try_recv(),
+            Self::Database(receiver) => receiver.try_recv(),
+        }
+    }
 }
 
 /// Runs the `Listen` stream.
@@ -486,7 +517,7 @@ pub(crate) async fn listen_stream_observed(
     let mut targets: BTreeMap<i32, TargetState> = BTreeMap::new();
     let mut database_hash_cache = None;
     let mut last_snapshot_version = None;
-    let mut events = ctx.local.subscribe();
+    let mut events = ListenEvents::Global(ctx.local.subscribe());
     let stream_deadline = ctx
         .rules
         .as_ref()
@@ -530,6 +561,13 @@ pub(crate) async fn listen_stream_observed(
                 Some(Err(e)) => Err(e),
                 Some(Ok(_)) if deadline_reached(&ctx, stream_deadline) => Err(lifetime_reached()),
                 Some(Ok(req)) => {
+                    // Subscribe before the request can select its initial snapshot. Parsing
+                    // here has no refusal side effects; the handler preserves error order.
+                    if parent.is_none() {
+                        if let Ok(database) = database_parent(&req.database) {
+                            events = ListenEvents::Database(ctx.local.subscribe_listen(&database));
+                        }
+                    }
                     let result = handle_listen_request(
                         &ctx,
                         &mut parent,
@@ -696,7 +734,7 @@ fn merge_refresh_event(
         None => {
             *input = refresh_input_for_event(parent, Some(last), event);
         }
-        Some(RefreshInput::Full) => {}
+        Some(RefreshInput::Full | RefreshInput::AddedTarget) => {}
     }
 }
 
@@ -804,7 +842,7 @@ fn handle_listen_request(
                 ctx,
                 Some(parent),
                 targets,
-                RefreshInput::Full,
+                RefreshInput::AddedTarget,
                 database_hash_cache,
                 last_snapshot_version,
                 out,
@@ -1091,10 +1129,17 @@ fn refresh_all(
                     resume_token(version, &binding)
                 };
                 let delta_paths = complete_delta_paths(&input, version);
+                // Authorization is still evaluated below. Only target addition at exactly
+                // the already-delivered snapshot may reuse an existing current target.
+                let reuse_current = matches!(input, RefreshInput::AddedTarget)
+                    && *last_snapshot_version == Some(version);
                 let mut removed = Vec::new();
                 for (id, state) in targets.iter_mut() {
                     let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
                         if state.current && state.resume.is_none() {
+                            if reuse_current {
+                                return Ok(());
+                            }
                             if let Some(paths) = delta_paths {
                                 if refresh_target_delta(db, *id, state, read_time, paths)?.is_some()
                                 {
@@ -1234,6 +1279,8 @@ fn refresh_target_full(
     snapshot_token: &[u8],
     history: &std::sync::Mutex<ListenResumeTokens>,
 ) -> Result<(), Status> {
+    #[cfg(test)]
+    FULL_TARGET_REFRESHES.with(|count| count.set(count.get() + 1));
     let original_boundary = match state.resume.as_ref() {
         Some(Resume::Boundary(point)) => Some(*point),
         _ => None,
@@ -1480,7 +1527,7 @@ fn complete_delta_paths(
 ) -> Option<&BTreeSet<DocumentPath>> {
     match input {
         RefreshInput::Delta { through, paths } if *through == snapshot_version => Some(paths),
-        RefreshInput::Full | RefreshInput::Delta { .. } => None,
+        RefreshInput::Full | RefreshInput::AddedTarget | RefreshInput::Delta { .. } => None,
     }
 }
 
@@ -2045,6 +2092,353 @@ mod refresh_tests {
             replay,
             Some(&pb::value::ValueType::StringValue(value.to_owned()))
         );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 32, failure_persistence: None, ..Default::default() })]
+        #[test]
+        fn target_add_reuse_matches_full_refresh_model(operations in proptest::collection::vec(0_u8..6, 1..24)) {
+            let mut optimized = generation_fixture();
+            let mut reference = generation_fixture();
+            for (step, operation) in operations.into_iter().enumerate() {
+                for fixture in [&mut optimized, &mut reference] {
+                    match operation {
+                        0 => {
+                            fixture.context.local.commit_writes(fixture.parent.as_ref().unwrap(), &[set("restored/a")], &|_, _, _| Ok(())).unwrap();
+                        }
+                        1 => fixture.context.local.restore_scope(&fixture.scope, &restored_snapshot("replacement")).unwrap(),
+                        2 => { if let Some(target) = fixture.targets.get_mut(&1) { target.current = false; } },
+                        3 => { if let Some(target) = fixture.targets.get_mut(&1) { target.resume = Some(Resume::Invalid); } },
+                        4 => { fixture.targets.remove(&1); },
+                        _ => {},
+                    }
+                }
+                let mut actual = Vec::new();
+                let mut expected = Vec::new();
+                reference.last_snapshot_version = None;
+                for (fixture, out) in [(&mut optimized, &mut actual), (&mut reference, &mut expected)] {
+                    handle_listen_request(&fixture.context, &mut fixture.parent, &mut fixture.targets,
+                        &query_request(i32::try_from(step).unwrap() + 2, "restored"),
+                        &mut fixture.cache, &mut fixture.last_snapshot_version, out).unwrap();
+                    for response in out {
+                        if let Some(pb::listen_response::ResponseType::TargetChange(change)) = response.response_type.as_mut() {
+                            change.resume_token.clear();
+                        }
+                    }
+                }
+                proptest::prop_assert_eq!(actual, expected);
+                let known = |fixture: &GenerationFixture| fixture.targets.iter().map(|(id, target)| (*id, target.known.clone())).collect::<BTreeMap<_, _>>();
+                proptest::prop_assert_eq!(known(&optimized), known(&reference));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "bounded performance measurement"]
+    fn measure_same_version_target_add_work() {
+        for target_count in [1, 10, 100] {
+            for pair in 0..5 {
+                for reference in [true, false] {
+                    let mut fixture = generation_fixture();
+                    for batch in 0..2 {
+                        let writes = (batch * 500..(batch + 1) * 500)
+                            .map(|index| set(&format!("restored/d{index:04}")))
+                            .collect::<Vec<_>>();
+                        fixture
+                            .context
+                            .local
+                            .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| {
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                    fixture.targets.clear();
+                    fixture.last_snapshot_version = None;
+                    FULL_TARGET_REFRESHES.with(|counter| counter.set(0));
+                    let start = std::time::Instant::now();
+                    for id in 1..=target_count {
+                        if reference {
+                            fixture.last_snapshot_version = None;
+                        }
+                        handle_listen_request(
+                            &fixture.context,
+                            &mut fixture.parent,
+                            &mut fixture.targets,
+                            &query_request(id, "restored"),
+                            &mut fixture.cache,
+                            &mut fixture.last_snapshot_version,
+                            &mut Vec::new(),
+                        )
+                        .unwrap();
+                    }
+                    eprintln!("target_add_work documents=1001 targets={target_count} reference={reference} pair={pair} full_queries={} micros={}", FULL_TARGET_REFRESHES.with(std::cell::Cell::get), start.elapsed().as_micros());
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 32, failure_persistence: None, ..Default::default() })]
+        #[test]
+        fn scoped_notifications_match_global_routing_model(operations in proptest::collection::vec(0_u8..4, 1..32)) {
+            let fixture = generation_fixture();
+            let mut snapshot = restored_snapshot("before");
+            snapshot.databases.insert(("demo-app".to_owned(), "busy".to_owned()), FirestoreState::new());
+            fixture.context.local.restore_scope(&fixture.scope, &snapshot).unwrap();
+            let parent = fixture.parent.as_ref().unwrap();
+            let busy = database_parent("projects/demo-app/databases/busy").unwrap();
+            let mut global = fixture.context.local.subscribe();
+            let mut scoped = fixture.context.local.subscribe_listen(parent);
+            for operation in operations {
+                match operation {
+                    0 => { fixture.context.local.commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(())).unwrap(); },
+                    1 => {
+                        let mut write = set("restored/a");
+                        let WriteOp::Set { path, .. } = &mut write.op else { unreachable!() };
+                        *path = crate::encode::decode_document_name("projects/demo-app/databases/busy/documents/items/a").unwrap();
+                        fixture.context.local.commit_writes(&busy, &[write], &|_, _, _| Ok(())).unwrap();
+                    },
+                    2 => fixture.context.local.restore_scope(&fixture.scope, &snapshot).unwrap(),
+                    _ => {
+                        drop(scoped);
+                        proptest::prop_assert_eq!(fixture.context.local.listen_ring_count(), 0);
+                        scoped = fixture.context.local.subscribe_listen(parent);
+                    },
+                }
+                let mut expected = Vec::new();
+                while let Ok(event) = global.try_recv() { if is_relevant(Some(parent), &event) { expected.push(event); } }
+                let mut actual = Vec::new();
+                while let Ok(event) = scoped.try_recv() { actual.push(event); }
+                proptest::prop_assert_eq!(actual, expected);
+            }
+            drop(scoped);
+            proptest::prop_assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn active_listen_uses_its_database_ring_after_backpressure() {
+        let fixture = generation_fixture();
+        let mut snapshot = restored_snapshot("before");
+        snapshot.databases.insert(
+            ("demo-app".to_owned(), "busy".to_owned()),
+            FirestoreState::new(),
+        );
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &snapshot)
+            .unwrap();
+        let local = Arc::clone(&fixture.context.local);
+        let parent = fixture.parent.as_ref().unwrap().clone();
+        let busy = database_parent("projects/demo-app/databases/busy").unwrap();
+        let (requests, inbound) = mpsc::channel(2);
+        let (responses, mut outbound) = mpsc::channel(1);
+        FULL_TARGET_REFRESHES.with(|counter| counter.set(0));
+        let stream = tokio::spawn(listen_stream(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+        ));
+        requests
+            .send(Ok(query_request(1, "restored")))
+            .await
+            .unwrap();
+        // Receiving ADD proves the initial snapshot is selected. With capacity one,
+        // the remaining initial rows hold the stream while both databases commit.
+        outbound.recv().await.unwrap().unwrap();
+        let busy_path = crate::encode::decode_document_name(
+            "projects/demo-app/databases/busy/documents/items/a",
+        )
+        .unwrap();
+        let mut write = set("restored/a");
+        let WriteOp::Set { path, .. } = &mut write.op else {
+            unreachable!()
+        };
+        *path = busy_path;
+        for _ in 0..4 * crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            local
+                .commit_writes(&busy, &[write.clone()], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        local
+            .commit_writes(&parent, &[set("unrelated/a")], &|_, _, _| Ok(()))
+            .unwrap();
+        let mut boundaries = 0;
+        while boundaries < 2 {
+            let response = tokio::time::timeout(Duration::from_secs(5), outbound.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            if matches!(response.response_type, Some(pb::listen_response::ResponseType::TargetChange(change))
+                if change.target_ids.is_empty() && !change.resume_token.is_empty())
+            {
+                boundaries += 1;
+            }
+        }
+        assert_eq!(FULL_TARGET_REFRESHES.with(std::cell::Cell::get), 1);
+        drop(outbound);
+        drop(requests);
+        stream.await.unwrap();
+        assert_eq!(local.listen_ring_count(), 0);
+    }
+
+    #[test]
+    fn concurrent_last_listen_subscribers_reclaim_the_ring() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        for _ in 0..64 {
+            let first = fixture.context.local.subscribe_listen(parent);
+            let second = fixture.context.local.subscribe_listen(parent);
+            std::thread::scope(|scope| {
+                let gate = Arc::new(std::sync::Barrier::new(2));
+                let other_gate = Arc::clone(&gate);
+                scope.spawn(move || {
+                    gate.wait();
+                    drop(first);
+                });
+                scope.spawn(move || {
+                    other_gate.wait();
+                    drop(second);
+                });
+            });
+            assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        }
+    }
+
+    #[test]
+    fn listen_ring_preserves_own_lag_reset_order_and_subscriber_cleanup() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        let mut first = fixture.context.local.subscribe_listen(parent);
+        let second = fixture.context.local.subscribe_listen(parent);
+        assert_eq!(fixture.context.local.listen_ring_count(), 1);
+        for _ in 0..=crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            fixture
+                .context
+                .local
+                .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        assert!(matches!(
+            first.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+        ));
+        let mut previous = 0;
+        while let Ok(event) = first.try_recv() {
+            assert!(event.version >= previous);
+            previous = event.version;
+        }
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &restored_snapshot("new-incarnation"))
+            .unwrap();
+        assert!(first.try_recv().unwrap().reset);
+        fixture
+            .context
+            .local
+            .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+            .unwrap();
+        let recreated = first.try_recv().unwrap();
+        assert!(!recreated.reset);
+        assert_eq!(recreated.version, 2);
+        drop(first);
+        assert_eq!(fixture.context.local.listen_ring_count(), 1);
+        drop(second);
+        assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        for index in 0..64 {
+            let parent =
+                database_parent(&format!("projects/demo-app/databases/idle{index}")).unwrap();
+            drop(fixture.context.local.subscribe_listen(&parent));
+        }
+        assert_eq!(fixture.context.local.listen_ring_count(), 0);
+    }
+
+    #[test]
+    fn quiet_listen_ring_ignores_other_database_bursts() {
+        let fixture = generation_fixture();
+        let quiet_parent = database_parent("projects/demo-app/databases/quiet").unwrap();
+        let mut events = fixture.context.local.subscribe_listen(&quiet_parent);
+        let parent = fixture.parent.as_ref().unwrap();
+        for _ in 0..4 * crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            fixture
+                .context
+                .local
+                .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        assert!(
+            matches!(
+                events.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "quiet database must retain no unrelated events: {quiet_parent:?}"
+        );
+    }
+
+    #[test]
+    fn global_commit_ring_reproduces_unrelated_database_lag() {
+        let fixture = generation_fixture();
+        let mut events = fixture.context.local.subscribe();
+        let parent = fixture.parent.as_ref().unwrap();
+        for _ in 0..=crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            fixture
+                .context
+                .local
+                .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+        ));
+        // A quiet database cannot classify the lost events: the stream must request Full.
+        let quiet_parent = database_parent("projects/demo-app/databases/quiet").unwrap();
+        let next = events.try_recv().unwrap();
+        assert!(refresh_input_for_event(
+            Some(&quiet_parent),
+            Some(CommitVersion::from_value(1)),
+            &next
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn same_version_target_add_queries_each_target_only_once() {
+        for count in [1, 10, 100] {
+            let mut fixture = generation_fixture();
+            fixture.targets.clear();
+            fixture.last_snapshot_version = None;
+            FULL_TARGET_REFRESHES.with(|counter| counter.set(0));
+            for id in 1..=count {
+                let mut out = Vec::new();
+                handle_listen_request(
+                    &fixture.context,
+                    &mut fixture.parent,
+                    &mut fixture.targets,
+                    &query_request(id, "restored"),
+                    &mut fixture.cache,
+                    &mut fixture.last_snapshot_version,
+                    &mut out,
+                )
+                .unwrap();
+                assert_eq!(fixture.targets.len(), usize::try_from(id).unwrap());
+                assert!(out.iter().any(|response| matches!(
+                    response.response_type.as_ref(),
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                    if change.target_change_type == pb::target_change::TargetChangeType::Current as i32
+                        && change.target_ids == [id]
+                )));
+                assert!(global_boundary(&out).1.is_some());
+            }
+            assert_eq!(
+                FULL_TARGET_REFRESHES.with(std::cell::Cell::get),
+                usize::try_from(count).unwrap()
+            );
+        }
     }
 
     #[test]

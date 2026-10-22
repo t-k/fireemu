@@ -9,7 +9,9 @@
 import {
   arr,
   bool,
+  bytes,
   dbl,
+  geo,
   inf,
   int,
   map,
@@ -999,6 +1001,842 @@ const o4ComparisonProgram = {
   ],
 };
 
+// --- O-5: what PX1d still answers UNIMPLEMENTED, and which function names exist ---
+
+/** Document functions of collections whose name is not ASCII (the "lacks /" index counts UTF-16). */
+export const O5_NAMES = [
+  ["document-id-hiragana", fn("document_id", ref("あ"))],
+  ["parent-hiragana", fn("parent", ref("あ"))],
+  ["document-id-subcollection-hiragana", fn("document_id", ref("c/x/あ"))],
+  ["document-id-emoji", fn("document_id", ref("😀"))],
+  ["collection-id-accented", fn("collection_id", ref("é"))],
+];
+
+const o5NameProgram = {
+  id: "fs-ent-pipeline/o5/names",
+  seed: [["nm5/d", { i: int(1) }]],
+  steps: O5_NAMES.map(([label, expression]) =>
+    step(label, pipeline(collection("nm5"), select({ v: expression }))),
+  ),
+};
+
+/** Map keys that are not plain names, in a literal that holds an expression. */
+export const O5_LITERAL_KEYS = [
+  ["key-reserved-with-field", mapOf({ __x__: fld("i") })],
+  ["key-empty-with-field", mapOf({ "": fld("i") })],
+  ["key-type-with-field", mapOf({ __type__: fld("i") })],
+  ["key-dotted-with-function", mapOf({ "a.b": docId() })],
+  ["nested-key-name-with-field", mapOf({ a: mapOf({ __name__: fld("i") }) })],
+  ["array-of-map-reserved-key-with-field", list(mapOf({ __x__: fld("i") }))],
+];
+
+const o5LiteralKeyProgram = {
+  id: "fs-ent-pipeline/o5/literal-keys",
+  seed: [["lk5/d", { i: int(1) }]],
+  steps: O5_LITERAL_KEYS.map(([label, literal]) =>
+    step(label, pipeline(collection("lk5"), select({ v: literal }))),
+  ),
+};
+
+const fo5 = () => collection("fo5");
+
+/**
+ * Which check answers first: a function name that does not exist, a function's argument count,
+ * the empty select of an earlier stage and an argument's type.
+ */
+export const O5_FUNCTION_ORDER = [
+  ["select-unknown-function", [select({ v: fn("nope_fn") })]],
+  ["select-empty-name", [select({ v: fn("") })]],
+  ["select-capitalized-name", [select({ v: fn("Equal", fld("i"), int(1)) })]],
+  ["select-empty-then-where-arity", [select({}), stage("where", fn("add", fld("i")))]],
+  ["select-empty-then-where-type", [select({}), stage("where", fn("not", fld("i")))]],
+  ["select-empty-then-where-known-no-arguments", [select({}), stage("where", fn("equal"))]],
+  ["where-unknown-then-select-empty", [stage("where", fn("nope_fn")), select({})]],
+  ["select-arity-then-select-unknown", [select({ v: fn("add") }), select({ v: fn("nope_fn") })]],
+  ["select-arity-before-unknown", [select({ a: fn("add"), b: fn("nope_fn") })]],
+  ["select-unknown-before-arity", [select({ a: fn("nope_fn"), b: fn("add") })]],
+  ["unknown-as-first-argument", [select({ v: fn("equal", fn("nope_fn"), fld("i")) })]],
+  ["arity-around-unknown-argument", [select({ v: fn("add", fn("nope_fn")) })]],
+  ["unknown-in-array-literal", [select({ v: list(fn("nope_fn")) })]],
+];
+
+const o5FunctionOrderProgram = {
+  id: "fs-ent-pipeline/o5/function-order",
+  seed: [["fo5/d", { i: int(1) }]],
+  steps: O5_FUNCTION_ORDER.map(([label, stages]) => step(label, pipeline(fo5(), ...stages))),
+};
+
+const so5 = () => collection("so5");
+/** A vector map of any elements, where `vec` builds doubles only. */
+const vectorOf = (...values) => mapOf({ __type__: str("__vector__"), value: list(...values) });
+const unknownAddFields = () => stage("add_fields", mapOf({ a: fn("nope_fn") }));
+
+/**
+ * The orders strict refuses since PX1d review round 2 (M1): an empty map or a later stage's
+ * check after a function or stage value fireemu does not check; and the limit and offset
+ * arguments only the official emulator answered (M2).
+ */
+export const O5_STAGE_ORDER = [
+  ["select-empty-then-where-sqrt-string", [select({}), stage("where", fn("sqrt", str("a")))]],
+  ["add-fields-unknown-then-select-empty", [unknownAddFields(), select({})]],
+  ["add-fields-unknown-then-limit-string", [unknownAddFields(), stage("limit", str("x"))]],
+  [
+    "add-fields-unknown-then-aggregate-one",
+    [unknownAddFields(), aggregate(mapOf({ c: fn("count", fld("n")) }))],
+  ],
+  [
+    "add-fields-array-of-field-then-select-empty",
+    [stage("add_fields", mapOf({ t: list(fld("i")) })), select({})],
+  ],
+  [
+    "aggregate-sum-then-select-empty",
+    [aggregate(mapOf({ c: fn("sum", fld("n")) }), mapOf({})), select({})],
+  ],
+  ["sort-then-limit-string", [stage("sort", fn("ascending", fld("i"))), stage("limit", str("x"))]],
+  ["limit-boolean", [stage("limit", bool(true))]],
+  ["limit-double", [stage("limit", dbl(1.5))]],
+  ["limit-null", [stage("limit", nul())]],
+  ["limit-empty-map", [stage("limit", mapOf({}))]],
+  ["offset-negative", [stage("offset", int(-1))]],
+  ["offset-boolean", [stage("offset", bool(true))]],
+  ["where-vector-of-integer", [stage("where", vectorOf(int(1)))]],
+];
+
+const o5StageOrderProgram = {
+  id: "fs-ent-pipeline/o5/stage-order",
+  seed: [["so5/d", { i: int(1), n: int(1), top: str("t") }]],
+  steps: O5_STAGE_ORDER.map(([label, stages]) => step(label, pipeline(so5(), ...stages))),
+};
+
+/**
+ * The values strict refuses since PX1d review round 2 (M2, S1): document-function argument
+ * types and map keys production has not named, malformed vectors and vectors of integers,
+ * literals with more than one empty or reserved key or a `__name__` key, and the argument
+ * checks of the functions fireemu runs.
+ */
+export const O5_VALUE_SHAPES = [
+  ["document-id-double", fn("document_id", dbl(1.5))],
+  ["document-id-geo", fn("document_id", geo(1, 1))],
+  ["document-id-timestamp", fn("document_id", ts("2020-01-01T00:00:00Z"))],
+  ["document-id-bytes", fn("document_id", bytes("AA=="))],
+  ["document-id-array", fn("document_id", arr(int(1)))],
+  ["document-id-vector", fn("document_id", vec(1))],
+  ["parent-double", fn("parent", dbl(1.5))],
+  ["map-key-double", fn("map", dbl(1.5), fld("i"))],
+  ["map-key-null", fn("map", nul(), fld("i"))],
+  ["map-key-timestamp", fn("map", ts("2020-01-01T00:00:00Z"), fld("i"))],
+  ["vector-of-integer", vectorOf(int(1))],
+  ["vector-of-double-and-integer", vectorOf(dbl(1), int(2))],
+  ["vector-without-value", mapOf({ __type__: str("__vector__") })],
+  ["vector-with-extra-key", mapOf({ __type__: str("__vector__"), value: list(dbl(1)), x: int(1) })],
+  ["vector-value-not-array", mapOf({ __type__: str("__vector__"), value: str("x") })],
+  ["keys-empty-and-reserved", mapOf({ "": int(1), __x__: int(1) })],
+  ["keys-two-reserved", mapOf({ __b__: int(1), __a__: int(1) })],
+  ["keys-reserved-inner-and-outer", mapOf({ a: mapOf({ __x__: int(1) }), __y__: int(1) })],
+  ["key-name", mapOf({ __name__: int(1) })],
+  ["key-inner-name", mapOf({ a: mapOf({ __name__: int(1) }) })],
+  ["map-one-argument", fn("map", str("k"))],
+  ["equal-one-argument", fn("equal", fld("i"))],
+  [
+    "document-id-with-options",
+    { functionValue: { name: "document_id", args: [fld("__name__")], options: { x: int(1) } } },
+  ],
+];
+
+const vs5 = () => collection("vs5");
+
+const o5ValueShapeProgram = {
+  id: "fs-ent-pipeline/o5/value-shapes",
+  seed: [["vs5/d", { i: int(1), n: int(1), top: str("t") }]],
+  steps: O5_VALUE_SHAPES.map(([label, value]) =>
+    step(label, pipeline(vs5(), select({ v: value }))),
+  ),
+};
+
+/**
+ * Every function name of the official emulator 1.22.0's registry
+ * (cloud/datastore/catalog/function/function_registry.binarypb in its jar: names and their
+ * operator spellings), then the names @firebase/firestore 4.17.1 sends that the registry lacks.
+ */
+export const O5_FUNCTION_NAMES = [
+  "get_field",
+  "offset",
+  "row",
+  "make_struct",
+  "struct_get",
+  "count",
+  "count_if",
+  "count_distinct",
+  "sum",
+  "average",
+  "minimum",
+  "maximum",
+  "first",
+  "last",
+  "array_agg",
+  "array_agg_distinct",
+  "logical_or",
+  "negate",
+  "-",
+  "add",
+  "+",
+  "subtract",
+  "multiply",
+  "*",
+  "divide",
+  "/",
+  "mod",
+  "%",
+  "bit_not",
+  "~",
+  "bit_left_shift",
+  "<<",
+  "bit_right_shift",
+  ">>",
+  "rand",
+  "abs",
+  "ceil",
+  "floor",
+  "round",
+  "pow",
+  "sqrt",
+  "log",
+  "ln",
+  "log10",
+  "exp",
+  "trunc",
+  "array",
+  "array_length",
+  "array_concat",
+  "join",
+  "array_contains",
+  "array_contains_any",
+  "array_contains_all",
+  "array_get",
+  "array_transform",
+  "array_filter",
+  "array_reverse",
+  "array_slice",
+  "array_first",
+  "array_first_n",
+  "array_last",
+  "array_last_n",
+  "maximum_n",
+  "minimum_n",
+  "array_index_of",
+  "array_index_of_all",
+  "less_than",
+  "<",
+  "less_than_or_equal",
+  "<=",
+  "equal",
+  "==",
+  "not_equal",
+  "!=",
+  "greater_than",
+  ">",
+  "greater_than_or_equal",
+  ">=",
+  "orders_after",
+  "cmp",
+  "current_document",
+  "is_error",
+  "if_error",
+  "if_absent",
+  "exists",
+  "is_absent",
+  "list_shredded_fields",
+  "error",
+  "reverse",
+  "concat",
+  "length",
+  "storage_size",
+  "and",
+  "AND",
+  "or",
+  "OR",
+  "xor",
+  "XOR",
+  "nor",
+  "not",
+  "NOT",
+  "conditional",
+  "switch_on",
+  "switch",
+  "equal_any",
+  "not_equal_any",
+  "if_null",
+  "coalesce",
+  "map",
+  "map_get",
+  "map_set",
+  "map_remove",
+  "map_merge",
+  "mask",
+  "map_keys",
+  "map_values",
+  "map_entries",
+  "namespace",
+  "parent",
+  "collection_id",
+  "document_id",
+  "has_ancestor",
+  "opaque_document_id",
+  "reference_slice",
+  "autogen_document_id",
+  "replace_document_id",
+  "document_matches",
+  "matches",
+  "score",
+  "snippet",
+  "geo_distance",
+  "search_field",
+  "to_row_id",
+  "string_concat",
+  "like",
+  "regex_contains",
+  "regex_match",
+  "regex_find",
+  "regex_find_all",
+  "to_lower",
+  "to_upper",
+  "char_length",
+  "byte_length",
+  "starts_with",
+  "ends_with",
+  "string_reverse",
+  "string_repeat",
+  "string_replace_all",
+  "string_replace_one",
+  "substring",
+  "string_contains",
+  "trim",
+  "ltrim",
+  "rtrim",
+  "split",
+  "string_index_of",
+  "current_timestamp",
+  "unix_micros_to_timestamp",
+  "unix_millis_to_timestamp",
+  "unix_seconds_to_timestamp",
+  "timestamp_to_unix_micros",
+  "timestamp_to_unix_millis",
+  "timestamp_to_unix_seconds",
+  "timestamp_add",
+  "timestamp_subtract",
+  "timestamp_trunc",
+  "timestamp_extract",
+  "timestamp_diff",
+  "type",
+  "is_type",
+  "euclidean_distance",
+  "cosine_distance",
+  "manhattan_distance",
+  "dot_product",
+  "vector_length",
+  "between",
+  "eq_any",
+  "is_nan",
+  "is_null",
+];
+/**
+ * The names not called without arguments. A random value changes between runs, so those names
+ * take one argument and answer their argument count. Three overloaded array functions answer an
+ * internal error (500 UNKNOWN) without arguments on the official emulator 1.22.0, so they take the
+ * arguments it answered a definite 400 for (o5-official-4.txt).
+ */
+export const O5_FUNCTION_ARGUMENTS = {
+  rand: [fld("i")],
+  autogen_document_id: [fld("i")],
+  current_timestamp: [fld("i")],
+  array_transform: [fld("i"), fld("i"), fld("i"), fld("i")],
+  array_reverse: [fld("i")],
+  array_slice: [fld("i"), fld("i")],
+};
+
+/** A step id for any function name: the name itself, or its code points when it is not plain. */
+export const functionNameStep = (name) =>
+  name === ""
+    ? "fn-empty"
+    : /^[a-z0-9_]+$/.test(name)
+      ? `fn-${name}`
+      : `fn-u${[...name].map((c) => c.codePointAt(0).toString(16)).join("-")}`;
+
+/**
+ * Each name called with no argument: an unknown name answers that it does not exist and a known
+ * one its argument count (or its value), so the rows give production's function list. The names
+ * in O5_FUNCTION_ARGUMENTS take the arguments listed there.
+ */
+const o5FunctionNameProgram = {
+  id: "fs-ent-pipeline/o5/function-names",
+  seed: [["fx5/d", { i: int(1) }]],
+  steps: O5_FUNCTION_NAMES.map((name) =>
+    step(
+      functionNameStep(name),
+      pipeline(collection("fx5"), select({ v: fn(name, ...(O5_FUNCTION_ARGUMENTS[name] ?? [])) })),
+    ),
+  ),
+};
+
+// O-5 appendix: finite unanswered PX questions. IDs beginning proposed- are new
+// representatives, not claims of prior production observations. Keep literal wire values intact.
+const o5RawReference = (value) => ({ referenceValue: value });
+
+const o5AppendixProgram = {
+  id: "fs-ent-pipeline/o5/appendix",
+  seed: [["ap5/d", { i: int(1), n: int(1), top: str("t") }]],
+  steps: [
+    // Draft 195.
+    step(
+      "proposed-n14-docid-where-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("where", fn("equal", fn("document_id", int(1)), str("x"))),
+        select({}),
+      ),
+    ),
+    // Draft 196.
+    step(
+      "proposed-n15-docid-add-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("add_fields", mapOf({ a: fn("document_id", int(1)) })),
+        select({}),
+      ),
+    ),
+    // Draft 197.
+    step(
+      "proposed-n76-map-add-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("add_fields", mapOf({ a: fn("map", dbl(1.5), fld("i")) })),
+        select({}),
+      ),
+    ),
+    // Draft 198.
+    step(
+      "proposed-n78-docid-double-then-limit",
+      pipeline(
+        collection("ap5"),
+        select({ v: fn("document_id", dbl(1.5)) }),
+        stage("limit", str("x")),
+      ),
+    ),
+    // Draft 199.
+    step(
+      "proposed-n79-map-where-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("where", fn("equal", fld("i"), fn("map", dbl(1.5), fld("i")))),
+        select({}),
+      ),
+    ),
+    // Draft 200.
+    step(
+      "proposed-n68-aggregate-bad-group-call",
+      pipeline(
+        collection("ap5"),
+        stage(
+          "aggregate",
+          mapOf({ c: fn("count", fld("n")) }),
+          mapOf({ "": fn("document_id", int(1)) }),
+        ),
+      ),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-integer",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: int(1) }) })),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-boolean",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: bool(true) }) })),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-null",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: nul() }) })),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-double",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: dbl(1.5) }) })),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-map",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: mapOf({}) }) })),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-array",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: list() }) })),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-nested",
+      pipeline(collection("ap5"), select({ v: mapOf({ a: mapOf({ __type__: int(1) }) }) })),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-where",
+      pipeline(collection("ap5"), stage("where", mapOf({ __type__: int(1) }))),
+    ),
+    // Draft 205.
+    step(
+      "proposed-type-tag-function-argument",
+      pipeline(collection("ap5"), select({ v: fn("equal", mapOf({ __type__: int(1) }), int(1)) })),
+    ),
+    // Draft 206.
+    step(
+      "proposed-empty-alias-unknown",
+      pipeline(collection("ap5"), select({ "": fn("nope_fn") })),
+    ),
+    // Draft 206.
+    step(
+      "proposed-invalid-alias-integer-vector",
+      pipeline(
+        collection("ap5"),
+        select({
+          "a..b": fld("i"),
+          c: mapOf({ __type__: str("__vector__"), value: list(int(1)) }),
+        }),
+      ),
+    ),
+    // Draft 206.
+    step(
+      "proposed-empty-alias-name-map",
+      pipeline(collection("ap5"), select({ "": mapOf({ __name__: int(1) }) })),
+    ),
+    // Draft 206.
+    step(
+      "proposed-empty-alias-equal-one",
+      pipeline(collection("ap5"), select({ "": fn("equal", fld("i")) })),
+    ),
+    // Draft 207.
+    step(
+      "proposed-vector-positive-infinity",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("__vector__"), value: list(dbl("Infinity")) }) }),
+      ),
+    ),
+    // Draft 207.
+    step(
+      "proposed-vector-negative-infinity",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("__vector__"), value: list(dbl("-Infinity")) }) }),
+      ),
+    ),
+    // Draft 208.
+    step(
+      "proposed-reference-collection",
+      pipeline(collection("ap5"), select({ v: o5RawReference("{docs}/c") })),
+    ),
+    // Draft 208.
+    step(
+      "proposed-reference-empty-segment",
+      pipeline(collection("ap5"), select({ v: o5RawReference("{docs}/c//d") })),
+    ),
+    // Draft 208.
+    step(
+      "proposed-reference-garbage",
+      pipeline(collection("ap5"), select({ v: o5RawReference("garbage") })),
+    ),
+    // Draft 208.
+    step(
+      "proposed-reference-documents-root",
+      pipeline(collection("ap5"), select({ v: o5RawReference("{docs}") })),
+    ),
+    // Draft 209.
+    step(
+      "proposed-add-reserved-alias",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({ __x__: fld("top") }))),
+    ),
+    // Draft 209.
+    step(
+      "proposed-distinct-dotted-alias",
+      pipeline(collection("ap5"), stage("distinct", mapOf({ "a.b": fld("top") }))),
+    ),
+    // Draft 209.
+    step(
+      "proposed-aggregate-unrun-name",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ v: fn("count") }), mapOf({ v: fld("top") })),
+      ),
+    ),
+    // Draft 210.
+    step(
+      "proposed-two-invalid-select-aliases",
+      pipeline(collection("ap5"), select({ "a..b": fld("i"), "c..d": fld("i") })),
+    ),
+    // Draft 210.
+    step(
+      "proposed-empty-add-then-negative-limit",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({})), stage("limit", int(-1))),
+    ),
+    // Draft 210,220.
+    step(
+      "proposed-two-empty-stages",
+      pipeline(collection("ap5"), select({}), stage("add_fields", mapOf({}))),
+    ),
+    // Draft 211.
+    step(
+      "proposed-select-name-field",
+      pipeline(collection("ap5"), select({ __name__: fld("__name__") })),
+    ),
+    // Draft 213,226.
+    step(
+      "proposed-docid-map",
+      pipeline(collection("ap5"), select({ v: fn("document_id", mapOf({ a: int(1) })) })),
+    ),
+    // Draft 213,226.
+    step(
+      "proposed-docid-boolean",
+      pipeline(collection("ap5"), select({ v: fn("document_id", bool(true)) })),
+    ),
+    // Draft 213.
+    step(
+      "proposed-collectionid-integer",
+      pipeline(collection("ap5"), select({ v: fn("collection_id", int(1)) })),
+    ),
+    // Draft 213.
+    step(
+      "proposed-parent-integer",
+      pipeline(collection("ap5"), select({ v: fn("parent", int(1)) })),
+    ),
+    // Draft 218,227-P29.
+    step(
+      "proposed-where-field-map",
+      pipeline(collection("ap5"), stage("where", mapOf({ a: fld("i") }))),
+    ),
+    // Draft 218.
+    step(
+      "proposed-where-equal-array-field",
+      pipeline(collection("ap5"), stage("where", fn("equal", fld("i"), list(fld("i"))))),
+    ),
+    // Draft 218.
+    step(
+      "proposed-where-nonliteral-map-key",
+      pipeline(collection("ap5"), stage("where", fn("map", fld("i"), fld("i")))),
+    ),
+    // Draft 219,229.
+    step(
+      "proposed-aggregate-alias-invalid",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ "a..b": fn("count", fld("n")) }), mapOf({})),
+      ),
+    ),
+    // Draft 219.
+    step(
+      "proposed-aggregate-alias-length",
+      pipeline(
+        collection("ap5"),
+        stage(
+          "aggregate",
+          mapOf({
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:
+              fn("count", fld("n")),
+          }),
+          mapOf({}),
+        ),
+      ),
+    ),
+    // Draft 219.
+    step(
+      "proposed-distinct-alias-invalid",
+      pipeline(collection("ap5"), stage("distinct", mapOf({ "a..b": fld("top") }))),
+    ),
+    // Draft 219.
+    step(
+      "proposed-distinct-alias-length",
+      pipeline(
+        collection("ap5"),
+        stage(
+          "distinct",
+          mapOf({
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:
+              fld("top"),
+          }),
+        ),
+      ),
+    ),
+    // Draft 220.
+    step(
+      "proposed-empty-add-then-empty-alias",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({})), select({ "": fld("i") })),
+    ),
+    // Draft 220.
+    step(
+      "proposed-empty-add-alias-then-empty-select",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({ "": fld("i") })), select({})),
+    ),
+    // Draft 221.
+    step(
+      "proposed-select-duplicate-quoted-path",
+      pipeline(collection("ap5"), select({ a: fld("i"), "`a`": fld("i") })),
+    ),
+    // Draft 227-draft-control.
+    step(
+      "proposed-known-function-where-array-control",
+      pipeline(collection("ap5"), stage("where", list(fn("document_id", fld("__name__"))))),
+    ),
+    // Draft 228.
+    step("proposed-limit-zero", pipeline(collection("ap5"), stage("limit", int(0)))),
+    // Draft 228.
+    step("proposed-offset-zero", pipeline(collection("ap5"), stage("offset", int(0)))),
+    // Draft 228.
+    step("proposed-offset-one", pipeline(collection("ap5"), stage("offset", int(1)))),
+    // Draft 230.
+    step(
+      "proposed-n41-unknown-type-double",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("x"), value: list(dbl(1.0)) }) }),
+      ),
+    ),
+    // Draft 230.
+    step(
+      "proposed-n60-array-holding-vector",
+      pipeline(
+        collection("ap5"),
+        select({ v: list(mapOf({ __type__: str("__vector__"), value: list(dbl(1.0)) })) }),
+      ),
+    ),
+    // Draft 230.
+    step(
+      "proposed-n69-distinct-then-limit",
+      pipeline(
+        collection("ap5"),
+        stage("distinct", mapOf({ a: fld("top") })),
+        stage("limit", str("x")),
+      ),
+    ),
+    // Draft 231.
+    step(
+      "proposed-r11-unknown-type-integer",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("x"), value: list(int(1)) }) }),
+      ),
+    ),
+    // Draft 235,245.
+    step(
+      "proposed-reversed-overlap",
+      pipeline(collection("ap5"), select({ "m.r": fld("top"), m: fld("top") })),
+    ),
+    // Draft 237.
+    step(
+      "proposed-missing-dotted-one",
+      pipeline(collection("ap5"), select({ "a.b": fld("missing") })),
+    ),
+    // Draft 237.
+    step(
+      "proposed-missing-dotted-deep",
+      pipeline(collection("ap5"), select({ "a.b.c": fld("missing") })),
+    ),
+    // Draft 237.
+    step(
+      "proposed-missing-dotted-sibling",
+      pipeline(collection("ap5"), select({ "a.b": fld("missing"), "a.c": fld("top") })),
+    ),
+    // Draft 243.
+    step("proposed-collection-string", pipeline(stage("collection", str("ap5")))),
+    // Draft 244.
+    step(
+      "proposed-select-alias-shape-dotted",
+      pipeline(collection("ap5"), select({ "a.b": fn("document_id", bool(true)) })),
+    ),
+    // Draft 244.
+    step(
+      "proposed-select-alias-shape-quoted",
+      pipeline(collection("ap5"), select({ "`a`": fn("document_id", bool(true)) })),
+    ),
+    // Draft 245.
+    step(
+      "proposed-reversed-literal-field-map",
+      pipeline(collection("ap5"), select({ v: mapOf({ l: fld("i"), k: fld("top") }) })),
+    ),
+    // Draft 245.
+    step(
+      "proposed-reversed-function-field-map",
+      pipeline(collection("ap5"), select({ b: fn("document_id", fld("__name__")), a: fld("i") })),
+    ),
+    // Draft 227.
+    step(
+      "original-p30-where-unknown-array",
+      pipeline(collection("ap5"), stage("where", list(fn("nope_fn")))),
+    ),
+    // Draft 229.
+    step(
+      "original-n19-count-field",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ c: fn("count", fld("n")) }), mapOf({})),
+        select({}),
+      ),
+    ),
+    // Draft 229.
+    step(
+      "original-n21-count-zero",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ c: fn("count") }), mapOf({})),
+        select({}),
+      ),
+    ),
+    // Draft 212-original.
+    step(
+      "original-q3-top-level-parent-chain",
+      pipeline(
+        collection("ap5"),
+        select({ v: fn("document_id", fn("parent", fn("parent", fld("__name__")))) }),
+        stage("limit", str("x")),
+      ),
+    ),
+    // Draft 236.
+    step(
+      "original-h9-two-failing-calls",
+      pipeline(
+        collection("ap5"),
+        select({ a: fn("document_id", str("s")), b: fn("parent", bool(true)) }),
+      ),
+    ),
+    // Draft 236.
+    step(
+      "original-m4242-00731",
+      pipeline(
+        collection("ap5"),
+        select({
+          v: fn("collection_id", fld("top")),
+          "`x y`": int(0),
+          "a.b": fn("map", str("k"), fn("equal", fld("n"), fld("top")), str("k"), fld("top")),
+        }),
+      ),
+    ),
+  ],
+};
+
+const o5SubcollectionProgram = {
+  id: "fs-ent-pipeline/o5/subcollection",
+  seed: [["qs5/p/children/d", { i: int(1), n: int(1), top: str("t") }]],
+  steps: [
+    // Draft 212-subcollection.
+    step(
+      "proposed-q3-subcollection-parent-chain",
+      pipeline(
+        collection("qs5/p/children"),
+        select({ v: fn("document_id", fn("parent", fn("parent", fld("__name__")))) }),
+        stage("limit", str("x")),
+      ),
+    ),
+  ],
+};
+
 export const PROGRAMS = [
   expressionProgram,
   whereProgram,
@@ -1020,4 +1858,12 @@ export const PROGRAMS = [
   o4FunctionProgram,
   o4DocumentProgram,
   o4ComparisonProgram,
+  o5NameProgram,
+  o5LiteralKeyProgram,
+  o5FunctionOrderProgram,
+  o5StageOrderProgram,
+  o5ValueShapeProgram,
+  o5FunctionNameProgram,
+  o5AppendixProgram,
+  o5SubcollectionProgram,
 ];

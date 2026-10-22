@@ -1556,6 +1556,30 @@ impl FirestoreState {
             .and_then(|(_, d)| d.as_deref())
     }
 
+    /// Immutable shared handle to the current document, absent at a tombstone.
+    #[must_use]
+    pub fn get_shared(&self, path: &DocumentPath) -> Option<SharedDocument> {
+        self.history.get(path)?.last()?.1.as_ref().map(Arc::clone)
+    }
+
+    /// Immutable shared handle using the same historical lookup as [`Self::get_at`].
+    /// Holding a handle does not pin retained history or change supported read times.
+    #[must_use]
+    pub fn get_at_shared(
+        &self,
+        path: &DocumentPath,
+        version: CommitVersion,
+    ) -> Option<SharedDocument> {
+        self.history
+            .get(path)?
+            .iter()
+            .rev()
+            .find(|(candidate, _)| *candidate <= version)?
+            .1
+            .as_ref()
+            .map(Arc::clone)
+    }
+
     /// Indexes a newly retained path. This is the path's one shared index allocation: the
     /// live indexes and the listing trie hold the same `Arc`, never a copy of their own (the
     /// `history` key is a separate copy).
@@ -4835,6 +4859,33 @@ impl FirestoreState {
         Ok((out, stats))
     }
 
+    /// Captures immutable query results that remain valid after the store is changed.
+    /// Ordinary unprojected queries clone stored handles instead of document fields. Projection
+    /// and nearest-vector results retain the materializing execution and its clone counters.
+    /// A selection retains O(result count) handles and their payloads until dropped; it does not
+    /// pin history floors. Selection and ordering counters match [`Self::run_query_with_stats`],
+    /// while Arc-only selection reports zero document and field-byte clones.
+    pub fn run_query_shared_with_stats(
+        &self,
+        query: &Query,
+        version: Option<CommitVersion>,
+    ) -> Result<(Vec<SharedDocument>, QueryStats), FirestoreError> {
+        if query.projection.is_some() || query.find_nearest.is_some() {
+            let (documents, counters) = self.run_query_with_stats(query, version)?;
+            return Ok((documents.into_iter().map(Arc::new).collect(), counters));
+        }
+        let mut documents = Vec::new();
+        let counters = self.select(query, version, &[], Consumption::Ordered, |document| {
+            let shared = version.map_or_else(
+                || self.get_shared(&document.path),
+                |version| self.get_at_shared(&document.path, version),
+            );
+            documents
+                .push(shared.expect("a selected document is retained in this immutable state"));
+        })?;
+        Ok((documents, counters))
+    }
+
     #[allow(clippy::too_many_lines)]
     fn run_find_nearest_with_stats(
         &self,
@@ -7573,4 +7624,9 @@ thread_local! {
 #[cfg(test)]
 mod performance_tests {
     include!("../tests/support/performance.rs");
+}
+
+#[cfg(test)]
+mod shared_snapshot_tests {
+    include!("../tests/support/shared_snapshot.rs");
 }

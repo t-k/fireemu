@@ -123,6 +123,11 @@ function wireView(value, parent = "") {
   ]));
 }
 
+function requestIdentity(seed, step) {
+  const { id, ...request } = step;
+  return JSON.stringify(wireView([seed, request]));
+}
+
 const oldIds = new Set(OLD_PROGRAMS.map((program) => program.id));
 const selected = PROGRAMS.filter((program) => program.id.startsWith("fs-ent-pipeline/o5/"));
 const additions = selected.filter((program) => !oldIds.has(program.id));
@@ -146,6 +151,9 @@ for (const expected of EXPECTED_CASES) {
     assert.deepEqual(program.seed, seed(expected.subcollection));
     const actual = program.steps.find((step) => step.id === expected.id);
     assert.equal(actual.rpc, expected.rpc);
+    assert.equal(actual.transport, undefined, `${expected.id} uses default REST`);
+    assert.equal(actual.options, undefined, `${expected.id} has no request options`);
+    assert.deepEqual(Object.keys(actual).sort(), ["body", "id", "rpc"], `${expected.id} has no extra request settings`);
     assert.deepEqual(wireView(actual.body), wireView(expected.body), expected.id);
   });
 }
@@ -162,11 +170,22 @@ test("O5 deduplicates complete typed requests with their fixture without losing 
   const seen = new Set();
   for (const program of additions) {
     for (const step of program.steps) {
-      const key = JSON.stringify(wireView([program.seed, step.body]));
+      const key = requestIdentity(program.seed, step);
       assert.ok(!seen.has(key), `duplicate ${step.id}`);
       seen.add(key);
     }
   }
   const reused = PROGRAMS.find((program) => program.id === "fs-ent-pipeline/o5/function-order").steps.filter((step) => step.id === "unknown-in-array-literal");
   assert.equal(reused.length, 1, "P32 reuses the existing original case");
+});
+
+
+test("O5 request identity distinguishes RPC, transport and options without using case IDs", () => {
+  const step = additions[0].steps[0];
+  const fixture = additions[0].seed;
+  const identity = requestIdentity(fixture, step);
+  assert.equal(requestIdentity(fixture, { ...step, id: "different-label" }), identity);
+  assert.notEqual(requestIdentity(fixture, { ...step, rpc: "runQuery" }), identity);
+  assert.notEqual(requestIdentity(fixture, { ...step, transport: "grpc" }), identity);
+  assert.notEqual(requestIdentity(fixture, { ...step, options: { explain: true } }), identity);
 });

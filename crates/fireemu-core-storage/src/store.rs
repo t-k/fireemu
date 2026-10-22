@@ -785,6 +785,10 @@ pub struct StorageState {
     public_read: BTreeSet<(BucketName, ObjectName, u64)>,
     #[cfg(test)]
     public_read_object_checks: usize,
+    #[cfg(test)]
+    upload_recomputations: usize,
+    #[cfg(test)]
+    upload_accounting_lookups: usize,
 }
 
 fn blob_bytes(blobs: &BTreeMap<BlobId, Arc<Vec<u8>>>) -> u64 {
@@ -851,6 +855,10 @@ impl StorageState {
             public_read: BTreeSet::new(),
             #[cfg(test)]
             public_read_object_checks: 0,
+            #[cfg(test)]
+            upload_recomputations: 0,
+            #[cfg(test)]
+            upload_accounting_lookups: 0,
         }
     }
 
@@ -871,7 +879,72 @@ impl StorageState {
     }
 
     fn refresh_retained_upload_bytes(&mut self) {
+        #[cfg(test)]
+        {
+            self.upload_recomputations += 1;
+        }
         self.retained_upload_bytes = Self::upload_bytes(&self.uploads);
+    }
+
+    // Only the selected session can change inside this boundary. Snapshotting the total also covers an expired lookup that removes that same session before returning an error.
+    fn with_upload_accounting<R>(
+        &mut self,
+        id: &UploadId,
+        change: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        #[cfg(test)]
+        {
+            self.upload_accounting_lookups += 2;
+        }
+        let retained = self.retained_upload_bytes;
+        let before = self
+            .uploads
+            .get(id)
+            .map_or(0, |upload| upload.received.len() as u64);
+        let result = change(self);
+        let after = self
+            .uploads
+            .get(id)
+            .map_or(0, |upload| upload.received.len() as u64);
+        self.retained_upload_bytes = retained
+            .checked_sub(before)
+            .and_then(|other| other.checked_add(after))
+            .expect("retained upload accounting invariant");
+        result
+    }
+
+    fn with_upload_session<R>(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+        change: impl FnOnce(&mut UploadSession) -> R,
+    ) -> Result<R, StorageError> {
+        let upload = self.upload_mut(id, now)?;
+        let before = upload.received.len() as u64;
+        let result = change(upload);
+        let after = upload.received.len() as u64;
+        self.retained_upload_bytes = self
+            .retained_upload_bytes
+            .checked_sub(before)
+            .and_then(|other| other.checked_add(after))
+            .expect("retained upload accounting invariant");
+        Ok(result)
+    }
+
+    fn retain_uploads(&mut self, mut keep: impl FnMut(&UploadSession) -> bool) {
+        let mut removed = 0;
+        self.uploads.retain(|_, upload| {
+            if keep(upload) {
+                true
+            } else {
+                removed += upload.received.len() as u64;
+                false
+            }
+        });
+        self.retained_upload_bytes = self
+            .retained_upload_bytes
+            .checked_sub(removed)
+            .expect("removed upload bytes were retained");
     }
 
     fn can_retain_upload_bytes(retained: u64, additional: u64, limit: u64) -> bool {
@@ -1023,8 +1096,7 @@ impl StorageState {
             }
         }
         self.remove_versioning_state_where(|name| name == bucket.as_str());
-        self.uploads.retain(|_, u| u.bucket != *bucket);
-        self.refresh_retained_upload_bytes();
+        self.retain_uploads(|u| u.bucket != *bucket);
         gone.len()
     }
 
@@ -1043,8 +1115,7 @@ impl StorageState {
             }
         }
         self.remove_versioning_state_where(&owned);
-        self.uploads.retain(|_, u| !owned(u.bucket.as_str()));
-        self.refresh_retained_upload_bytes();
+        self.retain_uploads(|u| !owned(u.bucket.as_str()));
         gone.len()
     }
 
@@ -1109,6 +1180,10 @@ impl StorageState {
             public_read,
             #[cfg(test)]
             public_read_object_checks: 0,
+            #[cfg(test)]
+            upload_recomputations: 0,
+            #[cfg(test)]
+            upload_accounting_lookups: 0,
         }
     }
 
@@ -2368,12 +2443,12 @@ impl StorageState {
             .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
             .min(DEFAULT_LIST_PAGE_SIZE);
         let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
-        let lower = (bucket.clone(), ObjectName::range_start(prefix));
         let fold = |name: &str| {
             let rest = &name[prefix.len()..];
             delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
         };
         if max == 0 {
+            let lower = (bucket.clone(), ObjectName::range_start(prefix));
             let token_is_item = page_token.is_some_and(|token| {
                 self.objects
                     .get(&(bucket.clone(), ObjectName::range_start(token)))
@@ -2407,18 +2482,30 @@ impl StorageState {
             };
         }
         let token_is_entry = page_token.is_some_and(|token| {
-            self.objects
-                .range(lower.clone()..)
-                .take_while(|((candidate_bucket, name), _)| {
-                    candidate_bucket == bucket && name.as_str().starts_with(prefix)
+            if !token.starts_with(prefix) {
+                return false;
+            }
+            // An unfolded object is an entry in its own right. A folded prefix needs an accepted descendant: a name that merely exists is not a valid token.
+            if self
+                .objects
+                .get(&(bucket.clone(), ObjectName::range_start(token)))
+                .is_some_and(|meta| {
+                    fold(meta.name.as_str()).is_none() && matches(meta.name.as_str())
                 })
-                .filter(|((_, name), _)| matches(name.as_str()))
+            {
+                return true;
+            }
+            self.objects
+                .range((bucket.clone(), ObjectName::range_start(token))..)
+                .take_while(|((candidate_bucket, name), _)| {
+                    candidate_bucket == bucket && name.as_str().starts_with(token)
+                })
                 .any(|((_, name), _)| {
-                    let folded = fold(name.as_str());
-                    folded.as_deref().unwrap_or(name.as_str()) == token
+                    fold(name.as_str()).as_deref() == Some(token) && matches(name.as_str())
                 })
         });
         let start = page_token.filter(|_| token_is_entry).unwrap_or(prefix);
+        let lower = (bucket.clone(), ObjectName::range_start(start));
         let mut items = Vec::with_capacity(max);
         let mut prefixes: Vec<String> = Vec::new();
         let mut next_page_token = None;
@@ -2696,14 +2783,14 @@ impl StorageState {
     /// Drops expired sessions; finished sessions beyond the tombstone cap are evicted oldest
     /// first (ids are sequence-ordered).
     fn sweep_uploads(&mut self, now: LogicalInstant) {
-        self.uploads.retain(|_, u| !Self::expired(u, now));
+        self.retain_uploads(|u| !Self::expired(u, now));
         let mut finished = self
             .uploads
             .values()
             .filter(|u| u.state != UploadState::Receiving)
             .count();
         if finished > MAX_FINISHED_UPLOAD_SESSIONS {
-            self.uploads.retain(|_, u| {
+            self.retain_uploads(|u| {
                 if u.state != UploadState::Receiving && finished > MAX_FINISHED_UPLOAD_SESSIONS {
                     finished -= 1;
                     false
@@ -2712,7 +2799,6 @@ impl StorageState {
                 }
             });
         }
-        self.refresh_retained_upload_bytes();
     }
 
     fn upload_mut(
@@ -2721,8 +2807,11 @@ impl StorageState {
         now: LogicalInstant,
     ) -> Result<&mut UploadSession, StorageError> {
         if self.uploads.get(id).is_some_and(|u| Self::expired(u, now)) {
-            self.uploads.remove(id);
-            self.refresh_retained_upload_bytes();
+            let removed = self.uploads.remove(id).expect("expired upload exists");
+            self.retained_upload_bytes = self
+                .retained_upload_bytes
+                .checked_sub(removed.received.len() as u64)
+                .expect("expired upload bytes were retained");
         }
         self.uploads.get_mut(id).ok_or(StorageError::UploadNotFound)
     }
@@ -2777,8 +2866,7 @@ impl StorageState {
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<(), StorageError> {
-        let result = (|| {
-            let u = self.upload_mut(id, now)?;
+        self.with_upload_session(id, now, |u| {
             if u.state == UploadState::Receiving {
                 // Keep the count for a later status query; drop the bytes, exactly as a cancel
                 // and a size / checksum abort do (S-2).
@@ -2786,9 +2874,7 @@ impl StorageState {
                 u.received = Vec::new();
             }
             Ok(())
-        })();
-        self.refresh_retained_upload_bytes();
-        result
+        })?
     }
 
     /// Declares (or confirms) the total size of an upload; a different total than the one
@@ -2823,11 +2909,10 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let retained = self.retained_upload_bytes;
         let limit = self.retained_upload_limit;
-        let result = (|| {
-            let u = self.upload_mut(id, now)?;
+        self.with_upload_session(id, now, |u| {
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
-                    return Err(StorageError::UploadFinalized)
+                    return Err(StorageError::UploadFinalized);
                 }
                 UploadState::Receiving => {}
             }
@@ -2855,9 +2940,7 @@ impl StorageState {
                 u.received.extend_from_slice(appended);
             }
             Ok(u.received.len() as u64)
-        })();
-        self.refresh_retained_upload_bytes();
-        result
+        })?
     }
 
     /// [`Self::append_upload`] with an owned chunk: a session that has not received
@@ -2873,11 +2956,10 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let retained = self.retained_upload_bytes;
         let limit = self.retained_upload_limit;
-        let attempt = (|| {
-            let u = self.upload_mut(id, now)?;
+        let attempt = self.with_upload_session(id, now, |u| {
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
-                    return Err(StorageError::UploadFinalized)
+                    return Err(StorageError::UploadFinalized);
                 }
                 UploadState::Receiving => {}
             }
@@ -2897,8 +2979,7 @@ impl StorageState {
             u.crc32c.update(&chunk);
             u.received = std::mem::take(&mut chunk);
             Ok(Some(u.received.len() as u64))
-        })();
-        self.refresh_retained_upload_bytes();
+        })?;
         match attempt? {
             Some(received) => Ok(received),
             None => self.append_upload(id, offset, &chunk, now),
@@ -2978,9 +3059,9 @@ impl StorageState {
         now: LogicalInstant,
         admit: impl FnOnce(&[StorageEvent]) -> Result<R, StorageError>,
     ) -> Result<(ObjectMetadata, R), StorageError> {
-        let result = self.finalize_upload_with_admission_inner(id, now, admit);
-        self.refresh_retained_upload_bytes();
-        result
+        self.with_upload_accounting(id, |store| {
+            store.finalize_upload_with_admission_inner(id, now, admit)
+        })
     }
 
     fn finalize_upload_with_admission_inner<R>(
@@ -2993,7 +3074,7 @@ impl StorageState {
             let u = self.upload_mut(id, now)?;
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
-                    return Err(StorageError::UploadFinalized)
+                    return Err(StorageError::UploadFinalized);
                 }
                 UploadState::Receiving => {}
             }
@@ -3113,15 +3194,16 @@ impl StorageState {
     /// and the running digests restored. A session that left the receiving state is left as
     /// it is.
     pub fn rollback_upload(&mut self, id: &UploadId, checkpoint: UploadCheckpoint) {
-        if let Some(upload) = self.uploads.get_mut(id) {
-            // Appending only grows a receiving session, so the checkpoint is a prefix of it.
-            if matches!(upload.state, UploadState::Receiving) {
-                upload.received.truncate(checkpoint.received);
-                upload.md5 = checkpoint.md5;
-                upload.crc32c = checkpoint.crc32c;
+        self.with_upload_accounting(id, |store| {
+            if let Some(upload) = store.uploads.get_mut(id) {
+                // Appending only grows a receiving session, so the checkpoint is a prefix of it.
+                if matches!(upload.state, UploadState::Receiving) {
+                    upload.received.truncate(checkpoint.received);
+                    upload.md5 = checkpoint.md5;
+                    upload.crc32c = checkpoint.crc32c;
+                }
             }
-        }
-        self.refresh_retained_upload_bytes();
+        });
     }
 
     /// Cancels an upload. A finalized session (committed, or refused by rules at
@@ -3131,20 +3213,17 @@ impl StorageState {
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<(), StorageError> {
-        let result = (|| {
-            let u = self.upload_mut(id, now)?;
+        self.with_upload_session(id, now, |u| {
             match u.state {
                 UploadState::Committed(_) | UploadState::Denied(_) => {
-                    return Err(StorageError::UploadFinalized)
+                    return Err(StorageError::UploadFinalized);
                 }
                 UploadState::Receiving | UploadState::Aborted => {}
             }
             u.state = UploadState::Aborted;
             u.received = Vec::new();
             Ok(())
-        })();
-        self.refresh_retained_upload_bytes();
-        result
+        })?
     }
 
     /// Lists the entries (objects, and common prefixes when a delimiter is given) that sort after
@@ -3308,6 +3387,173 @@ impl MetadataPatch {
 mod tests {
     use super::*;
 
+    fn reference_list_matching(
+        state: &StorageState,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        page_token: Option<&str>,
+        max_results: Option<usize>,
+        matches: &dyn Fn(&str) -> bool,
+    ) -> ListPage {
+        let max = max_results
+            .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
+            .min(DEFAULT_LIST_PAGE_SIZE);
+        let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
+        let lower = (bucket.clone(), ObjectName::range_start(prefix));
+        let fold = |name: &str| {
+            let rest = &name[prefix.len()..];
+            delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
+        };
+        if max == 0 {
+            let token_is_item = page_token.is_some_and(|token| {
+                state
+                    .objects
+                    .get(&(bucket.clone(), ObjectName::range_start(token)))
+                    .is_some_and(|metadata| {
+                        let name = metadata.name.as_str();
+                        name.starts_with(prefix) && matches(name) && fold(name).is_none()
+                    })
+            });
+            let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
+            let mut prefixes = Vec::new();
+            let mut next_page_token = None;
+            for ((candidate_bucket, name), _) in state.objects.range(lower..) {
+                if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                    break;
+                }
+                if !matches(name.as_str()) {
+                    continue;
+                }
+                if let Some(folded) = fold(name.as_str()) {
+                    if prefixes.last() != Some(&folded) {
+                        prefixes.push(folded);
+                    }
+                } else if name.as_str() >= item_start && next_page_token.is_none() {
+                    next_page_token = Some(name.as_str().to_owned());
+                }
+            }
+            return ListPage {
+                items: Vec::new(),
+                prefixes,
+                next_page_token,
+            };
+        }
+        let token_is_entry = page_token.is_some_and(|token| {
+            state
+                .objects
+                .range(lower.clone()..)
+                .take_while(|((candidate_bucket, name), _)| {
+                    candidate_bucket == bucket && name.as_str().starts_with(prefix)
+                })
+                .filter(|((_, name), _)| matches(name.as_str()))
+                .any(|((_, name), _)| {
+                    let folded = fold(name.as_str());
+                    folded.as_deref().unwrap_or(name.as_str()) == token
+                })
+        });
+        let start = page_token.filter(|_| token_is_entry).unwrap_or(prefix);
+        let mut items = Vec::with_capacity(max);
+        let mut prefixes: Vec<String> = Vec::new();
+        let mut next_page_token = None;
+        for ((candidate_bucket, name), meta) in state.objects.range(lower..) {
+            if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                break;
+            }
+            if !matches(name.as_str()) {
+                continue;
+            }
+            let folded = fold(name.as_str());
+            let entry_name = folded.as_deref().unwrap_or(name.as_str());
+            if entry_name < start || folded.as_ref().is_some_and(|p| prefixes.last() == Some(p)) {
+                continue;
+            }
+            if items.len() + prefixes.len() == max {
+                next_page_token = Some(entry_name.to_owned());
+                break;
+            }
+            if let Some(p) = folded {
+                prefixes.push(p);
+            } else {
+                items.push(meta.clone());
+            }
+        }
+        ListPage {
+            items,
+            prefixes,
+            next_page_token,
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+        #[test]
+        fn listing_cursor_matches_the_original_scan(
+            names in proptest::collection::btree_set("[ab/:-]{1,10}", 0..40),
+            prefix in proptest::sample::select(vec!["", "a", "a/", "b/", ":"]),
+            delimiter in proptest::sample::select(vec![None, Some("/"), Some("::"), Some(""), Some("a")]),
+            token in proptest::option::of("[ab/:-]{0,10}"),
+            max in 0usize..8,
+            rejected in proptest::option::of(proptest::char::range('a', 'b')),
+        ) {
+            let mut state = StorageState::new(1);
+            let bucket = BucketName::try_new("bucket-one").unwrap();
+            for name in &names {
+                state.put(&bucket, &ObjectName::try_new(name).unwrap(), Vec::new(), NewMetadata::default(), Precondition::default(), LogicalInstant::UNIX_EPOCH).unwrap();
+            }
+            let accepts = |name: &str| rejected.is_none_or(|c| !name.contains(c));
+            for token in [token, names.first().cloned(), names.last().cloned(), Some("a/".to_owned())] {
+                let actual = state.list_matching(&bucket, prefix, delimiter, token.as_deref(), Some(max), &accepts);
+                let expected = reference_list_matching(&state, &bucket, prefix, delimiter, token.as_deref(), Some(max), &accepts);
+                let cursor = actual.next_page_token.clone().or(token);
+                proptest::prop_assert_eq!(actual, expected);
+                let deleted = names.iter().find(|name| cursor.as_ref().is_some_and(|cursor| name.starts_with(cursor))).cloned();
+                if let Some(name) = &deleted {
+                    let _ = state.delete(&bucket, &ObjectName::try_new(name).unwrap(), Precondition::default(), LogicalInstant::UNIX_EPOCH);
+                }
+                for recreated in [false, true] {
+                    if recreated {
+                        if let Some(name) = &deleted {
+                            state.put(&bucket, &ObjectName::try_new(name).unwrap(), vec![1], NewMetadata::default(), Precondition::default(), LogicalInstant::UNIX_EPOCH).unwrap();
+                        }
+                    }
+                    let offsets = |name: &str| accepts(name) && cursor.as_deref().is_none_or(|cursor| name >= cursor);
+                    proptest::prop_assert_eq!(
+                        state.list_matching(&bucket, prefix, delimiter, cursor.as_deref(), Some(max), &offsets),
+                        reference_list_matching(&state, &bucket, prefix, delimiter, cursor.as_deref(), Some(max), &offsets),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deep_listing_visits_only_the_cursor_page() {
+        use std::cell::Cell;
+        let bucket = BucketName::try_new("bucket-one").unwrap();
+        let mut state = StorageState::new(1);
+        for i in 0..1024 {
+            state
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(format!("object-{i:04}")).unwrap(),
+                    Vec::new(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .unwrap();
+        }
+        let visits = Cell::new(0);
+        let page = state.list_matching(&bucket, "", None, Some("object-1000"), Some(10), &|_| {
+            visits.set(visits.get() + 1);
+            true
+        });
+        assert_eq!(page.items[0].name.as_str(), "object-1000");
+        assert_eq!(page.next_page_token.as_deref(), Some("object-1010"));
+        assert!(visits.get() <= 12, "visited {} names", visits.get());
+    }
+
     #[test]
     fn making_an_object_public_checks_only_that_object() {
         for count in [256, 16, 1] {
@@ -3334,6 +3580,144 @@ mod tests {
                 "public objects: {count}"
             );
             assert_eq!(state.public_read.len(), count);
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+        #[test]
+        fn retained_upload_bytes_match_recomputation_after_all_transitions(
+            operations in proptest::collection::vec((0u8..20, 0usize..16, 0u8..16), 1..160),
+        ) {
+            let buckets = [BucketName::try_new("bucket-one").unwrap(), BucketName::try_new("bucket-two").unwrap()];
+            let mut state = StorageState::new(3);
+            state.retained_upload_limit = 32;
+            let mut ids = Vec::new();
+            let mut capture = None;
+            let mut seconds = 0;
+            for (op, selected, bytes) in operations {
+                let now = LogicalInstant::from_unix_seconds(seconds);
+                let id = ids.get(selected % ids.len().max(1)).cloned().unwrap_or_else(|| UploadId::from_str_unchecked("missing"));
+                let bucket = &buckets[selected % 2];
+                let received = state.uploads.get(&id).map_or(0, |u| u.received.len() as u64);
+                let chunk = vec![bytes; usize::from(bytes)];
+                match op {
+                    0 | 1 => {
+                        if let Ok(id) = state.begin_upload(bucket, &ObjectName::try_new(format!("object-{selected}")).unwrap(), NewMetadata::default(), Precondition::default(), (op == 1).then_some(u64::from(bytes)), now) { ids.push(id); }
+                    }
+                    2 => { let _ = state.append_upload(&id, received, &chunk, now); }
+                    3 => { let _ = state.append_upload_owned(&id, received.saturating_sub(u64::from(bytes / 2)), chunk, now); }
+                    4 => { let _ = state.append_upload(&id, u64::from(bytes), &chunk, now); }
+                    5 => { let _ = state.cancel_upload(&id, now); }
+                    6 => { let _ = state.mark_upload_denied(&id, now); }
+                    7 => { let _ = state.finalize_upload(&id, now); }
+                    8 => {
+                        let _ = state.finalize_upload_with_admission(&id, now, |_| Err::<(), _>(StorageError::EventAdmission(EventAdmissionError::Capacity("full".to_owned()))));
+                    }
+                    9 => {
+                        if let Some(checkpoint) = state.upload_checkpoint(&id) {
+                            let _ = state.append_upload_owned(&id, received, chunk, now);
+                            proptest::prop_assert_eq!(state.retained_upload_bytes, StorageState::upload_bytes(&state.uploads));
+                            state.rollback_upload(&id, checkpoint);
+                        }
+                    }
+                    10 => { let _ = state.set_upload_hashes(&id, Some([bytes; 16]), None, now); }
+                    11 => { let _ = state.set_upload_total(&id, u64::from(bytes), now); }
+                    12 => { seconds += UPLOAD_SESSION_TTL_SECONDS + 1; let _ = state.upload_status(&id, LogicalInstant::from_unix_seconds(seconds)); }
+                    13 => { state.remove_bucket(bucket); }
+                    14 => { state.remove_buckets_where(|b| b == bucket.as_str()); }
+                    15 => { capture = Some(state.capture_buckets(|b| b == bucket.as_str())); }
+                    16 => { if let Some(captured) = &capture { state.restore_buckets(|b| b == bucket.as_str(), captured); } }
+                    17 => { state.clear(); }
+                    18 => { state.set_stored_bytes_limit(Some(u64::from(bytes))); let _ = state.upload_chunk(&id, received, &chunk, true, now); }
+                    _ => { let _ = state.pending_upload(&id, now); let _ = state.upload_phase(&id, now); }
+                }
+                proptest::prop_assert_eq!(state.retained_upload_bytes, StorageState::upload_bytes(&state.uploads), "op {} id {:?}", op, id);
+                if let Some(captured) = &capture {
+                    proptest::prop_assert_eq!(captured.retained_upload_bytes, StorageState::upload_bytes(&captured.uploads));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn appending_and_releasing_upload_bytes_reuses_the_session_lookup() {
+        let now = LogicalInstant::UNIX_EPOCH;
+        let bucket = BucketName::try_new("bucket-one").unwrap();
+        let mut state = StorageState::new(1);
+        let id = state
+            .begin_upload(
+                &bucket,
+                &ObjectName::try_new("object").unwrap(),
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                now,
+            )
+            .unwrap();
+        state.append_upload_owned(&id, 0, vec![1; 2], now).unwrap();
+        state.append_upload(&id, 2, &[2], now).unwrap();
+        state.append_upload_owned(&id, 0, vec![1], now).unwrap();
+        state.mark_upload_denied(&id, now).unwrap();
+        assert_eq!(state.retained_upload_bytes, 0);
+        assert_eq!(state.upload_accounting_lookups, 0);
+    }
+
+    #[test]
+    fn upload_mutations_do_not_recompute_unrelated_sessions() {
+        let now = LogicalInstant::UNIX_EPOCH;
+        let bucket = BucketName::try_new("bucket-one").unwrap();
+        for count in [1, 100, MAX_UPLOAD_SESSIONS] {
+            let mut state = StorageState::new(1);
+            for i in 0..MAX_FINISHED_UPLOAD_SESSIONS {
+                let id = state
+                    .begin_upload(
+                        &bucket,
+                        &ObjectName::try_new(format!("done-{i}")).unwrap(),
+                        NewMetadata::default(),
+                        Precondition::default(),
+                        None,
+                        now,
+                    )
+                    .unwrap();
+                state.cancel_upload(&id, now).unwrap();
+            }
+            let ids: Vec<_> = (0..count)
+                .map(|i| {
+                    state
+                        .begin_upload(
+                            &bucket,
+                            &ObjectName::try_new(format!("open-{i}")).unwrap(),
+                            NewMetadata::default(),
+                            Precondition::default(),
+                            None,
+                            now,
+                        )
+                        .unwrap()
+                })
+                .collect();
+            state.upload_recomputations = 0;
+            for id in &ids {
+                state.append_upload_owned(id, 0, vec![1; 4], now).unwrap();
+                state.append_upload(id, 2, &[1; 4], now).unwrap();
+                state.append_upload_owned(id, 0, vec![1; 4], now).unwrap();
+                let checkpoint = state.upload_checkpoint(id).unwrap();
+                state.append_upload(id, 6, &[1], now).unwrap();
+                state.rollback_upload(id, checkpoint);
+                assert_eq!(
+                    state.retained_upload_bytes,
+                    StorageState::upload_bytes(&state.uploads)
+                );
+            }
+            assert_eq!(state.retained_upload_bytes, 6 * count as u64);
+            for id in &ids {
+                state.cancel_upload(id, now).unwrap();
+            }
+            assert_eq!(state.retained_upload_bytes, 0);
+            assert_eq!(
+                state.upload_recomputations, 0,
+                "active session count: {count}"
+            );
         }
     }
 

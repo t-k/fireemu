@@ -26,6 +26,21 @@ fn target(child: &Graph, state: usize, unit: u16) -> Option<usize> {
 }
 
 impl Key {
+    fn points(&self, child: &Graph, min: u32) -> Vec<u16> {
+        let mut sources = BTreeSet::from([child.initial]);
+        sources.extend(self.tail.iter().copied());
+        match &self.prefix {
+            Prefix::Root | Prefix::None => {}
+            Prefix::Nullable(v) => sources.extend(
+                v.iter()
+                    .enumerate()
+                    .filter_map(|(q, &first)| (first < min).then_some(q)),
+            ),
+            Prefix::Indexed(v) => sources.extend(v.iter().map(|&(_, q)| q)),
+        }
+        child.points_for(sources)
+    }
+
     fn units(&self) -> usize {
         self.tail.len()
             + match &self.prefix {
@@ -159,7 +174,6 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
     let mut intern = BTreeMap::from([(initial.clone(), 0)]);
     let mut keys = vec![initial];
     let mut states = vec![State::default()];
-    let points = child.points();
     let mut cursor = 0;
     let mut units = keys[0].units();
     let mut edge_count = 0;
@@ -167,6 +181,7 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
         guard_count(cursor as u64 + 1, threshold)?;
         let current = keys[cursor].clone();
         states[cursor].accept = current.accepts(child, min);
+        let points = current.points(child, min);
         for (i, &lo) in points.iter().enumerate() {
             let next = current.next(child, min, lo)?;
             let to = if let Some(&to) = intern.get(&next) {
@@ -187,6 +202,12 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
                 to
             };
             let hi = points.get(i + 1).map_or(u16::MAX, |&p| p - 1);
+            if let Some(last) = states[cursor].edges.last_mut() {
+                if last.to == to && u32::from(last.hi) + 1 == u32::from(lo) {
+                    last.hi = hi;
+                    continue;
+                }
+            }
             states[cursor].edges.push(Edge { lo, hi, to });
             edge_count += 1;
             if edge_count > PROTOTYPE_EDGES {

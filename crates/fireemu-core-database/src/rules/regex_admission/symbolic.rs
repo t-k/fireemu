@@ -20,6 +20,22 @@ fn target(child: &Graph, state: usize, unit: u16) -> Option<usize> {
 }
 
 impl Subset {
+    fn points(&self, child: &Graph, max: u32) -> Vec<u16> {
+        // Cross-copy resets may use the child initial state. Including it even
+        // when inactive only subdivides equal successor intervals.
+        let mut sources = BTreeSet::from([child.initial]);
+        match self {
+            Self::Root => {}
+            Self::Nullable(v) => sources.extend(
+                v.iter()
+                    .enumerate()
+                    .filter_map(|(q, &first)| (first < max).then_some(q)),
+            ),
+            Self::Indexed(v) => sources.extend(v.iter().map(|&(_, q)| q)),
+        }
+        child.points_for(sources)
+    }
+
     fn units(&self) -> usize {
         match self {
             Self::Root => 1,
@@ -133,7 +149,6 @@ fn construct(
     } else {
         Subset::Indexed(vec![(0, child.initial)])
     };
-    let points = child.points();
     let mut intern = BTreeMap::from([(initial.clone(), 0)]);
     let mut subsets = vec![initial];
     let mut states = vec![State::default()];
@@ -144,6 +159,7 @@ fn construct(
         guard_count(cursor as u64 + 1, threshold)?;
         let subset = subsets[cursor].clone();
         states[cursor].accept = subset.accepts(child, min, max);
+        let points = subset.points(child, max);
         for (i, &lo) in points.iter().enumerate() {
             let next = subset.next(child, max, lo)?;
             let to = if let Some(&to) = intern.get(&next) {
@@ -166,6 +182,12 @@ fn construct(
                 to
             };
             let hi = points.get(i + 1).map_or(u16::MAX, |&p| p - 1);
+            if let Some(last) = states[cursor].edges.last_mut() {
+                if last.to == to && u32::from(last.hi) + 1 == u32::from(lo) {
+                    last.hi = hi;
+                    continue;
+                }
+            }
             states[cursor].edges.push(Edge { lo, hi, to });
             edge_count += 1;
             if edge_count > PROTOTYPE_EDGES {

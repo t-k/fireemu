@@ -1311,3 +1311,27 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
         }
     }
 }
+
+#[test]
+fn symbolic_repeats_do_not_materialize_irrelevant_global_endpoint_edges() {
+    let child = Automaton::Singleton((0..2499).collect())
+        .expanded()
+        .unwrap();
+    let mut explicit = Automaton::Graph(child.clone()).bounded(2, 2).unwrap();
+    assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
+    let (actual, count) = symbolic::bounded(&child, 2, 2, 5000).unwrap();
+    assert_eq!(count, Some(5000));
+    assert_eq!(actual.normal(), explicit.normal());
+}
+
+#[test]
+fn symbolic_minimum_does_not_materialize_irrelevant_global_endpoint_edges() {
+    let child = Automaton::Singleton((0..2499).collect())
+        .expanded()
+        .unwrap();
+    let mut explicit = Automaton::Graph(child.clone()).minimum(1).unwrap();
+    assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
+    let (actual, count) = minimum::compile(&child, 1, 5000).unwrap();
+    assert_eq!(count, Some(5000));
+    assert_eq!(actual.normal(), explicit.normal());
+}

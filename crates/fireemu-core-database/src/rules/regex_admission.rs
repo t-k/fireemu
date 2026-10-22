@@ -159,8 +159,12 @@ impl Graph {
     }
 
     fn points(&self) -> Vec<u16> {
+        self.points_for(self.reachable())
+    }
+
+    fn points_for(&self, states: impl IntoIterator<Item = usize>) -> Vec<u16> {
         let mut points = BTreeSet::from([0]);
-        for i in self.reachable() {
+        for i in states {
             for e in &self.states[i].edges {
                 points.insert(e.lo);
                 if e.hi < u16::MAX {

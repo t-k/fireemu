@@ -90,6 +90,18 @@ pub type SharedDocument = Arc<Document>;
 type DocumentHistory = BTreeMap<DocumentPath, Vec<(CommitVersion, Option<SharedDocument>)>>;
 type StagedChange = (DocumentPath, Option<SharedDocument>, Option<SharedDocument>);
 
+type GroupedWrites<'a> = BTreeMap<&'a DocumentPath, Vec<&'a Write>>;
+
+fn group_writes(writes: &[Write]) -> GroupedWrites<'_> {
+    let mut grouped: GroupedWrites<'_> = BTreeMap::new();
+    for write in writes {
+        #[cfg(test)]
+        CONFLICT_BATCH_INPUT_VISITS.with(|visits| visits.set(visits.get() + 1));
+        grouped.entry(write.op.path()).or_default().push(write);
+    }
+    grouped
+}
+
 /// One name-ordered `ListDocuments` entry when `show_missing` is enabled.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListedDocument {
@@ -4086,10 +4098,10 @@ impl FirestoreState {
 
     /// Whether the locks `holder` took cover a commit of `writes`: a document it read, or a
     /// document in the range of a query it ran (see [`Self::range_covers_writes`]).
-    fn holder_locks_writes(&self, holder: &Transaction, writes: &[Write]) -> bool {
+    fn holder_locks_writes(&self, holder: &Transaction, writes: &GroupedWrites<'_>) -> bool {
         writes
-            .iter()
-            .any(|write| holder.read_set.contains_key(write.op.path()))
+            .keys()
+            .any(|path| holder.read_set.contains_key(*path))
             || holder
                 .queries
                 .iter()
@@ -4107,31 +4119,21 @@ impl FirestoreState {
     /// cursors, offset and limit are ignored, so the lock is never narrower than the scan; a
     /// document whose result depends on a transform, or a filter that cannot be evaluated, is
     /// covered too.
-    fn range_covers_writes(&self, query: &Query, writes: &[Write]) -> bool {
-        let mut seen: Vec<&DocumentPath> = Vec::new();
-        for write in writes {
-            let path = write.op.path();
-            if seen.contains(&path) {
-                continue;
-            }
-            seen.push(path);
-            if self.range_covers_document(query, path, writes) {
-                return true;
-            }
-        }
-        false
+    fn range_covers_writes(&self, query: &Query, writes: &GroupedWrites<'_>) -> bool {
+        writes
+            .iter()
+            .any(|(path, writes)| self.range_covers_document(query, path, writes))
     }
 
     /// [`Self::range_covers_writes`] for the one document `path`.
-    fn range_covers_document(&self, query: &Query, path: &DocumentPath, writes: &[Write]) -> bool {
+    fn range_covers_document(&self, query: &Query, path: &DocumentPath, writes: &[&Write]) -> bool {
         if !path_in_scope(path, &query.scope) {
             return false;
         }
         let Some(filter) = query.filter.as_ref() else {
             return true;
         };
-        let own = || writes.iter().filter(|write| write.op.path() == path);
-        if own().any(|write| !write.transforms.is_empty()) {
+        if writes.iter().any(|write| !write.transforms.is_empty()) {
             return true;
         }
         let passes = |document: &Document| eval_filter(filter, document).unwrap_or(true);
@@ -4140,7 +4142,7 @@ impl FirestoreState {
             return true;
         }
         let mut current = before.cloned();
-        for write in own() {
+        for write in writes {
             match Self::preview_from(current.as_ref(), write, LogicalInstant::UNIX_EPOCH) {
                 Ok(next) => current = next,
                 Err(_) => return true,
@@ -4180,6 +4182,7 @@ impl FirestoreState {
             return Ok(());
         }
         self.prune_transactions(now);
+        let grouped = std::cell::OnceCell::new();
         let floor = self.compaction_floor;
         let holders: Vec<(TransactionId, LogicalInstant, bool)> = self
             .transactions
@@ -4189,7 +4192,8 @@ impl FirestoreState {
                     && !holder.read_only
                     && holder.read_version >= floor
                     && own != Some(*id)
-                    && self.holder_locks_writes(holder, writes)
+                    && self
+                        .holder_locks_writes(holder, grouped.get_or_init(|| group_writes(writes)))
             })
             .map(|(id, holder)| {
                 let cycle = own
@@ -4206,7 +4210,9 @@ impl FirestoreState {
                                     .filter(|(owner, _)| owner.is_active())
                                     .map(|(_, pending)| pending),
                             )
-                            .any(|pending| self.holder_locks_writes(requester, pending))
+                            .any(|pending| {
+                                self.holder_locks_writes(requester, &group_writes(pending))
+                            })
                     });
                 (id.clone(), holder.started_at, cycle)
             })
@@ -4266,6 +4272,7 @@ impl FirestoreState {
         writes: &[Write],
         own: Option<&TransactionId>,
     ) -> Vec<TransactionId> {
+        let grouped = std::cell::OnceCell::new();
         self.transactions
             .iter()
             .filter(|(id, holder)| {
@@ -4273,7 +4280,8 @@ impl FirestoreState {
                     && !holder.read_only
                     && holder.read_version >= self.compaction_floor
                     && own != Some(*id)
-                    && self.holder_locks_writes(holder, writes)
+                    && self
+                        .holder_locks_writes(holder, grouped.get_or_init(|| group_writes(writes)))
             })
             .map(|(id, _)| id.clone())
             .collect()
@@ -7629,4 +7637,14 @@ mod performance_tests {
 #[cfg(test)]
 mod shared_snapshot_tests {
     include!("../tests/support/shared_snapshot.rs");
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONFLICT_BATCH_INPUT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod conflict_grouping_tests {
+    include!("../tests/support/conflict_grouping.rs");
 }

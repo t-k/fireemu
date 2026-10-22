@@ -3,6 +3,8 @@ title: Realtime Database
 description: The Firebase Realtime Database with Security Rules, export and import, served without a compatibility claim yet.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs). It has no parity claim yet: production has not been observed, and rules coverage reports and Functions triggers are not implemented, so the [compatibility contract](../../compatibility/) lists it as an open gap, and behavior copied from the official emulator may change once production is observed (see [Provisional behavior](#provisional-behavior)).
 
 ## Start it
@@ -111,6 +113,9 @@ An instance with no rules file follows `database.defaultAccess`:
 - `"open"` (the development default in both profiles): every request is allowed, as the official emulator serves a database without rules.
 - `"locked"` (the `productionExact` default, `strict` profile only): only the `owner` credential reads and writes, as a new production database in locked mode admits only administrators. Every other credential, a signed-in user's included, is refused with 401.
 
+<Tabs syncKey="config-format">
+<TabItem label="TOML">
+
 ```toml
 schemaVersion = 1
 profile = "strict"
@@ -118,6 +123,22 @@ profile = "strict"
 [database]
 defaultAccess = "locked"
 ```
+
+</TabItem>
+<TabItem label="JSON">
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "database": {
+    "defaultAccess": "locked"
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 ### Unit testing with `@firebase/rules-unit-testing`
 

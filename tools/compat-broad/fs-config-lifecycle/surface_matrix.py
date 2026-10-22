@@ -652,7 +652,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "It must stay Enterprise-gated so a Standard Native run cannot reach a surface "
         "production would not serve.",
         _IMPLEMENTED,
-        ("crates/fireemu-adapter-http/src/control.rs:1356",),
+        (_at("crates/fireemu-adapter-http/src/control.rs", "if state.edition != FirestoreEdition::Enterprise {"),),
     ),
 )
 

@@ -376,13 +376,25 @@ pub fn nothing_to_import(dir: &Path, export_on_exit: Option<&Path>) -> Option<St
         Ok(_) => directory_is_empty(dir)
             .then(|| "the directory is empty, so the suite starts with no data".to_owned()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let absolute = std::path::absolute(dir).ok()?;
-            (export_on_exit == Some(absolute.as_path())).then(|| {
+            is_export_on_exit(dir, export_on_exit).then(|| {
                 "the directory does not exist yet, so the suite starts with no data (--export-on-exit creates it)".to_owned()
             })
         }
         _ => None,
     }
+}
+
+/// Whether `dir` names the `--export-on-exit` directory, which the preflight keeps with every
+/// symlink on it resolved (`/tmp/x` is `/private/tmp/x` on macOS).
+pub fn is_export_on_exit(dir: &Path, export_on_exit: Option<&Path>) -> bool {
+    let Some(export_on_exit) = export_on_exit else {
+        return false;
+    };
+    std::path::absolute(dir).is_ok_and(|absolute| {
+        absolute == export_on_exit
+            || fireemu_export_publication::resolve(&absolute)
+                .is_ok_and(|resolved| resolved == export_on_exit)
+    })
 }
 
 /// Whether `dir` is a directory with no entry. The directory is opened once, without following
@@ -3112,27 +3124,125 @@ pub fn export(
     endpoints: &Endpoints,
     initiated_by: &str,
 ) -> Result<(), ArtifactError> {
-    let staged = PublicationStage::create(dir, may_overwrite)
+    let staged = PublicationStage::create(dir, may_overwrite_target)
         .map_err(|e| ArtifactError::new("export", dir, e))?;
-    if staged.target_was_present() {
-        copy_unmanaged_entries(dir, staged.root())
+    // The tree is written through the stage's held descriptors, and the entries the export does
+    // not manage are read from the previous export opened relative to the held parent: no path
+    // is resolved again (export-guard r3 review M2).
+    let root = ExportPath::of(&staged).map_err(|e| ArtifactError::new("export", dir, e))?;
+    #[cfg(unix)]
+    if let Some(previous) = staged
+        .previous_export()
+        .map_err(|e| ArtifactError::new("export", dir, e))?
+    {
+        copy_unmanaged_entries(&previous, staged.target(), &root)
             .map_err(|e| ArtifactError::new("export", dir, e))?;
     }
-    write_export_tree(staged.root(), products, endpoints, initiated_by)?;
+    #[cfg(not(unix))]
+    if staged.target_was_present() {
+        copy_unmanaged_entries(staged.target(), staged.root())
+            .map_err(|e| ArtifactError::new("export", dir, e))?;
+    }
+    write_export_tree(&root, products, endpoints, initiated_by)?;
     staged
         .complete()
         .publish()
         .map_err(|e| ArtifactError::new("export", dir, e))
 }
 
+/// A path inside the export stage. On Unix every directory and file under it is made through
+/// the stage's held descriptors ([`fireemu_export_publication::StageDir`]); the path itself is
+/// for messages only.
+#[derive(Clone)]
+struct ExportPath {
+    #[cfg(unix)]
+    stage: std::sync::Arc<fireemu_export_publication::StageDir>,
+    relative: PathBuf,
+    full: PathBuf,
+}
+
+impl ExportPath {
+    /// The stage of `staged`, held.
+    #[cfg(unix)]
+    fn of(staged: &PublicationStage) -> Result<Self, String> {
+        let stage = staged.stage_dir()?;
+        Ok(Self {
+            full: stage.path().to_path_buf(),
+            relative: PathBuf::new(),
+            stage: std::sync::Arc::new(stage),
+        })
+    }
+
+    /// The stage of `staged`, by path (publication is unavailable here, so nothing is written).
+    #[cfg(not(unix))]
+    #[allow(clippy::unnecessary_wraps)]
+    fn of(staged: &PublicationStage) -> Result<Self, String> {
+        Ok(Self {
+            full: staged.root().to_path_buf(),
+            relative: PathBuf::new(),
+        })
+    }
+
+    fn join(&self, name: impl AsRef<Path>) -> Self {
+        Self {
+            #[cfg(unix)]
+            stage: self.stage.clone(),
+            relative: self.relative.join(name.as_ref()),
+            full: self.full.join(name.as_ref()),
+        }
+    }
+
+    #[cfg(unix)]
+    fn display(&self) -> std::path::Display<'_> {
+        self.full.display()
+    }
+
+    /// Makes this directory, owner-only, and its parents.
+    #[cfg(unix)]
+    fn create_dir(&self) -> Result<(), String> {
+        self.stage.create_dir(&self.relative).map(drop)
+    }
+
+    #[cfg(not(unix))]
+    fn create_dir(&self) -> Result<(), String> {
+        create_private_dir(&self.full)
+    }
+
+    /// A new owner-only file here, replacing what was there without following a link.
+    #[cfg(unix)]
+    fn create_file(&self) -> Result<std::fs::File, String> {
+        self.stage.create_file(&self.relative)
+    }
+
+    #[cfg(not(unix))]
+    fn create_file(&self) -> Result<std::fs::File, String> {
+        create_private_file(&self.full)
+    }
+
+    /// Writes a file owner-only, replacing what was there.
+    fn write(&self, bytes: &[u8]) -> Result<(), String> {
+        use std::io::Write as _;
+        self.create_file()?
+            .write_all(bytes)
+            .map_err(|e| format!("cannot write it: {e}"))
+    }
+}
+
+impl From<&ExportPath> for PathBuf {
+    fn from(path: &ExportPath) -> Self {
+        path.full.clone()
+    }
+}
+
 fn write_export_tree(
-    dir: &Path,
+    dir: &ExportPath,
     products: Products,
     endpoints: &Endpoints,
     initiated_by: &str,
 ) -> Result<(), ArtifactError> {
     let _ = initiated_by;
-    create_private_dir(dir).map_err(|e| ArtifactError::new("export", dir, e))?;
+    dir.create_dir()
+        .map_err(|e| ArtifactError::new("export", dir, e))?;
     let mut manifest = ExportMetadata::new(COMPATIBLE_CLI_VERSION);
 
     if products.firestore {
@@ -3147,8 +3257,9 @@ fn write_export_tree(
     if products.database {
         export_database(dir, endpoints, &mut manifest)?;
     }
-    write_private_file(&dir.join(METADATA_FILE_NAME), manifest.to_json().as_bytes())
-        .map_err(|e| ArtifactError::new("export", dir.join(METADATA_FILE_NAME), e))?;
+    dir.join(METADATA_FILE_NAME)
+        .write(manifest.to_json().as_bytes())
+        .map_err(|e| ArtifactError::new("export", &dir.join(METADATA_FILE_NAME), e))?;
     Ok(())
 }
 
@@ -3339,7 +3450,7 @@ fn read_field_config(dir: &Path) -> Result<Option<FieldConfigCatalogs>, Artifact
 }
 
 fn export_firestore(
-    dir: &Path,
+    dir: &ExportPath,
     endpoints: &Endpoints,
     manifest: &mut ExportMetadata,
 ) -> Result<(), ArtifactError> {
@@ -3359,12 +3470,14 @@ fn export_firestore(
         };
         let section_dir = dir.join(&path);
         let partition_dir = section_dir.join(PARTITION_DIR);
-        create_private_dir(&partition_dir)
+        partition_dir
+            .create_dir()
             .map_err(|e| ArtifactError::new("firestore", &partition_dir, e))?;
 
         let output_path = partition_dir.join(OUTPUT_FILE);
         let mut output = std::io::BufWriter::new(
-            create_private_file(&output_path)
+            output_path
+                .create_file()
                 .map_err(|e| ArtifactError::new("firestore", &output_path, e))?,
         );
         let (entity_count, output_bytes) = write_firestore_section(section, &mut output)
@@ -3379,7 +3492,8 @@ fn export_firestore(
             output_files: vec![OUTPUT_FILE.to_owned()],
         };
         let partition_path = partition_dir.join(PARTITION_METADATA);
-        write_private_file(&partition_path, &partition.to_bytes())
+        partition_path
+            .write(&partition.to_bytes())
             .map_err(|e| ArtifactError::new("firestore", &partition_path, e))?;
 
         let overall = OverallMetadata {
@@ -3388,7 +3502,8 @@ fn export_firestore(
             byte_count: output_bytes,
         };
         let overall_path = section_dir.join(FIRESTORE_OVERALL_METADATA);
-        write_private_file(&overall_path, &overall.to_bytes())
+        overall_path
+            .write(&overall.to_bytes())
             .map_err(|e| ArtifactError::new("firestore", &overall_path, e))?;
 
         let section = Section {
@@ -3407,7 +3522,7 @@ fn export_firestore(
     let catalogs = endpoints.backend.ttl_catalogs();
     if catalogs.values().any(|catalog| !catalog.is_empty()) {
         let path = dir.join(FIELD_CONFIG_FILE);
-        write_private_file(&path, field_config_json(&catalogs).as_bytes())
+        path.write(field_config_json(&catalogs).as_bytes())
             .map_err(|e| ArtifactError::new("firestore", &path, e))?;
     }
     Ok(())
@@ -3531,12 +3646,14 @@ fn sanitize(database: &str) -> String {
 
 #[allow(clippy::too_many_lines)]
 fn export_auth(
-    dir: &Path,
+    dir: &ExportPath,
     endpoints: &Endpoints,
     manifest: &mut ExportMetadata,
 ) -> Result<(), ArtifactError> {
     let section_dir = dir.join(AUTH_PATH);
-    create_private_dir(&section_dir).map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
+    section_dir
+        .create_dir()
+        .map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
     // Capture the Auth stores and the logical Blocking Functions projection under the same
     // adapter-level gate used by project configuration PATCH and blocking Auth requests. This
     // prevents an export from combining two settings generations. The gate is released before
@@ -3573,7 +3690,7 @@ fn export_auth(
             blocking
                 .blocking_auth_settings_for_export()
                 .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
-                .map(|value| blocking_settings_record_from_json(&value, &section_dir))
+                .map(|value| blocking_settings_record_from_json(&value, &section_dir.full))
                 .transpose()?
         } else {
             None
@@ -3586,7 +3703,8 @@ fn export_auth(
         file.users.push(exported_account(store, user, None));
     }
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
-    write_private_file(&accounts_path, file.to_json().as_bytes())
+    accounts_path
+        .write(file.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &accounts_path, e))?;
 
     let config = store.config();
@@ -3597,7 +3715,8 @@ fn export_auth(
         disabled_user_signup: Some(config.disabled_user_signup),
         disabled_user_deletion: Some(config.disabled_user_deletion),
     };
-    write_private_file(&config_path, document.to_json().as_bytes())
+    config_path
+        .write(document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
     let project_policy = exported_password_policy(store.password_policy());
     let project_quota = store.signup_quota().config().clone();
@@ -3640,7 +3759,7 @@ fn export_auth(
                 .push(exported_account(tenant_store, user, Some(tenant)));
         }
         let path = section_dir.join(format!("accounts-{tenant}.json"));
-        write_private_file(&path, file.to_json().as_bytes())
+        path.write(file.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
 
@@ -3656,7 +3775,7 @@ fn export_auth(
             project: project_policy,
             namespaces: tenant_policies,
         };
-        write_private_file(&path, policies.to_json().as_bytes())
+        path.write(policies.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
     let project_members = fireemu_adapter_http::identity_toolkit::exportable_config_members(
@@ -3679,7 +3798,7 @@ fn export_auth(
             },
             namespaces: tenant_settings,
         };
-        write_private_file(&path, settings.to_json().as_bytes())
+        path.write(settings.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
 
@@ -3873,7 +3992,7 @@ const DATABASE_EMULATOR_VERSION: &str = "4.11.2";
 /// Writes `database_export/<namespace>.json` for every namespace that holds data or was
 /// imported, with what `format=export` answers for it, as firebase-tools does.
 fn export_database(
-    dir: &Path,
+    dir: &ExportPath,
     endpoints: &Endpoints,
     manifest: &mut ExportMetadata,
 ) -> Result<(), ArtifactError> {
@@ -3889,11 +4008,12 @@ fn export_database(
             )
         })?
         .export_texts();
-    create_private_dir(&section_dir)
+    section_dir
+        .create_dir()
         .map_err(|e| ArtifactError::new("database", &section_dir, e))?;
     for (namespace, text) in texts {
         let path = section_dir.join(format!("{namespace}.json"));
-        write_private_file(&path, text.as_bytes())
+        path.write(text.as_bytes())
             .map_err(|e| ArtifactError::new("database", &path, e))?;
     }
     manifest.set(
@@ -3908,15 +4028,18 @@ fn export_database(
 }
 
 fn export_storage(
-    dir: &Path,
+    dir: &ExportPath,
     endpoints: &Endpoints,
     manifest: &mut ExportMetadata,
 ) -> Result<(), ArtifactError> {
     let section_dir = dir.join(STORAGE_PATH);
     let blobs_dir = section_dir.join(BLOBS_DIR);
     let metadata_dir = section_dir.join(METADATA_DIR);
-    create_private_dir(&blobs_dir).map_err(|e| ArtifactError::new("storage", &blobs_dir, e))?;
-    create_private_dir(&metadata_dir)
+    blobs_dir
+        .create_dir()
+        .map_err(|e| ArtifactError::new("storage", &blobs_dir, e))?;
+    metadata_dir
+        .create_dir()
         .map_err(|e| ArtifactError::new("storage", &metadata_dir, e))?;
 
     let store = endpoints
@@ -3964,7 +4087,8 @@ fn export_storage(
         })?;
         let id = blob_id(object.bucket.as_str(), object.name.as_str(), generation);
         let blob_path = blobs_dir.join(&id);
-        write_private_file(&blob_path, store.bytes(object))
+        blob_path
+            .write(store.bytes(object))
             .map_err(|e| ArtifactError::new("storage", &blob_path, e))?;
         let document = ExportedObject {
             name: object.name.as_str().to_owned(),
@@ -3992,12 +4116,14 @@ fn export_storage(
             extra: Vec::new(),
         };
         let metadata_path = metadata_dir.join(format!("{id}.json"));
-        write_private_file(&metadata_path, document.to_json().as_bytes())
+        metadata_path
+            .write(document.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("storage", &metadata_path, e))?;
     }
 
     let buckets_path = section_dir.join(BUCKETS_FILE);
-    write_private_file(&buckets_path, BucketsFile { buckets }.to_json().as_bytes())
+    buckets_path
+        .write(BucketsFile { buckets }.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("storage", &buckets_path, e))?;
 
     manifest.set(
@@ -4142,7 +4268,15 @@ fn copy_unmanaged_entry(
     copy_private_file(source, destination, metadata.len())
 }
 
-#[cfg(unix)]
+/// A stage for an export target inside `dir`, and its held root (tests write through it).
+#[cfg(all(unix, test))]
+fn stage_in(dir: &Path) -> (PublicationStage, ExportPath) {
+    let stage = PublicationStage::create(&dir.join("export"), |_| Ok(())).unwrap();
+    let root = ExportPath::of(&stage).unwrap();
+    (stage, root)
+}
+
+#[cfg(all(unix, test))]
 fn open_unmanaged_directory(path: &Path) -> Result<std::fs::File, String> {
     use rustix::fs::{Mode, OFlags};
 
@@ -4161,20 +4295,23 @@ fn open_unmanaged_directory(path: &Path) -> Result<std::fs::File, String> {
 }
 
 #[cfg(unix)]
-fn copy_unmanaged_entries(source: &Path, destination: &Path) -> Result<(), String> {
-    let directory = open_unmanaged_directory(source)?;
+fn copy_unmanaged_entries(
+    directory: &std::fs::File,
+    source: &Path,
+    destination: &ExportPath,
+) -> Result<(), String> {
     let mut budget = UnmanagedCopyBudget::new(
         EXPORT_UNMANAGED_TOTAL_BYTES_LIMIT,
         EXPORT_UNMANAGED_ENTRY_COUNT_LIMIT,
     );
-    copy_unmanaged_directory(&directory, source, destination, 0, true, &mut budget)
+    copy_unmanaged_directory(directory, source, destination, 0, true, &mut budget)
 }
 
 #[cfg(unix)]
 fn copy_unmanaged_directory(
     directory: &std::fs::File,
     source_path: &Path,
-    destination: &Path,
+    destination: &ExportPath,
     depth: u32,
     top_level: bool,
     budget: &mut UnmanagedCopyBudget,
@@ -4210,7 +4347,7 @@ fn copy_unmanaged_entry_at(
     parent: &std::fs::File,
     name: &std::ffi::OsStr,
     source_path: &Path,
-    destination: &Path,
+    destination: &ExportPath,
     depth: u32,
     budget: &mut UnmanagedCopyBudget,
 ) -> Result<(), String> {
@@ -4242,7 +4379,7 @@ fn copy_unmanaged_entry_at(
         .metadata()
         .map_err(|e| format!("cannot inspect {}: {e}", source_path.display()))?;
     if metadata.file_type().is_dir() {
-        create_private_dir(destination)?;
+        destination.create_dir()?;
         return copy_unmanaged_directory(
             &input,
             source_path,
@@ -4271,7 +4408,7 @@ fn copy_unmanaged_entry_at(
 #[cfg(all(unix, test))]
 fn copy_unmanaged_entry(
     source: &Path,
-    destination: &Path,
+    destination: &ExportPath,
     depth: u32,
     budget: &mut UnmanagedCopyBudget,
 ) -> Result<(), String> {
@@ -4289,17 +4426,13 @@ fn copy_unmanaged_entry(
 fn copy_private_file_from(
     input: std::fs::File,
     source: &Path,
-    destination: &Path,
+    destination: &ExportPath,
     byte_limit: u64,
 ) -> Result<(), String> {
     use std::io::{Read as _, Write as _};
-    use std::os::unix::fs::OpenOptionsExt as _;
 
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(destination)
+    let mut output = destination
+        .create_file()
         .map_err(|e| format!("cannot write {}: {e}", destination.display()))?;
     let copied = std::io::copy(&mut input.take(byte_limit.saturating_add(1)), &mut output)
         .map_err(|e| format!("cannot copy {}: {e}", source.display()))?;
@@ -4345,6 +4478,56 @@ fn copy_private_file(source: &Path, destination: &Path, byte_limit: u64) -> Resu
 /// rule always: a directory is only overwritten when it already holds a
 /// `firebase-export-metadata.json`, so `fireemu emulators:export ~/Documents` cannot
 /// silently replace a directory that was never an export.
+#[cfg(unix)]
+pub fn may_overwrite(dir: &Path) -> Result<(), String> {
+    may_overwrite_target(&fireemu_export_publication::inspect_target(dir)?)
+}
+
+#[cfg(unix)]
+fn may_overwrite_target(target: &fireemu_export_publication::ExportTarget) -> Result<(), String> {
+    use std::os::fd::AsFd as _;
+    let Some(directory) = target.directory() else {
+        return Ok(());
+    };
+    let mut empty = true;
+    let mut interrupted = false;
+    let entries = rustix::fs::Dir::read_from(directory)
+        .map_err(|error| format!("cannot inspect {}: {error}", target.path().display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("cannot inspect {}: {error}", target.path().display()))?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        empty = false;
+        interrupted |= name.starts_with(b".fireemu-displaced-");
+    }
+    let manifest = rustix::fs::statat(
+        directory.as_fd(),
+        METADATA_FILE_NAME,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .is_ok_and(|stat| {
+        rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::RegularFile
+    });
+    if empty || manifest {
+        return Ok(());
+    }
+    let hint = if interrupted {
+        "; it holds a .fireemu-displaced-* directory, the previous export an interrupted export left there: move its contents back, or empty the directory"
+    } else {
+        ""
+    };
+    Err(format!("{} is not empty and holds no {METADATA_FILE_NAME}, so it is not an export directory; choose an empty or dedicated directory{hint}", target.path().display()))
+}
+
+#[cfg(not(unix))]
+fn may_overwrite_target(target: &fireemu_export_publication::ExportTarget) -> Result<(), String> {
+    may_overwrite(target.path())
+}
+
+#[cfg(not(unix))]
 pub fn may_overwrite(dir: &Path) -> Result<(), String> {
     let metadata = match std::fs::symlink_metadata(dir) {
         Ok(metadata) => metadata,
@@ -4389,49 +4572,10 @@ pub fn may_overwrite(dir: &Path) -> Result<(), String> {
     ))
 }
 
-/// Creates `dir` and every parent, owner-only.
-///
-/// The mode is set **as the directory is created**, not afterwards: a `create` followed by a
-/// `chmod` leaves a window in which the directory is readable by everyone, and the whole
-/// point of these two functions is that an Auth export is never readable by another user.
-#[cfg(unix)]
-fn create_private_dir(dir: &Path) -> Result<(), String> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|e| format!("cannot create it: {e}"))?;
-    // `recursive` leaves an existing directory alone, including one this run did not create;
-    // an export directory being reused has to end up private too.
-    set_mode(dir, 0o700)
-}
-
+/// Creates `dir` and every parent (only where publication is unavailable, so never run).
 #[cfg(not(unix))]
 fn create_private_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create it: {e}"))
-}
-
-/// Writes a file owner-only, replacing what was there.
-#[cfg(unix)]
-fn create_private_file(path: &Path) -> Result<std::fs::File, String> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    if let Some(parent) = path.parent() {
-        create_private_dir(parent)?;
-    }
-    // A file that is already there (or a symlink left in a reused directory) is removed
-    // first and the new one created exclusively, so the write never follows a link.
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("cannot replace it: {e}")),
-    }
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|e| format!("cannot write it: {e}"))
 }
 
 #[cfg(not(unix))]
@@ -4440,22 +4584,6 @@ fn create_private_file(path: &Path) -> Result<std::fs::File, String> {
         create_private_dir(parent)?;
     }
     std::fs::File::create(path).map_err(|e| format!("cannot write it: {e}"))
-}
-
-/// Writes a file owner-only, replacing what was there.
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write as _;
-    let mut file = create_private_file(path)?;
-    file.write_all(bytes)
-        .map_err(|e| format!("cannot write it: {e}"))?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-        .map_err(|e| format!("cannot restrict its permissions: {e}"))
 }
 
 /// The entries an export owns inside its directory: the metadata file and the product
@@ -4574,6 +4702,31 @@ mod tests {
         assert!(super::nothing_to_import(&empty, None).is_some());
     }
 
+    /// A missing import directory is the first run of the `--export-on-exit` directory whether
+    /// that one is kept as typed or with its symlinks resolved, as the preflight keeps it.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_import_matches_the_resolved_export_on_exit_directory() {
+        let root = TrustedTempDir::new("import-first-run");
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let typed = link.join("data");
+        let resolved = fireemu_export_publication::preflight(&typed).unwrap();
+        assert_eq!(resolved, std::fs::canonicalize(&real).unwrap().join("data"));
+        for export_on_exit in [&typed, &resolved] {
+            assert!(super::is_export_on_exit(&typed, Some(export_on_exit)));
+            assert!(super::nothing_to_import(&typed, Some(export_on_exit)).is_some());
+        }
+        assert!(!super::is_export_on_exit(&typed, None));
+        assert!(!super::is_export_on_exit(
+            &root.join("other"),
+            Some(&resolved)
+        ));
+        assert!(super::nothing_to_import(&root.join("other"), Some(&resolved)).is_none());
+    }
+
     /// A directory an interrupted mount-point export left without a manifest is refused, and the
     /// refusal says where the previous export is.
     #[cfg(unix)]
@@ -4604,8 +4757,10 @@ mod tests {
             std::fs::create_dir(source.join(name)).unwrap();
             std::fs::write(source.join(name).join("x"), b"").unwrap();
         }
-        super::copy_unmanaged_entries(&source, &destination).unwrap();
-        let mut names: Vec<_> = std::fs::read_dir(&*destination)
+        let (stage, root) = super::stage_in(&destination);
+        let previous = super::open_unmanaged_directory(&source).unwrap();
+        super::copy_unmanaged_entries(&previous, &source, &root).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(stage.root())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
@@ -5740,6 +5895,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn unmanaged_copy_budget_is_checked_before_copying_the_next_file() {
+        let root = budget_dir("unmanaged-copy-budget");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        let (stage, staged) = super::stage_in(&destination);
+        let destination = stage.root().to_path_buf();
+        std::fs::write(source.join("first"), b"123").unwrap();
+        std::fs::write(source.join("second"), b"456").unwrap();
+        let mut budget = UnmanagedCopyBudget::new(5, 2);
+
+        super::copy_unmanaged_entry(&source.join("first"), &staged.join("first"), 0, &mut budget)
+            .unwrap();
+        let error = super::copy_unmanaged_entry(
+            &source.join("second"),
+            &staged.join("second"),
+            0,
+            &mut budget,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("5 byte cumulative copy limit"));
+        assert!(!destination.join("second").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(unix))]
     #[test]
     fn unmanaged_copy_budget_is_checked_before_copying_the_next_file() {
         let root = budget_dir("unmanaged-copy-budget");
@@ -5784,6 +5969,8 @@ mod tests {
         std::fs::create_dir(&source).unwrap();
         std::fs::create_dir(&outside).unwrap();
         std::fs::create_dir(&destination).unwrap();
+        let (stage, staged) = super::stage_in(&destination);
+        let destination = stage.root().to_path_buf();
         std::fs::write(source.join("entry"), b"inside").unwrap();
         std::fs::write(outside.join("entry"), b"outside").unwrap();
         let descriptor = super::open_unmanaged_directory(&source).unwrap();
@@ -5791,7 +5978,7 @@ mod tests {
         symlink(&outside, &source).unwrap();
         let mut budget = UnmanagedCopyBudget::new(64, 4);
 
-        super::copy_unmanaged_directory(&descriptor, &source, &destination, 0, false, &mut budget)
+        super::copy_unmanaged_directory(&descriptor, &source, &staged, 0, false, &mut budget)
             .unwrap();
 
         assert_eq!(std::fs::read(destination.join("entry")).unwrap(), b"inside");
@@ -5953,6 +6140,128 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A preflight holds the destination even when its former pathname is reused.
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_policy_reads_the_held_target_after_its_parent_is_renamed() {
+        let base = budget_dir("overwrite-held-policy");
+        let parent = base.join("parent");
+        let target = parent.join("data");
+        std::fs::create_dir_all(&target).unwrap();
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        may_overwrite(&resolved).unwrap();
+        std::fs::create_dir(target.join("auth_export")).unwrap();
+        std::fs::write(
+            target.join("auth_export/important.txt"),
+            b"preserve every byte",
+        )
+        .unwrap();
+        let moved = base.join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let result = PublicationStage::create(&resolved, super::may_overwrite_target);
+        assert_eq!(
+            std::fs::read(moved.join("data/auth_export/important.txt")).unwrap(),
+            b"preserve every byte"
+        );
+        let error = result.unwrap_err();
+        assert!(error.contains("is not empty and holds no"), "{error}");
+        assert!(std::fs::read_dir(&target).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_policy_accepts_the_held_export_despite_an_unrelated_nonexport_at_the_old_path() {
+        let base = budget_dir("overwrite-held-valid");
+        let parent = base.join("parent");
+        let target = parent.join("data");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join(super::METADATA_FILE_NAME), b"{}").unwrap();
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        let moved = base.join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("unrelated.txt"), b"leave me alone").unwrap();
+        may_overwrite(&resolved).unwrap();
+        let stage = PublicationStage::create(&resolved, super::may_overwrite_target).unwrap();
+        stage.complete().publish().unwrap();
+        assert_eq!(
+            std::fs::read(target.join("unrelated.txt")).unwrap(),
+            b"leave me alone"
+        );
+        assert!(moved.join("data").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_inspection_of_an_absent_held_target_never_creates_its_missing_parents() {
+        let base = budget_dir("overwrite-held-absent");
+        let parent = base.join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let target = parent.join("missing/data");
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        let moved = base.join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("unrelated.txt"), b"not the target").unwrap();
+        may_overwrite(&resolved).unwrap();
+        assert!(!moved.join("missing").exists());
+        assert_eq!(
+            std::fs::read(target.join("unrelated.txt")).unwrap(),
+            b"not the target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_inspection_judges_a_parent_created_after_preflight() {
+        let base = budget_dir("overwrite-late-parent");
+        let target = base.join("late/data");
+        let resolved = fireemu_export_publication::preflight(&target).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("notes"), b"preserve").unwrap();
+        assert!(may_overwrite(&resolved)
+            .unwrap_err()
+            .contains("is not empty"));
+        std::fs::remove_dir_all(base.join("late")).unwrap();
+        let victim = base.join("victim");
+        std::fs::create_dir(&victim).unwrap();
+        std::os::unix::fs::symlink(&victim, base.join("late")).unwrap();
+        assert!(may_overwrite(&resolved).is_err());
+        assert!(std::fs::read_dir(victim).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    proptest::proptest! {
+        #[test]
+        fn held_overwrite_policy_matches_empty_or_regular_manifest(
+            occupied in proptest::bool::ANY,
+            manifest_kind in 0u8..4,
+            rename_parent in proptest::bool::ANY,
+        ) {
+            let base = budget_dir("overwrite-held-model");
+            let parent = base.join("parent");
+            let target = parent.join("data");
+            std::fs::create_dir_all(&target).unwrap();
+            let resolved = fireemu_export_publication::preflight(&target).unwrap();
+            if occupied { std::fs::write(target.join("notes"), b"preserve").unwrap(); }
+            let manifest = target.join(super::METADATA_FILE_NAME);
+            match manifest_kind {
+                1 => std::fs::write(&manifest, b"{}").unwrap(),
+                2 => std::fs::create_dir(&manifest).unwrap(),
+                3 => std::os::unix::fs::symlink("missing", &manifest).unwrap(),
+                _ => {},
+            }
+            if rename_parent {
+                std::fs::rename(&parent, base.join("moved")).unwrap();
+                std::fs::create_dir_all(&target).unwrap();
+                std::fs::write(target.join("unrelated"), b"unrelated old path").unwrap();
+            }
+            let expected = (!occupied && manifest_kind == 0) || manifest_kind == 1;
+            proptest::prop_assert_eq!(may_overwrite(&resolved).is_ok(), expected);
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn overwrite_authorization_is_bound_to_the_captured_target_identity() {
@@ -5960,7 +6269,8 @@ mod tests {
         let target = base.join("export");
 
         let error = PublicationStage::create(&target, |checked| {
-            may_overwrite(checked)?;
+            super::may_overwrite_target(checked)?;
+            let checked = checked.path();
             std::fs::create_dir(checked).map_err(|error| error.to_string())?;
             std::fs::write(checked.join("notes.txt"), "preserve")
                 .map_err(|error| error.to_string())?;

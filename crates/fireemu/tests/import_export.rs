@@ -2943,6 +2943,38 @@ fn document_only_import_peak_rss_is_within_one_point_two_times_the_artifact() {
     );
 }
 
+/// The export at exit goes where the preflight resolved the path: a symlink on the way that is
+/// re-pointed while the suite runs is not followed again (export-guard review M2).
+#[cfg(unix)]
+#[test]
+fn export_on_exit_writes_where_the_preflight_resolved_the_path() {
+    let dir = scratch("resolved-once");
+    let first = dir.join("first");
+    let second = dir.join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    let repoint = format!(
+        "rm {link} && ln -s {second} {link}",
+        link = link.display(),
+        second = second.display()
+    );
+    let output = exec()
+        .args(["--export-on-exit"])
+        .arg(link.join("out"))
+        .args(["--", "/bin/sh", "-c", &repoint])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(
+        first.join("out/firebase-export-metadata.json").is_file(),
+        "the export did not go where the preflight resolved: {log}"
+    );
+    assert!(!second.join("out").exists(), "{log}");
+}
+
 /// EXPREL-1: a bare relative directory name is resolved against the working directory.
 ///
 /// `--export-on-exit out` used to reach the publication stage as the one-element relative path

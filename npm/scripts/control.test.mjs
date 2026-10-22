@@ -126,8 +126,9 @@ test('configuration names origin and API base explicitly and rejects ambiguous o
 
 test('the public package exports and publishes the shared client', async () => {
   const manifest = JSON.parse(await readFile(new URL('../fireemu/package.json',import.meta.url),'utf8'));
-  assert.equal(manifest.exports['./control'],'./control.mjs');
+  assert.deepEqual(manifest.exports['./control'],{types:'./control.d.mts',default:'./control.mjs'});
   assert.ok(manifest.files.includes('control.mjs'));
+  assert.ok(manifest.files.includes('control.d.mts'));
 });
 
 

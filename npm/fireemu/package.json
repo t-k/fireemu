@@ -23,7 +23,9 @@
     "bin/fireemu.mjs",
     "binary.mjs",
     "control.mjs",
+    "control.d.mts",
     "testing.mjs",
+    "testing.d.mts",
     "testing-snapshot.mjs",
     "testing-process.mjs",
     "README.md",
@@ -42,8 +44,14 @@
     "node": ">=20"
   },
   "exports": {
-    "./testing": "./testing.mjs",
+    "./testing": {
+      "types": "./testing.d.mts",
+      "default": "./testing.mjs"
+    },
     "./package.json": "./package.json",
-    "./control": "./control.mjs"
+    "./control": {
+      "types": "./control.d.mts",
+      "default": "./control.mjs"
+    }
   }
 }

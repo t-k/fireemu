@@ -246,6 +246,10 @@ assert(create["run"].strip == EXPECTED_CREATE_SCRIPT.strip, "the create step's s
 plan_runs = release.dig("jobs", "plan", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(plan_runs.include?("node npm/scripts/changelog-section.mjs"), "release plan must refuse a version without a CHANGELOG section before anything is published")
 assert(load_workflow("ci.yml").dig("jobs", "package", "steps").map { |step| step["run"] }.compact.include?("node --test npm/scripts/changelog-section.test.mjs"), "CI must test the CHANGELOG section extraction")
+package_runs = jobs.fetch("package").fetch("steps").map { |step| step["run"] }.compact
+types_consumer_command = "node --test npm/scripts/types-consumer.test.mjs"
+assert(package_runs.include?(types_consumer_command), "package CI must type-check actual packed public subpaths")
+assert(package_runs.index("pnpm -C ui install --frozen-lockfile") < package_runs.index(types_consumer_command), "type consumers must use the installed pinned UI TypeScript compiler")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
 assert(!release_source.include?("NPM_TOKEN"), "release publish must authenticate through Trusted Publishing")
 assert(!release_source.include?("NODE_AUTH_TOKEN"), "release publish must not inject a registry token")

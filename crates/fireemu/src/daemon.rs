@@ -580,6 +580,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     // credential (the `productionExact` value; owner decision Q4, ledger 1471).
     let realtime_database = Arc::new(Mutex::new(fireemu_adapter_database::rest::Database::new(
         fireemu_adapter_database::rest::RestOptions {
+            limits: fireemu_adapter_database::rest::WRITE_LIMITS,
             rules: match cfg.database_default_access {
                 crate::config::DatabaseDefaultAccess::Locked => {
                     fireemu_adapter_database::rest::RulesMode::DenyAll

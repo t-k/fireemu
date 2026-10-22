@@ -73,6 +73,18 @@ pub fn resolve(json: &Json, existing: Option<&Node>, context: ServerValueContext
     Ok(Json::Object(resolved))
 }
 
+/// Whether `json` holds a server value placeholder (a `.sv` member) anywhere, so that a
+/// write of it depends on the time and on what is stored.
+pub fn has_server_value(json: &Json) -> bool {
+    match json {
+        Json::Object(map) => {
+            map.contains_key(SERVER_VALUE_KEY) || map.values().any(has_server_value)
+        }
+        Json::Array(items) => items.iter().any(has_server_value),
+        _ => false,
+    }
+}
+
 /// The stored priority of `node` as a leaf, the base a priority placeholder resolves
 /// against.
 pub fn stored_priority(node: Option<&Node>) -> Option<Node> {

@@ -32,7 +32,9 @@ use crate::query::{
     Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, OrderClause, Query, QueryScope,
     UnaryOp,
 };
-use crate::size::{document_size, document_size_bytes, field_value_size};
+#[cfg(test)]
+use crate::size::document_size_bytes;
+use crate::size::{document_size, field_value_size};
 use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
@@ -87,8 +89,36 @@ pub struct Document {
 /// Immutable document allocation shared by MVCC history and commit-event consumers.
 pub type SharedDocument = Arc<Document>;
 
-type DocumentHistory = BTreeMap<DocumentPath, Vec<(CommitVersion, Option<SharedDocument>)>>;
-type StagedChange = (DocumentPath, Option<SharedDocument>, Option<SharedDocument>);
+#[derive(Debug)]
+struct RetainedDocument {
+    document: SharedDocument,
+    logical_bytes: u64,
+}
+
+impl Clone for RetainedDocument {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        RETAINED_DOCUMENT_CLONES.with(|count| count.set(count.get() + 1));
+        Self {
+            document: Arc::clone(&self.document),
+            logical_bytes: self.logical_bytes,
+        }
+    }
+}
+
+impl std::ops::Deref for RetainedDocument {
+    type Target = Document;
+    fn deref(&self) -> &Self::Target {
+        &self.document
+    }
+}
+
+type DocumentHistory = BTreeMap<DocumentPath, Vec<(CommitVersion, Option<RetainedDocument>)>>;
+type StagedChange = (
+    DocumentPath,
+    Option<RetainedDocument>,
+    Option<RetainedDocument>,
+);
 
 type GroupedWrites<'a> = BTreeMap<&'a DocumentPath, Vec<&'a Write>>;
 
@@ -283,8 +313,8 @@ pub struct CommitResult {
 }
 
 struct StagedDocument {
-    before: Option<SharedDocument>,
-    current: Option<SharedDocument>,
+    before: Option<RetainedDocument>,
+    current: Option<RetainedDocument>,
     changed: bool,
 }
 
@@ -523,27 +553,26 @@ fn subtract_history_usage(left: HistoryUsage, right: HistoryUsage) -> HistoryUsa
     })
 }
 
-fn history_path_usage(
+fn history_path_usage_from_sizes(
     path: &DocumentPath,
-    versions: &[(CommitVersion, Option<Arc<Document>>)],
+    sizes: impl IntoIterator<Item = Option<u64>>,
 ) -> HistoryUsage {
-    if versions.is_empty() {
+    let mut sizes = sizes.into_iter().peekable();
+    if sizes.peek().is_none() {
         return HistoryUsage::default();
     }
-    let live = matches!(versions.last(), Some((_, Some(_))));
     let mut usage = HistoryUsage {
         paths: 1,
-        path_and_index_bytes: history_path_and_index_bytes(path, live),
         ..HistoryUsage::default()
     };
-    for (index, (_, document)) in versions.iter().enumerate() {
+    while let Some(size) = sizes.next() {
+        let last = sizes.peek().is_none();
         usage.versions = usage.versions.saturating_add(1);
         usage.version_metadata_bytes = usage
             .version_metadata_bytes
             .saturating_add(HISTORY_VERSION_METADATA_BYTES);
-        if let Some(document) = document {
-            let bytes = document_size_bytes(path, &document.fields).unwrap_or(u64::MAX);
-            if index + 1 == versions.len() {
+        if let Some(bytes) = size {
+            if last {
                 usage.live_document_bytes = usage.live_document_bytes.saturating_add(bytes);
             } else {
                 usage.historical_document_bytes =
@@ -555,13 +584,31 @@ fn history_path_usage(
                 .tombstone_bytes
                 .saturating_add(HISTORY_TOMBSTONE_BYTES);
         }
+        if last {
+            usage.path_and_index_bytes = history_path_and_index_bytes(path, size.is_some());
+        }
     }
     finish_history_usage(usage)
 }
 
+fn history_document_sizes(
+    versions: &[(CommitVersion, Option<RetainedDocument>)],
+) -> impl Iterator<Item = Option<u64>> + '_ {
+    versions
+        .iter()
+        .map(|(_, document)| document.as_ref().map(|retained| retained.logical_bytes))
+}
+
+fn history_path_usage(
+    path: &DocumentPath,
+    versions: &[(CommitVersion, Option<RetainedDocument>)],
+) -> HistoryUsage {
+    history_path_usage_from_sizes(path, history_document_sizes(versions))
+}
+
 fn history_path_usage_after_floor(
     path: &DocumentPath,
-    versions: &[(CommitVersion, Option<Arc<Document>>)],
+    versions: &[(CommitVersion, Option<RetainedDocument>)],
     floor: CommitVersion,
 ) -> HistoryUsage {
     let cut = versions
@@ -573,6 +620,32 @@ fn history_path_usage_after_floor(
     } else {
         history_path_usage(path, remaining)
     }
+}
+
+fn projected_history_path_reclaim(
+    path: &DocumentPath,
+    existing: &[(CommitVersion, Option<RetainedDocument>)],
+    after_size: Option<u64>,
+    next_version: CommitVersion,
+    floor: CommitVersion,
+) -> HistoryUsage {
+    let projected_usage = history_path_usage_from_sizes(
+        path,
+        history_document_sizes(existing).chain(std::iter::once(after_size)),
+    );
+    let prefix = existing.partition_point(|(version, _)| *version <= floor)
+        + usize::from(next_version <= floor);
+    let cut = prefix.saturating_sub(1);
+    let projected_after_floor =
+        if cut == existing.len() && after_size.is_none() && next_version <= floor {
+            HistoryUsage::default()
+        } else {
+            history_path_usage_from_sizes(
+                path,
+                history_document_sizes(&existing[cut..]).chain(std::iter::once(after_size)),
+            )
+        };
+    subtract_history_usage(projected_usage, projected_after_floor)
 }
 
 /// A rejected history-budget dimension.
@@ -1571,7 +1644,12 @@ impl FirestoreState {
     /// Immutable shared handle to the current document, absent at a tombstone.
     #[must_use]
     pub fn get_shared(&self, path: &DocumentPath) -> Option<SharedDocument> {
-        self.history.get(path)?.last()?.1.as_ref().map(Arc::clone)
+        self.history
+            .get(path)?
+            .last()?
+            .1
+            .as_ref()
+            .map(|retained| Arc::clone(&retained.document))
     }
 
     /// Immutable shared handle using the same historical lookup as [`Self::get_at`].
@@ -1589,7 +1667,7 @@ impl FirestoreState {
             .find(|(candidate, _)| *candidate <= version)?
             .1
             .as_ref()
-            .map(Arc::clone)
+            .map(|retained| Arc::clone(&retained.document))
     }
 
     /// Indexes a newly retained path. This is the path's one shared index allocation: the
@@ -2085,7 +2163,13 @@ impl FirestoreState {
     pub fn live_document_handles(&self) -> Vec<Arc<Document>> {
         self.history
             .values()
-            .filter_map(|versions| versions.last()?.1.clone())
+            .filter_map(|versions| {
+                versions
+                    .last()?
+                    .1
+                    .as_ref()
+                    .map(|retained| Arc::clone(&retained.document))
+            })
             .collect()
     }
 
@@ -2099,7 +2183,7 @@ impl FirestoreState {
             .into_values()
             .filter_map(|versions| versions.into_iter().next_back()?.1)
             .map(|document| {
-                Arc::try_unwrap(document).unwrap_or_else(|shared| shared.as_ref().clone())
+                Arc::try_unwrap(document.document).unwrap_or_else(|shared| shared.as_ref().clone())
             })
             .collect()
     }
@@ -2204,7 +2288,7 @@ impl FirestoreState {
         let commit_time = self.next_commit_time(now);
         let next_version = CommitVersion(self.version.0 + 1);
         // Stage and validate everything before anything is published.
-        let mut staged: BTreeMap<DocumentPath, Document> = BTreeMap::new();
+        let mut staged: BTreeMap<DocumentPath, (Document, u64)> = BTreeMap::new();
         for imported in documents {
             let mut fields = imported.fields;
             normalize_fields_for_storage(&mut fields);
@@ -2215,13 +2299,13 @@ impl FirestoreState {
                 update_time: imported.update_time.unwrap_or(commit_time),
                 version: next_version,
             };
-            validate_document(&document, self.limit_scope)?;
+            let logical_bytes = validate_document(&document, self.limit_scope)?;
             self.index_catalog.document_index_usage_in(
                 &document.path,
                 &document.fields,
                 self.limit_scope,
             )?;
-            staged.insert(imported.path, document);
+            staged.insert(imported.path, (document, logical_bytes));
         }
         self.last_commit_time = Some(commit_time);
         self.compaction_forecast = None;
@@ -2237,7 +2321,7 @@ impl FirestoreState {
         self.version = next_version;
         self.commit_times.push_back((next_version, commit_time));
         let mut changes = Vec::with_capacity(staged.len());
-        for (path, document) in staged {
+        for (path, (document, logical_bytes)) in staged {
             let before = self
                 .history
                 .get(&path)
@@ -2256,13 +2340,16 @@ impl FirestoreState {
             let document = Arc::new(document);
             changes.push(DocumentChange {
                 path: path.clone(),
-                before,
+                before: before.map(|retained| retained.document),
                 after: Some(Arc::clone(&document)),
             });
-            self.history
-                .entry(path.clone())
-                .or_default()
-                .push((next_version, Some(document)));
+            self.history.entry(path.clone()).or_default().push((
+                next_version,
+                Some(RetainedDocument {
+                    document,
+                    logical_bytes,
+                }),
+            ));
             self.record_capacity_pressure(&path);
             if compactable {
                 self.compactable.insert(path);
@@ -2992,13 +3079,13 @@ impl FirestoreState {
                 .version_metadata_bytes
                 .saturating_add(HISTORY_VERSION_METADATA_BYTES);
             if let Some(before) = before {
-                let bytes = document_size(path, &before.fields).map_or(u64::MAX, |size| size.total);
+                let bytes = before.logical_bytes;
                 usage.live_document_bytes = usage.live_document_bytes.saturating_sub(bytes);
                 usage.historical_document_bytes =
                     usage.historical_document_bytes.saturating_add(bytes);
             }
             if let Some(after) = after {
-                let bytes = document_size(path, &after.fields).map_or(u64::MAX, |size| size.total);
+                let bytes = after.logical_bytes;
                 usage.live_document_bytes = usage.live_document_bytes.saturating_add(bytes);
             } else {
                 usage.tombstones = usage.tombstones.saturating_add(1);
@@ -3064,12 +3151,9 @@ impl FirestoreState {
             );
             reclaimed = subtract_history_usage(reclaimed, existing_reclaim);
 
-            let mut projected = existing.to_vec();
-            projected.push((next_version, after.clone()));
-            let projected_reclaim = subtract_history_usage(
-                history_path_usage(path, &projected),
-                history_path_usage_after_floor(path, &projected, floor),
-            );
+            let after_size = after.as_ref().map(|document| document.logical_bytes);
+            let projected_reclaim =
+                projected_history_path_reclaim(path, existing, after_size, next_version, floor);
             reclaimed = add_history_usage(reclaimed, projected_reclaim);
         }
         (uncompacted, subtract_history_usage(uncompacted, reclaimed))
@@ -3921,8 +4005,9 @@ impl FirestoreState {
                 )?;
             }
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
+            let mut validated_size = None;
             if let Some(Cow::Owned(doc)) = &next {
-                validate_document(doc, self.limit_scope)?;
+                validated_size = Some(validate_document(doc, self.limit_scope)?);
                 self.index_catalog.document_index_usage_in(
                     &doc.path,
                     &doc.fields,
@@ -3949,7 +4034,10 @@ impl FirestoreState {
                     result.update_time = Some(c.update_time);
                 }
             } else {
-                stage.current = next.map(|doc| Arc::new(doc.into_owned()));
+                stage.current = next.map(|doc| RetainedDocument {
+                    document: Arc::new(doc.into_owned()),
+                    logical_bytes: validated_size.expect("changed documents were validated"),
+                });
                 stage.changed = true;
             }
             results.push(result);
@@ -3967,8 +4055,12 @@ impl FirestoreState {
             .iter()
             .map(|(path, before, after)| DocumentChange {
                 path: path.clone(),
-                before: before.clone(),
-                after: after.clone(),
+                before: before
+                    .as_ref()
+                    .map(|retained| Arc::clone(&retained.document)),
+                after: after
+                    .as_ref()
+                    .map(|retained| Arc::clone(&retained.document)),
             })
             .collect();
         let result = CommitResult {
@@ -5748,7 +5840,7 @@ fn validate_stored_field_name(name: &str) -> Result<(), FirestoreError> {
         .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))
 }
 
-fn validate_document(doc: &Document, scope: LimitScope) -> Result<(), FirestoreError> {
+fn validate_document(doc: &Document, scope: LimitScope) -> Result<u64, FirestoreError> {
     for (name, value) in &doc.fields {
         validate_stored_field_name(name)?;
         check_limit(
@@ -5770,7 +5862,7 @@ fn validate_document(doc: &Document, scope: LimitScope) -> Result<(), FirestoreE
             check_stored_field_paths(value, &PropertyPath::root(name))?;
         }
     }
-    Ok(())
+    Ok(size.total)
 }
 
 #[derive(Debug, Clone)]
@@ -7567,7 +7659,7 @@ mod scope_index_tests {
             .and_then(|(_, document)| document.as_ref())
             .expect("stored document");
         assert!(take_field_tree_clone_count() <= 2);
-        assert!(Arc::ptr_eq(changed, stored));
+        assert!(Arc::ptr_eq(changed, &stored.document));
     }
 
     #[test]
@@ -7647,4 +7739,14 @@ thread_local! {
 #[cfg(test)]
 mod conflict_grouping_tests {
     include!("../tests/support/conflict_grouping.rs");
+}
+
+#[cfg(test)]
+thread_local! {
+    static RETAINED_DOCUMENT_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod history_size_cache_tests {
+    include!("../tests/support/history_size_cache.rs");
 }

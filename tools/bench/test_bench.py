@@ -138,3 +138,72 @@ class MixedConfigurationTests(unittest.TestCase):
             self.assertEqual(config['emulators']['storage']['port'],9199)
             self.assertEqual(config['emulators']['auth']['port'],9099)
             self.assertTrue((p/'storage.rules').exists())
+
+class BenchmarkWorkflowTests(unittest.TestCase):
+    def step(self,name):
+        workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/benchmark.yml').read_text()
+        self.assertIn('      - name: '+name+'\n',workflow)
+        section=workflow.split('      - name: '+name+'\n',1)[1].split('\n      - ',1)[0]
+        self.assertIn('        run: |\n',section)
+        result=[]
+        for line in section.split('        run: |\n',1)[1].splitlines():
+            if line and not line.startswith('          '):break
+            result.append(line[10:])
+        return '\n'.join(result)+'\n'
+
+    def shell(self,script,cwd,**variables):
+        import subprocess
+        env=os.environ.copy();env.update(variables)
+        return subprocess.run(['bash','-e','-o','pipefail','-c',script],cwd=cwd,env=env,
+                              stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=20)
+
+    def test_baseline_ref_guard_executes_against_real_git_history(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            cwd=Path(directory)
+            def git(*argv):return subprocess.check_output(['git','-c','user.name=Benchmark Test','-c','user.email=bench@example.test','-c','commit.gpgsign=false',*argv],cwd=cwd,stderr=subprocess.DEVNULL,text=True).strip()
+            git('init');git('commit','--allow-empty','-m','baseline');baseline=git('rev-parse','HEAD')
+            git('commit','--allow-empty','-m','candidate');candidate=git('rev-parse','HEAD');git('tag','--no-sign','-a','-m','tag','annotated',baseline);tag=git('rev-parse','annotated')
+            git('checkout','--orphan','unrelated');git('commit','--allow-empty','-m','unrelated');unrelated=git('rev-parse','HEAD');git('checkout','--detach',candidate)
+            script=self.step('Validate baseline source pin')
+            for value,expected in [('',True),(baseline,True),(candidate,True),('a'*40,False),(tag,False),(unrelated,False),(baseline[:12],False),(baseline+'^{commit}',False),('main',False),('$(touch injected)',False),('a'*39,False)]:
+                with self.subTest(value=value):
+                    result=self.shell(script,cwd,BASELINE_COMMIT=value,GITHUB_SHA=candidate)
+                    self.assertEqual(result.returncode==0,expected,result.stdout);self.assertFalse((cwd/'injected').exists())
+            self.assertNotEqual(self.shell(script,cwd,BASELINE_COMMIT=baseline,GITHUB_SHA=baseline).returncode,0)
+
+    def test_artifact_verification_checks_both_source_pins_and_all_bytes(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            cwd=Path(directory);candidate='a'*40;baseline='b'*40
+            for folder,commit in [('bench-bin',candidate),('bench-baseline',baseline)]:
+                path=cwd/folder;path.mkdir();(path/'fireemu').write_text('synthetic binary fixture\n');(path/'commit.txt').write_text(commit+'\n');(path/'toolchain.txt').write_text('identical pinned toolchain fixture\n');(path/'build.txt').write_text(f'source_commit={commit}\ntarget=x86_64-unknown-linux-musl\nprofile=release\n')
+                (path/'SHA256SUMS').write_text(''.join(hashlib.sha256((path/name).read_bytes()).hexdigest()+'  '+name+'\n' for name in ['fireemu','commit.txt','toolchain.txt','build.txt']))
+            script=self.step('Verify source-bound benchmark binaries')
+            def run(value=baseline):return self.shell(script,cwd,BASELINE_COMMIT=value,GITHUB_SHA=candidate)
+            self.assertEqual(run().returncode,0);self.assertEqual(run('').returncode,0);self.assertNotEqual(run('c'*40).returncode,0)
+            self.assertNotEqual(self.shell(script,cwd,BASELINE_COMMIT=baseline,GITHUB_SHA='c'*40).returncode,0)
+            for name in ['fireemu','commit.txt','toolchain.txt','build.txt']:
+                with self.subTest(name=name):
+                    path=cwd/'bench-baseline'/name;original=path.read_bytes();path.write_bytes(original+b'tampered\n');self.assertNotEqual(run().returncode,0);path.write_bytes(original)
+            for name,value in [('commit.txt','c'*40+'\n'),('build.txt',f'source_commit={baseline}\ntarget=wrong-target\nprofile=debug\n')]:
+                path=cwd/'bench-baseline'/name;sums=cwd/'bench-baseline/SHA256SUMS';original=path.read_bytes();old_sums=sums.read_text();path.write_text(value);sums.write_text(old_sums.replace(hashlib.sha256(original).hexdigest(),hashlib.sha256(path.read_bytes()).hexdigest()));self.assertNotEqual(run().returncode,0);path.write_bytes(original);sums.write_text(old_sums)
+            path=cwd/'bench-baseline/toolchain.txt';path.write_text('different compiler\n');sums=cwd/'bench-baseline/SHA256SUMS';text=sums.read_text().replace(hashlib.sha256(b'identical pinned toolchain fixture\n').hexdigest(),hashlib.sha256(path.read_bytes()).hexdigest());sums.write_text(text);self.assertNotEqual(run().returncode,0)
+
+    def test_default_and_selected_measurement_argv_and_workflow_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cwd=Path(directory);record=cwd/'argv';stub=cwd/'python3';stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORDED_ARGS"\n');stub.chmod(0o755)
+            script=self.step('Paired measurements, sequential on this single runner')
+            for selected in ['', 'a'*40]:
+                result=self.shell(script,cwd,PATH=str(cwd)+os.pathsep+os.environ['PATH'],RECORDED_ARGS=str(record),BASELINE_COMMIT=selected,TIER='standard',PROFILE='emulator',STARTUP_ONLY='false',MIXED_SERVICES='true',FIXTURE_SHAPE='wide-map');self.assertEqual(result.returncode,0,result.stdout)
+                argv=record.read_text().splitlines();self.assertEqual('--baseline-fireemu' in argv,bool(selected))
+                if selected:self.assertEqual(argv[argv.index('--baseline-fireemu')+1],str(cwd.resolve()/'bench-baseline/fireemu'))
+                self.assertIn('--mixed-services',argv);self.assertEqual(argv[argv.index('--fixture-shape')+1],'wide-map')
+            workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/benchmark.yml').read_text();self.assertIn('fetch-depth: 0',workflow);self.assertIn('name: benchmark-baseline-binary',workflow);self.assertIn("${{ matrix.role == 'baseline'",workflow);self.assertIn('sha256sum fireemu commit.txt toolchain.txt build.txt',workflow)
+            for line in workflow.splitlines():
+                if 'uses:' in line:self.assertRegex(line,r'@[0-9a-f]{40}(?:\s|$)')
+            self.assertNotIn('persist-credentials: true',workflow)
+            self.assertIn("RUSTUP_TOOLCHAIN: '1.94.0'",workflow)
+            self.assertIn("role: ${{ fromJSON(inputs.baseline_commit != '' && '[\"candidate\",\"baseline\"]' || '[\"candidate\"]') }}",workflow)
+            for step in ['Validate baseline source pin','Verify source-bound benchmark binaries','Build release-equivalent UI assets and optimized daemon (not timed)','Paired measurements, sequential on this single runner']:
+                self.assertNotIn('${{',self.step(step))

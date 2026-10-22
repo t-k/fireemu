@@ -1137,6 +1137,37 @@ struct CompactionForecast {
     reclaimed: HistoryUsage,
 }
 
+#[derive(Debug, Clone)]
+struct TtlExpiryIndex {
+    field: FieldPath,
+    entries: BTreeSet<(Timestamp, Arc<DocumentPath>)>,
+}
+
+/// Frozen expired-path membership in resource-name order.
+///
+/// Selection retains O(E) path handles; pages bound transfer size, not total memory.
+#[derive(Debug)]
+pub struct TtlExpirySelection {
+    paths: std::vec::IntoIter<Arc<DocumentPath>>,
+    #[cfg(test)]
+    inspected: usize,
+    #[cfg(test)]
+    retained_capacity: usize,
+}
+
+impl TtlExpirySelection {
+    /// Transfers at most `size` captured paths without consulting current documents.
+    pub fn next_page(&mut self, size: std::num::NonZeroUsize) -> Vec<Arc<DocumentPath>> {
+        self.paths.by_ref().take(size.get()).collect()
+    }
+
+    /// Whether every captured candidate has been consumed.
+    #[must_use]
+    pub fn is_exhausted(&self) -> bool {
+        self.paths.len() == 0
+    }
+}
+
 /// One Firestore database.
 #[derive(Debug, Clone)]
 pub struct FirestoreState {
@@ -1155,6 +1186,7 @@ pub struct FirestoreState {
     live_collection_group_paths: CollectionGroupPaths,
     /// Every live path in resource-name order for latest kindless descendant queries.
     live_paths: BTreeSet<Arc<DocumentPath>>,
+    ttl_expiry_indexes: BTreeMap<CollectionId, TtlExpiryIndex>,
     /// Which limits commits refuse.
     limit_scope: LimitScope,
     /// The RPC the next commit arrived through, which prices a delete's transaction.
@@ -1213,6 +1245,7 @@ impl Default for FirestoreState {
             collection_group_paths: BTreeMap::new(),
             live_collection_group_paths: BTreeMap::new(),
             live_paths: BTreeSet::new(),
+            ttl_expiry_indexes: BTreeMap::new(),
             limit_scope: LimitScope::default(),
             write_route: crate::index_usage::WriteRoute::default(),
             version: CommitVersion::default(),
@@ -1752,6 +1785,113 @@ impl FirestoreState {
         retained.map_or_else(|| Arc::new(path.clone()), Arc::clone)
     }
 
+    /// Captures expired membership for one policy in the supplied catalog.
+    pub fn select_ttl_expiry(
+        &mut self,
+        catalog: &crate::ttl::TtlCatalog,
+        group: &CollectionId,
+        now: Timestamp,
+    ) -> Result<TtlExpirySelection, FirestoreError> {
+        self.sync_ttl_expiry_indexes(catalog);
+        let mut paths = Vec::new();
+        #[cfg(test)]
+        let mut inspected = 0;
+        if let Some(index) = self.ttl_expiry_indexes.get(group) {
+            let policy = catalog
+                .iter()
+                .find(|(key, _)| *key == group)
+                .map(|(_, policy)| policy)
+                .expect("registered TTL groups belong to the captured catalog");
+            for (at, path) in &index.entries {
+                #[cfg(test)]
+                {
+                    inspected += 1;
+                }
+                let expiration = (i128::from(at.seconds()) * 1_000_000_000
+                    + i128::from(at.nanos()))
+                .saturating_add(
+                    policy
+                        .expiration_offset
+                        .map_or(0, LogicalDuration::as_nanos),
+                );
+                if expiration
+                    >= (i128::from(now.seconds()) * 1_000_000_000 + i128::from(now.nanos()))
+                {
+                    break;
+                }
+                paths.push(Arc::clone(path));
+            }
+        }
+        paths.sort_unstable();
+        #[cfg(test)]
+        let retained_capacity = paths.capacity();
+        Ok(TtlExpirySelection {
+            paths: paths.into_iter(),
+            #[cfg(test)]
+            inspected,
+            #[cfg(test)]
+            retained_capacity,
+        })
+    }
+
+    fn sync_ttl_expiry_indexes(&mut self, catalog: &crate::ttl::TtlCatalog) {
+        self.ttl_expiry_indexes
+            .retain(|group, _| catalog.iter().any(|(key, _)| key == group));
+        for (group, policy) in catalog {
+            if self
+                .ttl_expiry_indexes
+                .get(group)
+                .is_some_and(|index| index.field == policy.field)
+            {
+                continue;
+            }
+            let entries = self
+                .live_collection_group_paths
+                .get(group)
+                .into_iter()
+                .flatten()
+                .filter_map(|path| {
+                    #[cfg(test)]
+                    TTL_INDEX_BUILD_VISITS.with(|count| count.set(count.get() + 1));
+                    let document = self.get(path)?;
+                    let Value::Timestamp(at) = get_field(&document.fields, &policy.field)? else {
+                        return None;
+                    };
+                    Some((*at, Arc::clone(path)))
+                })
+                .collect();
+            self.ttl_expiry_indexes.insert(
+                group.clone(),
+                TtlExpiryIndex {
+                    field: policy.field.clone(),
+                    entries,
+                },
+            );
+        }
+    }
+
+    fn update_ttl_expiry_path(&mut self, path: &DocumentPath, insert: bool) {
+        let Some(index) = self.ttl_expiry_indexes.get(path.collection_id()) else {
+            return;
+        };
+        let Some(Value::Timestamp(at)) = self
+            .get(path)
+            .and_then(|doc| get_field(&doc.fields, &index.field))
+        else {
+            return;
+        };
+        let key = (*at, self.retained_scope_path(path));
+        let index = self
+            .ttl_expiry_indexes
+            .get_mut(path.collection_id())
+            .expect("registered TTL index");
+        if insert {
+            index.entries.insert(key);
+        } else {
+            index.entries.remove(&key);
+        }
+    }
+
     fn insert_live_scope_path(&mut self, path: &DocumentPath) {
         let shared = self.retained_scope_path(path);
         self.live_direct_collection_paths
@@ -2288,6 +2428,7 @@ impl FirestoreState {
         let mut snapshot = Self {
             index_catalog: Arc::clone(&self.index_catalog),
             history,
+            ttl_expiry_indexes: BTreeMap::new(),
             direct_collection_paths,
             live_direct_collection_paths,
             listing_trie,
@@ -2400,6 +2541,7 @@ impl FirestoreState {
                 before: before.map(|retained| retained.document),
                 after: Some(Arc::clone(&document)),
             });
+            self.update_ttl_expiry_path(&path, false);
             self.history.entry(path.clone()).or_default().push((
                 next_version,
                 Some(RetainedDocument {
@@ -2408,6 +2550,7 @@ impl FirestoreState {
                 }),
             ));
             self.record_capacity_pressure(&path);
+            self.update_ttl_expiry_path(&path, true);
             self.refresh_reclaim_threshold(&path);
         }
         self.rebuild_history_usage();
@@ -4218,11 +4361,13 @@ impl FirestoreState {
                 } else if became_missing {
                     self.remove_live_scope_path(&path);
                 }
+                self.update_ttl_expiry_path(&path, false);
                 self.history
                     .entry(path.clone())
                     .or_default()
                     .push((next_version, doc));
                 self.record_capacity_pressure(&path);
+                self.update_ttl_expiry_path(&path, true);
                 self.refresh_reclaim_threshold(&path);
             }
         }
@@ -7913,4 +8058,14 @@ thread_local! {
 #[cfg(test)]
 mod reclaim_index_tests {
     include!("../tests/support/reclaim_index.rs");
+}
+
+#[cfg(test)]
+mod ttl_expiry_selection_tests {
+    include!("../tests/support/ttl_expiry_selection.rs");
+}
+
+#[cfg(test)]
+thread_local! {
+    static TTL_INDEX_BUILD_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

@@ -4417,43 +4417,56 @@ impl LocalBackend {
         let expires_at = fireemu_core_firestore::ttl::timestamp_at(now);
         let mut deleted = 0;
         let mut complete = true;
-        for (collection_group, policy) in policies {
-            // Only the time-to-live field is projected, so a sweep never clones a document's
-            // payload to decide that the document stays.
-            let query = Query {
-                projection: Some(vec![policy.field.clone()]),
-                ..Query::new(fireemu_core_firestore::query::QueryScope::collection_group(
-                    collection_group.clone(),
-                ))
-            };
-            let Ok(documents) = self.run_query_latest(&parent, &query) else {
+        for (collection_group, _) in policies {
+            let Ok(mut expired) =
+                self.select_ttl_expiry(&parent, policies, collection_group, expires_at)
+            else {
                 continue;
             };
-            let mut expired = documents
-                .into_iter()
-                .filter(|document| policy.is_expired(&document.fields, expires_at))
-                .map(|document| document.path)
-                .peekable();
             // The scan is over; anything a client writes from here on is seen by the
             // re-evaluation each deletion performs, not by the selection above.
             after_scan();
-            for path in expired.by_ref() {
-                if deleted >= budget {
-                    complete = false;
+            loop {
+                // Pages bound transfer, while the frozen selection retains O(E) handles.
+                let page =
+                    expired.next_page(std::num::NonZeroUsize::new(64).expect("nonzero TTL page"));
+                if page.is_empty() {
                     break;
                 }
-                if self.delete_if_still_expired(&parent, &path, collection_group, expires_at) {
-                    deleted += 1;
+                for path in page {
+                    if deleted >= budget {
+                        complete = false;
+                        break;
+                    }
+                    if self.delete_if_still_expired(&parent, &path, collection_group, expires_at) {
+                        deleted += 1;
+                    }
                 }
-            }
-            if expired.peek().is_some() {
-                complete = false;
+                if !complete {
+                    break;
+                }
             }
             if !complete {
                 break;
             }
         }
         (deleted, complete)
+    }
+
+    fn select_ttl_expiry(
+        &self,
+        parent: &Parent,
+        policies: &TtlCatalog,
+        group: &fireemu_core_types::ids::CollectionId,
+        now: fireemu_core_firestore::value::Timestamp,
+    ) -> Result<fireemu_core_firestore::store::TtlExpirySelection, Status> {
+        let _admitted = self.barrier.admit();
+        let handle = self.database_handle(parent)?;
+        handle.with(|state| {
+            state
+                .select_ttl_expiry(policies, group, now)
+                .map_err(|error| status_from_error(&error))
+        })
     }
 
     /// Deletes one expiry candidate, reporting whether it was deleted.

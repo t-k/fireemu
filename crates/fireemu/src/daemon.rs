@@ -590,8 +590,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 }
             },
             credentials: crate::database_rules::credentials(&cfg, &registry),
-            // Only the owner lists the namespaces under strict and a locked database (review
-            // RTDB-04 S1); the emulator profile answers anyone, as the official emulator.
+            // The owner credential is required under strict or with locked database default access (review RTDB-04 S1); otherwise the emulator profile answers anyone, as the official emulator.
             inspect_needs_owner: cfg.profile == crate::config::CompatibilityProfile::Strict
                 || cfg.database_default_access == crate::config::DatabaseDefaultAccess::Locked,
             ..fireemu_adapter_database::rest::RestOptions::default()

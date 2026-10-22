@@ -10,6 +10,8 @@ import type { CoverageNode, CoverageValue, RuleCoverage } from "../api/control";
 export type CoverageRow = {
   line: number;
   column: number;
+  currentOffset: number;
+  endOffset: number;
   /** A short reading of the values the expression took, "not reached" when it took none. */
   summary: string;
   /** Whether the expression was evaluated at least once. */
@@ -32,6 +34,8 @@ const rowOf = (node: CoverageNode): CoverageRow => {
   return {
     line: node.sourcePosition.line,
     column: node.sourcePosition.column,
+    currentOffset: node.sourcePosition.currentOffset,
+    endOffset: node.sourcePosition.endOffset,
     reached: values.length > 0,
     summary:
       values.length === 0
@@ -57,4 +61,27 @@ export const coverageRows = (report: CoverageNode[]): CoverageRow[] => {
 export const coverageSummary = (c: RuleCoverage): { reached: number; total: number } => {
   const rows = coverageRows(c.report);
   return { reached: rows.filter((r) => r.reached).length, total: rows.length };
+};
+
+/** Convert exact UTF-8 boundaries to UTF-16 without normalizing CRLF or repairing invalid ranges. */
+export const sourceRange = (
+  source: string,
+  start: number,
+  end: number,
+): { start: number; end: number } | null => {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start)
+    return null;
+  const boundaries = new Map<number, number>([[0, 0]]);
+  let bytes = 0;
+  let units = 0;
+  for (const char of source) {
+    const code = char.codePointAt(0)!;
+    if (code >= 0xd800 && code <= 0xdfff) return null;
+    bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+    units += char.length;
+    boundaries.set(bytes, units);
+  }
+  const first = boundaries.get(start);
+  const last = boundaries.get(end);
+  return first === undefined || last === undefined ? null : { start: first, end: last };
 };

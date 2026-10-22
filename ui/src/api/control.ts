@@ -222,7 +222,14 @@ export type RulesRequest = {
   expressions: RulesExpression[];
 };
 
-export type RulesRequests = { capacity: number; loaded: boolean; requests: RulesRequest[] };
+export type RulesRequests = {
+  capacity: number;
+  loaded: boolean;
+  /** Same-response snapshot metadata; absent on older daemons. Never join a later editor fetch. */
+  source?: string | null;
+  generation?: string;
+  requests: RulesRequest[];
+};
 
 export const rulesRequests = (session: string): ResultAsync<RulesRequests, ApiError> =>
   request<RulesRequests>("GET", `${base(session)}/rules/requests`);

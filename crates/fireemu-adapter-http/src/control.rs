@@ -966,6 +966,8 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
     ok(json!({
         "capacity": REQUEST_TRACE_CAPACITY,
         "loaded": rules.is_loaded(),
+        "source": rules.source,
+        "generation": rules.generation().to_string(),
         "requests": requests,
     }))
 }

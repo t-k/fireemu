@@ -65,9 +65,26 @@ struct State {
 struct Graph {
     // Only literal expansion and certified clone may create this exact chain.
     word: Option<Arc<Vec<u16>>>,
+    store: Option<persistent::Store>,
     states: Vec<State>,
     initial: usize,
     deterministic: bool,
+}
+
+enum Outgoing<'a> {
+    Dense(std::iter::Copied<std::slice::Iter<'a, Edge>>),
+    Word(std::option::IntoIter<Edge>),
+    Persistent(persistent::Outgoing),
+}
+impl Iterator for Outgoing<'_> {
+    type Item = Edge;
+    fn next(&mut self) -> Option<Edge> {
+        match self {
+            Self::Dense(i) => i.next(),
+            Self::Word(i) => i.next(),
+            Self::Persistent(i) => i.next(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -86,34 +103,67 @@ fn state_bound(count: usize) -> Result<(), Failure> {
 
 impl Graph {
     fn state_count(&self) -> usize {
+        if let Some(store) = &self.store {
+            return store.count();
+        }
         self.word
             .as_ref()
             .map_or(self.states.len(), |word| word.len() + 1)
     }
     fn accepts(&self, q: usize) -> bool {
+        if let Some(store) = &self.store {
+            return store.accepts(q);
+        }
         self.word
             .as_ref()
             .map_or_else(|| self.states[q].accept, |word| q == word.len())
     }
-    fn outgoing(&self, q: usize) -> impl Iterator<Item = Edge> + '_ {
-        let virtual_edge = self
-            .word
-            .as_ref()
-            .and_then(|word| word.get(q))
-            .map(|&unit| Edge {
-                lo: unit,
-                hi: unit,
-                to: q + 1,
-            });
-        self.states
-            .get(q)
-            .into_iter()
-            .flat_map(|state| state.edges.iter().copied())
-            .chain(virtual_edge)
+    fn outgoing(&self, q: usize) -> Outgoing<'_> {
+        if let Some(store) = &self.store {
+            return Outgoing::Persistent(store.outgoing(q));
+        }
+        if let Some(word) = &self.word {
+            return Outgoing::Word(
+                word.get(q)
+                    .map(|&unit| Edge {
+                        lo: unit,
+                        hi: unit,
+                        to: q + 1,
+                    })
+                    .into_iter(),
+            );
+        }
+        Outgoing::Dense(self.states[q].edges.iter().copied())
+    }
+    fn ensure_store(&mut self) {
+        if self.store.is_none() {
+            self.store = Some(persistent::Store::from_graph(self));
+            self.word = None;
+            self.states.clear();
+        }
+    }
+    fn set_accept(&mut self, q: usize, accept: bool) {
+        self.ensure_store();
+        self.store.as_mut().unwrap().set_accept(q, accept);
+    }
+    fn fresh(&mut self, accept: bool) -> Result<usize, Failure> {
+        self.ensure_store();
+        self.store.as_mut().unwrap().fresh(accept, Vec::new())
     }
     // Explicit constructor-only transition. Symbolic readers never call this.
     // Its old prototype bound is still an activation blocker, not load policy.
     fn ensure_dense(&mut self) -> Result<(), Failure> {
+        if let Some(store) = &self.store {
+            state_bound(store.count())?;
+            self.states = (0..store.count())
+                .map(|q| State {
+                    accept: store.accepts(q),
+                    edges: store.outgoing(q).collect(),
+                })
+                .collect();
+            self.store = None;
+            return Ok(());
+        }
         let Some(word) = &self.word else {
             return Ok(());
         };
@@ -140,6 +190,7 @@ impl Graph {
     fn empty() -> Self {
         Self {
             word: None,
+            store: None,
             states: vec![State::default()],
             initial: 0,
             deterministic: true,
@@ -150,14 +201,12 @@ impl Graph {
         if self.word.is_some() {
             return (0..self.state_count()).collect();
         }
-        let mut seen = vec![false; self.states.len()];
+        let mut seen = BTreeSet::from([self.initial]);
         let mut queue = vec![self.initial];
-        seen[self.initial] = true;
         let mut cursor = 0;
         while cursor < queue.len() {
-            for edge in &self.states[queue[cursor]].edges {
-                if !seen[edge.to] {
-                    seen[edge.to] = true;
+            for edge in self.outgoing(queue[cursor]) {
+                if seen.insert(edge.to) {
                     queue.push(edge.to);
                 }
             }
@@ -212,6 +261,10 @@ impl Graph {
 
     // Copy the destination's outgoing edges now, without storing an epsilon edge.
     fn copy_edges(&mut self, from: usize, to: usize) -> Result<(), Failure> {
+        if let Some(store) = &mut self.store {
+            store.copy_edges(from, to);
+            return Ok(());
+        }
         self.ensure_dense()?;
         let source = self.states[to].clone();
         if self.states[from].edges.len() + source.edges.len() > PROTOTYPE_EDGES {
@@ -338,14 +391,14 @@ impl Graph {
         let mut subset_units = 1usize;
         while cursor < subsets.len() {
             guard_count(cursor as u64 + 1, threshold)?;
-            out[cursor].accept = subsets[cursor].iter().any(|&i| self.states[i].accept);
+            out[cursor].accept = subsets[cursor].iter().any(|&i| self.accepts(i));
             // Local endpoint atoms induce exactly the same successor subsets as
             // the jar's global atoms, without repeating unrelated endpoints.
             let mut events: BTreeMap<u32, Vec<(usize, bool)>> = BTreeMap::new();
             events.entry(0).or_default();
             events.entry(65536).or_default();
             for &i in &subsets[cursor] {
-                for edge in &self.states[i].edges {
+                for edge in self.outgoing(i) {
                     events
                         .entry(u32::from(edge.lo))
                         .or_default()
@@ -413,6 +466,7 @@ impl Graph {
         }
         *self = Self {
             word: None,
+            store: None,
             states: out,
             initial: 0,
             deterministic: true,
@@ -467,6 +521,7 @@ impl Automaton {
             Self::Graph(g) => Ok(g.clone()),
             Self::Singleton(units) => Ok(Graph {
                 word: Some(Arc::new(units.clone())),
+                store: None,
                 states: Vec::new(),
                 initial: 0,
                 deterministic: true,
@@ -540,13 +595,10 @@ impl Automaton {
 
     fn optional(&self) -> Result<Self, Failure> {
         let mut graph = self.expanded()?;
-        graph.ensure_dense()?;
-        state_bound(graph.states.len() + 1)?;
         let old = graph.initial;
-        let initial = graph.states.len();
-        graph.states.push(State::default());
+        let initial = graph.fresh(false)?;
         graph.copy_edges(initial, old)?;
-        graph.states[initial].accept = true;
+        graph.set_accept(initial, true);
         graph.initial = initial;
         graph.deterministic = false;
         Ok(Self::Graph(graph))
@@ -554,15 +606,9 @@ impl Automaton {
 
     fn star(&self) -> Result<Self, Failure> {
         let mut graph = self.expanded()?;
-        graph.ensure_dense()?;
-        state_bound(graph.states.len() + 1)?;
         let accepting = graph.accepting();
         let old = graph.initial;
-        let initial = graph.states.len();
-        graph.states.push(State {
-            accept: true,
-            edges: Vec::new(),
-        });
+        let initial = graph.fresh(true)?;
         graph.copy_edges(initial, old)?;
         for i in accepting {
             graph.copy_edges(i, initial)?;
@@ -618,6 +664,7 @@ impl Automaton {
         }
         Self::Graph(Graph {
             word: None,
+            store: None,
             initial: 0,
             deterministic: true,
             states: vec![
@@ -752,6 +799,7 @@ impl Automaton {
         }
         let mut graph = Graph {
             word: None,
+            store: None,
             states,
             initial: 0,
             deterministic: true,

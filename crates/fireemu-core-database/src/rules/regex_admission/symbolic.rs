@@ -201,6 +201,7 @@ fn construct(
     Ok((
         Automaton::Graph(Graph {
             word: None,
+            store: None,
             states,
             initial: 0,
             deterministic: true,

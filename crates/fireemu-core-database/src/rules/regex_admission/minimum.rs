@@ -215,6 +215,7 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
     Ok((
         Automaton::Graph(Graph {
             word: None,
+            store: None,
             states,
             initial: 0,
             deterministic: true,

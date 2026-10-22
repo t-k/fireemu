@@ -114,8 +114,19 @@ pub(super) struct Store {
     snapshot: Arc<Snapshot>,
 }
 
+impl std::fmt::Debug for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Store")
+            .field("count", &self.count())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Store {
     pub(super) fn from_graph(graph: &Graph) -> Self {
+        if let Some(store) = &graph.store {
+            return store.clone();
+        }
         Self {
             snapshot: Arc::new(if let Some(word) = &graph.word {
                 Snapshot::Word(word.clone())
@@ -129,6 +140,9 @@ impl Store {
         self.snapshot.count()
     }
 
+    // Shared retained versions cause Arc::make_mut to clone the recipe's component
+    // vector and override map. Repeated retained updates can therefore be quadratic;
+    // immutable row sharing does not imply constant-time recipe updates.
     fn recipe(&mut self) -> &mut Recipe {
         if !matches!(self.snapshot.as_ref(), Snapshot::Recipe(_)) {
             let snapshot = self.snapshot.clone();

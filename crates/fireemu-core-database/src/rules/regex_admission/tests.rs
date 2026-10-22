@@ -154,6 +154,7 @@ fn bounded_algebra_minimization_preserves_every_small_word() {
 fn utf16_interval_boundaries_and_surrogates_are_not_unicode_scalars() {
     let graph = Graph {
         word: None,
+        store: None,
         initial: 0,
         deterministic: false,
         states: vec![
@@ -236,6 +237,7 @@ fn symbolic_bounded_matches_every_small_explicit_partial_dfa() {
             let mut transitions = encoding;
             let mut graph = Graph {
                 word: None,
+                store: None,
                 states: vec![State::default(); 2],
                 initial: 0,
                 deterministic: true,
@@ -689,6 +691,7 @@ fn minimum_operator_observations_match_every_small_offline_jar_case() {
             let mut transitions = encoding;
             let mut graph = Graph {
                 word: None,
+                store: None,
                 states: vec![State::default(); 2],
                 initial: 0,
                 deterministic: true,
@@ -866,6 +869,7 @@ fn symbolic_minimum_matches_explicit_algebra_and_all_small_jar_observations() {
             let mut transitions = encoding;
             let mut child = Graph {
                 word: None,
+                store: None,
                 states: vec![State::default(); 2],
                 initial: 0,
                 deterministic: true,
@@ -1161,6 +1165,7 @@ fn ordinary_determinization_refuses_at_discovery_before_frontier_storage() {
     }
     let mut graph = Graph {
         word: None,
+        store: None,
         states,
         initial: 0,
         deterministic: false,
@@ -1172,6 +1177,7 @@ fn ordinary_determinization_refuses_at_discovery_before_frontier_storage() {
 fn local_sweep_preserves_overlapping_destination_reference_counts() {
     let mut graph = Graph {
         word: None,
+        store: None,
         initial: 0,
         deterministic: false,
         states: vec![
@@ -1262,6 +1268,7 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
             let expected = representatives.len().max(1);
             let mut graph = Graph {
                 word: None,
+                store: None,
                 initial: 0,
                 deterministic: true,
                 states: (0..3)
@@ -1410,6 +1417,7 @@ fn certified_word_view_matches_explicit_utf16_position_graphs() {
         assert!(view.states.is_empty());
         let dense = Graph {
             word: None,
+            store: None,
             initial: 0,
             deterministic: true,
             states: (0..=units.len())
@@ -1557,6 +1565,7 @@ fn persistent_store_preserves_exact_dense_and_virtual_rows() {
 fn persistent_row_copy_freezes_source_but_keeps_targets_live() {
     let graph = Graph {
         word: None,
+        store: None,
         initial: 0,
         deterministic: false,
         states: vec![
@@ -1642,6 +1651,7 @@ fn persistent_row_and_namespace_dags_use_bounded_native_stack() {
         .spawn(|| {
             let graph = Graph {
                 word: None,
+                store: None,
                 initial: 0,
                 deterministic: false,
                 states: (0..3)
@@ -1747,6 +1757,7 @@ fn persistent_primitive_matches_1296_eager_operation_models_and_guards() {
             let mut digits = encoding;
             let mut graph = Graph {
                 word: None,
+                store: None,
                 initial: 0,
                 deterministic: false,
                 states: vec![State::default(); 2],
@@ -1796,6 +1807,7 @@ fn persistent_primitive_matches_1296_eager_operation_models_and_guards() {
                         expected.deterministic = false;
                         let mut actual = Graph {
                             word: None,
+                            store: None,
                             initial: 0,
                             deterministic: false,
                             states: (0..imported.count())
@@ -1812,6 +1824,251 @@ fn persistent_primitive_matches_1296_eager_operation_models_and_guards() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+fn eager_unminimized_unary_constructor(value: &Automaton, star: bool) -> Graph {
+    fn copy(graph: &mut Graph, from: usize, to: usize) {
+        let snapshot = graph.states[to].clone();
+        graph.states[from].accept |= snapshot.accept;
+        graph.states[from].edges.extend(snapshot.edges);
+        graph.states[from].edges.sort_unstable();
+        graph.states[from].edges.dedup();
+    }
+    let mut graph = value.expanded().unwrap();
+    graph.ensure_dense().unwrap();
+    let accepting = graph.accepting();
+    let old = graph.initial;
+    let root = graph.states.len();
+    graph.states.push(State {
+        accept: star,
+        edges: Vec::new(),
+    });
+    copy(&mut graph, root, old);
+    if star {
+        for q in accepting {
+            copy(&mut graph, q, root);
+        }
+    } else {
+        graph.states[root].accept = true;
+    }
+    graph.initial = root;
+    graph.deterministic = false;
+    graph
+}
+
+#[test]
+fn persistent_optional_routing_reaches_real_guard_for_long_word() {
+    WORD_MATERIALIZATIONS.with(|count| count.set(0));
+    let value = Automaton::Singleton(vec![97; 30000]);
+    let mut actual = value.optional().unwrap();
+    assert_eq!(actual.minimize(5000), Err(Failure::Resource));
+    WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+}
+
+#[test]
+fn persistent_star_routing_reaches_real_guard_for_long_word() {
+    WORD_MATERIALIZATIONS.with(|count| count.set(0));
+    let value = Automaton::Singleton(vec![97; 30000]);
+    let mut actual = value.star().unwrap();
+    assert_eq!(actual.minimize(5000), Err(Failure::Resource));
+    WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+}
+
+#[test]
+fn persistent_optional_routing_preserves_boundary_without_materialization() {
+    for units in [0, 1, 4999, 5000] {
+        WORD_MATERIALIZATIONS.with(|count| count.set(0));
+        let mut actual = Automaton::Singleton(vec![97; units]).optional().unwrap();
+        assert_eq!(
+            actual.minimize(5000),
+            guard_count(units as u64 + 2, 5000).map(Some)
+        );
+        WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+    }
+}
+
+#[test]
+fn persistent_star_routing_preserves_boundary_without_materialization() {
+    for units in [0, 1, 4999, 5000] {
+        WORD_MATERIALIZATIONS.with(|count| count.set(0));
+        let mut actual = Automaton::Singleton(vec![97; units]).star().unwrap();
+        assert_eq!(
+            actual.minimize(5000),
+            guard_count(units as u64 + 2, 5000).map(Some)
+        );
+        WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+    }
+}
+
+#[test]
+fn persistent_unary_routing_matches_explicit_unminimized_state_graphs() {
+    let mut nullable_cycle = Automaton::literal("a").star().unwrap();
+    nullable_cycle.minimize(5000).unwrap();
+    let mut nullable_word =
+        Automaton::collection_union(&[Automaton::literal(""), Automaton::literal("ab")]).unwrap();
+    nullable_word.minimize(5000).unwrap();
+    for value in [
+        Automaton::Graph(Graph::empty()),
+        Automaton::literal(""),
+        Automaton::literal("a"),
+        Automaton::literal("ab"),
+        nullable_cycle,
+        nullable_word,
+    ] {
+        for star in [false, true] {
+            let expected = eager_unminimized_unary_constructor(&value, star);
+            WORD_MATERIALIZATIONS.with(|count| count.set(0));
+            let actual = if star { value.star() } else { value.optional() }
+                .unwrap()
+                .expanded()
+                .unwrap();
+            WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+            assert!(!actual.deterministic);
+            // This backend's unchanged ordinal IDs give an explicit isomorphism.
+            assert_eq!(actual.state_count(), expected.state_count());
+            assert_eq!(actual.initial, expected.initial);
+            for q in 0..actual.state_count() {
+                assert_eq!(actual.accepts(q), expected.accepts(q));
+                let mut a = actual.outgoing(q).collect::<Vec<_>>();
+                a.sort_unstable();
+                let mut b = expected.outgoing(q).collect::<Vec<_>>();
+                b.sort_unstable();
+                assert_eq!(a, b);
+            }
+            for threshold in [0, 1, 3, 5000] {
+                let mut a = actual.clone();
+                let mut b = expected.clone();
+                let result = a.minimize(threshold);
+                assert_eq!(result, b.minimize(threshold));
+                if result.is_ok() {
+                    assert_eq!(a.normal(), b.normal());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn persistent_partial_iterators_keep_snapshots_after_store_drop() {
+    let mut store = persistent::Store::from_graph(&Graph::empty());
+    store.set_edges(
+        0,
+        vec![
+            Edge {
+                lo: 1,
+                hi: 5,
+                to: 0,
+            },
+            Edge {
+                lo: 3,
+                hi: 7,
+                to: 0,
+            },
+        ],
+    );
+    let mut first = store.outgoing(0);
+    assert_eq!(
+        first.next(),
+        Some(Edge {
+            lo: 1,
+            hi: 5,
+            to: 0
+        })
+    );
+    store.set_edges(
+        0,
+        vec![Edge {
+            lo: 9,
+            hi: 10,
+            to: 0,
+        }],
+    );
+    let mut second = store.outgoing(0);
+    drop(store);
+    assert_eq!(
+        first.collect::<Vec<_>>(),
+        vec![Edge {
+            lo: 3,
+            hi: 7,
+            to: 0
+        }]
+    );
+    assert_eq!(
+        second.next(),
+        Some(Edge {
+            lo: 9,
+            hi: 10,
+            to: 0
+        })
+    );
+    assert_eq!(second.next(), None);
+}
+
+#[test]
+fn persistent_varying_histories_match_scalar_snapshots() {
+    for seed in 0..64u64 {
+        let mut random = seed + 1;
+        let mut eager = Graph {
+            word: None,
+            store: None,
+            initial: 0,
+            deterministic: false,
+            states: vec![State::default(); 4],
+        };
+        let mut store = persistent::Store::from_graph(&eager);
+        let mut retained = Vec::new();
+        for step in 0..40 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let a = (random as usize >> 8) % 4;
+            let b = (random as usize >> 16) % 4;
+            match step % 4 {
+                0 => {
+                    let accept = random & 1 != 0;
+                    eager.states[a].accept = accept;
+                    store.set_accept(a, accept);
+                }
+                1 => {
+                    let edges = vec![
+                        Edge {
+                            lo: 1,
+                            hi: 5,
+                            to: b,
+                        },
+                        Edge {
+                            lo: 3,
+                            hi: 7,
+                            to: a,
+                        },
+                    ];
+                    eager.states[a].edges = edges.clone();
+                    store.set_edges(a, edges);
+                }
+                2 => {
+                    let source = eager.states[b].clone();
+                    eager.states[a].accept |= source.accept;
+                    eager.states[a].edges.extend(source.edges);
+                    eager.states[a].edges.sort_unstable();
+                    eager.states[a].edges.dedup();
+                    store.copy_edges(a, b);
+                }
+                _ => retained.push((store.clone(), eager.states.clone())),
+            }
+            for q in 0..4 {
+                assert_eq!(store.accepts(q), eager.states[q].accept);
+                let actual: BTreeSet<_> = store.outgoing(q).collect();
+                assert_eq!(actual, eager.states[q].edges.iter().copied().collect());
+            }
+        }
+        for (version, expected) in retained {
+            for (q, state) in expected.iter().enumerate() {
+                assert_eq!(version.accepts(q), state.accept);
+                assert_eq!(
+                    version.outgoing(q).collect::<BTreeSet<_>>(),
+                    state.edges.iter().copied().collect()
+                );
             }
         }
     }

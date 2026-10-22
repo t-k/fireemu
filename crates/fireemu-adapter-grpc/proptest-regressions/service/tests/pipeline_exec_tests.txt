@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5c92329973615b983b38aa3fff9c70bcd4509c8e8afece2035d08d0c93e3e918 # shrinks to case = Case { docs: [(None, None), (Some(Value { value_type: Some(NullValue(NullValue)) }), Some(Value { value_type: Some(NullValue(NullValue)) }))], literal: None, select: None, offset: None, limit: Some(2) }
+cc 34b9de4036128a5d0af7d6199f2e5e76d306b028d37afc90fbd769561965dada # shrinks to case = Case { docs: [], m_shapes: [0, 0, 0, 0, 0, 0, 0, 0], literal: None, select: None, offset: Some(0), limit: None }

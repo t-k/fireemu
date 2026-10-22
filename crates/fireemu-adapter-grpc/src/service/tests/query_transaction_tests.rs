@@ -341,7 +341,7 @@ fn pipeline_request() -> pb::ExecutePipelineRequest {
                         stages: vec![pb::pipeline::Stage {
                             name: "collection".to_owned(),
                             args: vec![pb::Value {
-                                value_type: Some(pb::value::ValueType::StringValue(
+                                value_type: Some(pb::value::ValueType::ReferenceValue(
                                     "/items".to_owned(),
                                 )),
                             }],
@@ -880,9 +880,12 @@ async fn execute_pipeline_preserves_canonical_context_on_continuation_error() {
         drop(barrier.exclusive());
     }));
     let request = pipeline_request();
-    let canonical = crate::pipeline::validate_pipeline(&request)
-        .unwrap()
-        .canonical_text();
+    let canonical = crate::pipeline::validate_pipeline(
+        &request,
+        fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse,
+    )
+    .unwrap()
+    .canonical_text();
     let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
         .await
         .unwrap()

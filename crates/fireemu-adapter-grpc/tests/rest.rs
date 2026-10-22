@@ -136,6 +136,27 @@ fn call_as(
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
+        origin: None,
+        remote_peer: false,
+        browser_metadata: false,
+    });
+    (r.status, r.body)
+}
+
+/// A request whose body is JSON text, read with its key order as the server reads it.
+fn call_text(s: &RestState, method: &str, path: &str, text: &str) -> (u16, Value) {
+    let (body, key_order) =
+        fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(text.as_bytes()).unwrap();
+    let r = s.handle(&RestRequest {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        query: String::new(),
+        authorization: Some("Bearer owner".to_owned()),
+        app_check: Vec::new(),
+        body,
+        batch_field_order: Vec::new(),
+        key_order,
         origin: None,
         remote_peer: false,
         browser_metadata: false,
@@ -5587,6 +5608,7 @@ fn the_security_rules_route_needs_the_control_token_from_a_browser() {
             app_check: Vec::new(),
             body: json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}}),
             batch_field_order: Vec::new(),
+            key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
         });
         (r.status, r.body)
     };
@@ -5657,6 +5679,7 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
                 app_check: Vec::new(),
                 body: json!({}),
                 batch_field_order: Vec::new(),
+                key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
             });
             (r.status, r.body)
         };
@@ -6895,6 +6918,7 @@ fn the_privileged_emulator_routes_refuse_a_remote_peer() {
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
     };
     let rules = json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}});
     for remote_peer in [true, false] {
@@ -7022,12 +7046,17 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
             {"name": "offset", "args": [{"integerValue": "1"}]},
             {"name": "limit", "args": [{"integerValue": "5"}]},
         ]));
-        assert_eq!(status, 200, "strict={strict} {body}");
-        assert_eq!(
-            body,
-            json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
-            "strict={strict}"
-        );
+        if strict {
+            // Production recorded no offset of 1; strict does not infer its acceptance.
+            assert_eq!(status, 501, "{body}");
+        } else {
+            assert_eq!(status, 200, "strict={strict} {body}");
+            assert_eq!(
+                body,
+                json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
+                "strict={strict}"
+            );
+        }
         let (status, body) = run(json!([
             {"name": "collection", "args": [{"referenceValue": "/nest/a/sub"}]},
             {"name": "select", "args": [{"mapValue": {"fields": {
@@ -7081,13 +7110,28 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                 501,
                 "UNIMPLEMENTED",
             ),
+            // The stage registry's own text: strict refuses it as unobserved.
             (
                 "input misplaced",
                 pipeline_body(&json!([{"name": "limit", "args": [{"integerValue": "1"}]}])),
-                400,
-                "INVALID_ARGUMENT",
+                if strict { 501 } else { 400 },
+                if strict {
+                    "UNIMPLEMENTED"
+                } else {
+                    "INVALID_ARGUMENT"
+                },
             ),
-            ("no pipeline", json!({}), 400, "INVALID_ARGUMENT"),
+            // fireemu's own text, in no shape production refused.
+            (
+                "no pipeline",
+                json!({}),
+                if strict { 501 } else { 400 },
+                if strict {
+                    "UNIMPLEMENTED"
+                } else {
+                    "INVALID_ARGUMENT"
+                },
+            ),
             (
                 "transaction selector",
                 json!({"structuredPipeline": {"pipeline": {"stages": [collection]}}, "readTime": "2026-08-29T12:00:00Z"}),
@@ -7141,50 +7185,52 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
 
 /// Over REST, the recorded select refusals answer production's bodies: the one-element error
 /// array, the text, and the overlap's `ErrorInfo` (FS-ENT-ORACLE O-1,
-/// `fs-ent-pipeline/px0/aliases#overlap`).
+/// `fs-ent-pipeline/px0/aliases#overlap`). The body keeps its key order: an alias inside another
+/// names the later of the two, as the official emulator does, and strict answers only the
+/// order production refused.
 #[test]
 fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
+    let overlap = |child: &str| {
+        json!([{"error": {
+            "code": 400,
+            "message": format!("The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of '{child}' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."),
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {"field": child},
+                "reason": "OVERLAPPING_PROPERTY_PATHS",
+            }],
+        }}])
+    };
     for strict in [true, false] {
         let s = enterprise_state(strict, None);
         seed_nest(&s);
-        let select = |fields: Value| {
-            pipeline_body(&json!([
-                {"name": "collection", "args": [{"referenceValue": "/nest"}]},
-                {"name": "select", "args": [{"mapValue": {"fields": fields}}]},
-            ]))
+        let select = |fields: &str| {
+            let (status, body) = call_text(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                &format!(
+                    r#"{{"structuredPipeline": {{"pipeline": {{"stages": [{{"name": "collection", "args": [{{"referenceValue": "/nest"}}]}}, {{"name": "select", "args": [{{"mapValue": {{"fields": {{{fields}}}}}}}]}}]}}}}}}"#
+                ),
+            );
+            (status, body)
         };
-        let field = json!({"fieldReferenceValue": "name"});
-        let (status, body) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:executePipeline"),
-            select(json!({"m": field, "m.r": field})),
-        );
+        let field = r#"{"fieldReferenceValue": "name"}"#;
+        let (status, body) = select(&format!(r#""m": {field}, "m.r": {field}"#));
         assert_eq!(status, 400, "{body}");
-        assert_eq!(
-            body,
-            json!([{"error": {
-                "code": 400,
-                "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
-                "status": "INVALID_ARGUMENT",
-                "details": [{
-                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                    "domain": "firestore.googleapis.com",
-                    "metadata": {"field": "m.r"},
-                    "reason": "OVERLAPPING_PROPERTY_PATHS",
-                }],
-            }}]),
-            "strict={strict}"
-        );
-        let wide: serde_json::Map<String, Value> = (0..65)
-            .map(|k| (format!("a{k:02}"), field.clone()))
-            .collect();
-        let (status, body) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:executePipeline"),
-            select(Value::Object(wide)),
-        );
+        assert_eq!(body, overlap("m.r"), "strict={strict}");
+        // The other order: the official emulator names the later alias; production has not
+        // refused it.
+        let (status, body) = select(&format!(r#""m.r": {field}, "m": {field}"#));
+        if strict {
+            assert_eq!(status, 501, "{body}");
+        } else {
+            assert_eq!(body, overlap("m"), "{body}");
+        }
+        let wide: Vec<String> = (0..65).map(|k| format!(r#""a{k:02}": {field}"#)).collect();
+        let (status, body) = select(&wide.join(", "));
         assert_eq!(status, 400, "{body}");
         assert_eq!(
             body,
@@ -7195,12 +7241,7 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
             }}]),
             "strict={strict}"
         );
-        let (status, body) = call(
-            &s,
-            "POST",
-            &format!("{DOCS}:executePipeline"),
-            select(json!({"__x__": field})),
-        );
+        let (status, body) = select(&format!(r#""__x__": {field}"#));
         assert_eq!(status, 400, "{body}");
         assert_eq!(
             body,
@@ -7295,8 +7336,8 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
                 "strict={strict}"
             );
         }
-        // A map of recorded literals with plain keys composes (a named coordinator inference,
-        // PX1b review M3); empty, reserved and dotted keys are unrecorded.
+        // Map literals as production answered them (O-4 `literals#*`): nested values, any key
+        // but an empty or a reserved one (`__type__` aside), and vectors in their map form.
         let nested = json!({"mapValue": {"fields": {"a": {"mapValue": {"fields": {"b": {"arrayValue": {"values": [{"integerValue": "1"}, {"mapValue": {"fields": {"c": {"stringValue": "x"}}}}]}}}}}}}});
         let (status, body) = select(nested.clone());
         assert_eq!(status, 200, "strict={strict}: {body}");
@@ -7304,8 +7345,8 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
             body[0]["results"][0]["fields"]["v"], nested,
             "strict={strict}"
         );
-        for key in ["ab_c9", "_k", "K"] {
-            let plain = json!({"mapValue": {"fields": {key: {"integerValue": "1"}}}});
+        for key in ["ab_c9", "_k", "K", "a.b", "1a", "a-b", "__type__"] {
+            let plain = json!({"mapValue": {"fields": {key: {"stringValue": "x"}}}});
             let (status, body) = select(plain.clone());
             assert_eq!(status, 200, "strict={strict} {key:?}: {body}");
             assert_eq!(
@@ -7313,27 +7354,32 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
                 "strict={strict}"
             );
         }
-        for key in ["", "__x__", "a.b", "1a", "a-b"] {
+        for (key, text) in [
+            ("", "Property names cannot be empty."),
+            ("__x__", "field name '__x__' is reserved."),
+        ] {
             let (status, body) =
                 select(json!({"mapValue": {"fields": {key: {"integerValue": "1"}}}}));
-            // The emulator profile answers as before (a reserved key is refused by the value
-            // decoder, as for a write).
-            assert_eq!(status == 501, strict, "strict={strict} {key:?}: {body}");
+            assert_eq!(status, 400, "strict={strict} {key:?}: {body}");
+            assert_eq!(
+                stream_error(&body)["error"]["message"],
+                text,
+                "strict={strict} {key:?}"
+            );
         }
-        // A vector literal is unrecorded.
-        let (status, body) = select(
-            json!({"mapValue": {"fields": {"__type__": {"stringValue": "__vector__"}, "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}}),
-        );
+        let vector = json!({"mapValue": {"fields": {"__type__": {"stringValue": "__vector__"}, "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}});
+        let (status, body) = select(vector.clone());
+        assert_eq!(status, 200, "strict={strict}: {body}");
         assert_eq!(
-            status,
-            if strict { 501 } else { 200 },
-            "strict={strict}: {body}"
+            body[0]["results"][0]["fields"]["v"], vector,
+            "strict={strict}"
         );
     }
 }
 
 /// Owner first, as over gRPC, also on Enterprise; and a body field the request does not have
-/// is refused by the strict transcoder only.
+/// is refused: with the official emulator's text under the emulator profile, UNIMPLEMENTED
+/// under strict.
 #[test]
 fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
     let s = enterprise_state(
@@ -7358,18 +7404,28 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
         &format!("{DOCS}:executePipeline"),
         extra.clone(),
     );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(
-        stream_error(&body)["error"]["message"],
-        "Invalid JSON payload received. Unknown name \"bogus\" at 'structured_pipeline': Cannot find field."
+    // Strict: the transcoder's text was recorded for other methods only, so the refusal goes
+    // through the shape gate (ruling (c) of the PX1d r6 review) and is UNIMPLEMENTED.
+    assert_eq!(status, 501, "{body}");
+    assert!(
+        stream_error(&body)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Invalid JSON payload received. Unknown name \"bogus\" at 'structured_pipeline': Cannot find field."),
+        "{body}"
     );
+    // The emulator profile refuses it as the official emulator 1.22.0 does.
     let (status, body) = call(
         &enterprise_state(false, None),
         "POST",
         &format!("{DOCS}:executePipeline"),
         extra,
     );
-    assert_eq!(status, 200, "{body}");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
+        "Payload isn't valid for request."
+    );
     // On Standard only strict has the route (production's refusal); the emulator profile keeps
     // its plain 404.
     let (status, body) = call(
@@ -7407,6 +7463,90 @@ fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
                 "strict={strict} {path}"
             );
         }
+    }
+}
+
+/// A `bytesValue` with a line break (CR, LF, CRLF, a MIME break after 76 characters), a tab, a
+/// form feed, a space, `!` or a lone sextet is refused by the official emulator 1.22.0 with
+/// `Payload isn't valid for request.`; strict
+/// answers it with UNIMPLEMENTED (review r9 M2). Other methods keep the shared decoder, which
+/// skips line breaks, until production is observed (a commit pins that).
+#[test]
+fn rest_execute_pipeline_refuses_base64_the_official_emulator_does_not_read() {
+    let mime = format!("{}\r\n{}", "QUJD".repeat(19), "QUJD");
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        for text in [
+            "QUJD\nQUJD",
+            "QUJD\rQUJD",
+            "QUJD\r\nQUJD",
+            "\nQUJD",
+            "QUJD\n",
+            mime.as_str(),
+            "QUJD\tQUJD",
+            "QUJD\u{c}QUJD",
+            "QU JD",
+            "QUJD!",
+            "Q",
+            "+_AA",
+            "-/AA",
+            "QQ==QUJD",
+        ] {
+            for literal in [
+                json!({"bytesValue": text}),
+                json!({"bytes_value": text}),
+                json!({"arrayValue": {"values": [{"bytesValue": text}]}}),
+                json!({"mapValue": {"fields": {"k": {"bytes_value": text}}}}),
+            ] {
+                let stages = json!([
+                    {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+                    {"name": "select", "args": [{"mapValue": {"fields": {"v": literal}}}]}
+                ]);
+                let (status, body) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:executePipeline"),
+                    pipeline_body(&stages),
+                );
+                if strict {
+                    assert_eq!(status, 501, "{text:?}: {body}");
+                } else {
+                    assert_eq!(status, 400, "{text:?}: {body}");
+                    assert_eq!(
+                        stream_error(&body)["error"]["message"],
+                        "Payload isn't valid for request.",
+                        "{text:?}"
+                    );
+                }
+            }
+        }
+        // What the official emulator reads is answered, in either spelling: one alphabet, any
+        // number of trailing `=`.
+        for text in [
+            "QUJDQUJD", "+/+/", "-_-_", "-_8", "-_8=", "QQ===", "QUI==", "====", "",
+        ] {
+            for key in ["bytesValue", "bytes_value"] {
+                let stages = json!([
+                    {"name": "collection", "args": [{"referenceValue": "/nest"}]},
+                    {"name": "select", "args": [{"mapValue": {"fields": {"v": {key: text}}}}]}
+                ]);
+                let (status, body) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:executePipeline"),
+                    pipeline_body(&stages),
+                );
+                assert_eq!(status, 200, "strict={strict} {key} {text:?}: {body}");
+            }
+        }
+        // A commit still reads a line break as the shared decoder does (no production row yet).
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/b64/x", "fields": {"v": {"bytesValue": "QUJD\nQUJD"}}}}]}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
     }
 }
 
@@ -7448,6 +7588,9 @@ fn rest_execute_pipeline_transcodes_every_request_field() {
         let s = enterprise_state(strict, None);
         seed_nest(&s);
         for (label, body, status) in cases.clone() {
+            // fireemu's own text, in no shape production refused: strict refuses it as
+            // unobserved.
+            let status = if strict && status == 400 { 501 } else { status };
             let (got, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
             assert_eq!(got, status, "strict={strict} {label}: {body}");
             assert!(
@@ -7630,8 +7773,40 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
                 {"name": "offset", "args": [{"integerValue": "1"}]},
             ])),
         );
-        assert_eq!(status, 200, "{body}");
-        assert_eq!(body[0]["results"], json!([empty]), "strict={strict}");
+        // Production recorded no offset of 1; strict does not infer its acceptance.
+        assert_eq!(status, if strict { 501 } else { 200 }, "{body}");
+        if !strict {
+            assert_eq!(body[0]["results"], json!([empty]));
+        }
         assert!(empty.get("fields").is_none(), "{empty}");
     }
+}
+
+/// Under the emulator profile a REST literal is read in the body's key order, as the official
+/// emulator 1.22.0 reads it (`PX1d` r6 review S2): the first expression in that order is named.
+#[test]
+fn rest_execute_pipeline_literals_follow_the_body_order() {
+    let s = enterprise_state(false, None);
+    seed_nest(&s);
+    let select = |entries: &str| {
+        let (_, body) = call_text(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &format!(
+                r#"{{"structuredPipeline": {{"pipeline": {{"stages": [{{"name": "collection", "args": [{{"referenceValue": "/nest"}}]}}, {{"name": "select", "args": [{{"mapValue": {{"fields": {{"v": {{"mapValue": {{"fields": {{{entries}}}}}}}}}}}}}]}}]}}}}}}"#
+            ),
+        );
+        stream_error(&body)["error"]["message"].clone()
+    };
+    let function = r#"{"functionValue": {"name": "document_id", "args": [{"fieldReferenceValue": "__name__"}]}}"#;
+    let field = r#"{"fieldReferenceValue": "name"}"#;
+    assert_eq!(
+        select(&format!(r#""b": {function}, "a": {field}"#)),
+        "Value type is not supported: FUNCTION_VALUE"
+    );
+    assert_eq!(
+        select(&format!(r#""a": {field}, "b": {function}"#)),
+        "Value type is not supported: FIELD_REFERENCE_VALUE"
+    );
 }

@@ -171,6 +171,7 @@ fn firestore(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
     });
     let mut out = UiResponse::json(response.status, &response.body);
     if fireemu_adapter_grpc::rest::drops_connection(&response) {

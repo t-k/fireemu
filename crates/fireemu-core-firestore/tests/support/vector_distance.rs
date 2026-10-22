@@ -118,6 +118,11 @@ fn check(left: &[f64], right: &[f64]) {
         DistanceMeasure::DotProduct,
     ] {
         assert_eq!(
+            PreparedVectorDistance::new(right, measure).evaluate(left).map(f64::to_bits),
+            reference::vector_distance(left, right, measure).map(f64::to_bits),
+            "prepared left={left:?}, right={right:?}, measure={measure:?}"
+        );
+        assert_eq!(
             vector_distance(left, right, measure).map(f64::to_bits),
             reference::vector_distance(left, right, measure).map(f64::to_bits),
             "left={left:?}, right={right:?}, measure={measure:?}"

@@ -1,9 +1,12 @@
 //! Count-independent bounded-repetition prototype; not a production admission hook.
 //! Nullable copies use suffix thresholds. Nonnullable copies are indexed lazily.
-use super::{Automaton, Edge, Failure, Graph, PROTOTYPE_EDGES, State, guard_count, state_bound};
+use super::{
+    Automaton, Edge, Failure, Graph, PROTOTYPE_EDGES, State, SubsetIndex, guard_count,
+    reserve_items, state_bound,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Subset {
     // This root is a separate graph identity, never a language-only equivalence class.
     Root,
@@ -40,14 +43,6 @@ impl Subset {
             Self::Indexed(v) => sources.extend(v.iter().map(|&(_, q)| q)),
         }
         child.points_for(sources)
-    }
-
-    fn units(&self) -> usize {
-        match self {
-            Self::Root => 1,
-            Self::Nullable(thresholds) => thresholds.len() * 2,
-            Self::Indexed(states) => states.len() * 2,
-        }
     }
 
     fn accepts(&self, child: &Graph, min: u32, max: u32) -> bool {
@@ -150,34 +145,28 @@ fn construct(
     } else {
         Subset::Indexed(vec![(0, child.initial)])
     };
-    let mut intern = BTreeMap::from([(initial.clone(), 0)]);
     let mut subsets = vec![initial];
+    let mut intern = SubsetIndex::default();
+    intern.insert(SubsetIndex::digest(&subsets[0]), 0)?;
     let mut states = vec![State::default()];
     let mut cursor = 0usize;
-    let mut edge_count = 0usize;
-    let mut units = subsets[0].units();
     while cursor < subsets.len() {
         guard_count(cursor as u64 + 1, threshold)?;
-        let subset = subsets[cursor].clone();
-        states[cursor].accept = subset.accepts(child, min, max);
-        let points = subset.points(child, max);
+        states[cursor].accept = subsets[cursor].accepts(child, min, max);
+        let points = subsets[cursor].points(child, max);
         for (i, &lo) in points.iter().enumerate() {
-            let next = subset.next(child, max, lo)?;
-            let to = if let Some(&to) = intern.get(&next) {
+            let next = subsets[cursor].next(child, max, lo)?;
+            let digest = SubsetIndex::digest(&next);
+            let to = if let Some(to) = intern.find(digest, &next, &subsets) {
                 to
             } else {
                 // Every discovered subset will eventually be dequeued. Refusal here is
                 // equivalent to the later guard and prevents an unbounded pending queue.
                 guard_count(subsets.len() as u64 + 1, threshold)?;
-                state_bound(subsets.len() + 1)?;
-                units = units
-                    .checked_add(next.units())
-                    .ok_or(Failure::Inconclusive)?;
-                if units > PROTOTYPE_EDGES {
-                    return Err(Failure::Inconclusive);
-                }
+                reserve_items(&mut subsets, 1)?;
+                reserve_items(&mut states, 1)?;
                 let to = subsets.len();
-                intern.insert(next.clone(), to);
+                intern.insert(digest, to)?;
                 subsets.push(next);
                 states.push(State::default());
                 to
@@ -189,11 +178,8 @@ fn construct(
                     continue;
                 }
             }
+            reserve_items(&mut states[cursor].edges, 1)?;
             states[cursor].edges.push(Edge { lo, hi, to });
-            edge_count += 1;
-            if edge_count > PROTOTYPE_EDGES {
-                return Err(Failure::Inconclusive);
-            }
         }
         cursor += 1;
     }
@@ -228,4 +214,24 @@ pub(super) fn count_only(
     threshold: u64,
 ) -> Result<Option<u64>, Failure> {
     construct(child, min, max, threshold).map(|(_, count)| count)
+}
+
+#[test]
+fn typed_key_collision_preserves_symbolic_construction_identities() {
+    let keys: Vec<Subset> = vec![
+        Subset::Root,
+        Subset::Nullable(vec![]),
+        Subset::Indexed(vec![]),
+        Subset::Nullable(vec![(1, 0)]),
+        Subset::Nullable(vec![(1, 1)]),
+        Subset::Indexed(vec![(0, 1)]),
+        Subset::Indexed(vec![(1, 1)]),
+    ];
+    let mut index = SubsetIndex::default();
+    for id in 0..keys.len() {
+        index.insert(7, id).unwrap();
+    }
+    for (id, key) in keys.iter().enumerate() {
+        assert_eq!(index.find(7, key, &keys), Some(id));
+    }
 }

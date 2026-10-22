@@ -2247,7 +2247,7 @@ fn subset_index_verifies_colliding_identity_sets() {
     for (id, key) in keys.iter().enumerate() {
         assert_eq!(index.find(7, key, &keys), Some(id));
     }
-    assert_eq!(index.find(7, &[1, 4], &keys), None);
+    assert_eq!(index.find(7, &vec![1, 4], &keys), None);
     assert_eq!(index.find(8, &keys[0], &keys), None);
 }
 
@@ -2296,5 +2296,68 @@ fn subset_output_storage_does_not_replace_canonical_guard() {
             hi: 401,
             to: graph.initial
         }]
+    );
+}
+
+fn finite_prefix_chain(length: usize) -> Graph {
+    Graph {
+        word: None,
+        store: None,
+        initial: 0,
+        deterministic: true,
+        states: (0..=length)
+            .map(|q| State {
+                accept: true,
+                edges: if q < length {
+                    vec![Edge {
+                        lo: 97,
+                        hi: 97,
+                        to: q + 1,
+                    }]
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn finite_prefix_repeat_counts_match_small_explicit_copies() {
+    for length in 1..=6 {
+        let child = finite_prefix_chain(length);
+        for copies in [2, 3, 4] {
+            let mut explicit = Automaton::Graph(child.clone())
+                .bounded(copies, copies)
+                .unwrap();
+            let expected = Some(length as u64 * u64::from(copies) + 2);
+            assert_eq!(explicit.minimize(5000), Ok(expected));
+            assert_eq!(
+                symbolic::count_only(&child, copies, copies, 5000),
+                Ok(expected)
+            );
+        }
+        for copies in [1, 2, 4] {
+            let mut explicit = Automaton::Graph(child.clone()).minimum(copies).unwrap();
+            let expected = Some(length as u64 * u64::from(copies) + 3);
+            assert_eq!(explicit.minimize(5000), Ok(expected));
+            assert_eq!(minimum::count_only(&child, copies, 5000), Ok(expected));
+        }
+    }
+}
+
+#[test]
+fn symbolic_bounded_key_storage_does_not_replace_canonical_guard() {
+    assert_eq!(
+        symbolic::count_only(&finite_prefix_chain(1000), 2, 2, 5000),
+        Ok(Some(2002))
+    );
+}
+
+#[test]
+fn symbolic_minimum_key_storage_does_not_replace_canonical_guard() {
+    assert_eq!(
+        minimum::count_only(&finite_prefix_chain(1000), 4, 5000),
+        Ok(Some(4003))
     );
 }

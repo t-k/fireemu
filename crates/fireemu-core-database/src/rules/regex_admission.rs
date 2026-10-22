@@ -114,17 +114,17 @@ struct SubsetIndex {
     buckets: HashMap<u64, Vec<usize>>,
 }
 impl SubsetIndex {
-    fn digest(key: &[usize]) -> u64 {
+    fn digest<K: Hash + ?Sized>(key: &K) -> u64 {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hash);
         hash.finish()
     }
-    fn find(&self, digest: u64, key: &[usize], keys: &[Vec<usize>]) -> Option<usize> {
+    fn find<K: Eq>(&self, digest: u64, key: &K, keys: &[K]) -> Option<usize> {
         self.buckets
             .get(&digest)?
             .iter()
             .copied()
-            .find(|&id| keys[id] == key)
+            .find(|&id| &keys[id] == key)
     }
     fn insert(&mut self, digest: u64, id: usize) -> Result<(), Failure> {
         self.buckets

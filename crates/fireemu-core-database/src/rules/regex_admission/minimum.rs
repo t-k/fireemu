@@ -1,8 +1,11 @@
 //! Symbolic minimum-repeat prototype retaining the unminimized star-tail identities.
-use super::{Automaton, Edge, Failure, Graph, PROTOTYPE_EDGES, State, guard_count, state_bound};
+use super::{
+    Automaton, Edge, Failure, Graph, PROTOTYPE_EDGES, State, SubsetIndex, guard_count,
+    reserve_items, state_bound,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Prefix {
     Root,
     None,
@@ -10,7 +13,7 @@ enum Prefix {
     Indexed(Vec<(u32, usize)>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Key {
     prefix: Prefix,
     // The child states in the tail retain their identities; this is not a minimized star.
@@ -44,15 +47,6 @@ impl Key {
             Prefix::Indexed(v) => sources.extend(v.iter().map(|&(_, q)| q)),
         }
         child.points_for(sources)
-    }
-
-    fn units(&self) -> usize {
-        self.tail.len()
-            + match &self.prefix {
-                Prefix::None | Prefix::Root => 1,
-                Prefix::Nullable(v) => v.len() * 2,
-                Prefix::Indexed(v) => v.len() * 2,
-            }
     }
 
     fn accepts(&self, child: &Graph, min: u32) -> bool {
@@ -167,32 +161,26 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
         prefix,
         tail: Vec::new(),
     };
-    let mut intern = BTreeMap::from([(initial.clone(), 0)]);
     let mut keys = vec![initial];
+    let mut intern = SubsetIndex::default();
+    intern.insert(SubsetIndex::digest(&keys[0]), 0)?;
     let mut states = vec![State::default()];
     let mut cursor = 0;
-    let mut units = keys[0].units();
-    let mut edge_count = 0;
     while cursor < keys.len() {
         guard_count(cursor as u64 + 1, threshold)?;
-        let current = keys[cursor].clone();
-        states[cursor].accept = current.accepts(child, min);
-        let points = current.points(child, min);
+        states[cursor].accept = keys[cursor].accepts(child, min);
+        let points = keys[cursor].points(child, min);
         for (i, &lo) in points.iter().enumerate() {
-            let next = current.next(child, min, lo)?;
-            let to = if let Some(&to) = intern.get(&next) {
+            let next = keys[cursor].next(child, min, lo)?;
+            let digest = SubsetIndex::digest(&next);
+            let to = if let Some(to) = intern.find(digest, &next, &keys) {
                 to
             } else {
                 guard_count(keys.len() as u64 + 1, threshold)?;
-                state_bound(keys.len() + 1)?;
-                units = units
-                    .checked_add(next.units())
-                    .ok_or(Failure::Inconclusive)?;
-                if units > PROTOTYPE_EDGES {
-                    return Err(Failure::Inconclusive);
-                }
+                reserve_items(&mut keys, 1)?;
+                reserve_items(&mut states, 1)?;
                 let to = keys.len();
-                intern.insert(next.clone(), to);
+                intern.insert(digest, to)?;
                 keys.push(next);
                 states.push(State::default());
                 to
@@ -204,11 +192,8 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
                     continue;
                 }
             }
+            reserve_items(&mut states[cursor].edges, 1)?;
             states[cursor].edges.push(Edge { lo, hi, to });
-            edge_count += 1;
-            if edge_count > PROTOTYPE_EDGES {
-                return Err(Failure::Inconclusive);
-            }
         }
         cursor += 1;
     }
@@ -236,4 +221,45 @@ pub(super) fn compile(
 
 pub(super) fn count_only(child: &Graph, min: u32, threshold: u64) -> Result<Option<u64>, Failure> {
     construct(child, min, threshold).map(|(_, count)| count)
+}
+
+#[test]
+fn typed_key_collision_preserves_minimum_construction_identities() {
+    let keys: Vec<Key> = vec![
+        Key {
+            prefix: Prefix::Root,
+            tail: vec![],
+        },
+        Key {
+            prefix: Prefix::None,
+            tail: vec![],
+        },
+        Key {
+            prefix: Prefix::Nullable(vec![(1, 0)]),
+            tail: vec![],
+        },
+        Key {
+            prefix: Prefix::Nullable(vec![(1, 1)]),
+            tail: vec![],
+        },
+        Key {
+            prefix: Prefix::Nullable(vec![(1, 0)]),
+            tail: vec![1],
+        },
+        Key {
+            prefix: Prefix::Indexed(vec![(0, 1)]),
+            tail: vec![],
+        },
+        Key {
+            prefix: Prefix::Indexed(vec![(1, 1)]),
+            tail: vec![],
+        },
+    ];
+    let mut index = SubsetIndex::default();
+    for id in 0..keys.len() {
+        index.insert(7, id).unwrap();
+    }
+    for (id, key) in keys.iter().enumerate() {
+        assert_eq!(index.find(7, key, &keys), Some(id));
+    }
 }

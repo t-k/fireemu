@@ -278,7 +278,8 @@ jobs:
       - run: node --test npm/scripts/prepare-launcher.test.mjs
       - run: node --test npm/scripts/release-metadata.test.mjs
       - run: node --test npm/scripts/changelog-section.test.mjs
-      - run: node --test npm/scripts/testing-snapshot.test.mjs npm/scripts/testing-config.test.mjs npm/scripts/testing-worlds.test.mjs
+      - run: node --test npm/scripts/control.test.mjs npm/scripts/testing-snapshot.test.mjs npm/scripts/testing-config.test.mjs npm/scripts/testing-worlds.test.mjs
+      - run: node --test npm/scripts/types-consumer.test.mjs
       - run: cargo build --release --locked -p fireemu
       - run: node npm/scripts/pack-local.mjs
       - run: node npm/scripts/verify-install.mjs --dist npm/dist

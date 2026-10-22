@@ -43,6 +43,10 @@ const snapshot = (generation = "1") => ({
 const harness = async (page: Page) => {
   const state = {
     failure: 0,
+    diagnosticFailure: 0,
+    clearFailure: 0,
+    interval: "0",
+    clears: 0,
     generation: "1",
     loaded: true,
     source: "currently loaded editor source",
@@ -70,6 +74,37 @@ const harness = async (page: Page) => {
       });
     if (/^control\/v1\/sessions\/[^/]+$/.test(path))
       return json({ clock: { clock: "2026-10-22T00:00:00Z" } });
+    if (path.endsWith("/rules/diagnostics") || path.endsWith("/rules/diagnostics:clear")) {
+      if (path.endsWith(":clear")) {
+        state.clears++;
+        const expected = route.request().postDataJSON() as {
+          expectedGeneration: string;
+          expectedInterval: string;
+        };
+        if (
+          expected.expectedGeneration !== state.generation ||
+          expected.expectedInterval !== state.interval
+        )
+          return json({ error: { message: "stale diagnostic identity" } }, 409);
+        if (state.clearFailure === -1) return route.abort("connectionrefused");
+        if (state.clearFailure)
+          return json({ error: { message: "clear refused" } }, state.clearFailure);
+        state.interval = String(Number(state.interval) + 1);
+      } else if (state.diagnosticFailure)
+        return json({ error: { message: "inspection offline" } }, state.diagnosticFailure);
+      return json({
+        service: "firestore",
+        loaded: true,
+        generation: state.generation,
+        interval: state.interval,
+        expressionCount: 2,
+        distinctValueCount: 3,
+        observationCount: 5,
+        requestTraceCount: 1,
+        requestTraceCapacity: 100,
+        estimatedCoverageBytes: 512,
+      });
+    }
     if (state.failure === -1) return route.abort("connectionrefused");
     if (path.endsWith("/rules/requests")) {
       if (path.includes("/other/"))
@@ -211,4 +246,44 @@ test("network disconnection is an error, not a successful empty response", async
     await expect(page.getByTestId("fetch-error")).toHaveCount(remaining - 1);
   }
   await expect(page.getByTestId("rules-coverage")).toBeVisible();
+});
+
+test("diagnostic interval clear is explicit, keyboard accessible and retains drafts", async ({
+  page,
+}, info) => {
+  const state = await harness(page);
+  await page.goto("/ui/rules");
+  const editor = page.locator("#rules-firestore");
+  await editor.fill("draft preserved across diagnostic clear");
+  await page.getByTestId("rules-request-trace-1").click();
+  await page.getByTestId("rules-request-expression-0").click();
+  const clear = page.getByTestId("rules-diagnostics-clear");
+  await clear.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("rules-diagnostics-stats")).toContainText("interval 1");
+  await expect(editor).toHaveValue("draft preserved across diagnostic clear");
+  await expect(page.getByTestId("rules-request-highlight")).toHaveCount(0);
+  expect(state.clears).toBe(1);
+  await expect(page.getByText(/process RSS/)).toBeVisible();
+  await expect(page.getByText(/completed evaluations merge/)).toBeVisible();
+  await page.screenshot({
+    path: process.env.RULES_UI_EVIDENCE_DIR
+      ? `${process.env.RULES_UI_EVIDENCE_DIR}/diagnostic-interval.png`
+      : info.outputPath("diagnostic-interval.png"),
+    fullPage: true,
+  });
+  state.clearFailure = -1;
+  await clear.click();
+  await expect(page.getByText(/result is unknown or refused/)).toBeVisible();
+  await expect(clear).toBeDisabled();
+  expect(state.clears).toBe(2);
+  state.clearFailure = 0;
+  await page.getByTestId("rules-diagnostics-refresh").click();
+  await expect(clear).toBeEnabled();
+  expect(state.clears).toBe(2);
+  state.diagnosticFailure = 500;
+  await page.getByTestId("rules-diagnostics-refresh").click();
+  await expect(page.getByTestId("fetch-stale")).toBeVisible();
+  await expect(clear).toBeDisabled();
+  await expect(editor).toHaveValue("draft preserved across diagnostic clear");
 });

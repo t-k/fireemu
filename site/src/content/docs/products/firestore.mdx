@@ -82,7 +82,10 @@ The answers follow production as recorded by fireemu's production observations (
 | A stage's own argument count or options, such as `limit()` or `where(a, b)` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text, for `collection`, `where`, `select`, `limit`, `offset`, `add_fields`, `distinct` and `aggregate`; `UNIMPLEMENTED` for every other stage |
 | An empty `array()` or `map()` | `UNIMPLEMENTED` | An empty array or map |
 
-Every other function and stage is refused with `UNIMPLEMENTED`, never ignored.
+| An invalid, empty or 1500-byte alias in `add_fields`, `distinct` or `aggregate`, or an empty alias map of `select`, `add_fields`, `distinct` or `aggregate` | `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the official emulator's text, in its order (every alias before an empty map), before the stage is refused as unsupported |
+| An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
+
+Every other function and stage is refused with `UNIMPLEMENTED`, after the argument checks in the table above, never ignored.
 
 ## Composite indexes
 

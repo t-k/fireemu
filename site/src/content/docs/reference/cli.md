@@ -25,6 +25,8 @@ usage:
 Creates fireemu.toml in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given. An existing fireemu.json must be removed before creating fireemu.toml.
 
 options:
+  --reference
+        Also write fireemu.reference.toml, which fireemu does not load. With an existing fireemu.toml or fireemu.json and no --profile or --firebase-json, write only the reference. Copying a key into fireemu.toml makes it explicit and stops productionExact from switching it.
   --profile strict|emulator
         Compatibility profile. strict follows production Firebase and is recommended, including when migrating from the official emulator; emulator is only for checking alignment with the pinned official emulator and is not needed when migrating. Default: strict (asked interactively).
   --firebase-json <file>
@@ -34,7 +36,7 @@ options:
   --yes, --no-interactive
         Never ask; use the defaults for what is not given.
   --force
-        Replace an existing fireemu.toml. Default: an existing file is an error.
+        Replace existing output files. Default: an existing file is an error.
   -h, --help
         Print this help and exit.
 ```
@@ -48,7 +50,7 @@ usage:
   fireemu up [options]
   fireemu emulators:start [options]
 
-Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.
+Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured; the Realtime Database when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.
 
 options:
   --config <file>
@@ -60,7 +62,7 @@ options:
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port).
+        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).
   --firestore-port <n>
         Firestore port. Default: 8080 (0 picks a free port).
   --http-port <n>
@@ -75,12 +77,14 @@ options:
         Cloud Tasks port. Cloud Tasks starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9499.
   --pubsub-port <n>
         Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.
+  --database-port <n>
+        Realtime Database port. Without --only, giving it also starts the Realtime Database; with --only, it starts only when the list names database. Default: 9000.
   --functions <dir>
         Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
   --ui-port <n|auto>
         UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
-  --hub-port <n>
-        Emulator Hub port. Default: 4400.
+  --hub-port <n|auto>
+        Emulator Hub port; auto assigns an available port, 0 disables it. Default: 4400.
   --logging-port <n>
         Logging emulator port; 0 disables it. Default: 4500.
   --inspect-functions [port]
@@ -124,7 +128,7 @@ options:
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port).
+        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).
   --firestore-port <n>
         Firestore port. Default: 8080 (0 picks a free port).
   --http-port <n>
@@ -139,14 +143,16 @@ options:
         Cloud Tasks port. Cloud Tasks starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9499.
   --pubsub-port <n>
         Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.
+  --database-port <n>
+        Realtime Database port. Without --only, giving it also starts the Realtime Database; with --only, it starts only when the list names database. Default: 9000.
   --functions <dir>
         Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
   --ui
         Start the UI while the command runs (exec does not start it otherwise, as in `firebase emulators:exec`). --ui-port overrides.
   --ui-port <n|auto>
         UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
-  --hub-port <n>
-        Emulator Hub port. Default: 4400.
+  --hub-port <n|auto>
+        Emulator Hub port; auto assigns an available port, 0 disables it. Default: 4400.
   --logging-port <n>
         Logging emulator port; 0 disables it. Default: 4500.
   --inspect-functions [port]
@@ -190,13 +196,13 @@ options:
 fireemu doctor - check the installation: binary, UI, Functions runner, Node.js
 
 usage:
-  fireemu doctor [--connect <control url>] [--export-dir <dir>]
+  fireemu doctor [--connect <control url> | --export-dir <path>]
 
 Reports the Fireemu binary, UI, Functions runner and Node.js that this installation finds, and suggests a remedy for each problem.
 
 options:
-  --export-dir <dir>
-        Inspect export destination ownership and permissions without creating directories or changing permissions.
+  --export-dir path
+        Inspect an export destination and its ancestors without starting a daemon or changing files. Export checks again when it writes. Cannot be combined with --connect.
   --connect http://127.0.0.1:<port>
         Also report what a running suite says, through its control URL (the control port is printed at startup). Default: only the offline report.
   -h, --help
@@ -211,7 +217,7 @@ fireemu capabilities - print the capability manifest of the resolved profile as 
 usage:
   fireemu capabilities [options]
 
-Prints the capability manifest for the profile the options resolve to. It accepts the same configuration options as `up` and retains static validation. A virtual clock without a pinned daemon.clockStart produces a warning for this offline inspection; startup still refuses that configuration. The resolved profile selects the manifest.
+Prints the capability manifest for the profile the options resolve to. It accepts the same options as `up` and validates them the same way, but only --config (the profile it names) changes the result.
 
 options:
   --config <file>
@@ -223,7 +229,7 @@ options:
   -P, --project <id|alias>
         Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.
   --only <list>
-        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port).
+        Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, database, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port); the Realtime Database when configured (emulators.database, daemon.databasePort or --database-port).
   --firestore-port <n>
         Firestore port. Default: 8080 (0 picks a free port).
   --http-port <n>
@@ -238,12 +244,14 @@ options:
         Cloud Tasks port. Cloud Tasks starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9499.
   --pubsub-port <n>
         Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.
+  --database-port <n>
+        Realtime Database port. Without --only, giving it also starts the Realtime Database; with --only, it starts only when the list names database. Default: 9000.
   --functions <dir>
         Load exactly one Functions codebase from this directory, whatever firebase.json declares. Default: the codebases firebase.json declares.
   --ui-port <n|auto>
         UI port; auto assigns an available port, 0 disables the UI. Default: 4000 for up (the UI is skipped if that port is busy), off for exec.
-  --hub-port <n>
-        Emulator Hub port. Default: 4400.
+  --hub-port <n|auto>
+        Emulator Hub port; auto assigns an available port, 0 disables it. Default: 4400.
   --logging-port <n>
         Logging emulator port; 0 disables it. Default: 4500.
   --inspect-functions [port]

@@ -89,6 +89,14 @@ impl Tree {
         Ok(written)
     }
 
+    /// Replaces the whole tree with `root`, as a write of it at the root would: a value equal
+    /// to what is stored leaves the stored form in place (1.0 written over 1 leaves 1).
+    pub fn replace_root(&mut self, root: Option<Node>) {
+        if root != self.root {
+            self.root = root;
+        }
+    }
+
     /// Applies a multipath update at `base`: each key of `entries` is a path relative to
     /// `base`, and its value replaces that location. The paths may not overlap. Every entry is
     /// checked, and its server values resolved against the tree before the update, before
@@ -152,7 +160,7 @@ impl Tree {
             return Ok(Write::Priority(parent, priority));
         }
         let resolved = resolve(value, self.get(path), context)?;
-        let node = Node::from_json(&resolved, path, &self.limits)?;
+        let node = Node::from_json_owned(resolved, path, &self.limits)?;
         if node.as_ref() == self.get(path) {
             return Ok(Write::Unchanged(node));
         }

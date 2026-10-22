@@ -159,6 +159,12 @@ impl Node {
     /// nothing. Written data may not nest deeper, or reach longer paths, than the limits.
     /// Server values must be resolved first.
     pub fn from_json(json: &Json, at: &Path, limits: &Limits) -> Result<Option<Self>> {
+        Self::from_json_owned(json.clone(), at, limits)
+    }
+
+    /// [`Node::from_json`] taking the value: each part of `json` is dropped as soon as its
+    /// node is built, so a large write (an import) is not held twice.
+    pub fn from_json_owned(json: Json, at: &Path, limits: &Limits) -> Result<Option<Self>> {
         Self::build(
             json,
             Position {
@@ -169,19 +175,16 @@ impl Node {
         )
     }
 
-    fn build(json: &Json, at: Position, limits: &Limits) -> Result<Option<Self>> {
+    fn build(json: Json, at: Position, limits: &Limits) -> Result<Option<Self>> {
         // A null is held to the depth limit too: the official emulator refuses a delete
         // below depth 32 like any other write there.
         if at.depth > limits.max_depth {
             return Err(too_deep(limits));
         }
-        if matches!(json, Json::Null) {
-            return Ok(None);
-        }
         match json {
             Json::Null => Ok(None),
-            Json::Bool(b) => Ok(Some(Self::leaf(Leaf::Bool(*b)))),
-            Json::Number(n) => Ok(Some(Self::leaf(Leaf::Number(*n)))),
+            Json::Bool(b) => Ok(Some(Self::leaf(Leaf::Bool(b)))),
+            Json::Number(n) => Ok(Some(Self::leaf(Leaf::Number(n)))),
             Json::String(s) => {
                 if s.len() > limits.max_string_bytes {
                     return Err(DatabaseError::new(
@@ -193,11 +196,11 @@ impl Node {
                         ),
                     ));
                 }
-                Ok(Some(Self::leaf(Leaf::String(s.clone()))))
+                Ok(Some(Self::leaf(Leaf::String(s))))
             }
             Json::Array(items) => {
                 let entries = items
-                    .iter()
+                    .into_iter()
                     .enumerate()
                     .map(|(index, item)| (index.to_string(), item));
                 Self::from_entries(entries, None, at, limits)
@@ -207,7 +210,7 @@ impl Node {
     }
 
     fn from_object(
-        map: &BTreeMap<String, Json>,
+        mut map: BTreeMap<String, Json>,
         at: Position,
         limits: &Limits,
     ) -> Result<Option<Self>> {
@@ -219,19 +222,16 @@ impl Node {
         }
         // The official emulator stores a `.priority` member's number as a double (it answers
         // `2.0` for 2); a priority written to `<location>/.priority` keeps its type.
-        let priority = match map.get(PRIORITY_KEY) {
-            Some(json) => Priority::from_json(json)?.map(|priority| match priority {
+        let priority = match map.remove(PRIORITY_KEY) {
+            Some(json) => Priority::from_json(&json)?.map(|priority| match priority {
                 Priority::Number(n) => Priority::Number(Number::Double(n.as_f64())),
                 other @ Priority::String(_) => other,
             }),
             None => None,
         };
-        if let Some(value) = map.get(VALUE_KEY) {
-            // `.value` holds a leaf: the official emulator refuses an object or an array
-            // there (review r11 S29).
-            if map.keys().any(|k| k != VALUE_KEY && k != PRIORITY_KEY)
-                || matches!(value, Json::Object(_) | Json::Array(_))
-            {
+        if let Some(value) = map.remove(VALUE_KEY) {
+            // `.value` holds a leaf; objects and arrays are invalid.
+            if !map.is_empty() || matches!(value, Json::Object(_) | Json::Array(_)) {
                 return Err(DatabaseError::new(
                     ErrorKind::InvalidData,
                     "an object with \".value\" may hold only \".priority\" besides it",
@@ -243,15 +243,11 @@ impl Node {
             }
             return Ok(node.map(|node| node.with_priority(priority)));
         }
-        let entries = map
-            .iter()
-            .filter(|(k, _)| k.as_str() != PRIORITY_KEY)
-            .map(|(k, v)| (k.clone(), v));
-        Self::from_entries(entries, priority, at, limits)
+        Self::from_entries(map.into_iter(), priority, at, limits)
     }
 
-    fn from_entries<'a>(
-        entries: impl Iterator<Item = (String, &'a Json)>,
+    fn from_entries(
+        entries: impl Iterator<Item = (String, Json)>,
         priority: Option<Priority>,
         at: Position,
         limits: &Limits,

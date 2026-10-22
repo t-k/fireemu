@@ -76,6 +76,7 @@ allowUnsignedCustomTokens = true
 |---|---|---|
 | Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | Refused |
 | Firestore, Storage and Realtime Database Security Rules accept `@firebase/rules-unit-testing`'s unsigned mock ID token | `auth.allowUnsignedIdTokens` | Refused, as production refuses an unsigned token |
+| A Realtime Database instance without a rules file is open to every request, as the official emulator serves it | `database.defaultAccess` (`"open"`) | `"locked"`: only the emulator's `owner` credential reads and writes, as production admits only administrators to a new database in locked mode |
 | Identity-provider sign-in accepts fixture assertions and the sign-in widget | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates |
 | The Eventarc listener admits any credential or none | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 | A tenant ID can be any readable name, such as `tenant-a` | `auth.tenantIdFormat` (`"readable"`) | `"generated"`: production's generated form, such as `acme-x7k2q` |

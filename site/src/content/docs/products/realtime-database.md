@@ -1,36 +1,216 @@
 ---
 title: Realtime Database
-description: The Firebase Realtime Database, served without a compatibility claim yet.
+description: The Firebase Realtime Database with Security Rules, export and import, served without a compatibility claim yet.
 ---
 
-Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`. It is an open gap in the [compatibility contract](../../compatibility/): the transports the SDKs use are served and compared with the official emulator, but some features are missing and there is no compatibility claim yet.
+Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs). It has no parity claim yet: production has not been observed, and rules coverage reports and Functions triggers are not implemented, so the [compatibility contract](../../compatibility/) lists it as an open gap, and behavior copied from the official emulator may change once production is observed (see [Provisional behavior](#provisional-behavior)).
 
-The database starts when it is selected or configured: `--only database`, `emulators.database` in `firebase.json`, `daemon.databasePort`, or `--database-port`. Without any of them the default run leaves port 9000 free. `fireemu exec` sets `FIREBASE_DATABASE_EMULATOR_HOST`, which the Admin SDK reads; web and mobile clients call `connectDatabaseEmulator`.
+## Start it
+
+The database starts when it is selected or configured. Without any of the following, the default run leaves port 9000 free:
+
+- `--only database` (with other services: `--only auth,firestore,database`);
+- `emulators.database` in `firebase.json`, as `firebase init` writes it;
+- `daemon.databasePort` in `fireemu.toml`, or `--database-port`.
 
 ```sh
 npx fireemu exec --only database -- npm test
 ```
 
+```json
+{
+  "emulators": { "database": { "port": 9000 } }
+}
+```
+
+Since v0.29.0 a `firebase.json` with `emulators.database`, which `firebase init` writes, starts the database where earlier versions only reported it. A busy port stops the start (`error: bind 127.0.0.1:9000: Address already in use`); 9000 is also PHP-FPM's default, so choose another with `--database-port` or `emulators.database.port`, or leave the database out with `--only`.
+
+The start banner shows the address and the rules in force:
+
+```text
+  database:         127.0.0.1:9000   FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:9000
+  database rules:   demo-app-default-rtdb <- ./database.rules.json; another instance: every request is allowed (database.defaultAccess = open, default)
+```
+
+## Connect
+
+`fireemu exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the command it runs, and the Admin SDK reads it.
+
+`exec` also sets `FIREBASE_CONFIG` with the `databaseURL` `https://<project>.firebaseio.com`, as firebase-tools does, so an Admin SDK app initialized without options reads and writes the instance `<project>`, not `<project>-default-rtdb`, which the single rules form and the client example below use. Pass `databaseURL: 'https://<project>-default-rtdb.firebaseio.com'` to `initializeApp` to share an instance with clients. Web and mobile clients connect explicitly:
+
+```js
+import { initializeApp } from 'firebase/app';
+import { getDatabase, connectDatabaseEmulator } from 'firebase/database';
+
+const app = initializeApp({ projectId: 'demo-app', databaseURL: 'https://demo-app-default-rtdb.firebaseio.com' });
+const db = getDatabase(app);
+connectDatabaseEmulator(db, '127.0.0.1', 9000);
+```
+
+A database instance is a namespace. Requests choose one with the `ns` query parameter or the first label of the host name, as on the official emulator. `demo-app-default-rtdb` is the default instance of the project `demo-app`: ID tokens are checked against that project, and against the daemon's project for an instance with any other name. A session reset and session snapshots cover `<project>` and `<project>-default-rtdb`.
+
 ## What is served
 
-- The REST API (`.json` paths): reads, writes, updates, push ids, conditional requests with ETags, `shallow`, `print`, `format=export`, queries and event streams (`Accept: text/event-stream`).
+- The REST API (`.json` paths): reads, writes, updates, push ids, conditional requests with ETags, `shallow`, `print`, `format=export`, queries, and event streams (`Accept: text/event-stream`).
 - The realtime protocol over WebSocket and over long polling (`forceLongPolling()`), with listens, queries, transactions and server values.
-- `onDisconnect` writes (`set`, `update`, `remove`, `cancel`): they run when the connection ends, however it ends (the app goes offline, the socket closes, or a long-polling client stops asking), as one update with their server values resolved at that moment. An update the database cannot apply, such as a priority for a node that is not there, writes none of them, as on the official emulator. They do not run when fireemu itself stops, as the official emulator does not run them when it stops, and a session reset drops those registered for the projects it resets. Registrations are bounded only as plain writes are.
-- Namespaces, chosen by the `ns` query parameter or the first label of the host name, as on the official emulator. A session reset empties the namespaces of the project it resets (`<project>` and `<project>-default-rtdb`).
+- `onDisconnect` writes (`set`, `update`, `remove`, `cancel`). They run when the connection ends, however it ends, as one update with their server values resolved at that moment. They do not run when Fireemu itself stops, as the official emulator does not run them when it stops, and a session reset drops those registered for the projects it resets.
+- Security Rules (below), `/.settings/rules.json`, `/.inspect/databases.json`, and `disableTriggers` on writes.
+- Export, import and session snapshots (below).
 
 `tools/sdk-smoke-database` in the repository drives these through the pinned `firebase` and `firebase-admin` SDKs and compares the results with a recording of the official emulator.
 
 ## Security Rules
 
-Security Rules are evaluated as the official emulator (firebase-database-emulator v4.11.2) evaluates them: `.read`, `.write`, `.validate` and `.indexOn`, with `auth`, `now`, `root`, `data`, `newData`, `query` and `$` variables, over REST, event streams and the realtime protocol, onDisconnect writes included (checked when registered and again when they run, each on its own, so a denied one leaves the others). The `database` section of `firebase.json` is loaded as firebase-tools 15.28.2 loads it: the single form into `<project>-default-rtdb`, the array form into each entry's deploy target instances (from `.firebaserc`) or instance. A file that does not load stops the start with the file, line and column; a changed file is loaded again, and a change that does not load keeps the rules in force and prints why. `GET` and `PUT /.settings/rules.json?ns=<instance>` read and replace an instance's rules with an administrator credential. A rules change, or a client signing in or out, cancels the listens and event streams the new rules no longer allow. Under the `emulator` profile credentials are read as the official emulator reads them: any `Authorization: Bearer <token>` or `access_token` is an administrator that rules do not apply to (safe only because the listener is loopback), `auth=<ID token>` is the user the token names with its custom claims as members of `auth` (an unsigned token whatever project it names), and any other `auth` value is anonymous. Under `strict` (the default) only the emulator's `owner` credential, which the Admin SDK sends, is an administrator, `auth=` must be a token fireemu's Auth verifies for the instance's project (`<project>-default-rtdb`, or the daemon's project for a named instance; `auth.allowUnsignedIdTokens` decides the `@firebase/rules-unit-testing` mock tokens), and any other credential is refused with 401. The official emulator's own regular-expression dialect is not followed yet: its load refusals are (`\s` and `\S` included, and comments in expressions are read; a line break inside a string literal is refused there and a backslash before one continues the line, and format characters such as U+200B are skipped wherever its reader skips them), and a pattern fireemu does not read as it does (`(?…)`, `[[:class:]]`, `\W` and `\D`, an escaped letter other than `\d` and `\w`, an escaped backslash inside a class, an operator that starts an alternative, and the `i` flag on a pattern with any character beyond ASCII) is an error that makes the rule false whether or not it is negated; on an ASCII pattern `i` folds as the official emulator folds it, leaving the subject as it is. As there, a quantifier after a quantifier applies to the repetition (`a+?` is `(a+)?`, not lazy), and an unanchored pattern is searched as `.*` written before and after it, so `/a|q/` is `.*a|q.*`. A match that exceeds the engine's step or depth budget is an error too, so the rule is false, negated or not. A pattern the official emulator cannot determinize (its own resource limit) is refused there and loads here. An expression nests at most 600 levels (`&&`, `||` and `+` chains of any length count once), a local safety budget. An instance without rules follows `database.defaultAccess`: open, as the official emulator serves it, or, with `"locked"` (the `productionExact` default, strict profile only), only the emulator's `owner` credential, which the Admin SDK sends against an emulator; under `"locked"` other administrator tokens are held to the rules too. The start banner's `database rules:` line names each file and its instance, and what an instance without rules allows.
+### Load rules
+
+Name the rules file in `firebase.json`, as for the Firebase CLI. The single form loads one file into the default instance, `<project>-default-rtdb`:
+
+```json
+{
+  "database": { "rules": "database.rules.json" }
+}
+```
+
+The array form loads each entry into its `instance`, or into the instances of its deploy `target` from `.firebaserc`:
+
+```json
+{
+  "database": [
+    { "instance": "demo-app-default-rtdb", "rules": "database.rules.json" },
+    { "target": "audit", "rules": "audit.rules.json" }
+  ]
+}
+```
+
+A rules file that does not load stops the start with the file, line and column, as firebase-tools stops. A changed file is loaded again while Fireemu runs; a change that does not load keeps the rules in force and prints why. `GET` and `PUT /.settings/rules.json?ns=<instance>` read and replace an instance's rules with an administrator credential, which is how `@firebase/rules-unit-testing` loads them. The route requires a loopback peer, as the Firestore and Storage rules routes do. Non-loopback peers receive 403 before credentials are evaluated; repeated leading slashes and percent-encoded `.settings` paths are subject to the same restriction.
+
+Rules support `.read`, `.write`, `.validate` and `.indexOn`, with `auth`, `now`, `root`, `data`, `newData`, `query` and `$` variables, over REST, event streams and the realtime protocol. Comparisons with the official emulator cover REST reads and writes, event streams with and without range/count queries, and realtime listens without a query (`q` absent or empty). They do not establish every queried WebSocket listen shape; long polling uses the shared realtime session behavior.
+
+`onDisconnect` writes are checked both at registration and when the connection ends. Registration checks a `set` as one write and an `update` entry by entry, each against the current tree; if any entry fails, registration is refused. At disconnect, each pending entry is first checked alone against the then-current tree. Entries denied by `.write` or `.validate` are dropped. The retained entries are then checked together as one update; if that combined check fails, none of them is applied.
+
+An event stream whose query bounds or limits it is judged with that query; one whose query only orders reads all the data and, as on the official emulator, is judged as a stream without a query and needs no index. A rules change, a write that changes what a data-dependent `.read` allows, or a client signing in or out cancels the listens and event streams the rules no longer allow.
+
+### Credentials
+
+| Credential | `emulator` profile | `strict` profile (the default) |
+|---|---|---|
+| `Authorization: Bearer owner` or `access_token=owner` (the emulator owner credential) | Administrator; rules do not apply | Administrator; rules do not apply |
+| A single other `Authorization: Bearer` or `access_token` | Administrator, as on the official emulator. The listener is on loopback unless `network.allowNonLoopbackHosts` publishes it; see [CI and containers](../../guides/ci-and-containers/) first | Refused with 401 |
+| `auth=<ID token>` signed by Fireemu's Auth | The user it names, its custom claims as members of `auth` | The user it names, when the token is for the instance's project |
+| `auth=<unsigned ID token>` (`@firebase/rules-unit-testing`, `mockUserToken`) | The user its `sub` names, whatever project it names and with or without `aud`, as the official emulator reads it, while `auth.allowUnsignedIdTokens` is `true` (the default; `false` under `productionExact`, which makes it anonymous) | The user it names when it has the `createMockUserToken` shape and the instance's project as audience, while `auth.allowUnsignedIdTokens` is `true` (the default; `false` under `productionExact`) |
+| Any other `auth=` value | Anonymous | Refused with 401 |
+
+Before applying this table, Fireemu refuses ambiguous HTTP requests with 400 in either profile: any repeated query parameter (including `auth` and `access_token`), more than one `Authorization` header, or any combination of query credentials and an `Authorization` header. Identical repeated credentials are still ambiguous. The official emulator instead selects a value, so this is a listed difference.
+
+`/.inspect/databases.json`, which `firebase emulators:export` reads, answers anyone under the `emulator` profile and only the `owner` credential under `strict` or with a locked database.
+
+### An instance without rules
+
+An instance with no rules file follows `database.defaultAccess`:
+
+- `"open"` (the development default in both profiles): every request is allowed, as the official emulator serves a database without rules.
+- `"locked"` (the `productionExact` default, `strict` profile only): only the `owner` credential reads and writes, as a new production database in locked mode admits only administrators. Every other credential, a signed-in user's included, is refused with 401.
+
+```toml
+schemaVersion = 1
+profile = "strict"
+
+[database]
+defaultAccess = "locked"
+```
+
+### Unit testing with `@firebase/rules-unit-testing`
+
+`initializeTestEnvironment` loads the rules you pass through `/.settings/rules.json`, `authenticatedContext()` sends an unsigned mock token, and `withSecurityRulesDisabled()` and `clearDatabase()` are served:
+
+```js
+import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
+import { readFileSync } from 'node:fs';
+
+const [host, port] = process.env.FIREBASE_DATABASE_EMULATOR_HOST.split(':');
+const testEnv = await initializeTestEnvironment({
+  projectId: 'demo-app',
+  database: { host, port: Number(port), rules: readFileSync('database.rules.json', 'utf8') },
+});
+const alice = testEnv.authenticatedContext('alice').database();
+await assertSucceeds(alice.ref('users/alice').set({ name: 'Alice' }));
+await assertFails(alice.ref('users/bob').set({ name: 'Mallory' }));
+await testEnv.cleanup();
+```
+
+Run it with `npx fireemu exec --only database -- node test.mjs`. To test production's refusal of unsigned tokens, set `auth.allowUnsignedIdTokens` to `false` or set [`productionExact`](../../guides/profiles/). The realtime connection then refuses the mock token (`invalid_token`) and the SDK keeps retrying, so a read or write from `authenticatedContext()` does not settle instead of failing; check the refusal over REST (`?auth=<token>` answers 401) or give the assertion a timeout.
+
+### Limits
+
+- An expression nests at most 600 levels; `&&`, `||` and `+` chains of any length count once. This is a local safety budget: the official emulator itself fails between 2,000 and 4,000 levels.
+- A `matches()` call that exceeds the regular-expression engine's step or depth budget is an error, so the rule is false whether or not it is negated.
+- A write's path is at most 768 bytes and its data at most 32 levels deep, as production documents.
+
+## Differences from the official emulator
+
+Comparison with the official emulator is limited to recorded cases. The listed unsupported syntax and evaluation cases are refused when rules load or produce rule errors; this does not establish equivalent resource-limit admission. Character classes (names, white space and the format characters the official emulator's reader skips) use Java 21's tables. Operators and methods were compared with the official emulator for the recorded operand types.
+
+### Regular expressions
+
+The official emulator reads `matches()` patterns in a dialect of its own, an automaton grammar that is neither JavaScript's nor RE2's. Fireemu follows its grammar where it is recorded. For example, `a+?` means `(a+)?` (not a lazy repetition), `/a|q/` is searched as `.*a|q.*`, and under `i` an ASCII pattern folds case as there while the string being matched is left as it is. A construct whose meaning Fireemu does not reproduce yet is an error, so the rule is false whether or not it is negated:
+
+| Construct | Example |
+|---|---|
+| `(?…)` groups | `/(?:a)/`, `/(?i)a/` |
+| POSIX classes | `/[[:alpha:]]/` |
+| `\W` and `\D`, anywhere | `/\W/`, `/[\D]/` |
+| An escaped letter or digit other than `\d` and `\w` | `/\n/`, `/\x41/`, `/\1/` |
+| An escaped backslash inside a class | `/[\\a]/` |
+| An operator that starts an alternative, or a quantifier after `^` | `/(|a)/`, `/^(a|*)$/`, `/^*/`, `/^{2}a/` |
+| The `i` flag with any character beyond ASCII in the pattern | `/^é$/i`, `/[ａ-ｚ]/i` |
+| A backslash before a line break | `/a\` followed by a new line and `b/` |
+| An escaped letter with a format character such as U+200B after the backslash | `/\` U+200B `u0061/` |
+
+The recorded syntactic-refusal cases, including `\s`, an unclosed class or group, or an unescaped `^` in the middle, are refused here with the same message as the official emulator. This comparison does not cover resource-limit refusals.
+
+### Other differences
+
+- A lone escaped surrogate in a string literal (`'\uD83D'`) is refused when the rules load; the official emulator loads it.
+- A `\u` escape in a name (`\u0061uth.uid`, `auth.\u0075id`) is refused when the rules load; the official emulator reads it as the letter.
+- An equality of two snapshots, of `auth` with itself or of `query` with itself is an error here, so the rule is false whether or not it is negated. The static check lets two snapshots or `query` through only behind a ternary (`(c ? root : 'a') == (c ? root : 'a')`); `auth == auth` loads as it is. The official emulator compares snapshots by location and `auth` and `query` by identity.
+- Where the official emulator answers a request with an internal error (500), Fireemu denies it: for example a string method on a value that turns out to be a snapshot (`(c ? root : 'a').length`), and `getPriority()` at a location the official emulator cannot read as a path (a key with `.`, `#`, `$`, `[`, `]` or a control character, a reserved name such as `.value` or `.info`, `.priority` before the end, or a path beyond 32 levels or 768 bytes).
+- A method read without a call (`auth.uid.contains != null`, `data.child`) is an error here; the official emulator reads it as a function. A call whose callee is a ternary (`(c ? data.child : data.parent)('a')`) is refused when the rules load; the official emulator loads it.
+- `toLowerCase()` and `toUpperCase()` of a string holding a character whose case Java 21 and Fireemu's newer Unicode tables map differently is an error here: U+019B, U+0264, U+1C89, U+1C8A, U+A7CB to U+A7CF, U+A7D2 to U+A7D5 and U+A7DA to U+A7DC, and beyond the Basic Multilingual Plane U+10D50 to U+10D65, U+10D70 to U+10D85, U+16EA0 to U+16EB8 and U+16EBB to U+16ED3. The context-dependent sigma restriction below also applies.
+- `toLowerCase()` of a string holding `Σ` (U+03A3) is an error here unless each neighbour of the `Σ` is the string's edge, a space or a Latin, Greek or Cyrillic letter that has a case (`'ΑΣ'`, `'ΑΣ Α'`). Java chooses the final form `ς` by its word boundaries, which Fireemu does not reproduce, so `'Α:Σ'` and `'ΑΣ.'` are errors.
+- `replace('', to)` of a string holding a character beyond the Basic Multilingual Plane is an error here; Java puts `to` between the two halves of its surrogate pair.
+- A request that gives a query parameter more than once, or more than one credential (`auth`, `access_token` and an `Authorization` header), is refused with 400. The official emulator takes the first value, and `auth` before the others.
+- Malformed realtime wire queries receive a connection-error control message, without automatically dropping the connection or sending a close frame. These include unknown fields, a non-string index (`i`), non-boolean inclusive flags (`sin`, `ein`), a non-string limit side (`vf`), bound names (`sn`, `en`) other than strings or null, and a limit written as a floating-point number (even `2.0`). Type checks still apply to flags, side and names when their corresponding bound or limit is absent. A null bound name means no name; otherwise-valid inclusive flags and names without a bound, and a side without a limit, have no effect. A supplied integer limit must be positive and fit in 32 unsigned bits. Nonnumeric limits and integer limits outside that range receive `invalid_parameters` instead. A supplied limit also requires side `l` or `r`; Fireemu refuses a missing or other side where the official emulator can read it as neither side. These are realtime protocol responses, not HTTP 400 responses.
+- `query.orderBy`, `query.endBefore`, `query.isOrderByChild()`, the `OrderByKey`, `OrderByValue` and `OrderByPriority` names and `http.encodeURL()` are refused when the rules load; the official emulator loads them.
+- A few rules both refuse are refused with another message or at another column.
+- Some patterns refused by the official emulator at rule load because of resource limits can load and evaluate here, including cases that permit requests. Resource-limit admission is not equivalent and remains unresolved. These include determinization refusals ("could not determinize efficiently", a resource limit of the official emulator's automaton library). The recorded patterns include several counted repetitions of groups of alternatives in one pattern. Production's limit is not known; no production behavior is inferred from these comparisons.
 
 ## Export, import and snapshots
 
-`emulators:export`, `--export-on-exit` and the Hub's export write `database_export/<namespace>.json` for every namespace that holds data or was imported, from the same export format as `GET /.json?format=export` (priorities kept), with the `database` section of `firebase-export-metadata.json` that firebase-tools writes. `--import` writes each file back as the `owner` credential, as firebase-tools does with `disableTriggers=true`, before the command starts; a file named after an invalid namespace or holding invalid JSON refuses the start. `/.inspect/databases.json` lists the namespaces the server knows, as the official emulator does; under the strict profile and with a locked database only the `owner` credential, which firebase-tools sends, may read it. Session snapshots and resets include the namespaces of the session's project (`<project>-default-rtdb` or a namespace named after it); a restore is seen by open listeners and drops the onDisconnect writes registered for those namespaces.
+`emulators:export`, `--export-on-exit` and the Hub's export write `database_export/<instance>.json` for every instance that holds data or was imported, in the export format of `GET /.json?format=export` (priorities kept), with the `database` section of `firebase-export-metadata.json` that firebase-tools writes. The files are byte-identical to the Firebase CLI's for the same data, and each tool imports the other's export.
+
+```sh
+npx fireemu exec --only database --export-on-exit ./emulator-data -- npm test
+npx fireemu exec --only database --import ./emulator-data -- npm test
+```
+
+```text
+emulator-data/
+  firebase-export-metadata.json
+  database_export/
+    demo-app-default-rtdb.json
+```
+
+`--import` writes each file as the `owner` credential with `disableTriggers=true`, as firebase-tools does, before the command starts. The file name, lowercased, is the instance. A file named after an invalid instance, or one the database would refuse (invalid JSON, an invalid key, data nested too deep), stops the start before any other product's data is installed. An export's database section is skipped, with a note, when the database is not selected.
+
+Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
 
 ## Not supported yet
 
 - Rules coverage reports (the official emulator's `/.inspect/coverage`).
-- Realtime Database triggers for Cloud Functions, and a view in the Emulator UI.
+- Realtime Database triggers for Cloud Functions.
+- A view in the Emulator UI.
+- Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope.
 
-Where production has not been observed, Fireemu follows the official emulator (number forms such as `1.0`, a write of an equal value, priorities, refusal texts, long-polling framing). That behavior is provisional and may change once production is observed.
+## Provisional behavior
+
+Where production has not been observed, Fireemu follows the official emulator, and that behavior may change once production is observed. This covers number forms such as `1.0`, a write of an equal value, priorities, refusal texts, long-polling framing, how `onDisconnect` writes combine, the credentials of each profile, the regular-expression dialect, where the official emulator refuses a key of 768 bytes in a write's body but accepts it in the path, and the patterns it cannot determinize.

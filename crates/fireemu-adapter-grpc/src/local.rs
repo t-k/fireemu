@@ -404,6 +404,8 @@ pub struct LocalBackend {
     release_count: std::sync::atomic::AtomicU64,
     release_notify: tokio::sync::Notify,
     commits: tokio::sync::broadcast::Sender<CommitNotification>,
+    /// Only databases with live Listen subscribers retain an isolated notification ring.
+    listen_commits: Arc<Mutex<ListenCommitRegistry>>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
     /// Session-wide admission barrier shared with the other surfaces (reset holds it
@@ -905,6 +907,58 @@ pub struct CommitNotification {
     pub reset: bool,
     /// Changed paths without before/after document images.
     pub changes: Arc<[CommitPathChange]>,
+}
+
+type ListenCommitRegistry =
+    BTreeMap<(String, String), std::sync::Weak<tokio::sync::broadcast::Sender<CommitNotification>>>;
+
+/// Owns one subscriber and removes the database ring when its last subscriber leaves.
+/// Rings follow database names across restore; reset notifications invalidate incarnations.
+pub(crate) struct ListenSubscription {
+    sender: Arc<tokio::sync::broadcast::Sender<CommitNotification>>,
+    receiver: Option<tokio::sync::broadcast::Receiver<CommitNotification>>,
+    registry: Arc<Mutex<ListenCommitRegistry>>,
+    key: (String, String),
+}
+
+impl ListenSubscription {
+    pub(crate) async fn recv(
+        &mut self,
+    ) -> Result<CommitNotification, tokio::sync::broadcast::error::RecvError> {
+        self.receiver
+            .as_mut()
+            .expect("live Listen receiver")
+            .recv()
+            .await
+    }
+
+    pub(crate) fn try_recv(
+        &mut self,
+    ) -> Result<CommitNotification, tokio::sync::broadcast::error::TryRecvError> {
+        self.receiver
+            .as_mut()
+            .expect("live Listen receiver")
+            .try_recv()
+    }
+}
+
+impl Drop for ListenSubscription {
+    fn drop(&mut self) {
+        // Close before checking under the registry lock: concurrent final drops must
+        // not both count the other receiver while its automatic field drop is pending.
+        drop(self.receiver.take());
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.sender.receiver_count() == 0
+            && registry
+                .get(&self.key)
+                .is_some_and(|sender| sender.ptr_eq(&Arc::downgrade(&self.sender)))
+        {
+            registry.remove(&self.key);
+        }
+    }
 }
 
 fn status(e: DecodeError) -> Status {
@@ -2523,6 +2577,7 @@ impl LocalBackend {
             release_count: std::sync::atomic::AtomicU64::new(0),
             release_notify: tokio::sync::Notify::new(),
             commits: tokio::sync::broadcast::channel(COMMIT_NOTIFICATION_CAPACITY).0,
+            listen_commits: Arc::default(),
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
             change_admission: Mutex::new(None),
@@ -2926,7 +2981,7 @@ impl LocalBackend {
 
     fn announce_wipe(&self, databases: Vec<(String, String)>) {
         for (project, database) in databases {
-            let _ = self.commits.send(CommitNotification {
+            self.publish_notification(CommitNotification {
                 project,
                 database,
                 version: 0,
@@ -3380,6 +3435,53 @@ impl LocalBackend {
         self.commits.subscribe()
     }
 
+    /// Registers before Listen takes its first snapshot, so no intervening commit is lost.
+    pub(crate) fn subscribe_listen(&self, parent: &Parent) -> ListenSubscription {
+        let key = (
+            parent.project.as_str().to_owned(),
+            parent.database.as_str().to_owned(),
+        );
+        let mut registry = self
+            .listen_commits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sender = registry
+            .get(&key)
+            .and_then(std::sync::Weak::upgrade)
+            .unwrap_or_else(|| {
+                let sender =
+                    Arc::new(tokio::sync::broadcast::channel(COMMIT_NOTIFICATION_CAPACITY).0);
+                registry.insert(key.clone(), Arc::downgrade(&sender));
+                sender
+            });
+        ListenSubscription {
+            receiver: Some(sender.subscribe()),
+            sender,
+            registry: Arc::clone(&self.listen_commits),
+            key,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn listen_ring_count(&self) -> usize {
+        self.listen_commits.lock().unwrap().len()
+    }
+
+    /// Both notification surfaces receive the same committed event in database commit order.
+    fn publish_notification(&self, notification: CommitNotification) {
+        let _ = self.commits.send(notification.clone());
+        let registry = self
+            .listen_commits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(sender) = registry
+            .get(&(notification.project.clone(), notification.database.clone()))
+            .and_then(std::sync::Weak::upgrade)
+        {
+            let _ = sender.send(notification);
+        }
+    }
+
     /// Publishes a commit: the change sink first (synchronously, inside the database
     /// critical section the caller holds), then the `Listen` broadcast.
     /// Shares the session's fault plan with this backend.
@@ -3548,7 +3650,7 @@ impl LocalBackend {
                 },
             })
             .collect::<Arc<[_]>>();
-        let _ = self.commits.send(CommitNotification {
+        self.publish_notification(CommitNotification {
             project: event.project.clone(),
             database: event.database.clone(),
             version: event.version,

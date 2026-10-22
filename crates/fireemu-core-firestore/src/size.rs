@@ -146,16 +146,20 @@ fn fields_size(entries: &BTreeMap<String, Value>) -> Result<u64, SizeError> {
 }
 
 /// Exact document charge without constructing diagnostic contributors.
+#[cfg(test)]
 pub(crate) fn document_size_bytes(
     path: &DocumentPath,
     fields: &BTreeMap<String, Value>,
 ) -> Result<u64, SizeError> {
+    #[cfg(test)]
+    DOCUMENT_BYTE_VISITS.with(|count| count.set(count.get() + 1));
     add(add(document_name_size(path)?, 32)?, fields_size(fields)?)
 }
 
 #[cfg(test)]
 thread_local! {
-    static DOCUMENT_BREAKDOWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static DOCUMENT_BYTE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static DOCUMENT_BREAKDOWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Size of a document: name + fields + 32, with a breakdown of the largest fields.

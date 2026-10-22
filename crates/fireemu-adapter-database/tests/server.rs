@@ -71,6 +71,57 @@ async fn plain_requests_round_trip() {
 }
 
 #[tokio::test]
+async fn repeated_authorization_headers_are_refused_over_http_in_every_profile() {
+    use fireemu_adapter_database::rest::{Credentials, RulesMode};
+    let mut failures = Vec::new();
+    for (profile, strict, rules) in [
+        ("emulator", false, RulesMode::AllowAll),
+        ("strict", true, RulesMode::AllowAll),
+        ("productionExact", true, RulesMode::DenyAll),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let database = Arc::new(Mutex::new(Database::new(
+            RestOptions {
+                credentials: Credentials {
+                    strict,
+                    id_tokens: None,
+                },
+                rules,
+                ..RestOptions::default()
+            },
+            3,
+        )));
+        let server = tokio::spawn(serve(listener, database, ServerConfig::default()));
+        for credentials in [
+            "Authorization: Bearer owner\r\nAuthorization: Bearer other",
+            "authorization: Bearer other\r\nAUTHORIZATION: Bearer owner",
+            "Authorization: Bearer owner\r\nauthorization: Bearer owner",
+        ] {
+            for method in ["GET", "PUT"] {
+                let mut stream = TcpStream::connect(&address).await.unwrap();
+                let request = format!(
+                    "{method} /a.json?ns=dupauth HTTP/1.1\r\nHost: {address}\r\n{credentials}\r\nContent-Length: 1\r\nConnection: close\r\n\r\n1"
+                );
+                stream.write_all(request.as_bytes()).await.unwrap();
+                let mut response = String::new();
+                tokio::time::timeout(Duration::from_secs(5), stream.read_to_string(&mut response))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if !response.starts_with("HTTP/1.1 400") || !response.contains("Ambiguous request")
+                {
+                    failures.push(format!("{profile} {method} {credentials:?}: {response}"));
+                }
+            }
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
 async fn raw_quotes_and_braces_in_the_query_are_accepted() {
     // curl and the Firebase documentation send `orderBy="$key"` unencoded; the official
     // emulator accepts it, so the server must not refuse the request line.

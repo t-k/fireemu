@@ -71,7 +71,7 @@ pub fn split_target(target: &str) -> (&str, BTreeMap<String, String>) {
 /// given more than once, or more than one credential (`auth`, `access_token`, an
 /// `Authorization` header). The official emulator takes the first value and prefers `auth`;
 /// a request that could mean two things is refused here instead (a listed difference).
-pub fn check_ambiguity(target: &str, authorization: bool) -> Result<(), Refusal> {
+pub fn check_ambiguity(target: &str, authorization_count: usize) -> Result<(), Refusal> {
     let query = target.split_once('?').map_or("", |(_, query)| query);
     let mut seen = std::collections::BTreeSet::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
@@ -84,7 +84,7 @@ pub fn check_ambiguity(target: &str, authorization: bool) -> Result<(), Refusal>
     }
     let credentials = usize::from(seen.contains("auth"))
         + usize::from(seen.contains("access_token"))
-        + usize::from(authorization);
+        + authorization_count;
     if credentials > 1 {
         return Err(Refusal::bad(
             "Ambiguous request: more than one credential (auth, access_token or an Authorization header).",

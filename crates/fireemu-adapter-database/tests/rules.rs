@@ -1950,6 +1950,67 @@ fn an_ambiguous_request_is_refused() {
 }
 
 #[test]
+fn repeated_authorization_headers_are_ambiguous_in_every_profile() {
+    use fireemu_adapter_database::rest::Credentials;
+    let mut failures = Vec::new();
+    for (profile, strict, rules) in [
+        ("emulator", false, RulesMode::AllowAll),
+        ("strict", true, RulesMode::AllowAll),
+        ("productionExact", true, RulesMode::DenyAll),
+    ] {
+        let mut db = Database::new(
+            RestOptions {
+                credentials: Credentials {
+                    strict,
+                    id_tokens: None,
+                },
+                rules,
+                ..RestOptions::default()
+            },
+            7,
+        );
+        for headers in [
+            [
+                ("Authorization", "Bearer owner"),
+                ("Authorization", "Bearer other"),
+            ],
+            [
+                ("authorization", "Bearer other"),
+                ("AUTHORIZATION", "Bearer owner"),
+            ],
+            [
+                ("Authorization", "Bearer owner"),
+                ("authorization", "Bearer owner"),
+            ],
+        ] {
+            for method in ["GET", "PUT"] {
+                let (status, body) = call(&mut db, method, "/a.json?ns=dupauth", &headers, "1");
+                if status != 400 || !body.contains("Ambiguous request") {
+                    failures.push(format!("{profile} {method} {headers:?}: {status} {body}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+proptest::proptest! {
+    #[test]
+    fn authorization_multiplicity_does_not_depend_on_header_case(
+        cases in proptest::collection::vec(proptest::bool::ANY, 0..10),
+        writing in proptest::bool::ANY,
+    ) {
+        let mut db = db();
+        let headers: Vec<_> = cases.iter().map(|upper| {
+            (if *upper { "AUTHORIZATION" } else { "authorization" }, "Bearer owner")
+        }).collect();
+        let method = if writing { "PUT" } else { "GET" };
+        let (status, body) = call(&mut db, method, "/a.json?ns=authproperty", &headers, "1");
+        proptest::prop_assert_eq!(status, if cases.len() > 1 { 400 } else { 200 }, "{}", body);
+    }
+}
+
+#[test]
 fn a_stream_is_judged_without_its_query_and_a_shallow_read_unordered() {
     // Review r11 M37 and M38, recorded on the official emulator: an event stream's rules see
     // the stream kind's `query` whatever its URL asks for, and a `shallow` GET has no ordering.

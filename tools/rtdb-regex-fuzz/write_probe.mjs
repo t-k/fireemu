@@ -2,13 +2,17 @@
 // its placement, over 18 write operations, signed in ("a") and anonymous ("u"). After each
 // operation the owner reads /t back (format=export), so a write that was answered one way but
 // stored another shows. A control's "bodies" replace the body its named operations send.
-// node write_probe.mjs <host:port> <corpus.json> <out.json> [workers]
+// node write_probe.mjs <host:port> <corpus.json> <out.json> [workers] [corpus offset]
 // Loopback only.
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const [host, corpusFile, outFile, w] = process.argv.slice(2);
+const [host, corpusFile, outFile, w, offsetText] = process.argv.slice(2);
 const workers = Number(w ?? 6);
 const corpus = JSON.parse(readFileSync(corpusFile, 'utf8'));
+const offset = Number(offsetText ?? 0);
+if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(offset + corpus.length)) {
+  throw new Error('The corpus offset must be a non-negative safe integer within the corpus index range.');
+}
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const TOKEN = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'u1', uid: 'u1', iat: 1, exp: 9999999999, email: 'A@b.co', n: 3, roles: ['x', 'y'] })}.`;
 const SEED = JSON.stringify({ t: { o: { a: 1, b: 2, s: 'Hello', '.priority': 7 }, p: { m: 2 } }, n: { x: 1 } });
@@ -121,8 +125,9 @@ async function worker(k) {
   let gen = 0;
   let ns = `g11w${k}`;
   for (let i = k; i < corpus.length; i += workers) {
+    const globalIndex = offset + i;
     for (const [j, e] of [[0, corpus[i].expr], [1, `!(${corpus[i].expr})`]]) {
-      const row = { i, pol: j ? 'neg' : 'pos', place: corpus[i].place, expr: e };
+      const row = { i: globalIndex, pol: j ? 'neg' : 'pos', place: corpus[i].place, expr: e };
       const rules = rulesFor(corpus[i].place, e);
       await http('PUT', '/', ns, JSON.parse(SEED), 'o');
       const [ls, lt] = await http('PUT', '/.settings/rules', ns, { rules }, 'o');
@@ -130,7 +135,7 @@ async function worker(k) {
       if (ls !== 200) { row.err = lt.slice(0, 200); results[2 * i + j] = row; continue; }
       for (const [name, mk] of OPS) {
         for (const who of ['a', 'u']) {
-          const op = mk(i);
+          const op = mk(globalIndex);
           const fixed = corpus[i].bodies?.[name];
           if (fixed !== undefined) {
             if (op.rest) op.rest[2] = fixed;

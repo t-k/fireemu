@@ -1335,3 +1335,29 @@ fn symbolic_minimum_does_not_materialize_irrelevant_global_endpoint_edges() {
     assert_eq!(count, Some(5000));
     assert_eq!(actual.normal(), explicit.normal());
 }
+
+#[test]
+fn sparse_nullable_bounded_keys_follow_active_suffixes_only() {
+    let mut child = Automaton::Singleton((0..2499).collect())
+        .expanded()
+        .unwrap();
+    child.states[child.initial].accept = true;
+    let mut explicit = Automaton::Graph(child.clone()).bounded(2, 2).unwrap();
+    assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
+    let (actual, count) = symbolic::bounded(&child, 2, 2, 5000).unwrap();
+    assert_eq!(count, Some(5000));
+    assert_eq!(actual.normal(), explicit.normal());
+}
+
+#[test]
+fn sparse_nullable_minimum_keys_follow_active_suffixes_only() {
+    let mut child = Automaton::Singleton((0..2499).collect())
+        .expanded()
+        .unwrap();
+    child.states[child.initial].accept = true;
+    let mut explicit = Automaton::Graph(child.clone()).minimum(1).unwrap();
+    assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
+    let (actual, count) = minimum::compile(&child, 1, 5000).unwrap();
+    assert_eq!(count, Some(5000));
+    assert_eq!(actual.normal(), explicit.normal());
+}

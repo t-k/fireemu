@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 enum Subset {
     // This root is a separate graph identity, never a language-only equivalence class.
     Root,
-    Nullable(Vec<u32>),
+    Nullable(Vec<(usize, u32)>),
     Indexed(Vec<(u32, usize)>),
 }
 
@@ -19,6 +19,14 @@ fn target(child: &Graph, state: usize, unit: u16) -> Option<usize> {
         .map(|e| e.to)
 }
 
+// Missing entries are exactly the old sentinel `max`, not an omitted copy.
+fn lower(next: &mut BTreeMap<usize, u32>, q: usize, first: u32, bound: u32) {
+    if first < bound {
+        let old = next.entry(q).or_insert(first);
+        *old = (*old).min(first);
+    }
+}
+
 impl Subset {
     fn points(&self, child: &Graph, max: u32) -> Vec<u16> {
         // Cross-copy resets may use the child initial state. Including it even
@@ -28,8 +36,7 @@ impl Subset {
             Self::Root => {}
             Self::Nullable(v) => sources.extend(
                 v.iter()
-                    .enumerate()
-                    .filter_map(|(q, &first)| (first < max).then_some(q)),
+                    .filter_map(|&(q, first)| (first < max).then_some(q)),
             ),
             Self::Indexed(v) => sources.extend(v.iter().map(|&(_, q)| q)),
         }
@@ -39,7 +46,7 @@ impl Subset {
     fn units(&self) -> usize {
         match self {
             Self::Root => 1,
-            Self::Nullable(thresholds) => thresholds.len(),
+            Self::Nullable(thresholds) => thresholds.len() * 2,
             Self::Indexed(states) => states.len() * 2,
         }
     }
@@ -49,8 +56,7 @@ impl Subset {
             Self::Root => min == 0 || child.states[child.initial].accept,
             Self::Nullable(thresholds) => thresholds
                 .iter()
-                .enumerate()
-                .any(|(q, &first)| first < max && child.states[q].accept),
+                .any(|&(q, first)| first < max && child.states[q].accept),
             Self::Indexed(states) => states
                 .iter()
                 .any(|&(copy, q)| child.states[q].accept && (min == 0 || copy >= min - 1)),
@@ -62,11 +68,9 @@ impl Subset {
             Self::Root => {
                 let destination = target(child, child.initial, unit);
                 if child.states[child.initial].accept {
-                    let mut thresholds = vec![max; child.states.len()];
-                    if let Some(q) = destination {
-                        thresholds[q] = 0;
-                    }
-                    Ok(Self::Nullable(thresholds))
+                    Ok(Self::Nullable(
+                        destination.map(|q| vec![(q, 0)]).unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Self::Indexed(
                         destination.map(|q| vec![(0, q)]).unwrap_or_default(),
@@ -74,14 +78,11 @@ impl Subset {
                 }
             }
             Self::Nullable(thresholds) => {
-                let mut next = vec![max; child.states.len()];
+                let mut next = BTreeMap::new();
                 let mut accepting_first = max;
-                for (q, &first) in thresholds.iter().enumerate() {
-                    if first == max {
-                        continue;
-                    }
+                for &(q, first) in thresholds {
                     if let Some(to) = target(child, q, unit) {
-                        next[to] = next[to].min(first);
+                        lower(&mut next, to, first, max);
                     }
                     if child.states[q].accept {
                         accepting_first = accepting_first.min(first);
@@ -89,11 +90,10 @@ impl Subset {
                 }
                 if accepting_first < max {
                     if let Some(to) = target(child, child.initial, unit) {
-                        // accepting_first < max <= i32::MAX, so this addition is exact.
-                        next[to] = next[to].min(accepting_first + 1);
+                        lower(&mut next, to, accepting_first + 1, max);
                     }
                 }
-                Ok(Self::Nullable(next))
+                Ok(Self::Nullable(next.into_iter().collect()))
             }
             Self::Indexed(states) => {
                 let mut next = BTreeSet::new();

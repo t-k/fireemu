@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 enum Prefix {
     Root,
     None,
-    Nullable(Vec<u32>),
+    Nullable(Vec<(usize, u32)>),
     Indexed(Vec<(u32, usize)>),
 }
 
@@ -25,6 +25,13 @@ fn target(child: &Graph, state: usize, unit: u16) -> Option<usize> {
         .map(|e| e.to)
 }
 
+fn lower(next: &mut BTreeMap<usize, u32>, q: usize, first: u32, bound: u32) {
+    if first < bound {
+        let old = next.entry(q).or_insert(first);
+        *old = (*old).min(first);
+    }
+}
+
 impl Key {
     fn points(&self, child: &Graph, min: u32) -> Vec<u16> {
         let mut sources = BTreeSet::from([child.initial]);
@@ -33,8 +40,7 @@ impl Key {
             Prefix::Root | Prefix::None => {}
             Prefix::Nullable(v) => sources.extend(
                 v.iter()
-                    .enumerate()
-                    .filter_map(|(q, &first)| (first < min).then_some(q)),
+                    .filter_map(|&(q, first)| (first < min).then_some(q)),
             ),
             Prefix::Indexed(v) => sources.extend(v.iter().map(|&(_, q)| q)),
         }
@@ -45,7 +51,7 @@ impl Key {
         self.tail.len()
             + match &self.prefix {
                 Prefix::None | Prefix::Root => 1,
-                Prefix::Nullable(v) => v.len(),
+                Prefix::Nullable(v) => v.len() * 2,
                 Prefix::Indexed(v) => v.len() * 2,
             }
     }
@@ -59,8 +65,7 @@ impl Key {
             Prefix::None => false,
             Prefix::Nullable(v) => v
                 .iter()
-                .enumerate()
-                .any(|(q, &first)| first < min && child.states[q].accept),
+                .any(|&(q, first)| first < min && child.states[q].accept),
             Prefix::Indexed(v) => v
                 .iter()
                 .any(|&(copy, q)| copy + 1 == min && child.states[q].accept),
@@ -89,23 +94,16 @@ impl Key {
                     Prefix::None
                 } else {
                     // Positive root mode is used only for a nullable child.
-                    let mut thresholds = vec![min; child.states.len()];
-                    if let Some(to) = start_target {
-                        thresholds[to] = 0;
-                    }
-                    Prefix::Nullable(thresholds)
+                    Prefix::Nullable(start_target.map(|q| vec![(q, 0)]).unwrap_or_default())
                 }
             }
             Prefix::None => Prefix::None,
             Prefix::Nullable(v) => {
-                let mut thresholds = vec![min; child.states.len()];
+                let mut thresholds = BTreeMap::new();
                 let mut first_accept = min;
-                for (q, &first) in v.iter().enumerate() {
-                    if first == min {
-                        continue;
-                    }
+                for &(q, first) in v {
                     if let Some(to) = target(child, q, unit) {
-                        thresholds[to] = thresholds[to].min(first);
+                        lower(&mut thresholds, to, first, min);
                     }
                     if child.states[q].accept {
                         first_accept = first_accept.min(first);
@@ -113,12 +111,11 @@ impl Key {
                 }
                 if first_accept < min {
                     if let Some(to) = start_target {
-                        thresholds[to] = thresholds[to].min(first_accept + 1);
-                        // Every active nullable prefix accept can reach the star tail.
+                        lower(&mut thresholds, to, first_accept + 1, min);
                         tail.insert(to);
                     }
                 }
-                Prefix::Nullable(thresholds)
+                Prefix::Nullable(thresholds.into_iter().collect())
             }
             Prefix::Indexed(v) => {
                 let mut next = BTreeSet::new();

@@ -454,15 +454,8 @@ fn functions(state: &UiState) -> UiResponse {
             entry
         })
         .collect();
-    let logs = runtime.runner().logs_since(None);
-    let mut lines = logs
-        .lines
-        .iter()
-        .map(fireemu_adapter_functions::runner::RunnerLog::display)
-        .collect::<Vec<_>>();
-    if logs.truncated {
-        lines.insert(0, "[fireemu] earlier function logs were truncated");
-    }
+    let logs =
+        crate::sse::function_logs_since(runtime, &mut crate::sse::FunctionLogCursors::default());
     // The functions runtime belongs to one session -- the one whose project is the runtime's
     // (functions and Pub/Sub are served only for the default session, server-enforced). The
     // console targets that session for every functions action, whatever the top bar selects,
@@ -498,7 +491,9 @@ fn functions(state: &UiState) -> UiResponse {
             "status": runtime.status(),
             "history": runtime.history().iter().map(record_json).collect::<Vec<_>>(),
             "deadLetters": runtime.dead_letters().iter().map(record_json).collect::<Vec<_>>(),
-            "logs": lines,
+            "logs": logs.lines,
+            "logRecords": logs.records,
+            "logScopes": logs.scopes,
         }),
     )
 }

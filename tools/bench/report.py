@@ -13,6 +13,7 @@ import html
 import json
 import math
 import random
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -276,7 +277,10 @@ def table(rows: list[dict], title: str) -> list[str]:
 
 def markdown(meta, rows, eligible, expected, invalid, reasons) -> str:
     synthetic = meta.get("synthetic") is True
-    lines = [f"# Firestore emulator benchmark — {md(str(meta['commit'])[:12])}", ""]
+    mixed = meta.get("mixed_services") is True
+    scope = "Multi-service" if mixed else "Firestore"
+    transport = ("Storage, Auth and Hub probes use HTTP; Firestore probes use Admin gRPC. Storage operations include upload, readback validation and delete. " if mixed else "Admin gRPC unless a case is rules-*. ")
+    lines = [f"# {scope} emulator benchmark — {md(str(meta['commit'])[:12])}", ""]
     if synthetic:
         lines += ["> **SYNTHETIC EXAMPLE — formatting test data, not measured performance. Do not cite these numbers as benchmark results.**", ""]
     verdict = "RUN INPUT CHECKS PASSED (see per-metric availability)" if eligible else "NOT COMPARABLE — ratios and percentages withheld"
@@ -303,8 +307,8 @@ def markdown(meta, rows, eligible, expected, invalid, reasons) -> str:
         ("Memory — MiB", sorted([r for r in rows if r["unit"] == "bytes"], key=lambda r: (
             ["idle-empty", "idle-loaded", "before-release", "idle-after-delete", "idle-after-delete-long", "runtime"].index(r["metric"].split("/")[0]),
             r["metric"]))),
-        ("Firestore latency — ms", [r for r in rows if r["unit"] == "ms" and not r["metric"].startswith(("startup/", "shutdown/"))]),
-        ("Firestore throughput — req/s", [r for r in rows if r["unit"] == "req/s"]),
+        (f"{'Workload' if mixed else 'Firestore'} latency — ms", [r for r in rows if r["unit"] == "ms" and not r["metric"].startswith(("startup/", "shutdown/"))]),
+        (f"{'Workload' if mixed else 'Firestore'} throughput — req/s", [r for r in rows if r["unit"] == "req/s"]),
     ]
     for title, group in groups:
         # No all-empty memory phases in startup-only reports. Unavailable p99 stays explicit below.
@@ -343,7 +347,7 @@ def markdown(meta, rows, eligible, expected, invalid, reasons) -> str:
               "in `unit` and explicitly separate `display_unit` and converted display medians. Raw monotonic timestamps stay in ns. "
               "Tiny nonzero results use extra significant figures instead of becoming 0.000; displayed precision is not measurement accuracy.", "",
               "SDK usable includes set → get with value verification → delete. Assets preinstalled; fresh processes; "
-              "OS file cache uncontrolled. Admin gRPC unless a case is rules-*. "
+              "OS file cache uncontrolled. " + transport +
               "Pinned SDK defaults include automatic retries. Throughput includes client validation overhead; batch/listen workloads "
               "count logical operations, not physical RPCs or documents. Compare within one workload, not across unlike operations.", "",
               "PSS/RSS/USS are sampled process-tree sums. cgroup peak covers the whole runtime through pre-stop and includes file cache. "
@@ -357,6 +361,19 @@ def markdown(meta, rows, eligible, expected, invalid, reasons) -> str:
 
 def render(root: Path) -> bool:
     meta, trials = load(root)
+    comparison = meta.get("comparison", {"baseline":"official", "candidate":"fireemu"})
+    binary_mode = comparison == {"baseline":"baseline-fireemu", "candidate":"candidate-fireemu"}
+    if not binary_mode and comparison != {"baseline":"official", "candidate":"fireemu"}:
+        raise ValueError("unsupported comparison roles")
+    identity_errors = []
+    if binary_mode:
+        identities = meta.get("binaries", {})
+        for trial, _ in trials:
+            identity = identities.get(trial.get("engine"), {})
+            digest = identity.get("sha256")
+            if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) or not identity.get("version") or not identity.get("path") or trial.get("binary_sha256") != digest:
+                identity_errors.append("Trial binary identity does not match the manifest.")
+            trial["engine"] = {"baseline-fireemu":"official", "candidate-fireemu":"fireemu"}.get(trial.get("engine"), trial.get("engine"))
     expected = meta["config"]["pairs"]
     if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
         raise ValueError("positive integer expected pairs required")
@@ -369,10 +386,14 @@ def render(root: Path) -> bool:
             duplicates.append(f"block={trial['block']}, engine={trial['engine']}")
         block[trial["engine"]] = (trial, metrics)
     complete = len(blocks) == expected and all(set(b) == {"official", "fireemu"} for b in blocks.values())
-    invalid = [t for t, _ in trials if t.get("ok") is not True or any(c.get("ok") is False for c in t.get("cases", []))]
+    def dirty_cleanup(trial):
+        cleanup=trial.get("cleanup", {})
+        client=trial.get("client_cleanup", {})
+        return bool(trial.get("cleanup_error") or trial.get("client_cleanup_error") or cleanup.get("remaining_pids") or cleanup.get("forced_kill") or cleanup.get("systemd_result")=="timeout" or client.get("forced_kill") or client.get("exit_code",0))
+    invalid = [t for t, _ in trials if t.get("ok") is not True or dirty_cleanup(t) or any(c.get("ok") is False for c in t.get("cases", []))]
     path = root / "run-status.json"
     status = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-    reasons = []
+    reasons = list(dict.fromkeys(identity_errors))
     if not complete: reasons.append("Expected complete official/fireemu pairs are missing.")
     if duplicates: reasons.append("Duplicate trial identities: " + "; ".join(duplicates))
     if invalid: reasons.append("At least one measured or prelude trial failed validation or cleanup.")
@@ -393,19 +414,27 @@ def render(root: Path) -> bool:
     eligible = not reasons
     names = sorted(set().union(*(m.keys() for _, m in used))) if used else []
     rows = [aggregate_metric(name, blocks, expected, eligible) for name in names]
+    report_markdown = markdown(meta, rows, eligible, expected, invalid, reasons)
+    if binary_mode:
+        rows = [{key.replace("official_", "baseline_").replace("fireemu_", "candidate_"):value for key,value in row.items()} for row in rows]
+        report_markdown = re.sub(r"Official|official|fireemu", lambda match: "candidate-fireemu" if match[0]=="fireemu" else "baseline-fireemu", report_markdown)
     fields = list(rows[0]) if rows else ["metric", "unit", "display_unit", "direction", "status"]
     with (root / "summary.csv").open("w", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-    result = dict(schema_version=REPORT_SCHEMA_VERSION, synthetic=meta.get("synthetic") is True,
+    result = dict(schema_version=3 if binary_mode else REPORT_SCHEMA_VERSION, synthetic=meta.get("synthetic") is True,
                   eligible=eligible, expected_pairs=expected, failed_trials=len(invalid),
                   dataset_mismatch=dataset_mismatch, withholding_reasons=reasons,
                   percentage_estimator="paired geometric mean of fireemu/official, not ratio of medians",
                   canonical_units={"time": "ms", "memory": "bytes", "throughput": "req/s"},
                   display_units={"time": "ms", "memory": "MiB", "throughput": "req/s"}, rows=rows)
+    if binary_mode:
+        result["comparison"] = comparison
+        result["binaries"] = meta.get("binaries", {})
+        result["percentage_estimator"] = "paired geometric mean of candidate/baseline, not ratio of medians"
     (root / "summary.json").write_text(json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2) + "\n", encoding="utf-8")
-    (root / "summary.md").write_text(markdown(meta, rows, eligible, expected, invalid, reasons), encoding="utf-8")
+    (root / "summary.md").write_text(report_markdown, encoding="utf-8")
     return eligible
 
 

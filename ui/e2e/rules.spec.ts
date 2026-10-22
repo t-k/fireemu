@@ -77,7 +77,7 @@ test.describe("Rules", () => {
     const trace = page.getByTestId("rules-request-expressions");
     await expect(trace).toBeVisible();
     await expect(trace).toContainText("4:");
-    await expect(trace).toContainText("true x1");
+    await expect(trace).toContainText("true ×1");
   });
   test("renders the :ruleCoverage report -- positions, values and the reached count", async ({
     page,

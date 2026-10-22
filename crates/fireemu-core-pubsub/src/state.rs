@@ -7,7 +7,7 @@
 //! it, forwarding the virtual clock and holding the lock.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::resources::{Gauge, RetentionRoot, RootBudget, ServiceResources, Unit};
@@ -116,10 +116,38 @@ struct TopicEntry {
     message_retention_duration: Option<LogicalDuration>,
 }
 
+/// Mailbox-only observers; callbacks must never acquire broker or clock locks.
+type DeliveryObserver = dyn Fn() + Send + Sync;
+
+#[derive(Clone, Default)]
+struct DeliveryObservers(Vec<Weak<DeliveryObserver>>);
+
+impl std::fmt::Debug for DeliveryObservers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DeliveryObservers")
+            .field(&self.0.len())
+            .finish()
+    }
+}
+
+/// Publishes a coalescible wake after a mutation, while its caller still holds the broker lock.
+struct DeliveryChange(DeliveryObservers);
+
+impl Drop for DeliveryChange {
+    fn drop(&mut self) {
+        for observer in &self.0 .0 {
+            if let Some(observer) = observer.upgrade() {
+                observer();
+            }
+        }
+    }
+}
+
 /// The whole Pub/Sub state for one daemon (all projects share one registry; names are
 /// project-qualified so projects never collide).
 #[derive(Debug)]
 pub struct PubSubState {
+    delivery_observers: DeliveryObservers,
     seed: u64,
     resource_policies: BTreeMap<String, crate::iam::PolicyState>,
     policy_incarnation: u32,
@@ -147,6 +175,7 @@ impl PubSubState {
     #[must_use]
     pub fn new(seed: u64) -> Self {
         Self {
+            delivery_observers: DeliveryObservers::default(),
             seed,
             resource_policies: BTreeMap::new(),
             policy_incarnation: 0,
@@ -173,8 +202,22 @@ impl PubSubState {
         }
     }
 
+    /// Observes mutations that can change delivery readiness, including callers using the raw shared registry.
+    /// Callbacks run under the broker lock and must only signal a nonblocking mailbox.
+    pub fn observe_delivery(&mut self, observer: &Arc<DeliveryObserver>) {
+        self.delivery_observers
+            .0
+            .retain(|observer| observer.strong_count() > 0);
+        self.delivery_observers.0.push(Arc::downgrade(observer));
+    }
+
+    fn delivery_change(&self) -> DeliveryChange {
+        DeliveryChange(self.delivery_observers.clone())
+    }
+
     /// Configures explicit Pub/Sub service-agent identities, independently of Auth configuration.
     pub fn set_project_numbers(&mut self, numbers: BTreeMap<String, String>) -> Result<()> {
+        let _changed = self.delivery_change();
         for (project, number) in &numbers {
             validate_project(project)?;
             if number.is_empty()
@@ -197,6 +240,7 @@ impl PubSubState {
     /// subscriber on the source subscription and publisher on the dead-letter topic); see
     /// [`Self::set_dead_letter_grants_required`] to forward without them.
     pub fn set_dead_letter_iam_enforcement(&mut self, enforce: bool) {
+        let _changed = self.delivery_change();
         self.enforce_dead_letter_iam = enforce;
         self.dead_letter_grants_required = enforce;
     }
@@ -206,6 +250,7 @@ impl PubSubState {
     /// if the service agent held both roles: a test of dead lettering has nothing to learn from
     /// granting them by hand. No effect while enforcement is off.
     pub fn set_dead_letter_grants_required(&mut self, required: bool) {
+        let _changed = self.delivery_change();
         self.dead_letter_grants_required = required;
     }
 
@@ -225,6 +270,7 @@ impl PubSubState {
         version: Option<u32>,
         bindings: Vec<crate::PolicyBinding>,
     ) -> Result<crate::ResourcePolicy> {
+        let _changed = self.delivery_change();
         self.resource_policies
             .get_mut(resource)
             .ok_or_else(|| PubSubError::not_found(format!("resource {resource} not found")))?
@@ -340,6 +386,7 @@ impl PubSubState {
 
     /// Releases a transfer reservation after authority is revoked, preserving delivered counters.
     pub fn resume_dead_letter(&mut self, forward: &DeadLetterForward, now: LogicalInstant) {
+        let _changed = self.delivery_change();
         if let Some(sub) = self
             .subscriptions
             .get_mut(&forward.source_subscription.to_full())
@@ -386,6 +433,7 @@ impl PubSubState {
     /// subscription that has no retry policy. A negative interval is read as zero, which restores
     /// unthrottled redelivery. Existing subscriptions adopt the new interval immediately.
     pub fn set_push_minimum_redelivery_interval(&mut self, interval: LogicalDuration) {
+        let _changed = self.delivery_change();
         let interval = if interval.as_nanos() < 0 {
             LogicalDuration::ZERO
         } else {
@@ -511,6 +559,7 @@ impl PubSubState {
 
     /// Drops every topic and subscription (session reset). Identifier generators reset for deterministic fresh runs; topic incarnations remain monotonic to reject stale preparations.
     pub fn clear(&mut self) {
+        let _changed = self.delivery_change();
         self.issued_page_boundaries.clear();
         self.topics.clear();
         self.resource_policies.clear();
@@ -529,6 +578,7 @@ impl PubSubState {
 
     /// Drops one project's topics and subscriptions without disturbing other sessions.
     pub fn clear_project(&mut self, project: &str) {
+        let _changed = self.delivery_change();
         let prefix = format!("projects/{project}/");
         self.issued_page_boundaries
             .retain(|context, _| !context.starts_with(&prefix));
@@ -563,6 +613,7 @@ impl PubSubState {
 
     /// Drops every resource owned by a project accepted by `matches`.
     pub fn clear_projects_where(&mut self, matches: impl Fn(&str) -> bool) {
+        let _changed = self.delivery_change();
         let mut projects = BTreeSet::new();
         projects.extend(
             self.issued_page_boundaries
@@ -608,6 +659,7 @@ impl PubSubState {
         labels: BTreeMap<String, String>,
         message_retention_duration: Option<LogicalDuration>,
     ) -> Result<()> {
+        let _changed = self.delivery_change();
         if let Some(duration) = message_retention_duration {
             crate::configuration::validate_retention(duration)?;
         }
@@ -661,6 +713,7 @@ impl PubSubState {
         labels: BTreeMap<String, String>,
         strict: bool,
     ) -> Result<()> {
+        let _changed = self.delivery_change();
         if strict {
             crate::configuration::validate_labels(&labels)?;
         }
@@ -692,6 +745,7 @@ impl PubSubState {
 
     /// Deletes a topic. Its subscriptions survive, reporting `_deleted-topic_` as their topic.
     pub fn delete_topic(&mut self, name: &TopicName) -> Result<()> {
+        let _changed = self.delivery_change();
         let key = name.to_full();
         if self.topics.remove(&key).is_none() {
             return Err(PubSubError::not_found(format!("topic {key} not found")));
@@ -721,6 +775,7 @@ impl PubSubState {
 
     /// Creates a subscription. The topic must already exist. `ALREADY_EXISTS` if one is present.
     pub fn create_subscription(&mut self, config: SubscriptionConfig) -> Result<()> {
+        let _changed = self.delivery_change();
         config.validate()?;
         let key = config.name.to_full();
         let topic_key = config.topic.to_full();
@@ -761,6 +816,7 @@ impl PubSubState {
     /// Marks a visible subscription as owned by the Functions bridge. Messages are delivered
     /// directly by that bridge, so this subscription must not retain a duplicate backlog.
     pub fn mark_function_subscription(&mut self, name: &SubscriptionName) -> Result<()> {
+        let _changed = self.delivery_change();
         let key = name.to_full();
         if !self.subscriptions.contains_key(&key) {
             return Err(PubSubError::not_found(format!(
@@ -786,6 +842,20 @@ impl PubSubState {
         self.subscriptions
             .get(&name.to_full())
             .map(SubscriptionState::next_available_at)
+            .ok_or_else(|| {
+                PubSubError::not_found(format!("subscription {} not found", name.to_full()))
+            })
+    }
+
+    /// Returns the next retry or outstanding delivery deadline for pull scheduling.
+    pub fn next_pull_deadline(
+        &self,
+        name: &SubscriptionName,
+        now: LogicalInstant,
+    ) -> Result<Option<LogicalInstant>> {
+        self.subscriptions
+            .get(&name.to_full())
+            .map(|sub| sub.next_pull_deadline(now))
             .ok_or_else(|| {
                 PubSubError::not_found(format!("subscription {} not found", name.to_full()))
             })
@@ -822,6 +892,7 @@ impl PubSubState {
 
     /// Deletes a subscription.
     pub fn delete_subscription(&mut self, name: &SubscriptionName) -> Result<()> {
+        let _changed = self.delivery_change();
         let key = name.to_full();
         let Some(state) = self.subscriptions.remove(&key) else {
             return Err(PubSubError::not_found(format!(
@@ -838,6 +909,7 @@ impl PubSubState {
 
     /// Updates the ack deadline of a subscription.
     pub fn update_ack_deadline(&mut self, name: &SubscriptionName, seconds: u32) -> Result<()> {
+        let _changed = self.delivery_change();
         let s = self.sub_mut(name)?;
         if !(crate::subscription::MIN_ACK_DEADLINE_SECONDS
             ..=crate::subscription::MAX_ACK_DEADLINE_SECONDS)
@@ -857,6 +929,7 @@ impl PubSubState {
         name: &SubscriptionName,
         push_config: PushConfig,
     ) -> Result<()> {
+        let _changed = self.delivery_change();
         let subscription = self.sub_mut(name)?;
         subscription.set_push_config(push_config);
         Ok(())
@@ -887,6 +960,7 @@ impl PubSubState {
         update: crate::SubscriptionUpdate,
         strict: bool,
     ) -> Result<()> {
+        let _changed = self.delivery_change();
         let mut candidate = self.subscription_config(name)?.clone();
         if let Some(value) = update.ack_deadline_seconds {
             candidate.ack_deadline_seconds = value;
@@ -1294,6 +1368,7 @@ impl PubSubState {
         snapshot_name: &str,
         now: LogicalInstant,
     ) -> Result<()> {
+        let _changed = self.delivery_change();
         Self::parse_snapshot_name(snapshot_name)?;
         let snapshot = self.get_snapshot(snapshot_name, now)?;
         let config = self.subscription_config(subscription)?;
@@ -1458,6 +1533,7 @@ impl PubSubState {
         prepared: PreparedPublication,
         now: LogicalInstant,
     ) -> Result<Vec<Arc<StoredMessage>>> {
+        let _changed = self.delivery_change();
         let topic_incarnation = self
             .topics
             .get(&prepared.topic_key)
@@ -1670,6 +1746,19 @@ impl PubSubState {
         now: LogicalInstant,
         batching: OrderedPullBatching,
     ) -> Result<PullResult> {
+        self.pull_with_dead_letters_admitted(name, max, now, batching, |_| true)
+    }
+
+    /// Admits storage for a complete candidate batch before consuming ACK IDs or starting leases.
+    /// The callback runs under the broker lock and must not acquire that lock or block.
+    pub fn pull_with_dead_letters_admitted(
+        &mut self,
+        name: &SubscriptionName,
+        max: usize,
+        now: LogicalInstant,
+        batching: OrderedPullBatching,
+        admit: impl FnOnce(&[&StoredMessage]) -> bool,
+    ) -> Result<PullResult> {
         let key = name.to_full();
         if !self.subscriptions.contains_key(&key) {
             return Err(PubSubError::not_found(format!(
@@ -1691,9 +1780,14 @@ impl PubSubState {
                 .subscriptions
                 .get_mut(&key)
                 .expect("subscription present");
-            sub.pull_with_forwarding(max, now, authorized, batching, || {
-                format!("ack-{:016x}", seed_bump.next_u64())
-            })
+            sub.pull_with_admission(
+                max,
+                now,
+                authorized,
+                batching,
+                || format!("ack-{:016x}", seed_bump.next_u64()),
+                admit,
+            )
         };
         let dead_letter_topic = self
             .subscriptions
@@ -1761,6 +1855,7 @@ impl PubSubState {
         source_subscription: &SubscriptionName,
         message_id: &str,
     ) -> Result<bool> {
+        let _changed = self.delivery_change();
         Ok(self
             .sub_mut(source_subscription)?
             .complete_forward(message_id))
@@ -1768,6 +1863,7 @@ impl PubSubState {
 
     /// Acknowledges messages on a subscription. Unknown ack ids are ignored.
     pub fn acknowledge(&mut self, name: &SubscriptionName, ack_ids: &[String]) -> Result<usize> {
+        let _changed = self.delivery_change();
         Ok(self.sub_mut(name)?.acknowledge(ack_ids))
     }
 
@@ -1791,6 +1887,7 @@ impl PubSubState {
         seconds: u32,
         now: LogicalInstant,
     ) -> Result<()> {
+        let _changed = self.delivery_change();
         let sub = self.sub_mut(name)?;
         for id in ack_ids {
             sub.modify_ack_deadline(id, seconds, now);
@@ -1805,12 +1902,14 @@ impl PubSubState {
         time: LogicalInstant,
         now: LogicalInstant,
     ) -> Result<()> {
+        let _changed = self.delivery_change();
         self.sub_mut(name)?.seek_to_time(time, now)
     }
 
     /// Expires lapsed ack deadlines across every subscription. Call on each clock advance so a
     /// later pull redelivers messages whose deadline passed while the clock moved.
     pub fn expire_all(&mut self, now: LogicalInstant) {
+        let _changed = self.delivery_change();
         self.remove_expired_snapshots(now);
         for sub in self.subscriptions.values_mut() {
             sub.expire_deadlines(now);
@@ -1844,9 +1943,28 @@ mod tests {
     use crate::filter::Filter;
     use crate::subscription::{PushConfig, DEFAULT_ACK_DEADLINE_SECONDS};
 
+    #[test]
+    fn delivery_observers_cover_raw_mutations_and_survive_clear() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let count = Arc::new(AtomicUsize::new(0));
+        let signal = count.clone();
+        let observer: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            signal.fetch_add(1, Ordering::SeqCst);
+        });
+        let mut state = PubSubState::new(7);
+        state.observe_delivery(&observer);
+        state.clear();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        let topic = TopicName::new("demo-test", "observed").unwrap();
+        state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        let after_create = count.load(Ordering::SeqCst);
+        state.delete_topic(&topic).unwrap();
+        assert!(count.load(Ordering::SeqCst) > after_create);
+    }
+
     proptest::proptest! {
         #![proptest_config(proptest::test_runner::Config::with_cases(32))]
-        #[test]
+            #[test]
         fn topic_labels_replacement_matches_map_reference_and_preserves_identity(
             initial in proptest::collection::btree_map("[a-z]{1,8}", "[a-z0-9]{0,8}", 0..5),
             replacement in proptest::collection::btree_map("[a-z]{1,8}", "[a-z0-9]{0,8}", 0..5),

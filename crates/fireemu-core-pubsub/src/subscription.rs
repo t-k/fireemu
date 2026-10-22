@@ -576,6 +576,20 @@ impl SubscriptionState {
             .min()
     }
 
+    /// Earliest retry or lease deadline for pull rechecks. Ordering eligibility is still decided
+    /// by candidate selection, so a ready message blocked by credit never causes a zero timer.
+    pub(crate) fn next_pull_deadline(&self, now: LogicalInstant) -> Option<LogicalInstant> {
+        self.entries[self.first_unacked..]
+            .iter()
+            .filter_map(|entry| match entry.state {
+                Delivery::Available { available_at } => Some(available_at),
+                Delivery::Outstanding { deadline, .. } => Some(deadline),
+                Delivery::Acked | Delivery::ForwardPending => None,
+            })
+            .filter(|deadline| *deadline > now)
+            .min()
+    }
+
     /// The number of outstanding (delivered, unacked) messages.
     #[must_use]
     pub fn outstanding_count(&self) -> usize {
@@ -635,7 +649,29 @@ impl SubscriptionState {
         now: LogicalInstant,
         forwarding_authorized: bool,
         batching: OrderedPullBatching,
+        next_ack_id: impl FnMut() -> String,
+    ) -> PullOutcome {
+        self.pull_with_admission(
+            max,
+            now,
+            forwarding_authorized,
+            batching,
+            next_ack_id,
+            |_| true,
+        )
+    }
+
+    /// Plans the unchanged batch and admits output storage before assigning any delivery lease.
+    /// A refused admission is a stutter step for delivery attempts and ACK identifiers.
+    #[allow(clippy::too_many_lines)] // Keep selection, admission and lease commit in one transaction.
+    pub(crate) fn pull_with_admission(
+        &mut self,
+        max: usize,
+        now: LogicalInstant,
+        forwarding_authorized: bool,
+        batching: OrderedPullBatching,
         mut next_ack_id: impl FnMut() -> String,
+        admit: impl FnOnce(&[&StoredMessage]) -> bool,
     ) -> PullOutcome {
         if !forwarding_authorized {
             for entry in &mut self.entries {
@@ -671,8 +707,10 @@ impl SubscriptionState {
                     && max_attempts.is_none_or(|limit| entry.delivery_attempt < limit)
             });
 
+        let mut selected = Vec::new();
+        let mut forwarded = Vec::new();
         for i in self.first_unacked..self.entries.len() {
-            if out.received.len() >= max {
+            if selected.len() >= max {
                 break;
             }
             if self.entries[i].state == Delivery::Acked {
@@ -703,8 +741,7 @@ impl SubscriptionState {
                             continue;
                         }
                     }
-                    self.entries[i].state = Delivery::ForwardPending;
-                    out.dead_lettered.push(Arc::clone(&self.entries[i].stored));
+                    forwarded.push(i);
                     continue;
                 }
             }
@@ -715,6 +752,20 @@ impl SubscriptionState {
                 }
                 emitted_keys.insert(ordering_key);
             }
+            selected.push(i);
+        }
+        let candidates = selected
+            .iter()
+            .map(|&i| self.entries[i].stored.as_ref())
+            .collect::<Vec<_>>();
+        if !candidates.is_empty() && !admit(&candidates) {
+            return out;
+        }
+        for i in forwarded {
+            self.entries[i].state = Delivery::ForwardPending;
+            out.dead_lettered.push(Arc::clone(&self.entries[i].stored));
+        }
+        for i in selected {
             let ack_id = next_ack_id();
             let entry = &mut self.entries[i];
             entry.delivery_attempt += 1;
@@ -1107,6 +1158,85 @@ mod tests {
         move || {
             n.set(n.get() + 1);
             format!("ack-{}", n.get())
+        }
+    }
+
+    #[test]
+    fn denied_output_admission_does_not_lease_or_consume_ack_ids() {
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut sub = SubscriptionState::new(cfg());
+        sub.enqueue(stored("1", b"payload", 100), now).unwrap();
+        let mut ids = counter();
+        let denied = sub.pull_with_admission(
+            10,
+            now,
+            true,
+            OrderedPullBatching::Mixed,
+            &mut ids,
+            |messages| {
+                assert_eq!(messages[0].message.data, b"payload");
+                false
+            },
+        );
+        assert!(denied.received.is_empty());
+        assert_eq!(sub.outstanding_count(), 0);
+        let allowed = sub.pull(10, now, &mut ids);
+        assert_eq!(allowed.received[0].ack_id, "ack-1");
+        assert_eq!(allowed.received[0].delivery_attempt, 1);
+    }
+
+    proptest! {
+        #[test]
+        fn intermittent_admission_matches_unblocked_reference(
+            keys in proptest::collection::vec(0u8..3, 1..18),
+            commands in proptest::collection::vec((0u8..6,1usize..8), 1..60),
+            ordered in any::<bool>(),
+        ) {
+            let now = LogicalInstant::from_unix_seconds(100);
+            let mut config = cfg();
+            config.enable_message_ordering = ordered;
+            let mut actual = SubscriptionState::new(config);
+            for (index, key) in keys.iter().enumerate() {
+                let mut message = stored(&index.to_string(), b"payload", 100);
+                message.message.ordering_key = if *key == 0 { String::new() } else {key.to_string()};
+                actual.enqueue(message, now).unwrap();
+            }
+            let mut reference = actual.clone();
+            let (mut actual_ids, mut reference_ids) = (counter(), counter());
+            let mut instant = now;
+            let mut outstanding = Vec::<String>::new();
+            for (step, (command, limit)) in commands.into_iter().enumerate() {
+                match command {
+                    0 => { // Output cancellation before admission is a stutter step.
+                        let denied = actual.pull_with_admission(limit,instant,true,OrderedPullBatching::Mixed,&mut actual_ids,|_|false);
+                        prop_assert!(denied.received.is_empty());
+                    }
+                    1 => {
+                        let got = actual.pull(limit,instant,&mut actual_ids).received;
+                        let expected = reference.pull(limit,instant,&mut reference_ids).received;
+                        prop_assert_eq!(&got,&expected);
+                        outstanding.extend(got.iter().map(|message|message.ack_id.clone()));
+                    }
+                    2 => if let Some(id) = outstanding.pop() {
+                        prop_assert_eq!(actual.acknowledge(std::slice::from_ref(&id)),reference.acknowledge(std::slice::from_ref(&id)));
+                    }
+                    3 => if let Some(id) = outstanding.last() {
+                        actual.modify_ack_deadline(id,0,instant);
+                        reference.modify_ack_deadline(id,0,instant);
+                    }
+                    4 => {
+                        let message = stored(&format!("published-{step}"), b"new", 100);
+                        actual.enqueue(message.clone(),instant).unwrap();
+                        reference.enqueue(message,instant).unwrap();
+                    }
+                    _ => {
+                        instant = instant.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+                        actual.expire_deadlines(instant);
+                        reference.expire_deadlines(instant);
+                    }
+                }
+                prop_assert_eq!(actual.outstanding_count(),reference.outstanding_count());
+            }
         }
     }
 

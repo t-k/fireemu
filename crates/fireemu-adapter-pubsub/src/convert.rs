@@ -80,9 +80,16 @@ pub fn message_from_proto(m: pb::PubsubMessage) -> PubsubMessage {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PAYLOAD_CLONED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Renders a stored message as a wire message.
 #[must_use]
 pub fn message_to_proto(stored: &StoredMessage) -> pb::PubsubMessage {
+    #[cfg(test)]
+    PAYLOAD_CLONED_BYTES.with(|count| count.set(count.get() + stored.message.data.len()));
     pb::PubsubMessage {
         data: stored.message.data.clone(),
         attributes: stored
@@ -113,6 +120,30 @@ pub fn received_to_proto(
             0
         },
     }
+}
+
+/// Conservative encoded response size without cloning payloads. Per message, 512 bytes cover
+/// the 196-byte opaque ACK, timestamp (up to 22 bytes), attempt, tags and length prefixes.
+/// Accepted attribute keys/values need at most nine framing bytes per map entry; reserve 16.
+/// The response's subscription properties and envelope fit in the initial 32 bytes.
+pub(crate) fn streaming_size_bound(messages: &[&StoredMessage]) -> usize {
+    messages.iter().fold(32usize, |total, stored| {
+        let message = &stored.message;
+        let attributes = message
+            .attributes
+            .iter()
+            .fold(0usize, |size, (key, value)| {
+                size.saturating_add(key.len())
+                    .saturating_add(value.len())
+                    .saturating_add(16)
+            });
+        total
+            .saturating_add(message.data.len())
+            .saturating_add(attributes)
+            .saturating_add(message.ordering_key.len())
+            .saturating_add(stored.message_id.len())
+            .saturating_add(512)
+    })
 }
 
 fn retry_duration_from_proto(
@@ -617,6 +648,24 @@ mod tests {
 
     use super::*;
     use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn streaming_size_bound_covers_wire_without_cloning_payload(
+            payload in proptest::collection::vec(any::<u8>(),0..5000),
+            attributes in proptest::collection::btree_map("[a-z]{1,20}",".{0,40}",0..10),
+            seconds in any::<i64>(), nanos in 0u32..1_000_000_000,
+            attempt in any::<u32>(), strict in any::<bool>(), report in any::<bool>(),
+        ) {
+            use prost::Message;
+            let stored = StoredMessage { message_id:"id".to_owned(),publish_time:LogicalInstant::from_nanos(i128::from(seconds)*1_000_000_000+i128::from(nanos)),message:PubsubMessage{data:payload,attributes,ordering_key:"ordered".to_owned()} };
+            let bound = streaming_size_bound(&[&stored]);
+            let policy = if strict {crate::PagingPolicy::Strict} else {crate::PagingPolicy::Emulator};
+            let received = ReceivedMessage {ack_id:"ack-ffffffffffffffff".to_owned(),message:std::sync::Arc::new(stored),delivery_attempt:attempt};
+            let response = pb::StreamingPullResponse {received_messages:vec![received_to_proto(&received,report,policy)],subscription_properties:Some(pb::streaming_pull_response::SubscriptionProperties{exactly_once_delivery_enabled:true,message_ordering_enabled:true}),..Default::default()};
+            prop_assert!(bound>=response.encoded_len());
+        }
+    }
 
     proptest! {
         #[test]

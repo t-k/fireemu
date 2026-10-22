@@ -1507,6 +1507,9 @@ async fn setup_stream_credit(
         })
         .await
         .unwrap();
+    if count == 0 {
+        return (subscription, HashMap::new());
+    }
     let payloads: Vec<_> = (0..count)
         .map(|index| format!("credit-{index}").into_bytes())
         .collect();
@@ -5054,4 +5057,256 @@ async fn emulator_ordered_pull_keeps_mixed_n13_response() {
         assert_eq!(first[7].message.as_ref().unwrap().ordering_key, "k1");
         assert!(second.is_empty());
     }
+}
+
+#[tokio::test]
+async fn streaming_pull_observes_raw_publish_and_clock_changes_before_the_safety_recheck() {
+    use fireemu_core_pubsub::{PubsubMessage, TopicName};
+    let h = start().await;
+    let (subscription, _) = setup_stream_credit(&h, "raw-notify", 0).await;
+    let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+    // An empty read parks the producer before a raw broker publication.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), responses.message())
+            .await
+            .is_err()
+    );
+    let topic = TopicName::new("demo-app", "credit-raw-notify").unwrap();
+    let now = LogicalInstant::from_unix_seconds(1_700_000_000);
+    h.state
+        .lock()
+        .unwrap()
+        .publish(
+            &topic,
+            vec![PubsubMessage {
+                data: b"notified".to_vec(),
+                ..Default::default()
+            }],
+            now,
+        )
+        .unwrap();
+    let first = tokio::time::timeout(std::time::Duration::from_millis(500), responses.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first = &first.received_messages[0];
+    // Advance only the raw clock: no on_clock_changed or expire_all helper is called.
+    h.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(11))
+        .unwrap();
+    let replay = tokio::time::timeout(std::time::Duration::from_millis(500), responses.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        replay.received_messages[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .message_id,
+        first.message.as_ref().unwrap().message_id
+    );
+    assert_ne!(replay.received_messages[0].ack_id, first.ack_id);
+    drop(tx);
+    drop(responses);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn streaming_pull_safety_recheck_recovers_after_raw_registry_replacement() {
+    use fireemu_core_pubsub::{PubsubMessage, SubscriptionName};
+    let h = start().await;
+    let (subscription, _) = setup_stream_credit(&h, "raw-replace", 0).await;
+    let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), responses.message())
+            .await
+            .is_err()
+    );
+    let name = SubscriptionName::parse(&subscription).unwrap();
+    let config = h
+        .state
+        .lock()
+        .unwrap()
+        .subscription_config(&name)
+        .unwrap()
+        .clone();
+    let now = LogicalInstant::from_unix_seconds(1_700_000_000);
+    {
+        let mut state = h.state.lock().unwrap();
+        *state = PubSubState::new(42);
+        state
+            .create_topic(config.topic.clone(), std::collections::BTreeMap::new())
+            .unwrap();
+        state.create_subscription(config.clone()).unwrap();
+        state
+            .publish(
+                &config.topic,
+                vec![PubsubMessage {
+                    data: b"fallback".to_vec(),
+                    ..Default::default()
+                }],
+                now,
+            )
+            .unwrap();
+    }
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.received_messages[0].message.as_ref().unwrap().data,
+        b"fallback"
+    );
+    drop(tx);
+    drop(responses);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn streaming_pull_internal_byte_budget_preserves_protocol_byte_window_values() {
+    use fireemu_core_pubsub::{PubsubMessage, TopicName};
+    for bytes in [-1, 0, 1, 1024 * 1024] {
+        let h = start().await;
+        let (subscription, _) = setup_stream_credit(&h, "byte-values", 0).await;
+        let topic = TopicName::new("demo-app", "credit-byte-values").unwrap();
+        h.handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: vec![7; 1024 * 1024],
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.send(pb::StreamingPullRequest {
+            subscription,
+            stream_ack_deadline_seconds: 10,
+            max_outstanding_bytes: bytes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut responses = h
+            .subscriber()
+            .await
+            .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response.received_messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .data
+                .len(),
+            1024 * 1024
+        );
+        drop(tx);
+        drop(responses);
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn streaming_pull_oversized_aggregate_keeps_the_original_codec_failure_and_leases() {
+    use fireemu_core_pubsub::{PubsubMessage, SubscriptionName, TopicName};
+    let h = start().await;
+    let (subscription, _) = setup_stream_credit(&h, "oversize-batch", 0).await;
+    let topic = TopicName::new("demo-app", "credit-oversize-batch").unwrap();
+    h.handle
+        .publish(
+            &topic,
+            (0..12)
+                .map(|_| PubsubMessage {
+                    data: vec![7; 1024 * 1024],
+                    ..Default::default()
+                })
+                .collect(),
+        )
+        .unwrap();
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tx.send(pb::StreamingPullRequest {
+        subscription: subscription.clone(),
+        stream_ack_deadline_seconds: 10,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut responses = h
+        .subscriber()
+        .await
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::OutOfRange);
+    assert!(
+        error.message().contains("encoded message length too large"),
+        "{error}"
+    );
+    let name = SubscriptionName::parse(&subscription).unwrap();
+    assert!(h.handle.pull(&name, 100).unwrap().is_empty());
+    h.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(11))
+        .unwrap();
+    let replay = h.handle.pull(&name, 100).unwrap();
+    assert_eq!(replay.len(), 12);
+    assert!(replay.iter().all(|message| message.delivery_attempt == 2));
+    drop(tx);
+    drop(responses);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn streaming_pull_stays_live_across_minimum_and_maximum_raw_clock_replacement() {
+    let h = start().await;
+    let (subscription, published) = setup_stream_credit(&h, "extreme-clock", 1).await;
+    let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+    let first = next_credit_delivery(&mut responses, &published).await;
+    *h.clock.lock().unwrap() = VirtualClock::new(LogicalInstant::MIN);
+    // Replacing the clock removes its observers. The safety wake must keep the stream alive
+    // while the pre-existing lease is still in the far future on the replacement clock.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(1100), responses.message())
+            .await
+            .is_err()
+    );
+    *h.clock.lock().unwrap() = VirtualClock::new(LogicalInstant::MAX);
+    h.handle.on_clock_changed();
+    let replay = tokio::time::timeout(std::time::Duration::from_millis(500), responses.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("stream remains live after extreme clock replacement");
+    assert_eq!(
+        replay.received_messages[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .message_id,
+        first.message.as_ref().unwrap().message_id
+    );
+    assert_ne!(replay.received_messages[0].ack_id, first.ack_id);
+    drop(tx);
+    drop(responses);
+    h.shutdown().await;
 }

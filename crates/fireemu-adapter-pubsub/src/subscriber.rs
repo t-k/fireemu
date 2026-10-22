@@ -3,9 +3,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 
 use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
@@ -18,6 +20,81 @@ use crate::convert::{
     snapshot_to_proto, status, subscription_to_proto,
 };
 use crate::PubSubHandle;
+
+/// Bounds adapter-owned output separately from broker/client ACK credit. A whole batch larger
+/// than the bound is admitted exclusively, preserving the existing batch and codec-error behavior.
+#[derive(Debug)]
+pub(crate) struct OutputBudget {
+    limit: usize,
+    used: Mutex<usize>,
+    changed: tokio::sync::Notify,
+    revision: AtomicU64,
+}
+
+impl OutputBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: Mutex::new(0),
+            changed: tokio::sync::Notify::new(),
+            revision: AtomicU64::new(0),
+        }
+    }
+
+    fn try_reserve(self: &Arc<Self>, bytes: usize) -> Option<OutputReservation> {
+        let mut used = self.used.lock().expect("output budget lock");
+        let total = used.checked_add(bytes)?;
+        if *used != 0 && total > self.limit {
+            return None;
+        }
+        *used = total;
+        Some(OutputReservation {
+            budget: self.clone(),
+            bytes,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct OutputReservation {
+    budget: Arc<OutputBudget>,
+    bytes: usize,
+}
+
+impl Drop for OutputReservation {
+    fn drop(&mut self) {
+        let mut used = self.budget.used.lock().expect("output budget lock");
+        *used -= self.bytes;
+        drop(used);
+        self.budget.revision.fetch_add(1, Ordering::Release);
+        self.budget.changed.notify_waiters();
+    }
+}
+
+/// Queued output shares immutable broker data. The byte permit covers this queue and conversion;
+/// tonic owns the returned protobuf and its transport buffers after the stream is polled.
+#[derive(Debug)]
+struct QueuedResponse {
+    messages: Vec<fireemu_core_pubsub::ReceivedMessage>,
+    subscription_properties: Option<pb::streaming_pull_response::SubscriptionProperties>,
+    report_attempt: bool,
+    policy: crate::PagingPolicy,
+    _reservation: OutputReservation,
+}
+
+impl QueuedResponse {
+    fn into_proto(self) -> pb::StreamingPullResponse {
+        pb::StreamingPullResponse {
+            received_messages: self
+                .messages
+                .iter()
+                .map(|message| received_to_proto(message, self.report_attempt, self.policy))
+                .collect(),
+            subscription_properties: self.subscription_properties,
+            ..Default::default()
+        }
+    }
+}
 
 /// Subscriber service over the shared Pub/Sub state.
 pub struct SubscriberService {
@@ -86,6 +163,31 @@ fn update_push_config(
             push_config_from_proto(sub.push_config.as_ref(), policy).map_err(|error| status(&error))
         })
         .transpose()
+}
+
+fn prepare_stream_response(
+    handle: &PubSubHandle,
+    subscription: &SubscriptionName,
+    max: usize,
+    budget: &Arc<OutputBudget>,
+    report_attempt: bool,
+    properties: Option<pb::streaming_pull_response::SubscriptionProperties>,
+) -> Result<Option<QueuedResponse>, fireemu_core_pubsub::PubSubError> {
+    let mut reservation = None;
+    let messages = handle.pull_admitted(subscription, max, |messages| {
+        reservation = budget.try_reserve(crate::convert::streaming_size_bound(messages));
+        reservation.is_some()
+    })?;
+    if messages.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(QueuedResponse {
+        messages,
+        subscription_properties: properties,
+        report_attempt,
+        policy: handle.paging_policy,
+        _reservation: reservation.expect("nonempty batch admitted before leasing"),
+    }))
 }
 
 fn stream_pull_max(
@@ -473,16 +575,42 @@ impl Subscriber for SubscriberService {
             && first.max_outstanding_messages > 0)
             .then(|| usize::try_from(first.max_outstanding_messages).unwrap_or(usize::MAX));
         let handle = self.handle.clone();
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::StreamingPullResponse, Status>>(16);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<QueuedResponse, Status>>(16);
         tokio::spawn(async move {
+            #[cfg(not(test))]
+            let output_budget = Arc::new(OutputBudget::new(16 * 1024 * 1024));
+            #[cfg(test)]
+            let output_budget = Arc::new(OutputBudget::new(handle.stream_output_budget_limit));
+            #[cfg(test)]
+            handle
+                .stream_output_budgets
+                .lock()
+                .expect("test output budget registry")
+                .insert(name.to_full(), Arc::downgrade(&output_budget));
             let mut outstanding_ack_ids = BTreeSet::new();
             let mut first = Some(first);
             let mut inbound_open = true;
             let mut delivered = false;
-            // A short poll delivers messages published after the stream opened. This is a
-            // delivery cadence only; ack-deadline and redelivery timing run on the virtual clock.
-            let mut interval = tokio::time::interval(Duration::from_millis(25));
+            let mut ready = true;
+            let mut observed = (0, 0);
+            let mut scheduled = None;
             loop {
+                // Register before any broker/credit inspection. notify_waiters retains registered
+                // wakeups even when publication races the interval between inspection and select.
+                let changed = handle.delivery_notify.notified();
+                let capacity = output_budget.changed.notified();
+                tokio::pin!(changed, capacity);
+                changed.as_mut().enable();
+                capacity.as_mut().enable();
+                let current = (
+                    handle.delivery_revision.load(Ordering::Acquire),
+                    output_budget.revision.load(Ordering::Acquire),
+                );
+                if current != observed {
+                    ready = true;
+                    observed = current;
+                }
+                let wake_at = handle.pull_recheck_at(&name, &mut scheduled);
                 tokio::select! {
                     biased;
                     msg = async {
@@ -497,45 +625,42 @@ impl Subscriber for SubscriberService {
                                     let _ = tx.send(Err(error)).await;
                                     break;
                                 }
+                                ready = true;
                             },
                             Ok(None) if handle.paging_policy == crate::PagingPolicy::Strict && !delivered => {
-                                // Before any successful delivery, a clean half-close keeps polling.
                                 inbound_open = false;
                             }
                             Ok(None) | Err(_) => break,
                         }
                     }
                     () = tx.closed() => break,
-                    _ = interval.tick() => {
+                    () = &mut changed => { ready = true; }
+                    () = &mut capacity => { ready = true; }
+                    () = tokio::time::sleep_until(wake_at) => { ready = true; }
+                    permit = tx.reserve(), if ready => {
+                        let Ok(slot) = permit else { break; };
                         let max = match stream_pull_max(&handle, &name, message_limit, &mut outstanding_ack_ids) {
                             Ok(max) => max,
                             Err(error) => {
-                                let _ = tx.send(Err(status(&error))).await;
+                                slot.send(Err(status(&error)));
                                 break;
                             }
                         };
                         if max == 0 {
+                            ready = false;
                             continue;
                         }
-                        let pulled = handle.pull(&name, max);
-                        match pulled {
-                            Ok(msgs) if !msgs.is_empty() => {
+                        match prepare_stream_response(&handle, &name, max, &output_budget, report_attempt, subscription_properties) {
+                            Ok(Some(response)) => {
                                 if message_limit.is_some() {
-                                    outstanding_ack_ids.extend(msgs.iter().map(|message| message.ack_id.clone()));
+                                    outstanding_ack_ids.extend(response.messages.iter().map(|message| message.ack_id.clone()));
                                 }
-                                let resp = pb::StreamingPullResponse {
-                                    received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt,handle.paging_policy)).collect(),
-                                    subscription_properties,
-                                    ..pb::StreamingPullResponse::default()
-                                };
-                                if tx.send(Ok(resp)).await.is_err() {
-                                    break;
-                                }
+                                slot.send(Ok(response));
                                 delivered = true;
                             }
-                            Ok(_) => {}
-                            Err(e) => {
-                                let _ = tx.send(Err(status(&e))).await;
+                            Ok(None) => { ready = false; }
+                            Err(error) => {
+                                slot.send(Err(status(&error)));
                                 break;
                             }
                         }
@@ -543,7 +668,9 @@ impl Subscriber for SubscriberService {
                 }
             }
         });
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
+        Ok(Response::new(Box::pin(
+            ReceiverStream::new(rx).map(|queued| queued.map(QueuedResponse::into_proto)),
+        )))
     }
 
     async fn modify_push_config(
@@ -857,5 +984,641 @@ mod ack_wire_tests {
                     .collect::<BTreeSet<_>>()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn unread_output_never_clones_payload_and_poll_ends_the_adapter_reservation() {
+        use fireemu_core_pubsub::{PubsubMessage, ReceivedMessage, StoredMessage};
+        use fireemu_core_types::time::LogicalInstant;
+        let budget = Arc::new(OutputBudget::new(2048));
+        let stored = Arc::new(StoredMessage {
+            message_id: "id".to_owned(),
+            publish_time: LogicalInstant::UNIX_EPOCH,
+            message: PubsubMessage {
+                data: vec![7; 1024],
+                ..Default::default()
+            },
+        });
+        let messages = vec![ReceivedMessage {
+            ack_id: "ack-0000000000000000".to_owned(),
+            message: stored,
+            delivery_attempt: 1,
+        }];
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let before = crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get);
+        tx.send(Ok(QueuedResponse {
+            messages,
+            subscription_properties: None,
+            report_attempt: true,
+            policy: crate::PagingPolicy::Emulator,
+            _reservation: budget.try_reserve(1536).unwrap(),
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get),
+            before
+        );
+        assert!(budget.try_reserve(1024).is_none());
+        let mut responses = ReceiverStream::new(rx)
+            .map(|queued: Result<QueuedResponse, Status>| queued.map(QueuedResponse::into_proto));
+        let response = responses.next().await.unwrap().unwrap();
+        assert_eq!(
+            response.received_messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .data
+                .len(),
+            1024
+        );
+        assert_eq!(
+            crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get) - before,
+            1024
+        );
+        assert_eq!(*budget.used.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn an_unread_stream_does_not_take_another_streams_output_capacity() {
+        let slow = Arc::new(OutputBudget::new(10));
+        let other = Arc::new(OutputBudget::new(10));
+        let _blocked = slow.try_reserve(100).unwrap();
+        assert!(other.try_reserve(10).is_some());
+    }
+
+    fn handle_fixture() -> (PubSubHandle, SubscriptionName) {
+        use fireemu_core_pubsub::{PubSubState, TopicName};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::time::LogicalInstant;
+        let handle = PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(42))),
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            None,
+        )
+        .with_paging_policy(crate::PagingPolicy::Strict);
+        let topic = TopicName::new("demo-app", "wake").unwrap();
+        handle
+            .state()
+            .create_topic(topic.clone(), BTreeMap::new())
+            .unwrap();
+        let config = crate::convert::subscription_from_proto(&pb::Subscription {
+            name: "projects/demo-app/subscriptions/wake".to_owned(),
+            topic: topic.to_full(),
+            ..Default::default()
+        })
+        .unwrap();
+        let name = config.name.clone();
+        handle.state().create_subscription(config).unwrap();
+        (handle, name)
+    }
+
+    #[test]
+    fn delivery_andclock_observers_do_not_retain_the_handle() {
+        let (handle, _) = handle_fixture();
+        let state = handle.state.clone();
+        let clock = handle.clock.clone();
+        let delivery = Arc::downgrade(&handle.delivery_observer);
+        let time = Arc::downgrade(&handle.clock_observer);
+        let copy = handle.clone();
+        drop(handle);
+        assert!(delivery.upgrade().is_some());
+        drop(copy);
+        assert!(delivery.upgrade().is_none());
+        assert!(time.upgrade().is_none());
+        state.lock().unwrap().clear();
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn mutation_between_readiness_check_and_wait_is_retained() {
+        let (handle, name) = handle_fixture();
+        let notified = handle.delivery_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let seen = handle.delivery_revision.load(Ordering::Acquire);
+        assert!(handle.pull(&name, 1).unwrap().is_empty());
+        handle.state().clear();
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut notified)
+            .await
+            .unwrap();
+        assert_ne!(seen, handle.delivery_revision.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn extreme_raw_clock_replacement_never_panics_the_deadline_task() {
+        use fireemu_core_pubsub::PubsubMessage;
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::time::LogicalInstant;
+        for initial in [LogicalInstant::UNIX_EPOCH, LogicalInstant::MAX] {
+            let (handle, name) = handle_fixture();
+            *handle.clock.lock().unwrap() = VirtualClock::new(initial);
+            let topic = handle
+                .state()
+                .subscription_config(&name)
+                .unwrap()
+                .topic
+                .clone();
+            handle
+                .publish(
+                    &topic,
+                    vec![PubsubMessage {
+                        data: vec![1],
+                        ..Default::default()
+                    }],
+                )
+                .unwrap();
+            assert_eq!(handle.pull(&name, 1).unwrap().len(), 1);
+            for replacement in [
+                LogicalInstant::MIN,
+                LogicalInstant::from_nanos(i128::MIN + 1),
+                LogicalInstant::from_nanos(-1),
+                LogicalInstant::UNIX_EPOCH,
+                LogicalInstant::from_nanos(i128::MAX - 1),
+                LogicalInstant::MAX,
+            ] {
+                *handle.clock.lock().unwrap() = VirtualClock::new(replacement);
+                let task_handle = handle.clone();
+                let task_name = name.clone();
+                tokio::spawn(async move {
+                    let started = tokio::time::Instant::now();
+                    let wake = task_handle.pull_recheck_at(&task_name, &mut None);
+                    assert!(wake >= started);
+                    assert!(
+                        wake <= tokio::time::Instant::now() + std::time::Duration::from_secs(1)
+                    );
+                })
+                .await
+                .expect("raw clock replacement must not panic a stream deadline task");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pinned_near_future_deadline_is_checked_once_without_timer_spin() {
+        use fireemu_core_pubsub::PubsubMessage;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+        let (handle, name) = handle_fixture();
+        let topic = handle
+            .state()
+            .subscription_config(&name)
+            .unwrap()
+            .topic
+            .clone();
+        handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: vec![1],
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        handle.pull(&name, 1).unwrap();
+        handle
+            .clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_nanos(10_000_000_000 - 1))
+            .unwrap();
+        let mut scheduled = None;
+        let first = handle.pull_recheck_at(&name, &mut scheduled);
+        assert_eq!(
+            scheduled.as_ref().unwrap().1,
+            Some(LogicalInstant::from_unix_seconds(10))
+        );
+        tokio::time::sleep_until(first).await;
+        let second = handle.pull_recheck_at(&name, &mut scheduled);
+        assert!(
+            second.duration_since(tokio::time::Instant::now())
+                > std::time::Duration::from_millis(900)
+        );
+        assert_eq!(handle.pull_recheck_at(&name, &mut scheduled), second);
+    }
+
+    #[tokio::test]
+    #[ignore = "bounded performance measurement; run explicitly with port-registry"]
+    #[allow(clippy::too_many_lines)]
+    async fn measure_streaming_idle_work_and_deferred_payload_copies() {
+        use fireemu_core_pubsub::{PubsubMessage, ReceivedMessage, StoredMessage};
+        use fireemu_core_types::time::LogicalInstant;
+        use std::sync::atomic::AtomicUsize;
+        let (handle, name) = handle_fixture();
+        let port = std::env::var("PORT").unwrap_or_else(|_| "0".to_owned());
+        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            crate::serve_pubsub(listener, server_handle).await.unwrap();
+        });
+        let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        for streams in [1usize, 100, 1000] {
+            let mut clients = Vec::new();
+            let initial = handle.stream_pull_checks.load(Ordering::Relaxed);
+            for _ in 0..streams {
+                let (tx, rx) = tokio::sync::mpsc::channel(1);
+                tx.send(pb::StreamingPullRequest {
+                    subscription: name.to_full(),
+                    stream_ack_deadline_seconds: 10,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+                let response = pb::subscriber_client::SubscriberClient::new(channel.clone())
+                    .streaming_pull(ReceiverStream::new(rx))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                clients.push((tx, response));
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while handle.stream_pull_checks.load(Ordering::Relaxed) < initial + streams {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let before = handle.stream_pull_checks.load(Ordering::Relaxed);
+            let candidate_started = std::time::Instant::now();
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let candidate = handle.stream_pull_checks.load(Ordering::Relaxed) - before;
+            let candidate_elapsed_us = candidate_started.elapsed().as_micros();
+            let baseline_started = std::time::Instant::now();
+            let baseline = Arc::new(AtomicUsize::new(0));
+            let mut polling = Vec::new();
+            for _ in 0..streams {
+                let count = baseline.clone();
+                let handle = handle.clone();
+                let name = name.clone();
+                polling.push(tokio::spawn(async move {
+                    let mut ticks = tokio::time::interval(std::time::Duration::from_millis(25));
+                    loop {
+                        ticks.tick().await;
+                        handle.pull(&name, 100).unwrap();
+                        count.fetch_add(1, Ordering::Relaxed);
+                    }
+                }));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            for task in polling {
+                task.abort();
+                let _ = task.await;
+            }
+            let baseline = baseline.load(Ordering::Relaxed);
+            let baseline_elapsed_us = baseline_started.elapsed().as_micros();
+            println!("IDLE streams={streams} requested_window_ms=250 baseline_elapsed_us={baseline_elapsed_us} candidate_elapsed_us={candidate_elapsed_us} baseline_pull_checks={baseline} candidate_pull_checks={candidate}");
+            assert!(baseline >= streams * 5);
+            assert!(candidate <= streams * 2);
+            drop(clients);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let stored = Arc::new(StoredMessage {
+            message_id: "shared".to_owned(),
+            publish_time: LogicalInstant::UNIX_EPOCH,
+            message: PubsubMessage {
+                data: vec![7; 1024 * 1024],
+                ..Default::default()
+            },
+        });
+        let messages = (0..100)
+            .map(|index| ReceivedMessage {
+                ack_id: format!("ack-{index:016x}"),
+                message: stored.clone(),
+                delivery_attempt: 1,
+            })
+            .collect::<Vec<_>>();
+        let before = crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get);
+        let started = std::time::Instant::now();
+        let baseline = messages
+            .iter()
+            .map(|message| received_to_proto(message, true, crate::PagingPolicy::Strict))
+            .collect::<Vec<_>>();
+        let baseline_us = started.elapsed().as_micros();
+        let baseline_copies =
+            crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get) - before;
+        drop(baseline);
+        let budget = Arc::new(OutputBudget::new(16 * 1024 * 1024));
+        let bytes = crate::convert::streaming_size_bound(
+            &messages
+                .iter()
+                .map(|message| message.message.as_ref())
+                .collect::<Vec<_>>(),
+        );
+        let reservation = budget.try_reserve(bytes).unwrap();
+        let queued = QueuedResponse {
+            messages,
+            subscription_properties: None,
+            report_attempt: true,
+            policy: crate::PagingPolicy::Strict,
+            _reservation: reservation,
+        };
+        let candidate_copies = crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get)
+            - before
+            - baseline_copies;
+        println!("COPIES messages=100 payload_bytes=1048576 baseline_bytes={baseline_copies} candidate_unread_bytes={candidate_copies} reserved_encoded_bound={bytes} baseline_us={baseline_us}");
+        assert_eq!(baseline_copies, 100 * 1024 * 1024);
+        assert_eq!(candidate_copies, 0);
+        drop(queued);
+        assert_eq!(*budget.used.lock().unwrap(), 0);
+        drop(channel);
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[test]
+    fn blocked_output_neither_copies_payload_nor_starts_delivery_leases() {
+        use fireemu_core_pubsub::PubsubMessage;
+        let (handle, name) = handle_fixture();
+        let topic = handle
+            .state()
+            .subscription_config(&name)
+            .unwrap()
+            .topic
+            .clone();
+        handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: vec![7; 1024],
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        let budget = Arc::new(OutputBudget::new(2048));
+        let occupied = budget.try_reserve(2048).unwrap();
+        let before = crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get);
+        assert!(
+            prepare_stream_response(&handle, &name, 100, &budget, true, None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get),
+            before
+        );
+        drop(occupied);
+        let response = prepare_stream_response(&handle, &name, 100, &budget, true, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.messages[0].delivery_attempt, 1);
+        assert_eq!(
+            crate::convert::PAYLOAD_CLONED_BYTES.with(std::cell::Cell::get),
+            before
+        );
+        drop(response);
+        assert_eq!(*budget.used.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn an_unread_real_stream_with_occupied_bytes_does_not_block_other_delivery_or_ack() {
+        use fireemu_core_pubsub::{PubsubMessage, TopicName};
+        let (mut handle, slow_name) = handle_fixture();
+        // Scale only the private test budget, preserving the production admission algorithm.
+        // One normal 100-message response is then an exclusive oversized reservation.
+        handle.stream_output_budget_limit = 16 * 1024;
+        let slow_topic = handle
+            .state()
+            .subscription_config(&slow_name)
+            .unwrap()
+            .topic
+            .clone();
+        let fast_topic = TopicName::new("demo-app", "active").unwrap();
+        handle
+            .state()
+            .create_topic(fast_topic.clone(), BTreeMap::new())
+            .unwrap();
+        let config = crate::convert::subscription_from_proto(&pb::Subscription {
+            name: "projects/demo-app/subscriptions/active".to_owned(),
+            topic: fast_topic.to_full(),
+            ..Default::default()
+        })
+        .unwrap();
+        let fast_name = config.name.clone();
+        handle.state().create_subscription(config).unwrap();
+        let port = std::env::var("PORT").unwrap_or_else(|_| "0".to_owned());
+        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            crate::serve_pubsub(listener, server_handle).await.unwrap();
+        });
+        let endpoint = format!("http://{address}");
+        // A small HTTP/2 stream window makes unread transport backpressure deterministic.
+        let slow_channel = tonic::transport::Endpoint::from_shared(endpoint.clone())
+            .unwrap()
+            .initial_stream_window_size(1024u32)
+            .connect()
+            .await
+            .unwrap();
+        let (slow_tx, slow_rx) = tokio::sync::mpsc::channel(1);
+        slow_tx
+            .send(pb::StreamingPullRequest {
+                subscription: slow_name.to_full(),
+                stream_ack_deadline_seconds: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let slow_response = pb::subscriber_client::SubscriberClient::new(slow_channel.clone())
+            .streaming_pull(ReceiverStream::new(slow_rx))
+            .await
+            .unwrap()
+            .into_inner();
+        let slow_budget = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let observed = handle
+                    .stream_output_budgets
+                    .lock()
+                    .unwrap()
+                    .get(&slow_name.to_full())
+                    .and_then(std::sync::Weak::upgrade);
+                if let Some(budget) = observed {
+                    break budget;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        handle
+            .publish(
+                &slow_topic,
+                (0..500)
+                    .map(|_| PubsubMessage {
+                        data: vec![7; 1024],
+                        ..Default::default()
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if *slow_budget.used.lock().unwrap() > slow_budget.limit {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // Allow the one body already being encoded to reach its full flow-control window.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(*slow_budget.used.lock().unwrap() > slow_budget.limit);
+        let fast_channel = tonic::transport::Endpoint::from_shared(endpoint)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut fast_client = pb::subscriber_client::SubscriberClient::new(fast_channel);
+        let (fast_tx, fast_rx) = tokio::sync::mpsc::channel(1);
+        fast_tx
+            .send(pb::StreamingPullRequest {
+                subscription: fast_name.to_full(),
+                stream_ack_deadline_seconds: 10,
+                max_outstanding_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut fast_response = fast_client
+            .streaming_pull(ReceiverStream::new(fast_rx))
+            .await
+            .unwrap()
+            .into_inner();
+        let checks_before = handle.stream_pull_checks.load(Ordering::Relaxed);
+        let started = std::time::Instant::now();
+        for round in 0u8..16 {
+            handle
+                .publish(
+                    &slow_topic,
+                    vec![PubsubMessage {
+                        data: vec![round],
+                        ..Default::default()
+                    }],
+                )
+                .unwrap();
+            let published = handle
+                .publish(
+                    &fast_topic,
+                    vec![PubsubMessage {
+                        data: vec![round],
+                        ..Default::default()
+                    }],
+                )
+                .unwrap();
+            let response = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                fast_response.message(),
+            )
+            .await
+            .expect("occupied unread output must not block another subscription")
+            .unwrap()
+            .unwrap();
+            assert_eq!(response.received_messages.len(), 1);
+            let received = &response.received_messages[0];
+            assert_eq!(
+                received.message.as_ref().unwrap().message_id,
+                published[0].message_id
+            );
+            assert_eq!(received.message.as_ref().unwrap().data, vec![round]);
+            fast_client
+                .acknowledge(pb::AcknowledgeRequest {
+                    subscription: fast_name.to_full(),
+                    ack_ids: vec![received.ack_id.clone()],
+                })
+                .await
+                .unwrap();
+            let mut ids = BTreeSet::from([crate::ack_token::internal(
+                &received.ack_id,
+                handle.paging_policy,
+            )]);
+            let now = handle.now();
+            handle
+                .state()
+                .retain_outstanding_ack_ids(&fast_name, &mut ids, now)
+                .unwrap();
+            assert!(
+                ids.is_empty(),
+                "actual ACK retires the delivered broker lease"
+            );
+            assert!(
+                *slow_budget.used.lock().unwrap() > slow_budget.limit,
+                "slow queued output remains unread and occupies bytes"
+            );
+        }
+        let elapsed_us = started.elapsed().as_micros();
+        let checks = handle.stream_pull_checks.load(Ordering::Relaxed) - checks_before;
+        println!("MIXED subscriptions=2 publications=32 delivered=16 acked=16 elapsed_us={elapsed_us} total_pull_checks={checks} slow_reserved_bytes={} slow_budget_limit={}",*slow_budget.used.lock().unwrap(),slow_budget.limit);
+        drop(fast_tx);
+        drop(fast_response);
+        drop(fast_client);
+        drop(slow_tx);
+        drop(slow_response);
+        drop(slow_channel);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while *slow_budget.used.lock().unwrap() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("disconnect releases queued output reservations");
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[test]
+    fn output_reservations_release_and_preserve_oversized_batch_progress() {
+        let budget = Arc::new(OutputBudget::new(10));
+        let first = budget.try_reserve(6).unwrap();
+        assert!(budget.try_reserve(5).is_none());
+        let second = budget.try_reserve(4).unwrap();
+        assert!(budget.try_reserve(20).is_none());
+        drop(first);
+        assert!(budget.try_reserve(7).is_none());
+        drop(second);
+        let oversized = budget.try_reserve(20).unwrap();
+        assert!(budget.try_reserve(1).is_none());
+        drop(oversized);
+        assert!(budget.try_reserve(10).is_some());
+    }
+
+    #[tokio::test]
+    async fn dropping_an_unread_response_releases_output_bytes() {
+        let budget = Arc::new(OutputBudget::new(10));
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<QueuedResponse, Status>>(1);
+        let reserved = budget.try_reserve(10).unwrap();
+        tx.send(Ok(QueuedResponse {
+            messages: Vec::new(),
+            subscription_properties: None,
+            report_attempt: true,
+            policy: crate::PagingPolicy::Emulator,
+            _reservation: reserved,
+        }))
+        .await
+        .unwrap();
+        assert!(budget.try_reserve(1).is_none());
+        drop(rx);
+        assert!(budget.try_reserve(10).is_some());
     }
 }

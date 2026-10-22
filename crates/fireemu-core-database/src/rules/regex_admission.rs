@@ -843,3 +843,6 @@ fn reserve_word_units(units: &mut Vec<u16>, additional: usize) -> Result<(), Fai
         .try_reserve_exact(additional)
         .map_err(|_| Failure::Allocation)
 }
+
+#[path = "regex_admission/persistent.rs"]
+mod persistent;

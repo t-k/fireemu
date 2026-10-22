@@ -1526,3 +1526,293 @@ fn singleton_concat_preserves_chunk_order_and_empty_chunks() {
     .unwrap();
     assert_eq!(value.normal(), "S:0001,0002,0003,0004");
 }
+
+#[test]
+fn persistent_store_preserves_exact_dense_and_virtual_rows() {
+    for units in [vec![], vec![97], vec![0, 65535, 0xd83d, 0xde00]] {
+        let virtual_graph = Automaton::Singleton(units).expanded().unwrap();
+        let store = persistent::Store::from_graph(&virtual_graph);
+        assert_eq!(store.count(), virtual_graph.state_count());
+        for q in 0..store.count() {
+            assert_eq!(store.accepts(q), virtual_graph.accepts(q));
+            assert_eq!(
+                store.outgoing(q).collect::<Vec<_>>(),
+                virtual_graph.outgoing(q).collect::<Vec<_>>()
+            );
+        }
+        let mut dense = virtual_graph.clone();
+        dense.ensure_dense().unwrap();
+        let store = persistent::Store::from_graph(&dense);
+        for q in 0..store.count() {
+            assert_eq!(store.accepts(q), dense.accepts(q));
+            assert_eq!(
+                store.outgoing(q).collect::<Vec<_>>(),
+                dense.outgoing(q).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn persistent_row_copy_freezes_source_but_keeps_targets_live() {
+    let graph = Graph {
+        word: None,
+        initial: 0,
+        deterministic: false,
+        states: vec![
+            State::default(),
+            State {
+                accept: false,
+                edges: vec![Edge {
+                    lo: 97,
+                    hi: 97,
+                    to: 3,
+                }],
+            },
+            State::default(),
+            State::default(),
+        ],
+    };
+    let mut store = persistent::Store::from_graph(&graph);
+    store.copy_edges(0, 1);
+    assert_eq!(
+        store.outgoing(0).collect::<Vec<_>>(),
+        vec![Edge {
+            lo: 97,
+            hi: 97,
+            to: 3
+        }]
+    );
+    store.set_edges(
+        1,
+        vec![Edge {
+            lo: 98,
+            hi: 98,
+            to: 2,
+        }],
+    );
+    store.set_accept(1, true);
+    assert!(!store.accepts(0));
+    assert_eq!(
+        store.outgoing(0).collect::<Vec<_>>(),
+        vec![Edge {
+            lo: 97,
+            hi: 97,
+            to: 3
+        }]
+    );
+    store.set_accept(3, true);
+    assert!(store.accepts(store.outgoing(0).next().unwrap().to));
+    store.copy_edges(1, 1);
+    assert_eq!(
+        store.outgoing(1).collect::<Vec<_>>(),
+        vec![Edge {
+            lo: 98,
+            hi: 98,
+            to: 2
+        }]
+    );
+}
+
+#[test]
+fn persistent_import_has_fresh_namespaces_and_frozen_graph_versions() {
+    let mut source = persistent::Store::from_graph(&Automaton::literal("ab").expanded().unwrap());
+    let mut changed = source.clone();
+    changed.set_accept(1, true);
+    assert!(!source.accepts(1));
+    assert!(changed.accepts(1));
+    let mut target = persistent::Store::from_graph(&Graph::empty());
+    let first = target.import(&source).unwrap();
+    let second = target.import(&changed).unwrap();
+    assert_ne!(first, second);
+    assert!(!target.accepts(first + 1));
+    assert!(target.accepts(second + 1));
+    assert_eq!(target.outgoing(first).next().unwrap().to, first + 1);
+    assert_eq!(target.outgoing(second).next().unwrap().to, second + 1);
+    source.set_accept(2, false);
+    assert!(target.accepts(first + 2));
+    target.set_accept(second + 2, false);
+    assert!(changed.accepts(2));
+}
+
+#[test]
+fn persistent_row_and_namespace_dags_use_bounded_native_stack() {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let graph = Graph {
+                word: None,
+                initial: 0,
+                deterministic: false,
+                states: (0..3)
+                    .map(|q| State {
+                        accept: false,
+                        edges: vec![Edge {
+                            lo: 97 + q as u16,
+                            hi: 97 + q as u16,
+                            to: if q == 2 { 1 } else { q + 1 },
+                        }],
+                    })
+                    .collect(),
+            };
+            let mut rows = persistent::Store::from_graph(&graph);
+            for _ in 0..10000 {
+                rows.copy_edges(0, 1);
+                rows.copy_edges(0, 2);
+            }
+            assert_eq!(rows.outgoing(0).count(), 3);
+            drop(rows);
+            let mut namespaces =
+                persistent::Store::from_graph(&Automaton::literal("").expanded().unwrap());
+            for _ in 0..10000 {
+                let mut next = persistent::Store::from_graph(&Graph::empty());
+                assert_eq!(next.import(&namespaces).unwrap(), 1);
+                namespaces = next;
+            }
+            assert_eq!(namespaces.count(), 10001);
+            assert!(namespaces.accepts(10000));
+            assert_eq!(namespaces.outgoing(10000).count(), 0);
+            drop(namespaces);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn persistent_fresh_states_and_memoized_imports_keep_destination_identities() {
+    let mut source = persistent::Store::from_graph(&Automaton::literal("a").expanded().unwrap());
+    source.set_edges(
+        0,
+        vec![Edge {
+            lo: 97,
+            hi: 97,
+            to: 1,
+        }],
+    );
+    let q = source
+        .fresh(
+            true,
+            vec![Edge {
+                lo: 98,
+                hi: 98,
+                to: 0,
+            }],
+        )
+        .unwrap();
+    assert_eq!(q, 2);
+    assert!(source.accepts(q));
+    let mut target = persistent::Store::from_graph(&Graph::empty());
+    let first = target.import(&source).unwrap();
+    let second = target.import(&source).unwrap();
+    target.copy_edges(0, first);
+    target.copy_edges(0, second);
+    let mut edges = target.outgoing(0).collect::<Vec<_>>();
+    edges.sort_unstable();
+    assert_eq!(
+        edges,
+        vec![
+            Edge {
+                lo: 97,
+                hi: 97,
+                to: first + 1
+            },
+            Edge {
+                lo: 97,
+                hi: 97,
+                to: second + 1
+            }
+        ]
+    );
+    assert!(target.accepts(first + q));
+    assert!(target.accepts(second + q));
+}
+
+#[test]
+fn persistent_primitive_matches_1296_eager_operation_models_and_guards() {
+    fn equal(store: &persistent::Store, graph: &Graph) {
+        assert_eq!(store.count(), graph.state_count());
+        for q in 0..store.count() {
+            assert_eq!(store.accepts(q), graph.accepts(q));
+            let mut actual = store.outgoing(q).collect::<Vec<_>>();
+            actual.sort_unstable();
+            let mut expected = graph.outgoing(q).collect::<Vec<_>>();
+            expected.sort_unstable();
+            expected.dedup();
+            assert_eq!(actual, expected);
+        }
+    }
+    for accept in 0..4 {
+        for encoding in 0..81 {
+            let mut digits = encoding;
+            let mut graph = Graph {
+                word: None,
+                initial: 0,
+                deterministic: false,
+                states: vec![State::default(); 2],
+            };
+            for q in 0..2 {
+                graph.states[q].accept = accept & (1 << q) != 0;
+                for unit in [97, 98] {
+                    let digit = digits % 3;
+                    digits /= 3;
+                    if digit != 0 {
+                        graph.states[q].edges.push(Edge {
+                            lo: unit,
+                            hi: unit,
+                            to: digit - 1,
+                        });
+                    }
+                }
+            }
+            for from in 0..2 {
+                for to in 0..2 {
+                    let mut eager = graph.clone();
+                    let mut store = persistent::Store::from_graph(&graph);
+                    eager.copy_edges(from, to).unwrap();
+                    store.copy_edges(from, to);
+                    equal(&store, &eager);
+                    let frozen_store = store.clone();
+                    let frozen_eager = eager.clone();
+                    eager.states[to].accept = !eager.states[to].accept;
+                    eager.states[to].edges.push(Edge {
+                        lo: 99,
+                        hi: 99,
+                        to: from,
+                    });
+                    store.set_accept(to, eager.states[to].accept);
+                    store.set_edges(to, eager.states[to].edges.clone());
+                    equal(&store, &eager);
+                    equal(&frozen_store, &frozen_eager);
+                    let mut imported = persistent::Store::from_graph(&Graph::empty());
+                    let mut reference = Graph::empty();
+                    let offset = reference.append(&eager).unwrap();
+                    assert_eq!(imported.import(&store).unwrap(), offset);
+                    reference.copy_edges(0, offset).unwrap();
+                    imported.copy_edges(0, offset);
+                    equal(&imported, &reference);
+                    for threshold in [0, 1, 3, 5000] {
+                        let mut expected = reference.clone();
+                        expected.deterministic = false;
+                        let mut actual = Graph {
+                            word: None,
+                            initial: 0,
+                            deterministic: false,
+                            states: (0..imported.count())
+                                .map(|q| State {
+                                    accept: imported.accepts(q),
+                                    edges: imported.outgoing(q).collect(),
+                                })
+                                .collect(),
+                        };
+                        let result = actual.minimize(threshold);
+                        assert_eq!(result, expected.minimize(threshold));
+                        if result.is_ok() {
+                            assert_eq!(actual.normal(), expected.normal());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

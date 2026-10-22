@@ -4396,9 +4396,6 @@ impl FirestoreState {
     }
 
     fn refresh_reclaim_threshold(&mut self, path: &DocumentPath) {
-        if let Some((old_path, old_version)) = self.compactable.remove_entry(path) {
-            self.reclaim_thresholds.remove(&(old_version, old_path));
-        }
         let threshold = self.history.get(path).and_then(|versions| {
             versions
                 .get(1)
@@ -4408,14 +4405,34 @@ impl FirestoreState {
                     _ => None,
                 })
         });
+        if self.compactable.get(path).copied() == threshold {
+            return;
+        }
+        if let Some((old_path, old_version)) = self.compactable.remove_entry(path) {
+            self.reclaim_thresholds.remove(&(old_version, old_path));
+            #[cfg(test)]
+            RECLAIM_PAIR_REMOVALS.with(|count| count.set(count.get() + 1));
+        }
         if let Some(threshold) = threshold {
             let shared = self.retained_scope_path(path);
             self.compactable.insert(Arc::clone(&shared), threshold);
             self.reclaim_thresholds.insert((threshold, shared));
+            #[cfg(test)]
+            RECLAIM_PAIR_INSERTIONS.with(|count| count.set(count.get() + 1));
         }
     }
 
     fn reclaim_candidates(&self, floor: CommitVersion) -> Vec<Arc<DocumentPath>> {
+        #[cfg(test)]
+        RECLAIM_EXTREMA_PROBES.with(|count| count.set(count.get() + 1));
+        if self
+            .reclaim_thresholds
+            .last()
+            .is_some_and(|(threshold, _)| *threshold <= floor)
+        {
+            // Both index views contain the same paths; the reverse map already has legacy path order.
+            return self.compactable.keys().cloned().collect();
+        }
         let mut paths = Vec::new();
         for (threshold, path) in &self.reclaim_thresholds {
             #[cfg(test)]
@@ -4426,6 +4443,8 @@ impl FirestoreState {
             paths.push(Arc::clone(path));
         }
         // Preserve the previous path-ordered saturating subtraction/addition sequence.
+        #[cfg(test)]
+        RECLAIM_SORT_CALLS.with(|count| count.set(count.get() + 1));
         paths.sort_unstable();
         paths
     }
@@ -8050,7 +8069,11 @@ mod history_size_cache_tests {
 
 #[cfg(test)]
 thread_local! {
+    static RECLAIM_EXTREMA_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RECLAIM_THRESHOLD_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RECLAIM_SORT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RECLAIM_PAIR_REMOVALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RECLAIM_PAIR_INSERTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FORECAST_PATH_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static COMPACTION_PATH_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

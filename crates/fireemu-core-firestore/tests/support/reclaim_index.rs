@@ -58,16 +58,26 @@ fn fixture(count: usize, eligible: usize) -> FirestoreState {
 #[test]
 fn forecast_and_compaction_inspect_only_paths_reclaimable_at_the_floor() {
     let mut measurements = Vec::new();
+    let mut extrema_probes = Vec::new();
     for count in [1000, 10000] {
         for eligible in [0, 1, 100, count] {
             let mut state = fixture(count, eligible);
             assert!(state.history_accounting_exact);
             FORECAST_PATH_VISITS.with(|count| count.set(0));
-            RECLAIM_THRESHOLD_VISITS.with(|count| count.set(0));
+            reset_reclaim_work();
             state.base_compaction_reclaim(CommitVersion(2));
             let forecast = FORECAST_PATH_VISITS.with(std::cell::Cell::get);
-            let threshold_visits = RECLAIM_THRESHOLD_VISITS.with(std::cell::Cell::get);
-            assert_eq!(threshold_visits, eligible + usize::from(eligible < count));
+            let (probes, threshold_visits, sorts, _, _) = reclaim_work();
+            assert_eq!(
+                (threshold_visits, sorts),
+                if eligible == count {
+                    (0, 0)
+                } else {
+                    (eligible + 1, 1)
+                },
+                "compactable={count} eligible={eligible}"
+            );
+            extrema_probes.push(probes);
             let selected = state.reclaim_candidates(CommitVersion(2));
             assert_eq!(selected.len(), eligible);
             eprintln!("eligible={eligible} threshold_visits={threshold_visits} selected_capacity={} selected_capacity_bytes={}", selected.capacity(), selected.capacity() * std::mem::size_of::<Arc<DocumentPath>>());
@@ -86,6 +96,147 @@ fn forecast_and_compaction_inspect_only_paths_reclaimable_at_the_floor() {
             "compactable={count}"
         );
     }
+    assert!(extrema_probes.into_iter().all(|probes| probes == 1));
+}
+
+fn reset_reclaim_work() {
+    RECLAIM_EXTREMA_PROBES.with(|count| count.set(0));
+    RECLAIM_THRESHOLD_VISITS.with(|count| count.set(0));
+    RECLAIM_SORT_CALLS.with(|count| count.set(0));
+    RECLAIM_PAIR_REMOVALS.with(|count| count.set(0));
+    RECLAIM_PAIR_INSERTIONS.with(|count| count.set(0));
+}
+
+fn reclaim_work() -> (usize, usize, usize, usize, usize) {
+    (
+        RECLAIM_EXTREMA_PROBES.with(std::cell::Cell::get),
+        RECLAIM_THRESHOLD_VISITS.with(std::cell::Cell::get),
+        RECLAIM_SORT_CALLS.with(std::cell::Cell::get),
+        RECLAIM_PAIR_REMOVALS.with(std::cell::Cell::get),
+        RECLAIM_PAIR_INSERTIONS.with(std::cell::Cell::get),
+    )
+}
+
+#[test]
+fn ordered_selection_covers_extrema_boundaries_and_nonindexed_paths() {
+    let mut state = fixture(5, 1);
+    for (index, threshold) in [3, 2, 4, 4].into_iter().enumerate() {
+        state.history.get_mut(&path(index)).unwrap()[1].0 = CommitVersion(threshold);
+    }
+    state.history.get_mut(&path(4)).unwrap().truncate(1);
+    state.version = CommitVersion(4);
+    state.rebuild_history_usage();
+    for index in 0..5 {
+        state.refresh_reclaim_threshold(&path(index));
+    }
+    assert_index(&state);
+    let mut measurements = Vec::new();
+    for floor in [0, 1, 2, 3, 4, 5] {
+        let expected = state
+            .compactable
+            .iter()
+            .filter(|(_, threshold)| **threshold <= CommitVersion(floor))
+            .map(|(path, _)| path.as_ref().clone())
+            .collect::<Vec<_>>();
+        reset_reclaim_work();
+        let selected = state.reclaim_candidates(CommitVersion(floor));
+        assert_eq!(
+            selected
+                .iter()
+                .map(|path| path.as_ref().clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        measurements.push((expected.len(), reclaim_work()));
+    }
+    // Check the full-selection work reduction before checking the additional extrema probe.
+    for (eligible, (_, prefix, sorts, _, _)) in &measurements {
+        if *eligible == state.compactable.len() {
+            assert_eq!((*prefix, *sorts), (0, 0));
+        } else {
+            assert_eq!((*prefix, *sorts), (eligible + 1, 1));
+        }
+    }
+    assert!(measurements.iter().all(|(_, work)| work.0 == 1));
+
+    let empty = FirestoreState::default();
+    reset_reclaim_work();
+    assert!(empty.reclaim_candidates(CommitVersion(0)).is_empty());
+    assert_eq!(reclaim_work(), (1, 0, 1, 0, 0));
+}
+
+#[test]
+fn refresh_skips_only_unchanged_threshold_pair_writes() {
+    let mut state = fixture(1, 1);
+    let shared = Arc::clone(state.compactable.first_key_value().unwrap().0);
+    reset_reclaim_work();
+    state.refresh_reclaim_threshold(&path(0));
+    assert_eq!((reclaim_work().3, reclaim_work().4), (0, 0));
+    assert!(Arc::ptr_eq(
+        &shared,
+        state.compactable.first_key_value().unwrap().0
+    ));
+
+    let latest = state.history[&path(0)].last().unwrap().1.clone();
+    state
+        .history
+        .get_mut(&path(0))
+        .unwrap()
+        .push((CommitVersion(3), latest));
+    state.version = CommitVersion(3);
+    state
+        .commit_times
+        .push_back((CommitVersion(3), LogicalInstant::UNIX_EPOCH));
+    state.rebuild_history_usage();
+    reset_reclaim_work();
+    state.refresh_reclaim_threshold(&path(0));
+    assert_eq!((reclaim_work().3, reclaim_work().4), (0, 0));
+    assert_index(&state);
+
+    state.history.get_mut(&path(0)).unwrap().remove(0);
+    state.rebuild_history_usage();
+    reset_reclaim_work();
+    state.refresh_reclaim_threshold(&path(0));
+    assert_eq!((reclaim_work().3, reclaim_work().4), (1, 1));
+    assert_index(&state);
+
+    state.history.get_mut(&path(0)).unwrap().truncate(1);
+    state.rebuild_history_usage();
+    reset_reclaim_work();
+    state.refresh_reclaim_threshold(&path(0));
+    assert_eq!((reclaim_work().3, reclaim_work().4), (1, 0));
+    assert_index(&state);
+
+    state
+        .history
+        .get_mut(&path(0))
+        .unwrap()
+        .push((CommitVersion(4), None));
+    state.version = CommitVersion(4);
+    state.rebuild_history_usage();
+    reset_reclaim_work();
+    state.refresh_reclaim_threshold(&path(0));
+    assert_eq!((reclaim_work().3, reclaim_work().4), (0, 1));
+    assert_index(&state);
+
+    state.history.remove(&path(0));
+    state.rebuild_history_usage();
+    reset_reclaim_work();
+    state.refresh_reclaim_threshold(&path(0));
+    assert_eq!((reclaim_work().3, reclaim_work().4), (1, 0));
+    assert_index(&state);
+}
+
+#[test]
+fn refresh_shortcut_does_not_recertify_uncertain_accounting() {
+    let mut state = fixture(1, 1);
+    state.history_accounting_exact = false;
+    state.refresh_reclaim_threshold(&path(0));
+    assert!(!state.history_accounting_exact);
+    state.history.get_mut(&path(0)).unwrap()[1].0 = CommitVersion(3);
+    state.refresh_reclaim_threshold(&path(0));
+    assert!(!state.history_accounting_exact);
+    assert_index(&state);
 }
 
 // Frozen pre-index compaction reference: derive candidates by scanning history.

@@ -18,6 +18,10 @@ fn intervals(mut row: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
 }
 
 pub(super) fn refine(graph: &mut Graph) {
+    // Certified chain suffixes have distinct lengths and residual languages.
+    if graph.word.is_some() {
+        return;
+    }
     let dead = graph.states.len();
     // Complete only the minimizer's inverse view, after guarded determinization.
     let mut incoming: Vec<Vec<(usize, u16, u16)>> = vec![Vec::new(); dead + 1];

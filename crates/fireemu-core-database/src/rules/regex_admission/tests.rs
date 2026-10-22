@@ -87,15 +87,14 @@ fn accepts(value: &Automaton, word: &[u16]) -> bool {
         current = current
             .into_iter()
             .flat_map(|i| {
-                graph.states[i]
-                    .edges
-                    .iter()
+                graph
+                    .outgoing(i)
                     .filter(move |e| e.lo <= unit && unit <= e.hi)
                     .map(|e| e.to)
             })
             .collect();
     }
-    current.into_iter().any(|i| graph.states[i].accept)
+    current.into_iter().any(|i| graph.accepts(i))
 }
 
 #[test]
@@ -146,7 +145,7 @@ fn bounded_algebra_minimization_preserves_every_small_word() {
         }
         if let Automaton::Graph(graph) = minimal {
             assert!(graph.deterministic);
-            assert_eq!(graph.states.len(), graph.reachable().len());
+            assert_eq!(graph.state_count(), graph.reachable().len());
         }
     }
 }
@@ -154,6 +153,7 @@ fn bounded_algebra_minimization_preserves_every_small_word() {
 #[test]
 fn utf16_interval_boundaries_and_surrogates_are_not_unicode_scalars() {
     let graph = Graph {
+        word: None,
         initial: 0,
         deterministic: false,
         states: vec![
@@ -235,6 +235,7 @@ fn symbolic_bounded_matches_every_small_explicit_partial_dfa() {
         for encoding in 0..81 {
             let mut transitions = encoding;
             let mut graph = Graph {
+                word: None,
                 states: vec![State::default(); 2],
                 initial: 0,
                 deterministic: true,
@@ -687,6 +688,7 @@ fn minimum_operator_observations_match_every_small_offline_jar_case() {
         for encoding in 0..81 {
             let mut transitions = encoding;
             let mut graph = Graph {
+                word: None,
                 states: vec![State::default(); 2],
                 initial: 0,
                 deterministic: true,
@@ -863,6 +865,7 @@ fn symbolic_minimum_matches_explicit_algebra_and_all_small_jar_observations() {
         for encoding in 0..81 {
             let mut transitions = encoding;
             let mut child = Graph {
+                word: None,
                 states: vec![State::default(); 2],
                 initial: 0,
                 deterministic: true,
@@ -1133,15 +1136,16 @@ fn locally_swept_unique_word_reaches_true_admitted_guard_boundary() {
         .unwrap();
     graph.deterministic = false;
     assert_eq!(graph.minimize(5000), Ok(Some(5001)));
-    assert_eq!(graph.states.len(), 5000);
-    assert!(graph.states.iter().all(|state| state.edges.len() <= 1));
+    assert_eq!(graph.state_count(), 5000);
+    assert!((0..graph.state_count()).all(|q| graph.outgoing(q).count() <= 1));
 }
 
 #[test]
 fn exact_minimization_has_no_prototype_refinement_work_refusal() {
     let mut graph = Automaton::Singleton(vec![97; 3000]).expanded().unwrap();
+    graph.ensure_dense().unwrap();
     assert_eq!(graph.minimize(5000), Ok(None));
-    assert_eq!(graph.states.len(), 3001);
+    assert_eq!(graph.state_count(), 3001);
 }
 
 #[test]
@@ -1156,6 +1160,7 @@ fn ordinary_determinization_refuses_at_discovery_before_frontier_storage() {
         states[usize::from(unit) + 1].accept = true;
     }
     let mut graph = Graph {
+        word: None,
         states,
         initial: 0,
         deterministic: false,
@@ -1166,6 +1171,7 @@ fn ordinary_determinization_refuses_at_discovery_before_frontier_storage() {
 #[test]
 fn local_sweep_preserves_overlapping_destination_reference_counts() {
     let mut graph = Graph {
+        word: None,
         initial: 0,
         deterministic: false,
         states: vec![
@@ -1191,7 +1197,7 @@ fn local_sweep_preserves_overlapping_destination_reference_counts() {
         ],
     };
     assert_eq!(graph.minimize(5000), Ok(Some(3)));
-    assert_eq!(graph.states.len(), 2);
+    assert_eq!(graph.state_count(), 2);
     assert_eq!(
         graph.states[graph.initial].edges,
         vec![Edge {
@@ -1255,6 +1261,7 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
             }
             let expected = representatives.len().max(1);
             let mut graph = Graph {
+                word: None,
                 initial: 0,
                 deterministic: true,
                 states: (0..3)
@@ -1273,7 +1280,7 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
                     .collect(),
             };
             assert_eq!(graph.minimize(5000), Ok(None));
-            assert_eq!(graph.states.len(), expected, "code={code} mask={mask}");
+            assert_eq!(graph.state_count(), expected, "code={code} mask={mask}");
             assert!(
                 graph
                     .states
@@ -1281,7 +1288,7 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
                     .flat_map(|s| &s.edges)
                     .all(|e| e.lo >= 97 && e.hi <= 98)
             );
-            let dead = graph.states.len();
+            let dead = graph.state_count();
             let mut pairs = vec![(0, graph.initial)];
             let mut cursor = 0;
             while cursor < pairs.len() {
@@ -1341,6 +1348,7 @@ fn sparse_nullable_bounded_keys_follow_active_suffixes_only() {
     let mut child = Automaton::Singleton((0..2499).collect())
         .expanded()
         .unwrap();
+    child.ensure_dense().unwrap();
     child.states[child.initial].accept = true;
     let mut explicit = Automaton::Graph(child.clone()).bounded(2, 2).unwrap();
     assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
@@ -1354,10 +1362,134 @@ fn sparse_nullable_minimum_keys_follow_active_suffixes_only() {
     let mut child = Automaton::Singleton((0..2499).collect())
         .expanded()
         .unwrap();
+    child.ensure_dense().unwrap();
     child.states[child.initial].accept = true;
     let mut explicit = Automaton::Graph(child.clone()).minimum(1).unwrap();
     assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
     let (actual, count) = minimum::compile(&child, 1, 5000).unwrap();
     assert_eq!(count, Some(5000));
     assert_eq!(actual.normal(), explicit.normal());
+}
+
+#[test]
+fn certified_expanded_word_bypasses_no_real_guard_or_tag() {
+    WORD_MATERIALIZATIONS.with(|count| count.set(0));
+    let value = Automaton::Singleton(vec![97; 30000]);
+    let mut graph = value.expanded().unwrap();
+    assert_eq!(graph.reachable().len(), 30001);
+    assert_eq!(graph.minimize(5000), Ok(None));
+    let (expanded, count) = symbolic::bounded(&graph, 1, 1, 5000).unwrap();
+    assert!(matches!(expanded, Automaton::Graph(_)));
+    assert_eq!(count, None);
+    assert!(matches!(
+        symbolic::bounded(&graph, 2, 2, 5000),
+        Err(Failure::Resource)
+    ));
+    assert!(matches!(
+        minimum::compile(&graph, 0, 5000),
+        Err(Failure::Resource)
+    ));
+    graph.deterministic = false;
+    assert_eq!(graph.minimize(5000), Err(Failure::Resource));
+    WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+}
+
+#[test]
+fn certified_word_view_matches_explicit_utf16_position_graphs() {
+    for units in [
+        vec![],
+        vec![97],
+        vec![97, 97, 97],
+        vec![0, 65535, 1],
+        vec![0xd83d, 0xde00],
+        vec![0xd800],
+        vec![0xdc00],
+    ] {
+        let view = Automaton::Singleton(units.clone()).expanded().unwrap();
+        assert!(view.word.is_some());
+        assert!(view.states.is_empty());
+        let dense = Graph {
+            word: None,
+            initial: 0,
+            deterministic: true,
+            states: (0..=units.len())
+                .map(|q| State {
+                    accept: q == units.len(),
+                    edges: units
+                        .get(q)
+                        .map(|&unit| {
+                            vec![Edge {
+                                lo: unit,
+                                hi: unit,
+                                to: q + 1,
+                            }]
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect(),
+        };
+        assert_eq!(view.state_count(), dense.state_count());
+        for q in 0..view.state_count() {
+            assert_eq!(view.accepts(q), dense.accepts(q));
+            assert_eq!(
+                view.outgoing(q).collect::<Vec<_>>(),
+                dense.outgoing(q).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(view.normal(), dense.normal());
+        let mut forced = view.clone();
+        forced.deterministic = false;
+        assert_eq!(forced.minimize(5000), Ok(Some(units.len() as u64 + 2)));
+        assert!(forced.word.is_some());
+        assert_eq!(forced.normal(), dense.normal());
+    }
+}
+
+#[test]
+fn certified_word_clones_share_bytes_but_append_has_fresh_snapshot_identities() {
+    WORD_MATERIALIZATIONS.with(|count| count.set(0));
+    let view = Automaton::literal("ab").expanded().unwrap();
+    let copy = view.clone();
+    assert!(std::sync::Arc::ptr_eq(
+        view.word.as_ref().unwrap(),
+        copy.word.as_ref().unwrap()
+    ));
+    let mut result = Graph::empty();
+    let first = result.append(&view).unwrap();
+    let second = result.append(&copy).unwrap();
+    assert_ne!(first, second);
+    assert_ne!(
+        result.outgoing(first).next().unwrap().to,
+        result.outgoing(second).next().unwrap().to
+    );
+    result.copy_edges(0, first).unwrap();
+    let snapshot = result.outgoing(0).collect::<Vec<_>>();
+    result.states[first].accept = true;
+    result.states[first].edges.push(Edge {
+        lo: 99,
+        hi: 99,
+        to: second,
+    });
+    assert_eq!(result.outgoing(0).collect::<Vec<_>>(), snapshot);
+    assert!(!result.accepts(0));
+    // The copied row is frozen, but its target identities are not deep snapshots.
+    let destination = snapshot[0].to;
+    assert!(!result.accepts(destination));
+    result.states[destination].accept = true;
+    assert!(accepts(&Automaton::Graph(result.clone()), &[97]));
+    result.copy_edges(first, first).unwrap();
+    assert_eq!(result.outgoing(first).count(), 2);
+    assert!(view.word.is_some());
+    WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+    let mut explicitly_mutated = view.clone();
+    explicitly_mutated.ensure_dense().unwrap();
+    assert!(explicitly_mutated.word.is_none());
+    WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 1));
+    let union =
+        Automaton::collection_union(&[Automaton::literal("ab"), Automaton::literal("ab")]).unwrap();
+    let Automaton::Graph(union) = union else {
+        panic!("union lost graph tag");
+    };
+    assert!(union.word.is_none());
+    assert_eq!(union.state_count(), 7);
 }

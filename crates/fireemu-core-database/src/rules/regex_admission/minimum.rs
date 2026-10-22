@@ -18,9 +18,8 @@ struct Key {
 }
 
 fn target(child: &Graph, state: usize, unit: u16) -> Option<usize> {
-    child.states[state]
-        .edges
-        .iter()
+    child
+        .outgoing(state)
         .find(|e| e.lo <= unit && unit <= e.hi)
         .map(|e| e.to)
 }
@@ -57,18 +56,16 @@ impl Key {
     }
 
     fn accepts(&self, child: &Graph, min: u32) -> bool {
-        if self.tail.iter().any(|&q| child.states[q].accept) {
+        if self.tail.iter().any(|&q| child.accepts(q)) {
             return true;
         }
         match &self.prefix {
-            Prefix::Root => min == 0 || child.states[child.initial].accept,
+            Prefix::Root => min == 0 || child.accepts(child.initial),
             Prefix::None => false,
-            Prefix::Nullable(v) => v
-                .iter()
-                .any(|&(q, first)| first < min && child.states[q].accept),
+            Prefix::Nullable(v) => v.iter().any(|&(q, first)| first < min && child.accepts(q)),
             Prefix::Indexed(v) => v
                 .iter()
-                .any(|&(copy, q)| copy + 1 == min && child.states[q].accept),
+                .any(|&(copy, q)| copy + 1 == min && child.accepts(q)),
         }
     }
 
@@ -79,7 +76,7 @@ impl Key {
             if let Some(to) = target(child, q, unit) {
                 tail.insert(to);
             }
-            if child.states[q].accept {
+            if child.accepts(q) {
                 if let Some(to) = start_target {
                     tail.insert(to);
                 }
@@ -105,7 +102,7 @@ impl Key {
                     if let Some(to) = target(child, q, unit) {
                         lower(&mut thresholds, to, first, min);
                     }
-                    if child.states[q].accept {
+                    if child.accepts(q) {
                         first_accept = first_accept.min(first);
                     }
                 }
@@ -123,7 +120,7 @@ impl Key {
                     if let Some(to) = target(child, q, unit) {
                         next.insert((copy, to));
                     }
-                    if child.states[q].accept {
+                    if child.accepts(q) {
                         if let Some(to) = start_target {
                             if copy + 1 < min {
                                 next.insert((copy + 1, to));
@@ -157,8 +154,10 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
     if min > 0 && child.accepting().is_empty() {
         return Ok((Automaton::Graph(Graph::empty()), None));
     }
-    state_bound(child.states.len())?;
-    let prefix = if min == 0 || child.states[child.initial].accept {
+    if child.word.is_none() {
+        state_bound(child.state_count())?;
+    }
+    let prefix = if min == 0 || child.accepts(child.initial) {
         Prefix::Root
     } else {
         // A nonnullable initial self-loop can revisit this actual indexed subset.
@@ -215,6 +214,7 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
     }
     Ok((
         Automaton::Graph(Graph {
+            word: None,
             states,
             initial: 0,
             deterministic: true,

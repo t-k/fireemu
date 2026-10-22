@@ -12,9 +12,8 @@ enum Subset {
 }
 
 fn target(child: &Graph, state: usize, unit: u16) -> Option<usize> {
-    child.states[state]
-        .edges
-        .iter()
+    child
+        .outgoing(state)
         .find(|e| e.lo <= unit && unit <= e.hi)
         .map(|e| e.to)
 }
@@ -53,13 +52,13 @@ impl Subset {
 
     fn accepts(&self, child: &Graph, min: u32, max: u32) -> bool {
         match self {
-            Self::Root => min == 0 || child.states[child.initial].accept,
+            Self::Root => min == 0 || child.accepts(child.initial),
             Self::Nullable(thresholds) => thresholds
                 .iter()
-                .any(|&(q, first)| first < max && child.states[q].accept),
+                .any(|&(q, first)| first < max && child.accepts(q)),
             Self::Indexed(states) => states
                 .iter()
-                .any(|&(copy, q)| child.states[q].accept && (min == 0 || copy >= min - 1)),
+                .any(|&(copy, q)| child.accepts(q) && (min == 0 || copy >= min - 1)),
         }
     }
 
@@ -67,7 +66,7 @@ impl Subset {
         match self {
             Self::Root => {
                 let destination = target(child, child.initial, unit);
-                if child.states[child.initial].accept {
+                if child.accepts(child.initial) {
                     Ok(Self::Nullable(
                         destination.map(|q| vec![(q, 0)]).unwrap_or_default(),
                     ))
@@ -84,7 +83,7 @@ impl Subset {
                     if let Some(to) = target(child, q, unit) {
                         lower(&mut next, to, first, max);
                     }
-                    if child.states[q].accept {
+                    if child.accepts(q) {
                         accepting_first = accepting_first.min(first);
                     }
                 }
@@ -101,7 +100,7 @@ impl Subset {
                     if let Some(to) = target(child, q, unit) {
                         next.insert((copy, to));
                     }
-                    if child.states[q].accept && copy + 1 < max {
+                    if child.accepts(q) && copy + 1 < max {
                         if let Some(to) = target(child, child.initial, unit) {
                             next.insert((copy + 1, to));
                         }
@@ -143,8 +142,10 @@ fn construct(
     if min > 1 && min == max && child.accepting().is_empty() {
         return Ok((Automaton::Graph(Graph::empty()), None));
     }
-    state_bound(child.states.len())?;
-    let initial = if min == 0 || child.states[child.initial].accept {
+    if child.word.is_none() {
+        state_bound(child.state_count())?;
+    }
+    let initial = if min == 0 || child.accepts(child.initial) {
         Subset::Root
     } else {
         Subset::Indexed(vec![(0, child.initial)])
@@ -199,6 +200,7 @@ fn construct(
     // Dead-state removal and minimization occur only after the guarded traversal.
     Ok((
         Automaton::Graph(Graph {
+            word: None,
             states,
             initial: 0,
             deterministic: true,

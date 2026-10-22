@@ -3,6 +3,7 @@
 //! Independently specified from tagged-automaton behavior; no upstream code is embedded.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 const PROTOTYPE_STATES: usize = 20_000;
 const PROTOTYPE_EDGES: usize = 2_000_000;
@@ -61,6 +62,8 @@ struct State {
 
 #[derive(Clone, Debug)]
 struct Graph {
+    // Only literal expansion and certified clone may create this exact chain.
+    word: Option<Arc<Vec<u16>>>,
     states: Vec<State>,
     initial: usize,
     deterministic: bool,
@@ -81,8 +84,61 @@ fn state_bound(count: usize) -> Result<(), Failure> {
 }
 
 impl Graph {
+    fn state_count(&self) -> usize {
+        self.word
+            .as_ref()
+            .map_or(self.states.len(), |word| word.len() + 1)
+    }
+    fn accepts(&self, q: usize) -> bool {
+        self.word
+            .as_ref()
+            .map_or_else(|| self.states[q].accept, |word| q == word.len())
+    }
+    fn outgoing(&self, q: usize) -> impl Iterator<Item = Edge> + '_ {
+        let virtual_edge = self
+            .word
+            .as_ref()
+            .and_then(|word| word.get(q))
+            .map(|&unit| Edge {
+                lo: unit,
+                hi: unit,
+                to: q + 1,
+            });
+        self.states
+            .get(q)
+            .into_iter()
+            .flat_map(|state| state.edges.iter().copied())
+            .chain(virtual_edge)
+    }
+    // Explicit constructor-only transition. Symbolic readers never call this.
+    // Its old prototype bound is still an activation blocker, not load policy.
+    fn ensure_dense(&mut self) -> Result<(), Failure> {
+        let Some(word) = &self.word else {
+            return Ok(());
+        };
+        state_bound(word.len() + 1)?;
+        WORD_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
+        self.states = (0..=word.len())
+            .map(|q| State {
+                accept: q == word.len(),
+                edges: word
+                    .get(q)
+                    .map(|&unit| {
+                        vec![Edge {
+                            lo: unit,
+                            hi: unit,
+                            to: q + 1,
+                        }]
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect();
+        self.word = None;
+        Ok(())
+    }
     fn empty() -> Self {
         Self {
+            word: None,
             states: vec![State::default()],
             initial: 0,
             deterministic: true,
@@ -90,6 +146,9 @@ impl Graph {
     }
 
     fn reachable(&self) -> Vec<usize> {
+        if self.word.is_some() {
+            return (0..self.state_count()).collect();
+        }
         let mut seen = vec![false; self.states.len()];
         let mut queue = vec![self.initial];
         seen[self.initial] = true;
@@ -107,37 +166,42 @@ impl Graph {
     }
 
     fn accepting(&self) -> Vec<usize> {
+        if let Some(word) = &self.word {
+            return vec![word.len()];
+        }
         self.reachable()
             .into_iter()
-            .filter(|&i| self.states[i].accept)
+            .filter(|&i| self.accepts(i))
             .collect()
     }
 
     fn append(&mut self, other: &Self) -> Result<usize, Failure> {
+        self.ensure_dense()?;
         let offset = self.states.len();
         state_bound(
             offset
-                .checked_add(other.states.len())
+                .checked_add(other.state_count())
                 .ok_or(Failure::Inconclusive)?,
         )?;
         let edge_count = self
             .states
             .iter()
-            .chain(&other.states)
-            .map(|s| s.edges.len())
-            .sum::<usize>();
+            .map(|state| state.edges.len())
+            .sum::<usize>()
+            + (0..other.state_count())
+                .map(|q| other.outgoing(q).count())
+                .sum::<usize>();
         if edge_count > PROTOTYPE_EDGES {
             return Err(Failure::Inconclusive);
         }
-        self.states.extend(other.states.iter().map(|s| {
+        self.states.extend((0..other.state_count()).map(|q| {
             State {
-                accept: s.accept,
-                edges: s
-                    .edges
-                    .iter()
-                    .map(|e| Edge {
-                        to: e.to + offset,
-                        ..*e
+                accept: other.accepts(q),
+                edges: other
+                    .outgoing(q)
+                    .map(|edge| Edge {
+                        to: edge.to + offset,
+                        ..edge
                     })
                     .collect(),
             }
@@ -147,6 +211,7 @@ impl Graph {
 
     // Copy the destination's outgoing edges now, without storing an epsilon edge.
     fn copy_edges(&mut self, from: usize, to: usize) -> Result<(), Failure> {
+        self.ensure_dense()?;
         let source = self.states[to].clone();
         if self.states[from].edges.len() + source.edges.len() > PROTOTYPE_EDGES {
             return Err(Failure::Inconclusive);
@@ -165,7 +230,7 @@ impl Graph {
     fn points_for(&self, states: impl IntoIterator<Item = usize>) -> Vec<u16> {
         let mut points = BTreeSet::from([0]);
         for i in states {
-            for e in &self.states[i].edges {
+            for e in self.outgoing(i) {
                 points.insert(e.lo);
                 if e.hi < u16::MAX {
                     points.insert(e.hi + 1);
@@ -176,6 +241,9 @@ impl Graph {
     }
 
     fn remove_dead(&mut self) {
+        if self.word.is_some() {
+            return;
+        }
         let mut reverse = vec![Vec::new(); self.states.len()];
         for (i, state) in self.states.iter().enumerate() {
             for e in &state.edges {
@@ -252,6 +320,13 @@ impl Graph {
     fn determinize(&mut self, threshold: u64) -> Result<Option<u64>, Failure> {
         if self.deterministic {
             return Ok(None);
+        }
+        if let Some(word) = &self.word {
+            // Each position and the empty successor are distinct reachable subsets.
+            let count = word.len() as u64 + 2;
+            guard_count(count, threshold)?;
+            self.deterministic = true;
+            return Ok(Some(count));
         }
         let initial = vec![self.initial];
         let mut subsets = vec![initial.clone()];
@@ -336,6 +411,7 @@ impl Graph {
             cursor += 1;
         }
         *self = Self {
+            word: None,
             states: out,
             initial: 0,
             deterministic: true,
@@ -358,13 +434,12 @@ impl Graph {
         let mut cursor = 0;
         while cursor < queue.len() {
             let i = queue[cursor];
-            let state = &self.states[i];
             out.push_str(&format!(
                 "{}{}[",
                 cursor,
-                if state.accept { "+" } else { "-" }
+                if self.accepts(i) { "+" } else { "-" }
             ));
-            let mut edges = state.edges.clone();
+            let mut edges: Vec<_> = self.outgoing(i).collect();
             edges.sort_unstable_by_key(|e| (e.lo, e.hi, e.to));
             for e in edges {
                 let next = ids.len();
@@ -389,23 +464,12 @@ impl Automaton {
     fn expanded(&self) -> Result<Graph, Failure> {
         match self {
             Self::Graph(g) => Ok(g.clone()),
-            Self::Singleton(units) => {
-                state_bound(units.len().checked_add(1).ok_or(Failure::Inconclusive)?)?;
-                let mut states = vec![State::default(); units.len() + 1];
-                for (i, &unit) in units.iter().enumerate() {
-                    states[i].edges.push(Edge {
-                        lo: unit,
-                        hi: unit,
-                        to: i + 1,
-                    });
-                }
-                states[units.len()].accept = true;
-                Ok(Graph {
-                    states,
-                    initial: 0,
-                    deterministic: true,
-                })
-            }
+            Self::Singleton(units) => Ok(Graph {
+                word: Some(Arc::new(units.clone())),
+                states: Vec::new(),
+                initial: 0,
+                deterministic: true,
+            }),
         }
     }
 
@@ -439,10 +503,10 @@ impl Automaton {
         let mut result = graphs.remove(0);
         let mut accepting = result.accepting();
         for graph in graphs {
-            if graph.states[graph.initial].accept && graph.states[graph.initial].edges.is_empty() {
+            if graph.accepts(graph.initial) && graph.outgoing(graph.initial).next().is_none() {
                 continue;
             }
-            let offset = result.states.len();
+            let offset = result.state_count();
             let initial = result.append(&graph)?;
             let mut next: Vec<_> = graph.accepting().iter().map(|i| i + offset).collect();
             for i in accepting {
@@ -474,6 +538,7 @@ impl Automaton {
 
     fn optional(&self) -> Result<Self, Failure> {
         let mut graph = self.expanded()?;
+        graph.ensure_dense()?;
         state_bound(graph.states.len() + 1)?;
         let old = graph.initial;
         let initial = graph.states.len();
@@ -487,6 +552,7 @@ impl Automaton {
 
     fn star(&self) -> Result<Self, Failure> {
         let mut graph = self.expanded()?;
+        graph.ensure_dense()?;
         state_bound(graph.states.len() + 1)?;
         let accepting = graph.accepting();
         let old = graph.initial;
@@ -549,6 +615,7 @@ impl Automaton {
             return Self::Singleton(vec![lo]);
         }
         Self::Graph(Graph {
+            word: None,
             initial: 0,
             deterministic: true,
             states: vec![
@@ -580,6 +647,7 @@ impl Automaton {
     fn complement(&self, threshold: u64) -> Result<Self, Failure> {
         let mut graph = self.expanded()?;
         graph.determinize(threshold)?;
+        graph.ensure_dense()?;
         let points = graph.points();
         let old_len = graph.states.len();
         let mut gaps = Vec::new();
@@ -626,16 +694,13 @@ impl Automaton {
         fn contains(graph: &Graph, word: &[u16]) -> bool {
             let mut state = graph.initial;
             for &unit in word {
-                let Some(edge) = graph.states[state]
-                    .edges
-                    .iter()
-                    .find(|e| e.lo <= unit && unit <= e.hi)
+                let Some(edge) = graph.outgoing(state).find(|e| e.lo <= unit && unit <= e.hi)
                 else {
                     return false;
                 };
                 state = edge.to;
             }
-            graph.states[state].accept
+            graph.accepts(state)
         }
         if let Self::Singleton(word) = self {
             return Ok(if contains(&other.expanded()?, word) {
@@ -659,9 +724,9 @@ impl Automaton {
         let mut cursor = 0;
         while cursor < pairs.len() {
             let (a, b) = pairs[cursor];
-            states[cursor].accept = left.states[a].accept && right.states[b].accept;
-            for x in &left.states[a].edges {
-                for y in &right.states[b].edges {
+            states[cursor].accept = left.accepts(a) && right.accepts(b);
+            for x in left.outgoing(a) {
+                for y in right.outgoing(b) {
                     let lo = x.lo.max(y.lo);
                     let hi = x.hi.min(y.hi);
                     if lo > hi {
@@ -684,6 +749,7 @@ impl Automaton {
             cursor += 1;
         }
         let mut graph = Graph {
+            word: None,
             states,
             initial: 0,
             deterministic: true,
@@ -766,3 +832,5 @@ mod java21_case;
 
 #[path = "regex_admission/minimize.rs"]
 mod minimize;
+
+thread_local! { static WORD_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }

@@ -20,11 +20,15 @@ export function percentile(xs, p) {
   const a = [...xs].sort((x,y)=>x-y);
   return a[Math.min(a.length-1, Math.max(0, Math.ceil(a.length*p)-1))];
 }
-export function makeDoc(i, bytes) {
+export function makeDoc(i, bytes, shape='default') {
+  assert.ok(['default','tiny','wide-map'].includes(shape), 'unsupported fixture shape');
+  const base={i,bucket:i%100,score:i,owner:'bench-user'};
+  if(shape==='tiny') return base;
   let payload = '';
   for (let k=0; payload.length<bytes; ++k)
     payload += createHash('sha256').update(`${i}:${k}:fireemu-bench-v1`).digest('hex');
-  return {i, bucket:i%100, score:i, owner:'bench-user', payload:payload.slice(0,bytes)};
+  if(shape==='wide-map') return {...base,fields:Object.fromEntries(Array.from({length:32},(_,j)=>[`field${j}`,{value:i+j,nested:{flag:j%2===0}}]))};
+  return {...base,payload:payload.slice(0,bytes)};
 }
 export function expectedIndices(kind, n) {
   let ids = Array.from({length:n}, (_,i)=>i);
@@ -43,6 +47,54 @@ export async function closedLoop(ops, concurrency, invoke) {
   }));
 }
 
+export function validateMixedResponse(kind,data,expected) {
+  if(kind==='auth')assert.equal(typeof data?.signIn?.allowDuplicateEmails,'boolean');
+  else if(kind==='storage'){assert.equal(data?.name,expected.name);assert.equal(Number(data?.size),expected.size);}
+  else if(kind==='hub'){
+    for(const service of ['auth','storage','firestore']){
+      assert.equal(data?.[service]?.host,'127.0.0.1');
+      assert.equal(data?.[service]?.port,Number(expected[service].split(':')[1]));
+    }
+  }else assert.fail('unknown mixed response class');
+}
+
+export async function mixedClasses(tasks, {ops,concurrency,seed,mixed}) {
+  assert.ok(Number.isInteger(ops)&&ops>0&&ops<=100);
+  assert.ok(Number.isInteger(concurrency)&&concurrency>0&&concurrency<=4);
+  assert.ok(Number.isInteger(seed));
+  const names=Object.keys(tasks);assert.deepEqual([...names].sort(),['auth','firestore','hub','storage']);
+  const active=Object.fromEntries(names.map(name=>[name,0]));let overlap=false,failed=false;
+  const runClass=async name=>{
+    const latency=[],order=Array.from({length:ops},(_,i)=>i);
+    let state=seed>>>0,peak=0,error;
+    for(let i=order.length-1;i>0;i--){state=(Math.imul(state,1664525)+1013904223)>>>0;const j=state%(i+1);[order[i],order[j]]=[order[j],order[i]];}
+    const start=performance.now();
+    await closedLoop(ops,concurrency,async index=>{
+      if(failed)return;
+      peak=Math.max(peak,++active[name]);
+      if(active.storage&&names.some(n=>n!=='storage'&&active[n]))overlap=true;
+      const t=performance.now();
+      try{await tasks[name](order[index]);latency.push(performance.now()-t);}
+      catch(cause){failed=true;error??=cause;}
+      finally{active[name]--;}
+    });
+    if(error)throw error;
+    const wall=performance.now()-start;
+    return {ok:true,spec:{id:`${mixed?'mixed':'isolated'}-${name}`,kind:name,ops,concurrency,seed},
+      completed:latency.length,errors:0,dropped:0,logical_requests:ops,peak_inflight:peak,
+      wall_ms:wall,latency_ms:latency,throughput_rps:ops/(wall/1000),
+      p50_ms:percentile(latency,.5),p95_ms:percentile(latency,.95),p99_ms:percentile(latency,.99)};
+  };
+  let classes;
+  if(mixed){
+    const results=await Promise.allSettled(names.map(runClass));
+    const failure=results.find(result=>result.status==='rejected');if(failure)throw failure.reason;
+    classes=results.map(result=>result.value);
+  }else{classes=[];for(const name of names)classes.push(await runClass(name));}
+  assert.ok(!mixed||overlap,'no Storage/probe overlap observed; trial is invalid');
+  return {ok:true,overlap,classes};
+}
+
 let db, sdk, adminApp, webDb, webSdk, fixture=[], cfg, requireSdk;
 const id = i => String(i).padStart(9,'0');
 const delay = ms => new Promise(r=>setTimeout(r,ms));
@@ -51,6 +103,7 @@ const collection = () => db.collection('bench_items');
 async function init() {
   cfg=JSON.parse(process.env.BENCH_CLIENT_CONFIG);
   assertLocal(cfg.project, cfg.host);
+  if(cfg.mixedHosts)for(const host of Object.values(cfg.mixedHosts))assertLocal(cfg.project,host);
   process.env.FIRESTORE_EMULATOR_HOST=cfg.host;
   process.env.GCLOUD_PROJECT=cfg.project;
   delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -73,7 +126,7 @@ async function ready() {
   return {usable:true};
 }
 async function seed() {
-  fixture=Array.from({length:cfg.documents}, (_,i)=>makeDoc(i,cfg.payloadBytes));
+  fixture=Array.from({length:cfg.documents}, (_,i)=>makeDoc(i,cfg.payloadBytes,cfg.fixtureShape??'default'));
   const t=performance.now();
   for(let i=0;i<fixture.length;i+=100) {
     const b=db.batch();
@@ -307,6 +360,36 @@ async function listener(spec, namespace) {
             deliveries:latency.length,latency_unit:'writer dispatch to each listener callback',callbacks};
   } finally {for(const stop of unsub) stop();}
 }
+async function mixedWorkload(req) {
+  assert.ok(cfg.mixedHosts,'mixed services were not configured');
+  const hosts=cfg.mixedHosts;
+  const request=async(host,path,options={})=>fetch(`http://${host}${path}`,{
+    ...options,signal:AbortSignal.timeout(15000),redirect:'error',headers:{authorization:'Bearer owner',...options.headers}});
+  const tasks={
+    storage:async i=>{
+      const name=`bench_${cfg.nonce}_${req.namespace}_${i}`;
+      const bucket=`${cfg.project}.appspot.com`;
+      const path=`/v0/b/${bucket}/o/${encodeURIComponent(name)}`;
+      const bytes=Buffer.from(makeDoc(i,req.payloadBytes??65536).payload);
+      let uploaded=false;
+      try{
+        const upload=await request(hosts.storage,`/v0/b/${bucket}/o?uploadType=media&name=${encodeURIComponent(name)}`,{method:'POST',body:bytes,headers:{'content-type':'application/octet-stream'}});
+        assert.equal(upload.status,200);uploaded=true;
+        const meta=await upload.json();validateMixedResponse('storage',meta,{name,size:bytes.length});
+        const read=await request(hosts.storage,path+'?alt=media');assert.equal(read.status,200);
+        assert.deepEqual(Buffer.from(await read.arrayBuffer()),bytes);
+      }finally{
+        if(uploaded){const deleted=await request(hosts.storage,path,{method:'DELETE'});assert.ok([200,204].includes(deleted.status));await deleted.arrayBuffer();}
+      }
+      const absent=await request(hosts.storage,path);assert.equal(absent.status,404);await absent.arrayBuffer();
+    },
+    auth:async()=>{const response=await request(hosts.auth,`/emulator/v1/projects/${cfg.project}/config`);assert.equal(response.status,200);const data=await response.json();validateMixedResponse('auth',data);},
+    hub:async()=>{const response=await request(hosts.hub,'/emulators');assert.equal(response.status,200);const data=await response.json();validateMixedResponse('hub',data,{...hosts,firestore:cfg.host});},
+    firestore:async i=>{if(req.readiness){await ready();return;}const index=(i*7919)%cfg.documents;const got=await collection().doc(id(index)).get();assert.deepEqual(got.data(),fixture[index]);},
+  };
+  return mixedClasses(tasks,{ops:req.ops??8,concurrency:req.concurrency??2,seed:req.seed??20260909,mixed:req.mixed!==false});
+}
+
 async function clearData() {
   // Same SDK delete operations for both engines; no vendor-only reset endpoint.
   const cols=await db.listCollections();let deleted=0;
@@ -328,6 +411,7 @@ async function main() {
       if(req.action==='ready') response=await ready();
       else if(req.action==='seed') response=await seed();
       else if(req.action==='run') response= req.spec.kind==='listen'?await listener(req.spec,req.namespace):await run(req.spec,req.namespace);
+      else if(req.action==='mixed') response=await mixedWorkload(req);
       else if(req.action==='clear') response=await clearData();
       else if(req.action==='close') {
         if(webDb) await webSdk.terminate(webDb);

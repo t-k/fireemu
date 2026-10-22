@@ -74,10 +74,11 @@ def reserve_ports(count=5):
         for s in sockets:s.close()
 
 
-def paired_orders(pairs, discard, seed):
+def paired_orders(pairs, discard, seed, roles=('official','fireemu')):
+    if len(roles)!=2 or len(set(roles))!=2:raise ValueError('two distinct comparison roles required')
     rng=random.Random(seed); first=rng.randrange(2)
-    return [(i, i < discard, ['official','fireemu'] if (i+first)%2==0
-             else ['fireemu','official']) for i in range(pairs+discard)]
+    return [(i, i < discard, list(roles) if (i+first)%2==0
+             else list(reversed(roles))) for i in range(pairs+discard)]
 
 
 def scenarios(c, tier):
@@ -266,7 +267,7 @@ def phase(sampler,name,client=None,action=None,seconds=0,**kwargs):
     return dict(name=name,start_ns=begin,end_ns=time.monotonic_ns(),before=start,after=end,data=data)
 
 
-def config_files(cwd,ports,profile):
+def config_files(cwd,ports,profile,mixed=False):
     firestore,hub,websocket,http,storage=ports
     # The same server-side Rules are loaded by both. Admin trials bypass Rules;
     # the explicitly named Web SDK cases exercise allow and deny checks.
@@ -289,6 +290,10 @@ service cloud.firestore {
               'emulators':{'firestore':{'host':'127.0.0.1','port':firestore,'websocketPort':websocket},
                            'hub':{'host':'127.0.0.1','port':hub},'ui':{'enabled':False},
                            'singleProjectMode':True}}
+    if mixed:
+        firebase['emulators'].update(auth={'host':'127.0.0.1','port':http},storage={'host':'127.0.0.1','port':storage})
+        firebase['storage']={'rules':'storage.rules'}
+        (cwd/'storage.rules').write_text("rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{object=**} { allow read, write: if true; } } }\n")
     dump(cwd/'firebase.json',firebase)
     dump(cwd/'fireemu.json',{'schemaVersion':1,'profile':profile,'firebaseJson':'firebase.json',
          'bind':'127.0.0.1','projects':{'requireDemoPrefix':True},
@@ -298,22 +303,25 @@ service cloud.firestore {
 def run_trial(args,c,block,discard,engine_name,case_order,cache,out):
     cwd=out/f'block-{block:02d}-{engine_name}';cwd.mkdir()
     home=cwd/'home';home.mkdir()
-    ports=reserve_ports();config_files(cwd,ports,args.profile)
+    ports=reserve_ports();config_files(cwd,ports,args.profile,args.mixed_services)
     project=f'demo-bench-{block:02d}'
     env=env_for(home,cache)
+    services='firestore,auth,storage' if args.mixed_services else 'firestore'
     if engine_name=='official':
-        argv=[shutil.which('node'),args.firebase_cli,'emulators:start','--only','firestore',
+        argv=[shutil.which('node'),args.firebase_cli,'emulators:start','--only',services,
               '--project',project,'--config',str(cwd/'firebase.json'),'--non-interactive','--log-verbosity','QUIET']
     else:
-        argv=[args.fireemu,'up','--config',str(cwd/'fireemu.json'),'--only','firestore','--project',project,
+        argv=[args.baseline_fireemu if engine_name=='baseline-fireemu' else args.fireemu,'up','--config',str(cwd/'fireemu.json'),'--only',services,'--project',project,
               '--firestore-port',str(ports[0]),'--hub-port',str(ports[1]),'--http-port',str(ports[3]),
               '--storage-port',str(ports[4]),'--ui-port','0','--logging-port','0','--log-verbosity','quiet']
     client=engine=sampler=None
     trial=dict(engine=engine_name,block=block,discard=discard,profile=args.profile,ok=False,
                command=argv,project=project,ports=ports,phases=[],cases=[])
+    if engine_name!='official':trial['binary_sha256']=sha(argv[0])
     try:
         client=Client(dict(project=project,host=f'127.0.0.1:{ports[0]}',nonce=uuid.uuid4().hex,
-                           sdkRoot=args.sdk_root,documents=c['documents'],payloadBytes=c['payloadBytes']),cwd,env)
+                           mixedHosts=({name:f'127.0.0.1:{ports[index]}' for name,index in [('storage',4),('auth',3),('hub',1)]} if args.mixed_services else None),
+                           sdkRoot=args.sdk_root,fixtureShape=args.fixture_shape,documents=c['documents'],payloadBytes=c['payloadBytes']),cwd,env)
         trial['client_metadata']=client.metadata
         engine=Engine(argv,cwd,env,args.supervisor);trial['launch']=engine.start()
         sampler=Sampler(engine,cwd/'samples.jsonl',args.sample_ms/1000);sampler.start()
@@ -327,11 +335,17 @@ def run_trial(args,c,block,discard,engine_name,case_order,cache,out):
                 time.sleep(.01)
         trial['tcp_ready_ms']=(time.monotonic_ns()-engine.t0)/1e6
         client.call('ready',timeout=max(1,deadline-time.monotonic()))
+        if args.mixed_services:client.call('mixed',readiness=True,namespace='ready',ops=1,concurrency=1,mixed=True,timeout=max(1,deadline-time.monotonic()))
         trial['usable_ready_ms']=(time.monotonic_ns()-engine.t0)/1e6
         trial['phases'].append(phase(sampler,'idle-empty',seconds=c['idleSeconds']))
         if not args.startup_only:
             trial['phases'].append(phase(sampler,'seed-and-verify',client,'seed',timeout=900))
             trial['phases'].append(phase(sampler,'idle-loaded',seconds=c['idleSeconds']))
+            if args.mixed_services:
+                for mode in [False,True]:
+                    observed=phase(sampler,'mixed-services' if mode else 'isolated-services',client,'mixed',mixed=mode,namespace='mixed' if mode else 'isolated',ops=8,concurrency=2,seed=20260909)
+                    trial['phases'].append(observed)
+                    trial['cases'].extend(observed['data']['classes'])
             for j,spec in enumerate(case_order):
                 warm={**spec,'ops':min(spec['ops'], 200 if not spec['kind'].startswith('transaction') else 5)}
                 if spec['kind'] in ['scan','projection','listen','batch']:warm['ops']=1
@@ -389,23 +403,27 @@ def metadata(args,c):
     git=lambda *a:capture(['git','-C',str(root),*a])
     data={'schemaVersion':1,'createdAt':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
           'commit':git('rev-parse','HEAD'),'dirty_tracked':bool(git('status','--porcelain','--untracked-files=no')),
-          'tier':args.tier,'config':c,'profile':args.profile,'startup_only':args.startup_only,
+          'tier':args.tier,'fixture_shape':args.fixture_shape,'mixed_services':args.mixed_services,'config':c,'profile':args.profile,'startup_only':args.startup_only,
           'excluded_by_plan':([] if args.profile=='emulator' else [
               {'cases':['rules-allow','rules-deny'], 'reason':'strict requires verified tokens; these cases use EmulatorMock and are not comparable without an Auth fixture'}]),
           'supervisor':args.supervisor,'cache_state':'assets-preinstalled; process-cold, OS-cache-uncontrolled',
-          'node':capture([shutil.which('node'),'--version']), 'java':capture(['java','-version']),
+          'node':capture([shutil.which('node'),'--version']), 'java':None if args.baseline_fireemu else capture(['java','-version']),
           'python':sys.version,'kernel':platform.release(),'architecture':platform.machine(),
           'cpu_count':os.cpu_count(),'cpu_affinity':sorted(os.sched_getaffinity(0)),
           'cpuinfo':Path('/proc/cpuinfo').read_text(),'meminfo':Path('/proc/meminfo').read_text(),
           'runner':{k:os.environ.get(k) for k in ['RUNNER_OS','RUNNER_ARCH','ImageOS','ImageVersion','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT']},
           'binary_kind':'caller-supplied; workflow default: release x86_64-unknown-linux-musl with UI embedded',
           'binary_sha256':sha(args.fireemu),'binary_version':capture([args.fireemu,'--version']),
-          'firebase_version':capture([shutil.which('node'),args.firebase_cli,'--version']),
+          'firebase_version':None if args.baseline_fireemu else capture([shutil.which('node'),args.firebase_cli,'--version']),
           'conformance_lock_sha256':sha(root/'conformance/pnpm-lock.yaml'),
           'cargo_lock_sha256':sha(root/'Cargo.lock'),
           'harness_sha256':{str(p.relative_to(HERE)):sha(p) for p in sorted(HERE.glob('*')) if p.suffix in ['.py','.mjs','.json','.c']},
           'exec_helper_sha256':sha(ensure_launcher()),'exec_helper_accounting':'included in cgroup peak, no persistent supervisor in engine cgroup',
           'sampling_interval_ms':args.sample_ms,'recovery_seconds':args.recovery_seconds}
+    if args.baseline_fireemu:
+        data['comparison']={'baseline':'baseline-fireemu','candidate':'candidate-fireemu'}
+        data['binaries']={role:dict(path=str(Path(binary).resolve()),sha256=sha(binary),version=capture([binary,'--version']))
+                          for role,binary in [('baseline-fireemu',args.baseline_fireemu),('candidate-fireemu',args.fireemu)]}
     for file in ['cpu','memory','io']:
         p=Path('/proc/pressure')/file;data['pressure_'+file]=p.read_text() if p.exists() else None
     return data
@@ -414,12 +432,15 @@ def metadata(args,c):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--repo',default='.');p.add_argument('--fireemu',required=True)
+    p.add_argument('--baseline-fireemu',help='Compare two fireemu binaries instead of official vs fireemu')
     p.add_argument('--sdk-root',default='conformance');p.add_argument('--firebase-cli')
     p.add_argument('--tier',choices=['smoke','standard','extended'],default='standard')
     p.add_argument('--profile',choices=['emulator','strict'],default='emulator')
     p.add_argument('--out',default='.bench-output');p.add_argument('--supervisor',choices=['systemd','process'],default='systemd')
     p.add_argument('--sample-ms',type=int,default=250);p.add_argument('--start-timeout',type=int,default=180)
     p.add_argument('--recovery-seconds',type=int,default=15);p.add_argument('--startup-only',action='store_true')
+    p.add_argument('--mixed-services',action='store_true',help='Bounded Storage/Auth/Hub/Firestore isolated and overlapping workloads')
+    p.add_argument('--fixture-shape',choices=['default','tiny','wide-map'],default='default')
     p.add_argument('--pairs',type=int);p.add_argument('--offered-rate',type=int,default=0)
     args=p.parse_args()
     if platform.system()!='Linux':p.error('Linux only: do not compare different memory metrics across platforms')
@@ -428,9 +449,14 @@ def main():
     args.repo=str(Path(args.repo).resolve());args.sdk_root=str(Path(args.sdk_root).resolve())
     args.fireemu=str(Path(args.fireemu).resolve())
     if not os.access(args.fireemu,os.X_OK):p.error('fireemu binary is missing/not executable')
-    if not args.firebase_cli:
+    if args.baseline_fireemu:
+        args.baseline_fireemu=str(Path(args.baseline_fireemu).resolve())
+        if not os.access(args.baseline_fireemu,os.X_OK):p.error('baseline fireemu binary is missing/not executable')
+    if args.baseline_fireemu:
+        args.firebase_cli=None
+    elif not args.firebase_cli:
         args.firebase_cli=capture(['node','-e',"const r=require('module').createRequire(process.argv[1]);console.log(r.resolve('firebase-tools/lib/bin/firebase.js'));",str(Path(args.sdk_root)/'package.json')])
-    else:args.firebase_cli=str(Path(args.firebase_cli).resolve())
+    elif args.firebase_cli:args.firebase_cli=str(Path(args.firebase_cli).resolve())
     plan=json.loads((HERE/'plan.json').read_text());c=plan['tiers'][args.tier].copy()
     if args.pairs is not None:
         if not 1<=args.pairs<=50:p.error('pairs must be 1..50')
@@ -439,11 +465,16 @@ def main():
     out=Path(args.out).resolve();out.mkdir(parents=True,exist_ok=True)
     if (out/'manifest.json').exists():p.error('Use an empty output directory for each run')
     cache=Path(os.environ.get('FIREBASE_EMULATORS_PATH',str(Path.home()/'.cache/firebase/emulators'))).resolve()
-    jars=sorted(cache.glob('*firestore*.jar'))
-    if not jars:p.error('Pre-download the pinned Firestore emulator with setup:emulators:firestore')
+    jars=[] if args.baseline_fireemu else sorted(cache.glob('*firestore*.jar'))
+    if not args.baseline_fireemu and not jars:p.error('Pre-download the pinned Firestore emulator with setup:emulators:firestore')
+    if args.mixed_services and not args.baseline_fireemu:
+        storage_jars=sorted(cache.glob('*storage*.jar'))
+        if not storage_jars:p.error('Pre-download the pinned Storage emulator with setup:emulators:storage')
+        jars+=storage_jars
     meta=metadata(args,c);meta['jars']={p.name:sha(p) for p in jars};dump(out/'manifest.json',meta)
     failures=0
-    for block,discard,order in paired_orders(c['pairs'],c['discardPairs'],plan['seed']):
+    roles=('baseline-fireemu','candidate-fireemu') if args.baseline_fireemu else ('official','fireemu')
+    for block,discard,order in paired_orders(c['pairs'],c['discardPairs'],plan['seed'],roles):
         cases=scenarios(c,args.tier)
         if args.profile=='strict':cases=[s for s in cases if not s['kind'].startswith('rules')]
         if args.offered_rate:
@@ -454,12 +485,13 @@ def main():
             trial=run_trial(args,c,block,discard,name,cases,cache,out)
             if not trial['ok']:failures+=1
             # A dirty stop can contaminate every later sample; stop the experiment.
-            if trial.get('cleanup_error') or trial.get('cleanup',{}).get('remaining_pids'):
+            if trial.get('cleanup_error') or trial.get('cleanup',{}).get('remaining_pids') or trial.get('cleanup',{}).get('forced_kill') or trial.get('cleanup',{}).get('systemd_result')=='timeout':
                 raise RuntimeError('Engine cleanup failed; refusing further measurements')
             time.sleep(1)
     after={p.name:sha(p) for p in jars}
-    if after!=meta['jars']:failures+=1
-    dump(out/'run-status.json',{'failures':failures,'asset_hashes_unchanged':after==meta['jars']})
+    binaries_unchanged=sha(args.fireemu)==meta['binary_sha256'] and all(sha(identity['path'])==identity['sha256'] for identity in meta.get('binaries',{}).values())
+    if after!=meta['jars'] or not binaries_unchanged:failures+=1
+    dump(out/'run-status.json',{'failures':failures,'asset_hashes_unchanged':after==meta['jars'] and binaries_unchanged})
     return int(failures>0)
 
 

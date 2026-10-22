@@ -11,13 +11,23 @@ on:
         description: Dataset and number of paired repetitions
       profile:
         type: choice
-        options: [firebase, strict]
-        default: firebase
+        options: [emulator, strict]
+        default: emulator
         description: Never combine different compatibility profiles in one series
       startup_only:
         type: boolean
         default: false
         description: 12 measured startup pairs; no data workload
+
+      mixed_services:
+        type: boolean
+        default: false
+        description: Bounded isolated and mixed Storage, Auth, Hub and Firestore workloads
+      fixture_shape:
+        type: choice
+        options: [default, tiny, wide-map]
+        default: default
+        description: Deterministic fixture shape; never combine shapes in a comparison
 
 permissions:
   contents: read
@@ -97,12 +107,15 @@ jobs:
           distribution: temurin
           java-version: '21.0.8+9.0.LTS' # Measurement baseline, not a claim this is the latest JDK.
       - name: Dependencies and emulator download (never timed)
+        env:
+          MIXED_SERVICES: ${{ inputs.mixed_services || 'false' }}
         run: |
           chmod +x bench-bin/fireemu
           sha256sum -c bench-bin/SHA256SUMS
           test "$(cat bench-bin/commit.txt)" = "$(git rev-parse HEAD)"
           pnpm -C conformance install --frozen-lockfile
           pnpm -C conformance exec firebase setup:emulators:firestore
+          if [ "$MIXED_SERVICES" = true ]; then pnpm -C conformance exec firebase setup:emulators:storage; fi
           bench-bin/fireemu doctor
           test -d /run/systemd/system
           test -f /sys/fs/cgroup/cgroup.controllers
@@ -116,9 +129,13 @@ jobs:
           TIER: ${{ inputs.tier || 'standard' }}
           PROFILE: ${{ inputs.profile || 'emulator' }}
           STARTUP_ONLY: ${{ inputs.startup_only || 'false' }}
+          MIXED_SERVICES: ${{ inputs.mixed_services || 'false' }}
+          FIXTURE_SHAPE: ${{ inputs.fixture_shape || 'default' }}
         run: |
           extra=()
           if [ "$STARTUP_ONLY" = true ]; then extra+=(--startup-only); fi
+          if [ "$MIXED_SERVICES" = true ]; then extra+=(--mixed-services); fi
+          extra+=(--fixture-shape "$FIXTURE_SHAPE")
           python3 tools/bench/bench.py \
             --fireemu "$PWD/bench-bin/fireemu" \
             --sdk-root "$PWD/conformance" \

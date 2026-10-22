@@ -120,3 +120,21 @@ class ReportingTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+class ComparisonTests(unittest.TestCase):
+    def test_explicit_comparison_order_preserves_pairing(self):
+        order=paired_orders(4,1,99,('baseline-fireemu','candidate-fireemu'))
+        self.assertEqual({x for _,_,pair in order for x in pair},{'baseline-fireemu','candidate-fireemu'})
+        self.assertEqual(sum(pair[0]=='baseline-fireemu' for _,discard,pair in order if not discard),2)
+    def test_duplicate_roles_rejected(self):
+        with self.assertRaises(ValueError):paired_orders(1,0,99,('fireemu','fireemu'))
+
+
+class MixedConfigurationTests(unittest.TestCase):
+    def test_services_are_enabled_only_on_opt_in(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);config_files(p,[8080,4400,9150,9099,9199],'emulator',mixed=True)
+            config=json.loads((p/'firebase.json').read_text())
+            self.assertEqual(config['emulators']['storage']['port'],9199)
+            self.assertEqual(config['emulators']['auth']['port'],9099)
+            self.assertTrue((p/'storage.rules').exists())

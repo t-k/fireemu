@@ -102,10 +102,49 @@ fn state_bound(count: usize) -> Result<(), Failure> {
     }
 }
 
+#[cfg(test)]
+thread_local! { static ALLOCATION_FAILURE_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) }; }
+
+fn allocation_point() -> Result<(), Failure> {
+    #[cfg(test)]
+    ALLOCATION_FAILURE_AFTER.with(|remaining| match remaining.get() {
+        Some(0) => Err(Failure::Allocation),
+        Some(n) => {
+            remaining.set(Some(n - 1));
+            Ok(())
+        }
+        None => Ok(()),
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+struct AllocationFault;
+#[cfg(test)]
+impl AllocationFault {
+    fn after(successful_reserves: usize) -> Self {
+        ALLOCATION_FAILURE_AFTER.with(|n| n.set(Some(successful_reserves)));
+        Self
+    }
+}
+#[cfg(test)]
+impl Drop for AllocationFault {
+    fn drop(&mut self) {
+        ALLOCATION_FAILURE_AFTER.with(|n| n.set(None));
+    }
+}
+
 fn reserve_items<T>(items: &mut Vec<T>, additional: usize) -> Result<(), Failure> {
+    allocation_point()?;
     items
         .try_reserve(additional)
         .map_err(|_| Failure::Allocation)
+}
+
+fn push_item<T>(items: &mut Vec<T>, item: T) -> Result<(), Failure> {
+    reserve_items(items, 1)?;
+    items.push(item);
+    Ok(())
 }
 
 // Hashes index candidates only; exact sorted identity sets decide equality.
@@ -127,6 +166,7 @@ impl SubsetIndex {
             .find(|&id| &keys[id] == key)
     }
     fn insert(&mut self, digest: u64, id: usize) -> Result<(), Failure> {
+        allocation_point()?;
         self.buckets
             .try_reserve(1)
             .map_err(|_| Failure::Allocation)?;

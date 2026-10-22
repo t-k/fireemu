@@ -1,7 +1,6 @@
 //! Symbolic minimum-repeat prototype retaining the unminimized star-tail identities.
 use super::{
-    Automaton, Edge, Failure, Graph, PROTOTYPE_EDGES, State, SubsetIndex, guard_count,
-    reserve_items, state_bound,
+    Automaton, Edge, Failure, Graph, State, SubsetIndex, guard_count, push_item, reserve_items,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -109,25 +108,24 @@ impl Key {
                 Prefix::Nullable(thresholds.into_iter().collect())
             }
             Prefix::Indexed(v) => {
-                let mut next = BTreeSet::new();
+                let mut next = Vec::new();
                 for &(copy, q) in v {
                     if let Some(to) = target(child, q, unit) {
-                        next.insert((copy, to));
+                        push_item(&mut next, (copy, to))?;
                     }
                     if child.accepts(q) {
                         if let Some(to) = start_target {
                             if copy + 1 < min {
-                                next.insert((copy + 1, to));
+                                push_item(&mut next, (copy + 1, to))?;
                             } else {
                                 tail.insert(to);
                             }
                         }
                     }
-                    if next.len() > PROTOTYPE_EDGES {
-                        return Err(Failure::Inconclusive);
-                    }
                 }
-                Prefix::Indexed(next.into_iter().collect())
+                next.sort_unstable();
+                next.dedup();
+                Prefix::Indexed(next)
             }
         };
         Ok(Self {
@@ -148,9 +146,8 @@ fn construct(child: &Graph, min: u32, threshold: u64) -> Result<(Automaton, Opti
     if min > 0 && child.accepting().is_empty() {
         return Ok((Automaton::Graph(Graph::empty()), None));
     }
-    if child.word.is_none() {
-        state_bound(child.state_count())?;
-    }
+    // Readers query exact logical IDs and reachable accepting states sparsely;
+    // total namespace cardinality is not a canonical resource guard.
     let prefix = if min == 0 || child.accepts(child.initial) {
         Prefix::Root
     } else {
@@ -262,4 +259,19 @@ fn typed_key_collision_preserves_minimum_construction_identities() {
     for (id, key) in keys.iter().enumerate() {
         assert_eq!(index.find(7, key, &keys), Some(id));
     }
+}
+
+#[test]
+fn indexed_prefix_scratch_failure_is_operational_allocation() {
+    let child = super::tests::finite_prefix_nonnullable_hole_child();
+    let current = Key {
+        prefix: Prefix::Indexed(vec![(0, 1), (1, 1)]),
+        tail: vec![],
+    };
+    for budget in 0..4 {
+        let _fault = super::AllocationFault::after(budget);
+        assert_eq!(current.next(&child, 4, 97), Err(Failure::Allocation));
+    }
+    let _fault = super::AllocationFault::after(4);
+    assert!(current.next(&child, 4, 97).is_ok());
 }

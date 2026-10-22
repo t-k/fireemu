@@ -2361,3 +2361,118 @@ fn symbolic_minimum_key_storage_does_not_replace_canonical_guard() {
         Ok(Some(4003))
     );
 }
+
+pub(super) fn finite_prefix_nonnullable_hole_child() -> Graph {
+    Graph {
+        word: None,
+        store: None,
+        initial: 0,
+        deterministic: true,
+        states: (0..4)
+            .map(|q| State {
+                accept: q == 1 || q == 3,
+                edges: if q < 3 {
+                    vec![Edge {
+                        lo: 97,
+                        hi: 97,
+                        to: q + 1,
+                    }]
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn exact_nonnullable_repeat_does_not_fill_copy_holes() {
+    let child = finite_prefix_nonnullable_hole_child();
+    let (actual, _) = symbolic::bounded(&child, 3, 3, 5000).unwrap();
+    assert!(!accepts(&actual, &[97; 4]));
+}
+
+#[test]
+fn symbolic_readers_follow_tiny_frontier_in_large_namespace() {
+    let mut child = Graph {
+        word: None,
+        store: None,
+        initial: 0,
+        deterministic: true,
+        states: vec![State::default(); 30001],
+    };
+    child.states[0].edges.push(Edge {
+        lo: 97,
+        hi: 97,
+        to: 1,
+    });
+    child.states[1].accept = true;
+    assert_eq!(symbolic::count_only(&child, 2, 2, 5000), Ok(Some(4)));
+    assert_eq!(minimum::count_only(&child, 1, 5000), Ok(Some(4)));
+}
+
+fn single_accept_reset_graph(states: usize, labels: u16) -> Graph {
+    Graph {
+        word: None,
+        store: None,
+        initial: 0,
+        deterministic: true,
+        states: (0..states)
+            .map(|q| State {
+                accept: q == 0,
+                edges: if q == 0 {
+                    vec![Edge {
+                        lo: 0,
+                        hi: 0,
+                        to: 1,
+                    }]
+                } else {
+                    (1..=labels)
+                        .map(|unit| Edge {
+                            lo: unit,
+                            hi: unit,
+                            to: (q + usize::from(unit)) % states,
+                        })
+                        .collect()
+                },
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn single_accept_reset_counts_match_explicit_optional_and_star() {
+    for states in [3, 5, 7] {
+        let child = single_accept_reset_graph(states, 2);
+        for star in [false, true] {
+            let mut explicit =
+                eager_unminimized_unary_constructor(&Automaton::Graph(child.clone()), star);
+            assert_eq!(explicit.minimize(5000), Ok(Some(states as u64 + 2)));
+            let (actual, count) = if star {
+                minimum::compile(&child, 0, 5000)
+            } else {
+                symbolic::bounded(&child, 0, 1, 5000)
+            }
+            .unwrap();
+            assert_eq!(count, Some(states as u64 + 2));
+            assert_eq!(actual.normal(), explicit.normal());
+            assert_eq!(actual.expanded().unwrap().state_count(), states);
+        }
+    }
+}
+
+#[test]
+fn bounded_output_storage_retains_more_than_two_million_intervals() {
+    let child = single_accept_reset_graph(4999, 402);
+    let (actual, count) = symbolic::bounded(&child, 0, 1, 5000).unwrap();
+    assert_eq!(count, Some(5001));
+    assert_eq!(actual.expanded().unwrap().state_count(), 4999);
+}
+
+#[test]
+fn minimum_output_storage_retains_more_than_two_million_intervals() {
+    let child = single_accept_reset_graph(4999, 402);
+    let (actual, count) = minimum::compile(&child, 0, 5000).unwrap();
+    assert_eq!(count, Some(5001));
+    assert_eq!(actual.expanded().unwrap().state_count(), 4999);
+}

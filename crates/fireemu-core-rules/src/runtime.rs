@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use crate::ast::{Item, PathSegment, Ruleset, Span};
 use crate::coverage::RulesDiagnostics;
-use crate::lint::{lint_source, DiagnosticLevel, LintOptions};
+use crate::lint::{lint_parsed, DiagnosticLevel, LintOptions};
 use crate::parse::{parse_ruleset, ParseError};
 
 /// The currently loaded rules: source text plus its parsed form. `None` means no rules are
@@ -72,8 +72,8 @@ impl LoadedRules {
     pub fn from_source(source: &str) -> Result<Self, ParseError> {
         let ruleset = parse_ruleset(source)?;
         validate_ruleset(&ruleset)?;
-        let report = lint_source(source, &LintOptions::default());
-        for diagnostic in &report.diagnostics {
+        let (diagnostics, _) = lint_parsed(source, &ruleset, &LintOptions::default());
+        for diagnostic in &diagnostics {
             if diagnostic.level != DiagnosticLevel::Error {
                 continue;
             }
@@ -438,5 +438,56 @@ mod tests {
 
         assert!(loaded.retained_bytes() > empty.retained_bytes());
         assert!(loaded.retained_bytes() >= V1.len() as u64);
+    }
+    #[test]
+    fn distinct_source_load_parses_once_and_keeps_validation_precedence() {
+        crate::parse::PARSE_CALLS.with(|calls| calls.set(0));
+        LoadedRules::from_source(V1).unwrap();
+        assert_eq!(crate::parse::PARSE_CALLS.with(core::cell::Cell::get), 1);
+        let error = LoadedRules::from_source(
+            "rules_version = '3'; service cloud.firestore { function f() { return f(); } }",
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "unsupported rules_version `3`");
+    }
+
+    #[test]
+    #[ignore = "bounded release load phase measurement"]
+    fn bounded_load_phase_measurement() {
+        fn expression(leaves: usize) -> String {
+            if leaves == 1 {
+                return "true".into();
+            }
+            format!(
+                "({} && {})",
+                expression(leaves / 2),
+                expression(leaves - leaves / 2)
+            )
+        }
+        for bytes in [1024usize, 10_240, 102_400] {
+            let source = format!(
+                "service cloud.firestore {{ match /{{id}} {{ allow get: if {}; }} }}",
+                expression(bytes / 10)
+            );
+            let mut parse_time = std::time::Duration::ZERO;
+            let mut validate_time = std::time::Duration::ZERO;
+            let mut lint_time = std::time::Duration::ZERO;
+            for _ in 0..30 {
+                let start = std::time::Instant::now();
+                let tree = crate::parse::parse_ruleset(&source).unwrap();
+                parse_time += start.elapsed();
+                let start = std::time::Instant::now();
+                super::validate_ruleset(&tree).unwrap();
+                validate_time += start.elapsed();
+                let start = std::time::Instant::now();
+                std::hint::black_box(crate::lint::lint_parsed(
+                    &source,
+                    &tree,
+                    &crate::lint::LintOptions::default(),
+                ));
+                lint_time += start.elapsed();
+            }
+            println!("load bytes={} iterations=30 parse={parse_time:?} validate={validate_time:?} lint={lint_time:?}", source.len());
+        }
     }
 }

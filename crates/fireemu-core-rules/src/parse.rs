@@ -121,8 +121,13 @@ fn compile_literal_pattern(
         })
 }
 
+#[cfg(test)]
+std::thread_local! { pub(crate) static PARSE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) }; }
+
 /// Parses a complete ruleset.
 pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
+    #[cfg(test)]
+    PARSE_CALLS.with(|calls| calls.set(calls.get() + 1));
     // Production compiles expressions 99 levels deep, which the recursive-descent parser
     // follows through about ten frames a level: more than a request thread's stack holds in a
     // debug build. Loading a ruleset is rare, so the parse gets a thread of its own.
@@ -174,6 +179,11 @@ fn parse_ruleset_on_this_thread(src: &str) -> Result<Ruleset, ParseError> {
     check_expression_tree_depth(&ruleset)?;
     check_duplicate_functions(&ruleset)?;
     ruleset.value_dependencies = analyze_value_dependencies(&ruleset);
+    ruleset.function_scopes = ruleset
+        .services
+        .iter()
+        .map(|service| crate::scope::ServiceScopes::compile(&service.items))
+        .collect();
     Ok(ruleset)
 }
 
@@ -664,6 +674,7 @@ impl<'a> Parser<'a> {
             version,
             services,
             value_dependencies: crate::ast::ValueDependencies::default(),
+            function_scopes: Vec::new(),
         })
     }
 

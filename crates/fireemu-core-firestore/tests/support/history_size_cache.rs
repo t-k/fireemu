@@ -142,6 +142,81 @@ proptest::proptest! {
             proptest::prop_assert_eq!(state.history_usage(), reference_usage(&state));
         }
     }
+
+    #[test]
+    fn generated_byte_limits_match_tree_usage_at_adjacent_boundaries(
+        operations in proptest::collection::vec((0u8..4, 0u16..256, proptest::bool::ANY), 1..32),
+        retained in 1usize..9,
+        length in 0usize..512,
+        delete in proptest::bool::ANY,
+        advance in proptest::bool::ANY,
+    ) {
+        let mut state = FirestoreState::with_history_version_limit(retained);
+        for (index, length, delete) in operations {
+            let op = if delete {
+                WriteOp::Delete { path: path(index) }
+            } else {
+                WriteOp::Set {
+                    path: path(index),
+                    fields: BTreeMap::from([("body".into(), Value::String("x".repeat(usize::from(length))))]),
+                    update_mask: None,
+                }
+            };
+            state.commit(&[Write { op, precondition: None, transforms: Vec::new() }], None, LogicalInstant::UNIX_EPOCH).unwrap();
+        }
+        state.commit(&[Write {
+            op: WriteOp::Set {
+                path: path(0),
+                fields: BTreeMap::from([("body".into(), Value::String("seed".into()))]),
+                update_mask: None,
+            },
+            precondition: None,
+            transforms: Vec::new(),
+        }], None, LogicalInstant::UNIX_EPOCH).unwrap();
+        let now = if advance { LogicalInstant::from_unix_seconds(4000) } else { LogicalInstant::UNIX_EPOCH };
+        let write = Write {
+            op: if delete { WriteOp::Delete { path: path(0) } } else { WriteOp::Set {
+                path: path(0),
+                fields: BTreeMap::from([
+                    ("body".into(), Value::String("y".repeat(length))),
+                    ("generation".into(), Value::Integer(1)),
+                ]),
+                update_mask: None,
+            } },
+            precondition: None,
+            transforms: Vec::new(),
+        };
+        let mut reference = state.clone();
+        reference.commit(std::slice::from_ref(&write), None, now).unwrap();
+        let expected = reference_usage(&reference);
+        let before = reference_usage(&state);
+        for limit in [expected.total_bytes.saturating_sub(1), expected.total_bytes, expected.total_bytes + 1] {
+            let mut candidate = state.clone();
+            candidate.history_limits.max_bytes = limit;
+            let result = candidate.commit(std::slice::from_ref(&write), None, now);
+            if limit < expected.total_bytes {
+                proptest::prop_assert!(matches!(result, Err(FirestoreError::HistoryCapacity(HistoryCapacityError { dimension: "bytes", current, maximum })) if current == expected.total_bytes && maximum == limit), "expected the exact tree-sized byte-capacity refusal");
+                proptest::prop_assert_eq!(candidate.version, state.version);
+                proptest::prop_assert_eq!(&candidate.commit_times, &state.commit_times);
+                proptest::prop_assert_eq!(candidate.history_usage(), before);
+                proptest::prop_assert_eq!(reference_usage(&candidate), before);
+                for index in 0..4 {
+                    match (state.get_shared(&path(index)), candidate.get_shared(&path(index))) {
+                        (Some(old), Some(current)) => proptest::prop_assert!(Arc::ptr_eq(&old, &current)),
+                        (None, None) => {},
+                        _ => proptest::prop_assert!(false, "refused admission changed a visible document"),
+                    }
+                }
+            } else {
+                proptest::prop_assert!(result.is_ok());
+                proptest::prop_assert_eq!(candidate.history_usage(), expected);
+                proptest::prop_assert_eq!(reference_usage(&candidate), expected);
+                for index in 0..4 {
+                    proptest::prop_assert_eq!(candidate.get(&path(index)), reference.get(&path(index)));
+                }
+            }
+        }
+    }
 }
 
 #[test]

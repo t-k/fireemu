@@ -138,4 +138,33 @@ proptest::proptest! {
         let capacity = CommitVersion(capacity.min(state.version.0));
         proptest::prop_assert_eq!(state.projected_retention_floor(capacity, state.version, at), reference_floor(&state, capacity, state.version, at));
     }
+
+    #[test]
+    fn indexed_projection_matches_reference_through_readonly_retry_states(
+        operations in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY, proptest::bool::ANY, 0u16..301), 1..48),
+        capacity in 0u64..64,
+        production in proptest::bool::ANY,
+    ) {
+        let scope = if production { LimitScope::Production } else { LimitScope::OfficialEmulator };
+        let mut state = FirestoreState::with_limit_scope(scope);
+        let mut now = LogicalInstant::UNIX_EPOCH;
+        for (step, (read_only, retry, rollback, advance)) in operations.into_iter().enumerate() {
+            let mut id = state.begin_transaction(read_only, now).unwrap();
+            now = LogicalInstant::from_nanos(now.as_nanos() + i128::from(advance) * 1_000_000_000);
+            let _ = state.touch_transaction(&id, now);
+            if retry {
+                if let Ok(next) = state.retry_transaction(&id, now) { id = next; }
+            }
+            if rollback { let _ = state.rollback_at(&id, now); }
+            // Model the projection's history inputs independently of transaction lifecycle operations.
+            state.version = CommitVersion(u64::try_from(step + 1).unwrap());
+            state.commit_times.push_back((state.version, LogicalInstant::from_unix_seconds(-36000 + i64::try_from(step).unwrap())));
+            let deadline = state.transactions.get(&id).map_or(now, |transaction| transaction_deadline(transaction, scope));
+            for at in [now, LogicalInstant::from_nanos(deadline.as_nanos() - 1), deadline, LogicalInstant::from_nanos(deadline.as_nanos() + 1)] {
+                for floor in [CommitVersion(0), CommitVersion(capacity.min(state.version.0)), state.version] {
+                    proptest::prop_assert_eq!(state.projected_retention_floor(floor, state.version, at), reference_floor(&state, floor, state.version, at));
+                }
+            }
+        }
+    }
 }

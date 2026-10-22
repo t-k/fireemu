@@ -7200,6 +7200,4190 @@
         }
       }
     },
+    "fs-ent-pipeline/o5/appendix": {
+      "corpusDigest": "f2417d6834b3572bf842c078731dd4ae8b459e40f6c7f470382e00c78ff457ab",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "proposed-n14-docid-where-then-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-n15-docid-add-then-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-n76-map-add-then-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map key must be of type STRING, given type is DOUBLE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-n78-docid-double-then-limit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-n79-map-where-then-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map key must be of type STRING, given type is DOUBLE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-n68-aggregate-bad-group-call": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds LONG.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-boolean": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds BOOLEAN.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-null": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds NULL.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds DOUBLE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds MAP.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds ARRAY.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-nested": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds LONG.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-where": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds LONG.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-type-tag-function-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Field __type__ must be a string; founds LONG.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-empty-alias-unknown": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-invalid-alias-integer-vector": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-empty-alias-name-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-empty-alias-equal-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-vector-positive-infinity": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "__type__": {
+                            "stringValue": "__vector__"
+                          },
+                          "value": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "doubleValue": "Infinity"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-vector-negative-infinity": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "__type__": {
+                            "stringValue": "__vector__"
+                          },
+                          "value": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "doubleValue": "-Infinity"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-reference-collection": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/c\" lacks \"/\" at index 60.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-reference-empty-segment": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/c//d\" lacks a resource id at index 61.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-reference-garbage": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"garbage\" lacks \"projects\" at index 0.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-reference-documents-root": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-add-reserved-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'add_fields': field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-distinct-dotted-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "a.b"
+                    },
+                    "reason": "TOP_LEVEL_PROPERTY_PATH_ONLY"
+                  }
+                ],
+                "message": "The nested field reference 'a.b' is not supported in its current use case.\n\nCertain stages like `aggregate(...)` or `unnest(...)` only support assigning to top-level fields. This means you cannot use an alias like 'foo.bar' to assign the result to a nested field. If you want to use an alias that has a dot in it, escape the path with backticks, like `foo.bar`.\n\nDepending on the SDK, this can be done like so:`.distinct(field(\"address.city\").as(\"`address.city`\"))`",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-aggregate-unrun-name": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'aggregate(...)' stage cannot have overlapping field names: [v]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-two-invalid-select-aliases": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-empty-add-then-negative-limit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'add_fields(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-two-empty-stages": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-select-name-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ap5/d"
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-docid-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `MAP`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-docid-boolean": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `BOOLEAN`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-collectionid-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "collection_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function collection_id(...) requires `Reference` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-parent-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "parent"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function parent(...) requires `Reference` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-where-field-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-where-equal-array-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-where-nonliteral-map-key": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map keys must be constants/literals",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-aggregate-alias-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-aggregate-alias-length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "limit": "1500"
+                    },
+                    "reason": "PROPERTY_PATH_TOO_LONG"
+                  }
+                ],
+                "message": "The field reference 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is longer than 1500 bytes.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-distinct-alias-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-distinct-alias-length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "limit": "1500"
+                    },
+                    "reason": "PROPERTY_PATH_TOO_LONG"
+                  }
+                ],
+                "message": "The field reference 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is longer than 1500 bytes.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-empty-add-then-empty-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-empty-add-alias-then-empty-select": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid empty property path string.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-select-duplicate-quoted-path": {
+          "status": 500,
+          "body": [
+            {
+              "error": {
+                "code": 500,
+                "message": "An internal error occurred.",
+                "status": "INTERNAL"
+              }
+            }
+          ]
+        },
+        "proposed-known-function-where-array-control": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FUNCTION_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-limit-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "proposed-offset-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "i": {
+                      "integerValue": "1"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "top": {
+                      "stringValue": "t"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ap5/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-offset-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "proposed-n41-unknown-type-double": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "__type__": {
+                            "stringValue": "x"
+                          },
+                          "value": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "doubleValue": 1
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-n60-array-holding-vector": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "mapValue": {
+                              "fields": {
+                                "__type__": {
+                                  "stringValue": "__vector__"
+                                },
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "doubleValue": 1
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-n69-distinct-then-limit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-r11-unknown-type-integer": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "__type__": {
+                            "stringValue": "x"
+                          },
+                          "value": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "integerValue": "1"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-reversed-overlap": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "m"
+                    },
+                    "reason": "OVERLAPPING_PROPERTY_PATHS"
+                  }
+                ],
+                "message": "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-missing-dotted-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "mapValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-missing-dotted-deep": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "mapValue": {
+                        "fields": {
+                          "b": {
+                            "mapValue": {}
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-missing-dotted-sibling": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "mapValue": {
+                        "fields": {
+                          "c": {
+                            "stringValue": "t"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "proposed-collection-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected collection_name to be REFERENCE_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-select-alias-shape-dotted": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `BOOLEAN`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-select-alias-shape-quoted": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `BOOLEAN`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-reversed-literal-field-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "proposed-reversed-function-field-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "integerValue": "1"
+                    },
+                    "b": {
+                      "stringValue": "d"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "original-p30-where-unknown-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FUNCTION_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "original-n19-count-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "original-n21-count-zero": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "original-q3-top-level-parent-chain": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "original-h9-two-failing-calls": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "original-m4242-00731": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "collection_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function collection_id(...) requires `Reference` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o5/function-names": {
+      "corpusDigest": "ecbdd2c300ea74a2bbcfacbe82389b4d1b63405a9bed2e8fa9f2ff8f7fcb563e",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "fn-get_field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'get_field(map: map[string, any], key: string): any?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-offset": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'offset(array: array[any], index: int64): any?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-row": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'row' does not exist, did you mean 'pow'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-make_struct": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'make_struct' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-struct_get": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'struct_get' does not exist, did you mean 'array_get'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-count": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'count' does not exist, did you mean 'count'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-count_if": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'count_if' does not exist, did you mean 'count_if'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-count_distinct": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'count_distinct' does not exist, did you mean 'count_distinct'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-sum": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'sum(x: array[any]): number' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-average": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'average' does not exist, did you mean 'average'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-minimum": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'minimum' does not accept 0 argument(s). Valid options are:\n- minimum(input: array[any?]): any? with [1..1] argument(s).\n- minimum(x: any?*): any? with [2..+∞) argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-maximum": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'maximum' does not accept 0 argument(s). Valid options are:\n- maximum(input: array[any?]): any? with [1..1] argument(s).\n- maximum(x: any?*): any? with [2..+∞) argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-first": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'first' does not exist, did you mean 'first'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-last": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'last' does not exist, did you mean 'last'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_agg": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_agg' does not exist, did you mean 'array_agg'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_agg_distinct": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_agg_distinct' does not exist, did you mean 'array_agg_distinct'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-logical_or": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'logical_or' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-negate": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'negate[T <: number](x: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u2d": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '-' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-add": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u2b": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '+' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-subtract": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'subtract[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-multiply": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'multiply[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u2a": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '*' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-divide": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'divide[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u2f": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '/' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-mod": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'mod[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u25": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '%' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-bit_not": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'bit_not[T <: number](x: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u7e": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '~' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-bit_left_shift": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'bit_left_shift[T <: number](x: T, y: int64): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u3c-3c": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '<<' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-bit_right_shift": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'bit_right_shift[T <: number](x: T, y: int64): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u3e-3e": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '>>' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-rand": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'rand(): float64' takes [0..0] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-abs": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'abs[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-ceil": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'ceil[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-floor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'floor[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-round": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'round' does not accept 0 argument(s). Valid options are:\n- round[T <: number](number: T): T with [1..1] argument(s).\n- round[T <: number](number: T, places: int64): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-pow": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'pow(base: number, exponent: number): float64' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-sqrt": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'sqrt(number: number): float64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-log": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'log' does not accept 0 argument(s). Valid options are:\n- log(number: number): number with [1..1] argument(s).\n- log(number: number, base: number): number with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-ln": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'ln(number: number): number' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-log10": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'log10(number: number): number' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-exp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'exp(exponent: number): number' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-trunc": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'trunc' does not accept 0 argument(s). Valid options are:\n- trunc[T <: number](number: T): T with [1..1] argument(s).\n- trunc[T <: number](number: T, places: int64): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "fn-array_length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_length(x: array[any]): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_concat": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_concat(arrays: array[any]*): array[any]' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-join": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'join' does not accept 0 argument(s). Valid options are:\n- join[T: string | bytes](array: array[T], delimiter: T): string with [2..2] argument(s).\n- join[T: string | bytes](array: array[T], delimiter: T, null_text: T): string with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_contains": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_contains(array: array[any], value: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_contains_any": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_contains_any(array: array[any], search_values: array[any]): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_contains_all": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_contains_all(array: array[any], search_values: array[any]): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_get": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_get(array: array[any], index: int64): any?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_transform": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_filter": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_filter(array: array[any], alias: string, filter: (any) -> boolean): array[any]' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_reverse": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_reverse"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_reverse(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_slice": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_slice"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_slice(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_first": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_first(array: array[any]): any' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_first_n": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_first_n(array: array[any], n: int64): array[any]' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_last": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_last(array: array[any]): any' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_last_n": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_last_n(array: array[any], n: int64): array[any]' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-maximum_n": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'maximum_n(input: array[any?], n: int64): array[any]' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-minimum_n": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'minimum_n(input: array[any?], n: int64): array[any]' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_index_of": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_index_of(array: array[any], search: any, direction: (first|last)): int64' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-array_index_of_all": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_index_of_all(array: array[any], search: any): array[int64]' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-less_than": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'less_than(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u3c": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '<' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-less_than_or_equal": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'less_than_or_equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u3c-3d": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '<=' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-equal": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u3d-3d": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '==' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-not_equal": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'not_equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u21-3d": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '!=' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-greater_than": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'greater_than(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u3e": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '>' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-greater_than_or_equal": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'greater_than_or_equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u3e-3d": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '>=' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-orders_after": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'orders_after' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-cmp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'cmp(x: any, y: any): int64' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-current_document": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "__create_time__": {
+                            "timestampValue": "<t2>"
+                          },
+                          "__name__": {
+                            "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/fx5/d"
+                          },
+                          "__update_time__": {
+                            "timestampValue": "<t2>"
+                          },
+                          "i": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "fn-is_error": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'is_error(try: any): boolean' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-if_error": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'if_error(try: any?, catch: any?): any?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-if_absent": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'if_absent(value: any?, replacement: any?): any?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-exists": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'exists(value: any?): boolean' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-is_absent": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'is_absent(value: any?): boolean' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-list_shredded_fields": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'list_shredded_fields' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-error": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'error' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-reverse": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'reverse[T: string | bytes | array[any]](input: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-concat": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'concat[T: string | bytes | array[any]](input: T*): T' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'length[T: string | bytes | array[any] | map[string, any] | vector](input: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-storage_size": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'storage_size(input: any): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-and": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'and(x: boolean?*): boolean?' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u41-4e-44": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'AND' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-or": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'or(x: boolean?*): boolean?' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u4f-52": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'OR' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-xor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'xor(x: boolean*): boolean' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u58-4f-52": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'XOR' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-nor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nor(x: boolean*): boolean' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-not": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'not(x: boolean): boolean' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-u4e-4f-54": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'NOT' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-conditional": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'conditional(condition: boolean?, true_case: any?, false_case: any?): any?' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-switch_on": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'switch_on(x: any*): any?' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-switch": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'switch' does not exist, did you mean 'switch_on'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-equal_any": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'equal_any(value: any, search_space: array[any]): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-not_equal_any": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'not_equal_any(value: any, search_space: array[any]): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-if_null": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'if_null(left: any?, right: any?): any?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-coalesce": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'coalesce(x: any?*): any?' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "fn-map_get": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_get(map: map[string, any], key: string): any?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-map_set": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_set(map: map[string, any], entries: any*): map[string, any]' takes [3..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-map_remove": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_remove(map: map[string, any], key: string*): map[string, any]' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-map_merge": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_merge(maps: map[string, any]*): map[string, any]' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-mask": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'mask' does not exist, did you mean 'last'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-map_keys": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_keys(map: map[string, any]): array[string]' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-map_values": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_values(map: map[string, any]): array[any]' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-map_entries": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_entries(map: map[string, any]): array[map[string, any]]' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-namespace": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'namespace(ref: document_reference): string' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-parent": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'parent(ref: document_reference): document_reference?' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-collection_id": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'collection_id(ref: document_reference): string' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-document_id": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'document_id(ref: document_reference): any' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-has_ancestor": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'has_ancestor(value: document_reference, prefix: document_reference): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-opaque_document_id": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'opaque_document_id' does not exist, did you mean 'replace_document_id'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-reference_slice": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'reference_slice(current: document_reference, offset: int64, length: int64): document_reference' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-autogen_document_id": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'autogen_document_id(): string' takes [0..0] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-replace_document_id": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'replace_document_id(ref: document_reference, new_id: any): document_reference' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-document_matches": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'document_matches(query: string): boolean' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-matches": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'matches(field: any, query: string): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-score": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'score' function can only be used in the search(...) stage.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-snippet": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'snippet' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-geo_distance": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'geo_distance(x: lat_lng, y: lat_lng): float64' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-search_field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'search_field' does not exist, did you mean 'get_field'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-to_row_id": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'to_row_id' does not exist, did you mean 'to_lower'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-string_concat": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_concat(strings: string*): string' takes [2..+∞) argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-like": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'like[T: string | regex](search_space: string, pattern: T): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-regex_contains": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'regex_contains[T: string | regex](search_space: string, regexp: T): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-regex_match": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'regex_match[T: string | regex](search_space: string, regexp: T): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-regex_find": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'regex_find[T: string | regex](search_space: string, regexp: T): string?' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-regex_find_all": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'regex_find_all[T: string | regex](search_space: string, regexp: T): array[string?]' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-to_lower": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'to_lower[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-to_upper": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'to_upper[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-char_length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'char_length(str: string): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-byte_length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'byte_length[T: string | bytes](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-starts_with": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'starts_with(value: string, prefix: string): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-ends_with": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'ends_with(value: string, postfix: string): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-string_reverse": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_reverse[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-string_repeat": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_repeat[T: string | bytes](input: T, repetitions: int64): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-string_replace_all": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_replace_all[T: string | bytes](input: T, find: T, replacement: T): T' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-string_replace_one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_replace_one[T: string | bytes](input: T, find: T, replacement: T): T' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-substring": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'substring' does not accept 0 argument(s). Valid options are:\n- substring[T: string | bytes](input: T, position: int64): T with [2..2] argument(s).\n- substring[T: string | bytes](input: T, position: int64, length: int64): T with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-string_contains": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_contains(value: string, substring: string): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-trim": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'trim' does not accept 0 argument(s). Valid options are:\n- trim[T: string | bytes](input: T): T with [1..1] argument(s).\n- trim[T: string | bytes](input: T, values_to_trim: T): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-ltrim": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'ltrim' does not accept 0 argument(s). Valid options are:\n- ltrim[T: string | bytes](value: T): T with [1..1] argument(s).\n- ltrim[T: string | bytes](value: T, to_trim: T): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-rtrim": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'rtrim' does not accept 0 argument(s). Valid options are:\n- rtrim[T: string | bytes](value: T): T with [1..1] argument(s).\n- rtrim[T: string | bytes](value: T, to_trim: T): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-split": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'split' does not accept 0 argument(s). Valid options are:\n- split(input: string): array[string] with [1..1] argument(s).\n- split[T: string | bytes](input: T, delimiter: T): array[T] with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-string_index_of": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_index_of[T: string | bytes](value: T, search: T): int64' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-current_timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'current_timestamp(): timestamp' takes [0..0] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-unix_micros_to_timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'unix_micros_to_timestamp(input: int64): timestamp' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-unix_millis_to_timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'unix_millis_to_timestamp(input: int64): timestamp' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-unix_seconds_to_timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'unix_seconds_to_timestamp(input: int64): timestamp' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_to_unix_micros": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_to_unix_micros[T: timestamp | bson_timestamp](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_to_unix_millis": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_to_unix_millis[T: timestamp | bson_timestamp](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_to_unix_seconds": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_to_unix_seconds[T: timestamp | bson_timestamp](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_add": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_add[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_subtract": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_subtract[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_trunc": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_trunc' does not accept 0 argument(s). Valid options are:\n- timestamp_trunc[T: timestamp | bson_timestamp](timestamp: T, granularity: (microsecond|millisecond|second|minute|hour|day|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear)): timestamp with [2..2] argument(s).\n- timestamp_trunc[T: timestamp | bson_timestamp](timestamp: T, granularity: (microsecond|millisecond|second|minute|hour|day|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear), time_zone: string): timestamp with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_extract": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_extract' does not accept 0 argument(s). Valid options are:\n- timestamp_extract[T: timestamp | bson_timestamp](timestamp: T, part: (microsecond|millisecond|second|minute|hour|dayofweek|day|dayofyear|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear)): int64 with [2..2] argument(s).\n- timestamp_extract[T: timestamp | bson_timestamp](timestamp: T, part: (microsecond|millisecond|second|minute|hour|dayofweek|day|dayofyear|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear), time_zone: string): int64 with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-timestamp_diff": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_diff[T1: timestamp | bson_timestamp, T2: timestamp | bson_timestamp](end: T1, start: T2, unit: (microsecond|millisecond|second|minute|hour|day)): int64' takes [3..3] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-type": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'type(input: any): string' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-is_type": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'is_type(value: any, type: (null|array|boolean|bytes|timestamp|geo_point|number|int32|int64|float64|decimal128|map|reference|string|vector|max_key|min_key|object_id|regex|bson_timestamp)): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-euclidean_distance": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'euclidean_distance(x: vector, y: vector): float64' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-cosine_distance": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'cosine_distance(x: vector, y: vector): float64' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-manhattan_distance": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'manhattan_distance' does not exist, did you mean 'euclidean_distance'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-dot_product": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'dot_product(x: vector, y: vector): float64' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-vector_length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'vector_length(vector: vector): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-between": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'between' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-eq_any": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'eq_any' does not exist, did you mean 'equal'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-is_nan": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'is_nan' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "fn-is_null": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'is_null' does not exist, did you mean 'if_null'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o5/function-order": {
+      "corpusDigest": "b1bf67e049bfe57e0cd63941e8285e87f3887ac7a9f6e1c46484bd1b40da803e",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "select-unknown-function": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-name": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function '' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-capitalized-name": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'Equal' does not exist, did you mean 'equal'?",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-then-where-arity": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-then-where-type": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-empty-then-where-known-no-arguments": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "where-unknown-then-select-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-arity-then-select-unknown": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-arity-before-unknown": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "select-unknown-before-arity": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unknown-as-first-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "arity-around-unknown-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unknown-in-array-literal": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FUNCTION_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o5/literal-keys": {
+      "corpusDigest": "246d9d3bfcd726767afea3454c2431cf5744464fa22199a714e1634aa68c3fb2",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "key-reserved-with-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "key-empty-with-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "key-type-with-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "key-dotted-with-function": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FUNCTION_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "nested-key-name-with-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__name__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-of-map-reserved-key-with-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o5/names": {
+      "corpusDigest": "2973e6f32cc346d207eca2f66b95e941f5ac1334135350e4f4bc503b5f8660ae",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "document-id-hiragana": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/あ\" lacks \"/\" at index 60.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "parent-hiragana": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/あ\" lacks \"/\" at index 60.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-subcollection-hiragana": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/c/x/あ\" lacks \"/\" at index 64.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-emoji": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/😀\" lacks \"/\" at index 61.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "collection-id-accented": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Document parent name \"projects/demo-fs-query-index/databases/entpipe1/documents/é\" lacks \"/\" at index 60.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o5/stage-order": {
+      "corpusDigest": "5508a7072b825d072fe3f106e4806afd40a719336ef7c706c436d574220fcb38",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "select-empty-then-where-sqrt-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-unknown-then-select-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-unknown-then-limit-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-unknown-then-aggregate-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'nope_fn' does not exist.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-fields-array-of-field-then-select-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Value type is not supported: FIELD_REFERENCE_VALUE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "aggregate-sum-then-select-empty": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'select(...)' stage requires at least one field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sort-then-limit-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected ordering[0] to be MAP_VALUE, but was FUNCTION_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "limit-boolean": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "limit-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was DOUBLE_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "limit-null": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was NULL_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "limit-empty-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was MAP_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "offset-negative": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'offset(...)' cannot have a negative value: -1",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "offset-boolean": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected offset to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "where-vector-of-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Vector must only contain values of type 'double'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o5/subcollection": {
+      "corpusDigest": "8f04c5273bf7cc3457469ad5f5cdab3e7acb5f4f1c826f42ec232e56f7fb2c28",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "proposed-q3-subcollection-parent-chain": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o5/value-shapes": {
+      "corpusDigest": "19525cdc6086f3ddfa0f618f88f087be0e3af77d5b3333cdbd5c280e444bc486",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-22T08:44:38.363Z",
+      "gitSha": "1a467d4dd5eb23b3f4800776bc312e6d8bfc4128",
+      "steps": {
+        "document-id-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `DOUBLE`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-geo": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `GEO_POINT`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `TIMESTAMP`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-bytes": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `BYTES`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `ARRAY`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-vector": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "document_id"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function document_id(...) requires `Reference` but got `VECTOR`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "parent-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "parent"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function parent(...) requires `Reference` but got `DOUBLE`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-key-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map key must be of type STRING, given type is DOUBLE",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-key-null": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map key must be of type STRING, given type is NULL",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-key-timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map key must be of type STRING, given type is TIMESTAMP",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "vector-of-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Vector must only contain values of type 'double'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "vector-of-double-and-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Vector must only contain values of type 'double'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "vector-without-value": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Vector map is missing key 'value'.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "vector-with-extra-key": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Vector value map has extraneous entries.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "vector-value-not-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Vector value type must be an array.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "keys-empty-and-reserved": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "keys-two-reserved": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__b__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "keys-reserved-inner-and-outer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__x__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "key-name": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__name__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "key-inner-name": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "field name '__name__' is reserved.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-one-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "'map' function must have an even number of arguments",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "equal-one-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "document-id-with-options": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "d"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
     "fs-ent-pipeline/px0/aliases": {
       "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
       "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
@@ -544,7 +545,7 @@ test("the committed REST request export is the corpus's", async () => {
   const { readFile } = await import("node:fs/promises");
   assert.equal(await readFile(EXPORT, "utf8"), exportText());
   const exported = JSON.parse(exportText());
-  // Only the programs the fixture records (O-3 and O-4 since their recordings).
+  // Every recorded program contributes its exact exported REST requests.
   const recordedIds = Object.keys(
     JSON.parse(
       await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
@@ -552,7 +553,9 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 20);
+  assert.equal(recordedPrograms.length, 28);
+  assert.deepEqual(recordedIds.toSorted(), PROGRAMS.map((p) => p.id).toSorted());
+  assert.deepEqual(exported.programs.map((p) => p.id).toSorted(), recordedIds.toSorted());
   const rest = recordedPrograms
     .flatMap((p) => p.steps)
     .filter((s) => (s.transport ?? "rest") === "rest");
@@ -803,7 +806,8 @@ test("a seed commit is a reviewed single-document write into the named database"
 });
 
 test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", async () => {
-  const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
+  const { ceilings, harnessDigest, programDigest, selectPrograms } =
+    await import("./fs-query-index/run.mjs");
   const { readFile } = await import("node:fs/promises");
   const {
     O5_FUNCTION_NAMES,
@@ -876,13 +880,37 @@ test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", a
   assert.deepEqual(ceilings(o5), { maxRequests: 240, maxHarnessRequests: 80 });
   const worst = 1 + 2 + 2 * (240 + 80) + 2;
   assert.equal(worst, 645);
-  // O-5 is not recorded yet; the earlier programs keep their recorded digests.
+  // Bind the populated O5 capture while preserving the historical six-program cap above.
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS.filter((p) => p.id.startsWith("fs-ent-pipeline/o5/"))) {
-    assert.equal(recorded[program.id], undefined, program.id);
+  assert.deepEqual(Object.keys(recorded).toSorted(), PROGRAMS.map((p) => p.id).toSorted());
+  const allO5 = PROGRAMS.filter((p) => p.id.startsWith("fs-ent-pipeline/o5/"));
+  assert.equal(allO5.length, 8);
+  assert.equal(
+    allO5.reduce((n, p) => n + p.steps.length, 0),
+    310,
+  );
+  const harness = await harnessDigest();
+  for (const program of allO5) {
+    assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
+    assert.equal(recorded[program.id]?.harnessDigest, harness, program.id);
+    assert.deepEqual(
+      Object.keys(recorded[program.id].steps).toSorted(),
+      program.steps.map((s) => s.id).toSorted(),
+      program.id,
+    );
   }
+  const earlier = Object.fromEntries(
+    Object.entries(recorded)
+      .filter(([id]) => !id.startsWith("fs-ent-pipeline/o5/"))
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  assert.equal(Object.keys(earlier).length, 20);
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(earlier)).digest("hex"),
+    "a9e2320e7eb12cf32fc9085730692640fd9170bdcf8c88a9a1754977ba389307",
+  );
   for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o5/"))) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
@@ -945,4 +973,31 @@ test("the O-5 name sweep calls every registry and SDK name once, each under its 
     assert.equal(call.name, O5_FUNCTION_NAMES[index]);
     assert.deepEqual(call.args, Array(expected[call.name] ?? 0).fill(field), call.name);
   }
+});
+
+test("the O5 captured INTERNAL response remains an explicit unknown", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { isUnknownRow } = await import("./fs-query-index/unknown-rows.mjs");
+  const recorded = JSON.parse(
+    await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  ).programs;
+  const rows = Object.entries(recorded)
+    .filter(([id]) => id.startsWith("fs-ent-pipeline/o5/"))
+    .flatMap(([id, p]) =>
+      Object.entries(p.steps)
+        .filter(([, value]) => value.status === 500)
+        .map(([step, value]) => ({ row: `${id}#${step}`, value })),
+    );
+  assert.deepEqual(rows, [
+    {
+      row: "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path",
+      value: {
+        status: 500,
+        body: [
+          { error: { code: 500, message: "An internal error occurred.", status: "INTERNAL" } },
+        ],
+      },
+    },
+  ]);
+  assert.equal(isUnknownRow(`${rows[0].row} ${rows[0].value.status}`), true);
 });

@@ -479,6 +479,56 @@ const HISTORY_VERSION_METADATA_BYTES: u64 = 16;
 const HISTORY_TOMBSTONE_BYTES: u64 = 1;
 const HISTORY_COMMIT_TIME_BYTES: u64 = 24;
 
+impl HistoryUsage {
+    fn components(self) -> [u64; 10] {
+        [
+            self.live_document_bytes,
+            self.historical_document_bytes,
+            self.path_and_index_bytes,
+            self.version_metadata_bytes,
+            self.tombstone_bytes,
+            self.commit_time_bytes,
+            self.versions,
+            self.tombstones,
+            self.paths,
+            self.commit_times,
+        ]
+    }
+
+    fn unsaturated(self) -> bool {
+        self.total_bytes < u64::MAX && self.components().into_iter().all(|value| value < u64::MAX)
+    }
+}
+
+fn certified_history_add(left: u64, right: u64, exact: &mut bool) -> u64 {
+    *exact &= left
+        .checked_add(right)
+        .is_some_and(|value| value < u64::MAX);
+    left.saturating_add(right)
+}
+
+fn certified_history_sub(left: u64, right: u64, exact: &mut bool) -> u64 {
+    *exact &= left.checked_sub(right).is_some();
+    left.saturating_sub(right)
+}
+
+fn checked_history_change(left: HistoryUsage, before: HistoryUsage, after: HistoryUsage) -> bool {
+    left.unsaturated()
+        && before.unsaturated()
+        && after.unsaturated()
+        && left
+            .components()
+            .into_iter()
+            .zip(before.components())
+            .zip(after.components())
+            .all(|((value, remove), add)| {
+                value
+                    .checked_sub(remove)
+                    .and_then(|remaining| remaining.checked_add(add))
+                    .is_some_and(|result| result < u64::MAX)
+            })
+}
+
 fn history_path_and_index_bytes(path: &DocumentPath, live: bool) -> u64 {
     let path_bytes = u64::try_from(path.resource_name().len()).unwrap_or(u64::MAX);
     let retained_roots = 4u64;
@@ -1141,12 +1191,15 @@ pub struct FirestoreState {
     /// Exact logical usage, maintained with each published history mutation. Keeping this
     /// cached makes a no-op admission independent of retained-history cardinality.
     history_usage: HistoryUsage,
+    /// Sticky uncertainty in legacy accounting; only a checked reconstruction recertifies.
+    history_accounting_exact: bool,
     /// Last immutable compaction forecast. A refused external admission can retry without
     /// rescanning the retained corpus; every published mutation invalidates it.
     compaction_forecast: Option<CompactionForecast>,
-    /// Paths whose history still holds something a later compaction could drop (more than
-    /// one version, or a single tombstone). Compaction only visits these.
-    compactable: BTreeSet<DocumentPath>,
+    /// Exact next reclaim threshold per path, sharing the retained scope allocation.
+    compactable: BTreeMap<Arc<DocumentPath>, CommitVersion>,
+    /// Threshold order avoids visiting paths that the current floor cannot reclaim.
+    reclaim_thresholds: BTreeSet<(CommitVersion, Arc<DocumentPath>)>,
 }
 
 impl Default for FirestoreState {
@@ -1181,8 +1234,10 @@ impl Default for FirestoreState {
             max_versions_per_path: DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
             history_limits: HistoryLimits::default(),
             history_usage: HistoryUsage::default(),
+            history_accounting_exact: true,
             compaction_forecast: None,
-            compactable: BTreeSet::new(),
+            compactable: BTreeMap::new(),
+            reclaim_thresholds: BTreeSet::new(),
         }
     }
 }
@@ -2260,10 +2315,12 @@ impl FirestoreState {
             max_versions_per_path: self.max_versions_per_path,
             history_limits: self.history_limits,
             history_usage: HistoryUsage::default(),
+            history_accounting_exact: false,
             compaction_forecast: None,
-            compactable: BTreeSet::new(),
+            compactable: BTreeMap::new(),
+            reclaim_thresholds: BTreeSet::new(),
         };
-        snapshot.history_usage = snapshot.recount_history_usage();
+        snapshot.rebuild_history_usage();
         snapshot
     }
 
@@ -2351,11 +2408,9 @@ impl FirestoreState {
                 }),
             ));
             self.record_capacity_pressure(&path);
-            if compactable {
-                self.compactable.insert(path);
-            }
+            self.refresh_reclaim_threshold(&path);
         }
-        self.history_usage = self.recount_history_usage();
+        self.rebuild_history_usage();
         self.compact(now);
         Ok(CommitResult {
             commit_time,
@@ -2973,14 +3028,29 @@ impl FirestoreState {
         self.history_limits
     }
 
+    #[cfg(test)]
     fn recount_history_usage(&self) -> HistoryUsage {
+        self.checked_history_recount().0
+    }
+
+    fn rebuild_history_usage(&mut self) {
+        let (usage, exact) = self.checked_history_recount();
+        self.history_usage = usage;
+        self.history_accounting_exact = exact;
+    }
+
+    fn checked_history_recount(&self) -> (HistoryUsage, bool) {
         let mut usage = HistoryUsage::default();
+        let mut exact = true;
         for (path, versions) in &self.history {
-            usage = add_history_usage(usage, history_path_usage(path, versions));
+            let path_usage = history_path_usage(path, versions);
+            exact &= path_usage.unsaturated();
+            usage = add_history_usage(usage, path_usage);
         }
         usage.commit_times = u64::try_from(self.commit_times.len()).unwrap_or(u64::MAX);
         usage.commit_time_bytes = usage.commit_times.saturating_mul(HISTORY_COMMIT_TIME_BYTES);
-        finish_history_usage(usage)
+        let usage = finish_history_usage(usage);
+        (usage, exact && usage.unsaturated())
     }
 
     fn base_compaction_reclaim(&mut self, floor: CommitVersion) -> HistoryUsage {
@@ -2995,7 +3065,10 @@ impl FirestoreState {
         }
 
         let mut reclaimed = HistoryUsage::default();
-        for path in &self.compactable {
+        for path in self.reclaim_candidates(floor) {
+            let path = path.as_ref();
+            #[cfg(test)]
+            FORECAST_PATH_VISITS.with(|count| count.set(count.get() + 1));
             let versions = self
                 .history
                 .get(path)
@@ -3059,55 +3132,69 @@ impl FirestoreState {
         floor.max(projected_capacity_floor).min(projected_version)
     }
 
-    fn projected_history_usage(
-        &mut self,
+    fn projected_uncompacted_usage(
+        &self,
         staged: &[StagedChange],
-        now: LogicalInstant,
-    ) -> (HistoryUsage, HistoryUsage) {
+    ) -> (HistoryUsage, CommitVersion, bool) {
         let mut usage = self.history_usage();
+        let mut exact = self.history_accounting_exact;
         let mut projected_capacity_floor = self.capacity_floor;
         let next_version = CommitVersion(self.version.0.saturating_add(1));
         if !staged.is_empty() {
-            usage.commit_times = usage.commit_times.saturating_add(1);
-            usage.commit_time_bytes = usage
-                .commit_time_bytes
-                .saturating_add(HISTORY_COMMIT_TIME_BYTES);
+            usage.commit_times = certified_history_add(usage.commit_times, 1, &mut exact);
+            usage.commit_time_bytes = certified_history_add(
+                usage.commit_time_bytes,
+                HISTORY_COMMIT_TIME_BYTES,
+                &mut exact,
+            );
         }
         for (path, before, after) in staged {
-            usage.versions = usage.versions.saturating_add(1);
-            usage.version_metadata_bytes = usage
-                .version_metadata_bytes
-                .saturating_add(HISTORY_VERSION_METADATA_BYTES);
+            usage.versions = certified_history_add(usage.versions, 1, &mut exact);
+            usage.version_metadata_bytes = certified_history_add(
+                usage.version_metadata_bytes,
+                HISTORY_VERSION_METADATA_BYTES,
+                &mut exact,
+            );
             if let Some(before) = before {
                 let bytes = before.logical_bytes;
-                usage.live_document_bytes = usage.live_document_bytes.saturating_sub(bytes);
+                usage.live_document_bytes =
+                    certified_history_sub(usage.live_document_bytes, bytes, &mut exact);
                 usage.historical_document_bytes =
-                    usage.historical_document_bytes.saturating_add(bytes);
+                    certified_history_add(usage.historical_document_bytes, bytes, &mut exact);
             }
             if let Some(after) = after {
                 let bytes = after.logical_bytes;
-                usage.live_document_bytes = usage.live_document_bytes.saturating_add(bytes);
+                usage.live_document_bytes =
+                    certified_history_add(usage.live_document_bytes, bytes, &mut exact);
             } else {
-                usage.tombstones = usage.tombstones.saturating_add(1);
-                usage.tombstone_bytes = usage
-                    .tombstone_bytes
-                    .saturating_add(HISTORY_TOMBSTONE_BYTES);
+                usage.tombstones = certified_history_add(usage.tombstones, 1, &mut exact);
+                usage.tombstone_bytes = certified_history_add(
+                    usage.tombstone_bytes,
+                    HISTORY_TOMBSTONE_BYTES,
+                    &mut exact,
+                );
             }
             if self.history.contains_key(path) {
                 if before.is_some() && after.is_none() {
-                    usage.path_and_index_bytes = usage
-                        .path_and_index_bytes
-                        .saturating_sub(3 * HISTORY_INDEX_REFERENCE_OVERHEAD);
+                    usage.path_and_index_bytes = certified_history_sub(
+                        usage.path_and_index_bytes,
+                        3 * HISTORY_INDEX_REFERENCE_OVERHEAD,
+                        &mut exact,
+                    );
                 } else if before.is_none() && after.is_some() {
-                    usage.path_and_index_bytes = usage
-                        .path_and_index_bytes
-                        .saturating_add(3 * HISTORY_INDEX_REFERENCE_OVERHEAD);
+                    usage.path_and_index_bytes = certified_history_add(
+                        usage.path_and_index_bytes,
+                        3 * HISTORY_INDEX_REFERENCE_OVERHEAD,
+                        &mut exact,
+                    );
                 }
             } else {
-                usage.paths = usage.paths.saturating_add(1);
-                usage.path_and_index_bytes = usage
-                    .path_and_index_bytes
-                    .saturating_add(history_path_and_index_bytes(path, after.is_some()));
+                usage.paths = certified_history_add(usage.paths, 1, &mut exact);
+                usage.path_and_index_bytes = certified_history_add(
+                    usage.path_and_index_bytes,
+                    history_path_and_index_bytes(path, after.is_some()),
+                    &mut exact,
+                );
             }
             let existing = self
                 .history
@@ -3127,6 +3214,21 @@ impl FirestoreState {
         }
         let uncompacted = finish_history_usage(usage);
 
+        (
+            uncompacted,
+            projected_capacity_floor,
+            exact && uncompacted.unsaturated(),
+        )
+    }
+
+    fn projected_history_usage(
+        &mut self,
+        staged: &[StagedChange],
+        now: LogicalInstant,
+    ) -> (HistoryUsage, HistoryUsage, bool) {
+        let (uncompacted, projected_capacity_floor, exact) =
+            self.projected_uncompacted_usage(staged);
+        let next_version = CommitVersion(self.version.0.saturating_add(1));
         let projected_version = if staged.is_empty() {
             self.version
         } else {
@@ -3156,7 +3258,11 @@ impl FirestoreState {
                 projected_history_path_reclaim(path, existing, after_size, next_version, floor);
             reclaimed = add_history_usage(reclaimed, projected_reclaim);
         }
-        (uncompacted, subtract_history_usage(uncompacted, reclaimed))
+        (
+            uncompacted,
+            subtract_history_usage(uncompacted, reclaimed),
+            exact && uncompacted.unsaturated(),
+        )
     }
 
     fn check_history_limits(&self, usage: HistoryUsage) -> Result<(), FirestoreError> {
@@ -3242,21 +3348,33 @@ impl FirestoreState {
             self.commit_times.pop_front();
             removed_commit_times = removed_commit_times.saturating_add(1);
         }
-        self.history_usage.commit_times = self
-            .history_usage
-            .commit_times
-            .saturating_sub(removed_commit_times);
-        self.history_usage.commit_time_bytes = self
-            .history_usage
-            .commit_time_bytes
-            .saturating_sub(removed_commit_times.saturating_mul(HISTORY_COMMIT_TIME_BYTES));
+        self.history_usage.commit_times = certified_history_sub(
+            self.history_usage.commit_times,
+            removed_commit_times,
+            &mut self.history_accounting_exact,
+        );
+        let removed_bytes = removed_commit_times.checked_mul(HISTORY_COMMIT_TIME_BYTES);
+        self.history_accounting_exact &= removed_bytes.is_some();
+        self.history_usage.commit_time_bytes = certified_history_sub(
+            self.history_usage.commit_time_bytes,
+            removed_bytes.unwrap_or(u64::MAX),
+            &mut self.history_accounting_exact,
+        );
         self.history_usage = finish_history_usage(self.history_usage);
-        let mut compactable = core::mem::take(&mut self.compactable);
+        let candidates = if self.history_accounting_exact {
+            self.reclaim_candidates(floor)
+        } else {
+            self.compactable.keys().cloned().collect()
+        };
         let mut removed_paths = Vec::new();
         let mut usage_changes = Vec::new();
-        compactable.retain(|path| {
+        for path in candidates {
+            let path = path.as_ref();
+            #[cfg(test)]
+            COMPACTION_PATH_VISITS.with(|count| count.set(count.get() + 1));
             let Some(h) = self.history.get_mut(path) else {
-                return false;
+                self.refresh_reclaim_threshold(path);
+                continue;
             };
             let before_usage = history_path_usage(path, h);
             // Keep the newest version at or before the floor plus everything after it; drop
@@ -3274,7 +3392,8 @@ impl FirestoreState {
                 self.history.remove(path);
                 removed_paths.push(path.clone());
                 usage_changes.push((before_usage, HistoryUsage::default()));
-                return false;
+                self.refresh_reclaim_threshold(path);
+                continue;
             }
             let after_usage = self
                 .history
@@ -3283,12 +3402,11 @@ impl FirestoreState {
                     history_path_usage(path, history)
                 });
             usage_changes.push((before_usage, after_usage));
-            self.history
-                .get(path)
-                .is_some_and(|h| h.len() > 1 || matches!(h.first(), Some((_, None))))
-        });
-        self.compactable = compactable;
+            self.refresh_reclaim_threshold(path);
+        }
         for (before, after) in usage_changes {
+            self.history_accounting_exact &=
+                checked_history_change(self.history_usage, before, after);
             self.history_usage =
                 add_history_usage(subtract_history_usage(self.history_usage, before), after);
         }
@@ -4071,7 +4189,8 @@ impl FirestoreState {
             stamped,
         };
         let before = self.history_usage();
-        let (uncompacted, after) = self.projected_history_usage(&staged_changes, now);
+        let (uncompacted, after, accounting_exact) =
+            self.projected_history_usage(&staged_changes, now);
         self.check_history_limits(after)?;
         let reservation = admit(&result, HistoryProjection { before, after })?;
 
@@ -4083,6 +4202,7 @@ impl FirestoreState {
         }
         self.compaction_forecast = None;
         self.history_usage = uncompacted;
+        self.history_accounting_exact = accounting_exact;
         if changed {
             self.version = next_version;
             self.commit_times.push_back((next_version, commit_time));
@@ -4090,7 +4210,6 @@ impl FirestoreState {
                 let became_live = before.is_none() && doc.is_some();
                 let became_missing = before.is_some() && doc.is_none();
                 // A second version, or a tombstone, is something a later compaction can drop.
-                let compactable = self.history.contains_key(&path) || doc.is_none();
                 if !self.history.contains_key(&path) {
                     self.insert_scope_path(&path);
                 }
@@ -4104,9 +4223,7 @@ impl FirestoreState {
                     .or_default()
                     .push((next_version, doc));
                 self.record_capacity_pressure(&path);
-                if compactable {
-                    self.compactable.insert(path);
-                }
+                self.refresh_reclaim_threshold(&path);
             }
         }
         if let Some(id) = transaction {
@@ -4131,6 +4248,41 @@ impl FirestoreState {
             check_limit(limits::FIELD_TRANSFORMS_PER_DOCUMENT, *count)?;
         }
         Ok(())
+    }
+
+    fn refresh_reclaim_threshold(&mut self, path: &DocumentPath) {
+        if let Some((old_path, old_version)) = self.compactable.remove_entry(path) {
+            self.reclaim_thresholds.remove(&(old_version, old_path));
+        }
+        let threshold = self.history.get(path).and_then(|versions| {
+            versions
+                .get(1)
+                .map(|(version, _)| *version)
+                .or(match versions.as_slice() {
+                    [(version, None)] => Some(*version),
+                    _ => None,
+                })
+        });
+        if let Some(threshold) = threshold {
+            let shared = self.retained_scope_path(path);
+            self.compactable.insert(Arc::clone(&shared), threshold);
+            self.reclaim_thresholds.insert((threshold, shared));
+        }
+    }
+
+    fn reclaim_candidates(&self, floor: CommitVersion) -> Vec<Arc<DocumentPath>> {
+        let mut paths = Vec::new();
+        for (threshold, path) in &self.reclaim_thresholds {
+            #[cfg(test)]
+            RECLAIM_THRESHOLD_VISITS.with(|count| count.set(count.get() + 1));
+            if *threshold > floor {
+                break;
+            }
+            paths.push(Arc::clone(path));
+        }
+        // Preserve the previous path-ordered saturating subtraction/addition sequence.
+        paths.sort_unstable();
+        paths
     }
 
     fn record_capacity_pressure(&mut self, path: &DocumentPath) {
@@ -7749,4 +7901,16 @@ thread_local! {
 #[cfg(test)]
 mod history_size_cache_tests {
     include!("../tests/support/history_size_cache.rs");
+}
+
+#[cfg(test)]
+thread_local! {
+    static RECLAIM_THRESHOLD_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FORECAST_PATH_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static COMPACTION_PATH_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod reclaim_index_tests {
+    include!("../tests/support/reclaim_index.rs");
 }

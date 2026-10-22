@@ -2914,8 +2914,16 @@ impl FirestoreState {
         let oldest_read = LogicalInstant::from_nanos(now.as_nanos().saturating_sub(window));
         let mut floor = self.version_at(oldest_read).max(projected_capacity_floor);
         if let Some(oldest_transaction) = self
-            .transactions
-            .values()
+            .active_transaction_deadlines
+            .range((
+                std::ops::Bound::Excluded((now, TransactionId(u64::MAX))),
+                std::ops::Bound::Unbounded,
+            ))
+            .filter_map(|(_, id)| self.transactions.get(id))
+            .inspect(|_| {
+                #[cfg(test)]
+                RETENTION_PROJECTION_VISITS.with(|visits| visits.set(visits.get() + 1));
+            })
             .filter(|transaction| {
                 transaction.state == TransactionState::Active
                     && transaction_deadline(transaction, self.limit_scope) > now
@@ -4870,6 +4878,8 @@ impl FirestoreState {
                 COSINE_ZERO_VECTOR.into(),
             ));
         }
+        let distance =
+            PreparedVectorDistance::new(&find_nearest.query_vector, find_nearest.distance_measure);
         let zero_candidate = std::cell::Cell::new(false);
         let mut candidates = BinaryHeap::new();
         let nearest_limit = usize::try_from(find_nearest.limit).unwrap_or(usize::MAX);
@@ -4892,11 +4902,7 @@ impl FirestoreState {
                 zero_candidate.set(true);
                 return;
             }
-            let Some(distance) = vector_distance(
-                vector,
-                &find_nearest.query_vector,
-                find_nearest.distance_measure,
-            ) else {
+            let Some(distance) = distance.evaluate(vector) else {
                 return;
             };
             let admitted =
@@ -6565,6 +6571,8 @@ fn scaled_norm(values: impl IntoIterator<Item = f64>) -> Option<f64> {
 }
 
 fn normalized_components(values: &[f64]) -> Option<Vec<f64>> {
+    #[cfg(test)]
+    NORMALIZATION_CALLS.with(|calls| calls.set(calls.get() + 1));
     if values.iter().any(|value| !value.is_finite()) {
         return None;
     }
@@ -6608,6 +6616,38 @@ fn checked_dot(left: &[f64], right: &[f64]) -> Option<f64> {
         }
     }
     Some(dot)
+}
+
+struct PreparedVectorDistance<'a> {
+    query: &'a [f64],
+    measure: DistanceMeasure,
+    normalized_query: Option<Vec<f64>>,
+}
+
+impl<'a> PreparedVectorDistance<'a> {
+    fn new(query: &'a [f64], measure: DistanceMeasure) -> Self {
+        Self {
+            query,
+            measure,
+            normalized_query: if measure == DistanceMeasure::Cosine {
+                normalized_components(query)
+            } else {
+                None
+            },
+        }
+    }
+
+    fn evaluate(&self, vector: &[f64]) -> Option<f64> {
+        if self.measure != DistanceMeasure::Cosine {
+            return vector_distance(vector, self.query, self.measure);
+        }
+        if vector.len() != self.query.len() {
+            return None;
+        }
+        let left = normalized_components(vector)?;
+        let similarity = checked_dot(&left, self.normalized_query.as_ref()?)?;
+        Some((1.0 - similarity.clamp(-1.0, 1.0)).clamp(0.0, 2.0))
+    }
 }
 
 fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> Option<f64> {
@@ -7522,4 +7562,15 @@ mod scope_index_tests {
 #[cfg(test)]
 mod vector_distance_tests {
     include!("../tests/support/vector_distance.rs");
+}
+
+#[cfg(test)]
+thread_local! {
+    static NORMALIZATION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RETENTION_PROJECTION_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod performance_tests {
+    include!("../tests/support/performance.rs");
 }

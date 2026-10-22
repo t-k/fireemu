@@ -290,20 +290,21 @@ impl IndexSet {
         collection: &CollectionId,
         field: &FieldPath,
     ) -> Vec<(IndexQueryScope, IndexFieldMode)> {
-        self.single_fields
-            .iter()
-            .filter(|((c, path), _)| c == collection.as_str() && field.segments().starts_with(path))
-            .max_by_key(|((_, path), _)| path.len())
-            .map_or_else(
-                || {
-                    vec![
-                        (IndexQueryScope::Collection, IndexFieldMode::Ascending),
-                        (IndexQueryScope::Collection, IndexFieldMode::Descending),
-                        (IndexQueryScope::Collection, IndexFieldMode::Contains),
-                    ]
-                },
-                |(_, modes)| modes.clone(),
-            )
+        let mut key = (collection.as_str().to_owned(), field.segments().to_vec());
+        loop {
+            #[cfg(test)]
+            SINGLE_FIELD_LOOKUPS.with(|visits| visits.set(visits.get() + 1));
+            if let Some(modes) = self.single_fields.get(&key) {
+                return modes.clone();
+            }
+            if key.1.pop().is_none() {
+                return vec![
+                    (IndexQueryScope::Collection, IndexFieldMode::Ascending),
+                    (IndexQueryScope::Collection, IndexFieldMode::Descending),
+                    (IndexQueryScope::Collection, IndexFieldMode::Contains),
+                ];
+            }
+        }
     }
 
     /// The override declared for exactly this field, absent when the field inherits its
@@ -1361,4 +1362,62 @@ pub fn validate_aggregation_query(
     decide_with_requirements(query, indexes, *ctx, |disjunction, effective_order| {
         requirement_for_aggregation(disjunction, effective_order, aggregations)
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static SINGLE_FIELD_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+
+    #[test]
+    fn ancestor_lookup_work_ignores_unrelated_overrides() {
+        let mut indexes = IndexSet::default();
+        let collection = CollectionId::try_new("items").unwrap();
+        for i in 0..1024 {
+            indexes.set_single_field_indexes(
+                &collection,
+                &FieldPath::parse(&format!("unrelated{i}")).unwrap(),
+                Vec::new(),
+            );
+        }
+        indexes.set_single_field_indexes(
+            &collection,
+            &FieldPath::parse("nested").unwrap(),
+            Vec::new(),
+        );
+        SINGLE_FIELD_LOOKUPS.with(|visits| visits.set(0));
+        assert_eq!(
+            indexes
+                .single_field_modes(&collection, &FieldPath::parse("nested.child.leaf").unwrap()),
+            Vec::new()
+        );
+        assert_eq!(SINGLE_FIELD_LOOKUPS.with(std::cell::Cell::get), 3);
+    }
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+        #[test]
+        fn ancestor_lookup_matches_original_scan_after_catalog_changes(operations in proptest::collection::vec((0u8..4, 0usize..2, 0usize..5, proptest::bool::ANY), 0..64)) {
+            let collections = [CollectionId::try_new("items").unwrap(), CollectionId::try_new("other").unwrap()];
+            let fields = ["a", "a.b", "`a.b`", "a.b.c", "x"].map(|field| FieldPath::parse(field).unwrap());
+            let mut indexes = IndexSet::default();
+            for (op, c, f, enabled) in operations {
+                let modes = if enabled { vec![(IndexQueryScope::Collection, IndexFieldMode::Ascending)] } else { Vec::new() };
+                match op {
+                    0 => indexes.set_default_single_field_indexes(&collections[c], modes),
+                    1 | 2 => indexes.set_single_field_indexes(&collections[c], &fields[f], modes),
+                    _ => { indexes.clear_single_field_override(&collections[c], &fields[f]); }
+                }
+                for collection in &collections {
+                    for field in &fields {
+                        let expected = indexes.single_fields.iter().filter(|((c, path), _)| c == collection.as_str() && field.segments().starts_with(path)).max_by_key(|((_, path), _)| path.len()).map_or_else(|| vec![(IndexQueryScope::Collection, IndexFieldMode::Ascending), (IndexQueryScope::Collection, IndexFieldMode::Descending), (IndexQueryScope::Collection, IndexFieldMode::Contains)], |(_, modes)| modes.clone());
+                        proptest::prop_assert_eq!(indexes.single_field_modes(collection, field), expected);
+                    }
+                }
+            }
+        }
+    }
 }

@@ -749,9 +749,9 @@ test("B real child refusal releases public handles and retains unresolved owners
   const moduleUrl = new URL("./pubsub-observation-b/replay.mjs", import.meta.url).href;
   const harmless =
     "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.stdout.write('ready');";
-  const harness = `import {spawn,execFileSync} from 'node:child_process';import {once} from 'node:events';import {waitForExec} from ${JSON.stringify(moduleUrl)};const child=spawn(process.execPath,['--eval',${JSON.stringify(harmless)}],{stdio:['pipe','pipe','ignore']});await once(child.stdout,'data');const identity=execFileSync('ps',['-ww','-p',String(child.pid),'-o','ppid=,lstart=,comm=,args='],{encoding:'utf8',timeout:1000}).trim();console.log(JSON.stringify({receipt:{pid:child.pid,parentPid:process.pid,identity,stableIdentity:identity.replace(/^\\d+\\s+/,''),args:[process.execPath,'--eval',${JSON.stringify(harmless)}]}}));try{await waitForExec(child,{path:process.execPath,args:['--eval',${JSON.stringify(harmless)}],parentPid:process.pid},{setupMs:10,replayMs:1000,graceMs:10,killMs:10,inspect:()=>{throw Error('simulated bounded ps refusal');}});}catch(error){console.log(JSON.stringify({refused:error.message,unresolved:error.unresolvedProcess??null}));process.exitCode=2;}`;
+  const harness = `import {spawn,execFileSync} from 'node:child_process';import {once} from 'node:events';import {waitForExec} from ${JSON.stringify(moduleUrl)};const child=spawn(process.execPath,['--eval',${JSON.stringify(harmless)}],{stdio:['pipe','pipe','ignore']});await once(child.stdout,'data');const identity=execFileSync('ps',['-ww','-p',String(child.pid),'-o','ppid=,lstart=,comm=,args='],{encoding:'utf8',timeout:1000}).trim();console.log(JSON.stringify({receipt:{pid:child.pid,parentPid:process.pid,identity,stableIdentity:identity.replace(/^\\d+\\s+/,''),args:[process.execPath,'--eval',${JSON.stringify(harmless)}]}}));await once(process.stdin,'data');process.stdin.destroy();try{await waitForExec(child,{path:process.execPath,args:['--eval',${JSON.stringify(harmless)}],parentPid:process.pid},{setupMs:10,replayMs:1000,graceMs:10,killMs:10,inspect:()=>{throw Error('simulated bounded ps refusal');}});}catch(error){console.log(JSON.stringify({refused:error.message,unresolved:error.unresolvedProcess??null}));process.exitCode=2;}`;
   const outer = spawn(process.execPath, ["--input-type=module", "--eval", harness], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     env: { PATH: process.env.PATH, LANG: "C", LC_ALL: "C", TZ: "UTC" },
   });
   let text = "",
@@ -768,17 +768,32 @@ test("B real child refusal releases public handles and retains unresolved owners
     result,
     cleanup = false;
   try {
+    await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(Error("setup receipt deadline")), 5000);
+      const inspect = () => {
+        const row = text
+          .split("\n")
+          .slice(0, -1)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+          .find((entry) => entry.receipt);
+        if (row) {
+          receipt = row.receipt;
+          clearTimeout(timer);
+          outer.stdout.off("data", inspect);
+          resolve();
+        }
+      };
+      outer.stdout.on("data", inspect);
+      inspect();
+    });
+    outer.stdin.end("begin\n");
     result = await Promise.race([
       completion,
       new Promise((resolve) => {
-        timer = setTimeout(() => resolve("deadline"), 2000);
+        timer = setTimeout(() => resolve("natural-exit deadline"), 2000);
       }),
     ]);
-    receipt = text
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .find((row) => row.receipt)?.receipt;
     assert.ok(receipt, "durable actual pid/birth/comm/args receipt required");
     console.log(JSON.stringify({ actualChildReceipt: receipt, outerExit: result }));
     assert.equal(result, 2, errors);

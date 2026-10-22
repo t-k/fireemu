@@ -73,6 +73,22 @@ export function rehearsalPlan({
   };
 }
 
+// ps snapshots retain birth/command identity; zombies remain present until actually reaped.
+function groupSnapshot(pgid) {
+  const result = spawnSync("ps", ["-ww", "-axo", "pid=,pgid=,lstart=,comm=,args="], {
+    encoding: "utf8",
+    timeout: 1000,
+    env: { ...process.env, LANG: "C", LC_ALL: "C", TZ: "UTC" },
+  });
+  if (result.error || result.status !== 0) throw new Error("rehearsal ownership inspection failed");
+  return result.stdout.split("\n").flatMap((line) => {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    return match && Number(match[2]) === pgid
+      ? [{ pid: Number(match[1]), identity: match[3] }]
+      : [];
+  });
+}
+
 function run(command, { cwd, env, timeoutMs }) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command[0], command.slice(1), {
@@ -81,25 +97,123 @@ function run(command, { cwd, env, timeoutMs }) {
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
-    let stdout = "";
-    let stderr = "";
+    let stdout = "",
+      stderr = "",
+      timedOut = false,
+      closed = false;
+    let originalLeader,
+      ownershipError,
+      leaderExited = false;
+    child.on("spawn", () => {
+      try {
+        originalLeader = groupSnapshot(child.pid).find((row) => row.pid === child.pid);
+        if (!originalLeader) throw new Error("rehearsal original leader identity unavailable");
+      } catch (error) {
+        ownershipError = error.message;
+      }
+    });
+    child.on("exit", () => {
+      leaderExited = true;
+    });
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
+      timedOut = true;
+      const cleanup = {
+        pid: child.pid,
+        confirmed: false,
+        escalated: false,
+        stage: "timeout-inspection",
+        capturedLeader: originalLeader
+          ? { pid: originalLeader.pid, identity: originalLeader.identity.slice(0, 1024) }
+          : null,
+      };
       try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        // already gone
+        const verifyLeader = (rows) => {
+          const current = rows.find((row) => row.pid === child.pid);
+          cleanup.currentLeader = current
+            ? { pid: current.pid, identity: current.identity.slice(0, 1024) }
+            : null;
+          cleanup.currentPids = rows.slice(0, 16).map((row) => row.pid);
+          if (ownershipError) throw new Error(ownershipError);
+          if (
+            !originalLeader ||
+            leaderExited ||
+            child.exitCode !== null ||
+            child.signalCode !== null
+          )
+            throw new Error("rehearsal original leader is no longer owned");
+          if (rows.find((row) => row.pid === child.pid)?.identity !== originalLeader.identity)
+            throw new Error("rehearsal original leader identity changed");
+        };
+        const owned = groupSnapshot(child.pid);
+        verifyLeader(owned);
+        const signal = (name) => {
+          cleanup.stage = `before-${name}`;
+          const current = groupSnapshot(child.pid);
+          verifyLeader(current);
+          for (const row of current) {
+            const original = owned.find((entry) => entry.pid === row.pid);
+            if (!original || original.identity !== row.identity)
+              throw new Error("rehearsal group identity changed");
+          }
+          if (current.length) {
+            try {
+              process.kill(-child.pid, name);
+            } catch (error) {
+              if (error.code !== "ESRCH") throw error;
+            }
+          }
+        };
+        const wait = async () => {
+          cleanup.stage = "termination-observation";
+          const deadline = Date.now() + 1000;
+          do {
+            if (closed && groupSnapshot(child.pid).length === 0) return true;
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          } while (Date.now() < deadline);
+          return false;
+        };
+        signal("SIGTERM");
+        cleanup.confirmed = await wait();
+        if (!cleanup.confirmed) {
+          cleanup.escalated = true;
+          signal("SIGKILL");
+          cleanup.confirmed = await wait();
+        }
+      } catch (error) {
+        cleanup.error = error.message;
+        cleanup.failureStage = cleanup.stage;
       }
-      reject(new Error("the rehearsal timed out"));
+      Object.assign(cleanup, {
+        leaderExited,
+        closed,
+        exitCode: child.exitCode,
+        signalCode: child.signalCode,
+      });
+      const error = new Error(
+        `the rehearsal timed out; cleanup ${cleanup.confirmed ? "confirmed" : "unresolved"}`,
+      );
+      error.cleanup = cleanup;
+      if (!cleanup.confirmed) {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+      }
+      reject(error);
     }, timeoutMs);
     child.on("close", (code) => {
-      clearTimeout(timer);
-      resolvePromise({ code, stdout, stderr });
+      closed = true;
+      if (!timedOut) {
+        clearTimeout(timer);
+        resolvePromise({ code, stdout, stderr });
+      }
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      if (!timedOut) {
+        clearTimeout(timer);
+        reject(error);
+      }
     });
   });
 }

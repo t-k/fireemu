@@ -59,6 +59,7 @@ impl AdminGrpc {
             browser_metadata: false,
             // An Admin call is never a BatchWrite, so it has no field order to keep.
             batch_field_order: Vec::new(),
+            key_order: crate::rest::json_syntax::KeyOrder::default(),
         };
         // The REST core takes locks, waits out contention and reads or writes whole exports:
         // it runs on the blocking pool, never on a runtime worker (as the REST surface does).

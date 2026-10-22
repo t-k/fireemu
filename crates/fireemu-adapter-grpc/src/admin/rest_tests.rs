@@ -69,6 +69,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
         remote_peer: false,
         browser_metadata: false,
         batch_field_order: Vec::new(),
+        key_order: crate::rest::json_syntax::KeyOrder::default(),
     });
     (response.status, response.body)
 }
@@ -825,6 +826,7 @@ fn call_anonymous(state: &RestState, method: &str, path: &str, body: Value) -> (
         remote_peer: false,
         browser_metadata: false,
         batch_field_order: Vec::new(),
+        key_order: crate::rest::json_syntax::KeyOrder::default(),
     });
     (response.status, response.body)
 }
@@ -906,6 +908,7 @@ fn the_database_rules_route_is_guarded_like_the_project_route() {
             remote_peer: false,
             browser_metadata: false,
             batch_field_order: Vec::new(),
+            key_order: crate::rest::json_syntax::KeyOrder::default(),
         };
         mutate(&mut request);
         let response = state.handle(&request);

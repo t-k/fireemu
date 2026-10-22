@@ -9,7 +9,7 @@
     "firestore",
     "testing"
   ],
-  "homepage": "https://github.com/t-k/fireemu#readme",
+  "homepage": "https://t-k.github.io/fireemu/",
   "bugs": "https://github.com/t-k/fireemu/issues",
   "license": "Apache-2.0",
   "repository": {

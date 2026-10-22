@@ -405,11 +405,9 @@ fn comparison_errors_propagate_first() {
 }
 
 /// `array(...)` and `map(...)` as production and the official emulator answer them (FS-ENT-ORACLE
-/// O-1: `array(i, x)` = `[1, null]`, `map("k", i, "k2", x)` = `{k: 1}`). Production refused an
-/// integer key and a key repeated with both values present as the official emulator does
-/// (O-3); another key type and a repeated key with an absent value are unrecorded, so strict
-/// refuses them as unobserved and the emulator profile refuses them as the official emulator
-/// does.
+/// O-1: `array(i, x)` = `[1, null]`, `map("k", i, "k2", x)` = `{k: 1}`). Production refused a
+/// key that is not a string naming its type, and a key repeated with two present values, as
+/// the official emulator does; a missing value drops its entry first (O-3, O-4).
 #[test]
 #[allow(clippy::too_many_lines)]
 fn array_and_map_literals() {
@@ -467,13 +465,14 @@ fn array_and_map_literals() {
             ))
         );
     }
-    assert!(unobserved(&boolean_key.eval_in(&r, Unrecorded::Refuse)));
-    assert_eq!(
-        boolean_key.eval_in(&r, Unrecorded::OfficialEmulator),
-        Eval::Error(EvalError::Invalid(
-            "map key must be of type STRING, given type is BOOLEAN".into()
-        ))
-    );
+    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            boolean_key.eval_in(&r, unrecorded),
+            Eval::Error(EvalError::Invalid(
+                "map key must be of type STRING, given type is BOOLEAN".into()
+            ))
+        );
+    }
     // A repeated key is refused even when a value is missing; production answered it with
     // both values present.
     let duplicate = Eval::Error(EvalError::Invalid(
@@ -483,8 +482,8 @@ fn array_and_map_literals() {
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
         assert_eq!(both.eval_in(&r, unrecorded), duplicate);
     }
-    // A repeat with a missing value: the official emulator counts only present values, so it
-    // keeps the present one; production has not answered it.
+    // A repeat with a missing value: production and the official emulator count only present
+    // values, so the present one is kept (O-4 `functions#map-repeat-*`).
     for (repeated, kept) in [
         (
             call("map", vec![k("k"), field("x"), k("k"), field("s")]),
@@ -499,21 +498,26 @@ fn array_and_map_literals() {
             None,
         ),
     ] {
-        assert!(unobserved(&repeated.eval_in(&r, Unrecorded::Refuse)));
-        assert_eq!(
-            repeated.eval_in(&r, Unrecorded::OfficialEmulator),
-            Eval::Value(Value::Map(
-                kept.into_iter().map(|v| ("k".to_owned(), v)).collect()
-            ))
-        );
+        for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            assert_eq!(
+                repeated.eval_in(&r, unrecorded),
+                Eval::Value(Value::Map(
+                    kept.clone()
+                        .into_iter()
+                        .map(|v| ("k".to_owned(), v))
+                        .collect()
+                ))
+            );
+        }
     }
     // Two present values repeat even with a missing one between them.
     let around = call(
         "map",
         vec![k("k"), field("i"), k("k"), field("x"), k("k"), field("s")],
     );
-    assert!(unobserved(&around.eval_in(&r, Unrecorded::Refuse)));
-    assert_eq!(around.eval_in(&r, Unrecorded::OfficialEmulator), duplicate);
+    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(around.eval_in(&r, unrecorded), duplicate);
+    }
     // Errors propagate.
     let error = call("document_id", vec![field("i")]);
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {

@@ -223,13 +223,27 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
             }),
             "{name}(str)"
         );
-        // Another argument type is unrecorded.
-        let e = call(name, vec![field("num")]).eval(&r);
-        assert!(unobserved(&e), "{name}(num) = {e:?}");
-    }
-    for name in ["collection_id", "parent"] {
-        let e = call(name, vec![field("collection")]).eval(&r);
-        assert!(unobserved(&e), "{name}(collection) = {e:?}");
+        // Every other argument type too in the emulator profile (O-4 recorded an integer for
+        // document_id; strict refuses the other pairs, see
+        // strict_answers_only_the_argument_and_key_types_production_recorded).
+        assert_eq!(
+            call(name, vec![field("num")]).eval_in(&r, Unrecorded::OfficialEmulator),
+            Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Reference",
+                got: "LONG"
+            }),
+            "{name}(num)"
+        );
+        // A collection: refused naming it (O-3 for document_id, O-4 for the others).
+        assert_eq!(
+            call(name, vec![field("collection")]).eval(&r),
+            Eval::Error(EvalError::Invalid(format!(
+                "Document parent name \"{collection}\" lacks \"/\" at index {}.",
+                collection.len()
+            ))),
+            "{name}(collection)"
+        );
     }
     assert_eq!(
         call("parent", vec![field("__name__")]).eval(&r),
@@ -238,9 +252,8 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
         ))
     );
     // The exact documents root: production refuses its ID and its collection ID, and answers
-    // null for its parent. A top-level collection (one named `documents` too): its ID is
-    // refused naming the reference and its length. A deeper collection, or a malformed root,
-    // is unrecorded.
+    // null for its parent. A collection at any depth (one named `documents` too) is refused
+    // naming the reference and its length. A malformed root is unrecorded.
     let reference = |name: &str| Expr::Constant(Value::Reference(name.to_owned()));
     let root = "projects/p/databases/(default)/documents";
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
@@ -269,14 +282,11 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                 "{name}"
             );
         }
-        // A deeper collection is unrecorded: the official emulator answers it like a top-level
-        // one, for every document function. A malformed root is unrecorded in both.
+        // A deeper collection, for every document function (O-4 `*-subcollection`).
         let deep = "projects/p/databases/(default)/documents/a/b/documents";
         for function in ["document_id", "collection_id", "parent"] {
             let got = call(function, vec![reference(deep)]).eval_in(&r, unrecorded);
-            if unrecorded == Unrecorded::Refuse {
-                assert!(unobserved(&got), "{function}");
-            } else {
+            {
                 assert_eq!(
                     got,
                     Eval::Error(EvalError::Invalid(format!(
@@ -287,13 +297,10 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                 );
             }
         }
-        // A top-level collection for every function: the official emulator's text under the
-        // emulator profile (production recorded only document_id's).
+        // A top-level collection for every function (O-4 `*-collection`).
         for function in ["collection_id", "parent"] {
             let got = call(function, vec![reference(collection)]).eval_in(&r, unrecorded);
-            if unrecorded == Unrecorded::Refuse {
-                assert!(unobserved(&got), "{function}");
-            } else {
+            {
                 assert_eq!(
                     got,
                     Eval::Error(EvalError::Invalid(format!(
@@ -303,6 +310,20 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
                     "{function}"
                 );
             }
+        }
+        // A non-ASCII collection: production recorded ASCII names only, so strict refuses it;
+        // the official emulator counts the index in UTF-16 units (😀 is two).
+        let emoji = "projects/p/databases/(default)/documents/😀";
+        let got = call("document_id", vec![reference(emoji)]).eval_in(&r, unrecorded);
+        if unrecorded == Unrecorded::Refuse {
+            assert!(unobserved(&got), "{got:?}");
+        } else {
+            assert_eq!(
+                got,
+                Eval::Error(EvalError::Invalid(format!(
+                    "Document parent name \"{emoji}\" lacks \"/\" at index 43."
+                )))
+            );
         }
         // Malformed references name no collection: an empty project, database or segment.
         for name in [
@@ -318,10 +339,11 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
         }
     }
     // An error argument propagates unchanged.
-    let inner = call("parent", vec![field("num")]).eval(&r);
+    let malformed = || reference("projects//databases/(default)/documents/c");
+    let inner = call("parent", vec![malformed()]).eval(&r);
     assert!(unobserved(&inner));
     assert_eq!(
-        call("document_id", vec![call("parent", vec![field("num")])]).eval(&r),
+        call("document_id", vec![call("parent", vec![malformed()])]).eval(&r),
         inner
     );
 }
@@ -356,9 +378,14 @@ fn equal_is_three_valued() {
     // An error wins over absent and values, on either side.
     let eq = |a: Expr, b: Expr| condition("equal", vec![a, b]).eval(&r);
     let error = call("document_id", vec![field("n")]);
-    assert!(unobserved(&eq(error.clone(), k(Value::Integer(7)))));
-    assert!(unobserved(&eq(field("missing"), error.clone())));
-    assert!(unobserved(&eq(error, field("missing"))));
+    let wrong = Eval::Error(EvalError::WrongType {
+        function: "document_id",
+        expected: "Reference",
+        got: "LONG",
+    });
+    assert_eq!(eq(error.clone(), k(Value::Integer(7))), wrong);
+    assert_eq!(eq(field("missing"), error.clone()), wrong);
+    assert_eq!(eq(error, field("missing")), wrong);
 }
 
 #[test]
@@ -409,10 +436,23 @@ fn where_keeps_true_drops_false_and_absent_and_refuses_errors() {
         "equal",
         vec![call("parent", vec![field("k")]), Expr::Constant(s("x"))],
     );
+    // The emulator profile answers the refusal; strict refuses it as unobserved, since production
+    // answered no refusal inside a where condition.
     assert!(matches!(
-        execute(vec![Stage::Where(error)], input.clone()),
+        execute_in(
+            vec![Stage::Where(error.clone())],
+            input.clone(),
+            Unrecorded::OfficialEmulator
+        ),
         Err(EvalError::WrongType {
             function: "parent",
+            ..
+        })
+    ));
+    assert!(matches!(
+        execute(vec![Stage::Where(error)], input.clone()),
+        Err(EvalError::Unobserved {
+            function: "where",
             ..
         })
     ));
@@ -763,8 +803,13 @@ fn errors_and_functions_describe_themselves() {
 
 #[test]
 fn document_functions_name_why_an_input_is_unobserved() {
-    let r = row("c/x", &[("num", Value::Integer(1))]);
-    let reason = |name: &str, arg: Expr| match call(name, vec![arg]).eval(&r) {
+    let r = row("c/x", &[]);
+    let reason = |name: &str, reference: &str| match call(
+        name,
+        vec![Expr::Constant(Value::Reference(reference.into()))],
+    )
+    .eval(&r)
+    {
         Eval::Error(EvalError::Unobserved { function, reason }) => {
             assert_eq!(function, name);
             reason
@@ -772,19 +817,18 @@ fn document_functions_name_why_an_input_is_unobserved() {
         other => panic!("{name}: {other:?}"),
     };
     for name in ["document_id", "collection_id", "parent"] {
-        assert_eq!(
-            reason(name, field("num")),
-            "the argument is not a document reference"
-        );
-        assert_eq!(
-            reason(
-                name,
-                Expr::Constant(Value::Reference(
-                    "projects/p/databases/(default)/documents/c/x/s".into()
-                ))
-            ),
-            "the reference does not name a document"
-        );
+        // A malformed reference, and under strict a non-ASCII collection (production recorded
+        // ASCII names only).
+        for reference in [
+            "projects//databases/(default)/documents/c",
+            "projects/p/databases/(default)/documents/あ",
+        ] {
+            assert_eq!(
+                reason(name, reference),
+                "the reference does not name a document",
+                "{name}({reference})"
+            );
+        }
     }
     // A reference constant names its document.
     assert_eq!(
@@ -832,7 +876,12 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
         assert_eq!(text.eval(&r), wrong(name, "STRING"));
         let number = call(name, vec![field("num")]);
         assert_eq!(official(&number), wrong(name, "LONG"));
-        assert!(unobserved(&number.eval(&r)), "{name}(num)");
+        // Strict answers the integer for document_id only (O-4 `functions#document-id-integer`).
+        if name == "document_id" {
+            assert_eq!(number.eval(&r), wrong(name, "LONG"), "{name}(num)");
+        } else {
+            assert!(unobserved(&number.eval(&r)), "{name}(num)");
+        }
     }
     assert_eq!(
         wrong("parent", "STRING"),
@@ -915,7 +964,7 @@ fn select_aliases_are_field_paths() {
             (alias("m.s"), field("profile.score")),
             (alias("m.r"), field("profile.rank")),
             (alias("`q.r`"), field("top")),
-            (alias("gone.deep"), field("missing")),
+            (alias("`gone.deep`"), field("missing")),
         ])],
         input,
     )
@@ -930,4 +979,211 @@ fn select_aliases_are_field_paths() {
     ]
     .into();
     assert_eq!(out, vec![expected]);
+}
+
+/// A nested alias whose value is missing: the official emulator keeps its parents as empty maps
+/// (`{a.b.c: missing}` gives `{a: {b: {}}}`, and a sibling alias fills the same parent), which
+/// production has not answered, so strict refuses it as unobserved.
+#[test]
+fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profile() {
+    type Aliases = Vec<(FieldPath, Expr)>;
+    let input = vec![row("c/x", &[("top", s("t"))])];
+    let map = |entries: &[(&str, Value)]| {
+        Value::Map(
+            entries
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        )
+    };
+    let empty = || Value::Map(BTreeMap::new());
+    let cases: Vec<(Aliases, Vec<(&str, Value)>)> = vec![
+        (
+            vec![(alias("a.b.c"), field("missing"))],
+            vec![("a", map(&[("b", empty())]))],
+        ),
+        (
+            vec![
+                (alias("a.b"), field("missing")),
+                (alias("a.c"), field("top")),
+            ],
+            vec![("a", map(&[("c", s("t"))]))],
+        ),
+        (vec![(alias("`a.b`"), field("missing"))], vec![]),
+    ];
+    for (aliases, expected) in cases {
+        let nested = aliases.iter().any(|(a, _)| a.segments().len() > 1);
+        let out = execute_in(
+            vec![Stage::Select(aliases.clone())],
+            input.clone(),
+            Unrecorded::OfficialEmulator,
+        )
+        .unwrap();
+        let expected: BTreeMap<String, Value> = expected
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect();
+        assert_eq!(out, vec![expected], "{aliases:?}");
+        let strict = execute_in(
+            vec![Stage::Select(aliases.clone())],
+            input.clone(),
+            Unrecorded::Refuse,
+        );
+        if nested {
+            assert!(
+                matches!(
+                    strict,
+                    Err(EvalError::Unobserved {
+                        function: "select",
+                        ..
+                    })
+                ),
+                "{aliases:?} {strict:?}"
+            );
+        } else {
+            assert!(strict.is_ok(), "{aliases:?} {strict:?}");
+        }
+    }
+}
+
+#[test]
+fn strict_answers_only_the_argument_and_key_types_production_recorded() {
+    let constant = |v: Value| Expr::Constant(v);
+    let others = [
+        Value::Double(1.5),
+        Value::Timestamp(crate::value::Timestamp::new(0, 0).unwrap()),
+        Value::Bytes(vec![0]),
+        Value::GeoPoint(crate::value::GeoPoint::new(1.0, 1.0).unwrap()),
+        Value::Array(vec![Value::Integer(1)]),
+        Value::Vector(vec![1.0]),
+    ];
+    let map = Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))]));
+    let r = row("c/x", &[]);
+    for (name, recorded, unrecorded) in [
+        (
+            "document_id",
+            vec![s("c/x"), Value::Integer(1)],
+            vec![map.clone(), Value::Boolean(true)],
+        ),
+        (
+            "collection_id",
+            vec![s("c/x"), map.clone()],
+            vec![Value::Integer(1), Value::Boolean(true)],
+        ),
+        (
+            "parent",
+            vec![s("c/x"), Value::Boolean(true)],
+            vec![Value::Integer(1), map.clone()],
+        ),
+    ] {
+        // The pairs production did not record for this function are refused under strict.
+        for value in &unrecorded {
+            let e = call(name, vec![constant(value.clone())]);
+            assert!(
+                unobserved(&e.eval_in(&r, Unrecorded::Refuse)),
+                "{name}({value:?})"
+            );
+        }
+        for value in &recorded {
+            let e = call(name, vec![constant(value.clone())]);
+            let wrong = Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Reference",
+                got: type_name(value),
+            });
+            assert_eq!(
+                e.eval_in(&r, Unrecorded::Refuse),
+                wrong,
+                "{name}({value:?})"
+            );
+            assert_eq!(e.eval_in(&r, Unrecorded::OfficialEmulator), wrong);
+        }
+        for value in &others {
+            let e = call(name, vec![constant(value.clone())]);
+            assert!(
+                unobserved(&e.eval_in(&r, Unrecorded::Refuse)),
+                "{name}({value:?})"
+            );
+            assert_eq!(
+                e.eval_in(&r, Unrecorded::OfficialEmulator),
+                Eval::Error(EvalError::WrongType {
+                    function: name,
+                    expected: "Reference",
+                    got: type_name(value),
+                }),
+                "{name}({value:?})"
+            );
+        }
+    }
+    // map(...) keys: an integer and a boolean recorded (O-3, O-4).
+    let map_of = |key: Value| call("map", vec![constant(key), constant(Value::Integer(1))]);
+    for key in [Value::Integer(1), Value::Boolean(true)] {
+        let text = Eval::Error(EvalError::Invalid(format!(
+            "map key must be of type STRING, given type is {}",
+            type_name(&key)
+        )));
+        assert_eq!(map_of(key.clone()).eval_in(&r, Unrecorded::Refuse), text);
+        assert_eq!(map_of(key).eval_in(&r, Unrecorded::OfficialEmulator), text);
+    }
+    for key in [Value::Double(1.5), Value::Null, Value::Array(vec![])] {
+        assert!(
+            unobserved(&map_of(key.clone()).eval_in(&r, Unrecorded::Refuse)),
+            "{key:?}"
+        );
+        assert_eq!(
+            map_of(key.clone()).eval_in(&r, Unrecorded::OfficialEmulator),
+            Eval::Error(EvalError::Invalid(format!(
+                "map key must be of type STRING, given type is {}",
+                type_name(&key)
+            )))
+        );
+    }
+    // A string key is a key under both.
+    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            map_of(s("k")).eval_in(&r, unrecorded),
+            Eval::Value(Value::Map(BTreeMap::from([(
+                "k".to_owned(),
+                Value::Integer(1)
+            )])))
+        );
+    }
+}
+
+proptest! {
+    /// A select whose fields fail (PX1d round 4, H9): with one failing field both profiles give
+    /// its error; with two, strict refuses as unobserved (production names one of them by the
+    /// request's field order, which the decoded stage no longer holds) and the emulator profile
+    /// gives the first one's.
+    #[test]
+    fn select_with_failing_fields_answers_one_error_only_when_one_fails(
+        failing in proptest::collection::vec(any::<bool>(), 1..5),
+    ) {
+        let aliases: Vec<(FieldPath, Expr)> = failing
+            .iter()
+            .enumerate()
+            .map(|(k, fails)| {
+                let arg = if *fails { field("top") } else { field("__name__") };
+                (alias(&format!("a{k}")), call("document_id", vec![arg]))
+            })
+            .collect();
+        let input = vec![row("c/x", &[("top", Value::Integer(1))])];
+        let count = failing.iter().filter(|f| **f).count();
+        let strict = execute_in(vec![Stage::Select(aliases.clone())], input.clone(), Unrecorded::Refuse);
+        let emulator = execute_in(vec![Stage::Select(aliases)], input, Unrecorded::OfficialEmulator);
+        match count {
+            0 => {
+                prop_assert!(strict.is_ok(), "{strict:?}");
+                prop_assert!(emulator.is_ok(), "{emulator:?}");
+            }
+            1 => {
+                prop_assert!(matches!(strict, Err(EvalError::WrongType { .. })), "{strict:?}");
+                prop_assert_eq!(&strict, &emulator);
+            }
+            _ => {
+                prop_assert!(matches!(strict, Err(EvalError::Unobserved { function: "select", .. })), "{strict:?}");
+                prop_assert!(matches!(emulator, Err(EvalError::WrongType { .. })), "{emulator:?}");
+            }
+        }
+    }
 }

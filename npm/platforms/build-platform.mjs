@@ -71,7 +71,7 @@ export function platformManifest(platform, version) {
     name: packageName(platform),
     version,
     description: `The fireemu daemon for ${platform.name}`,
-    homepage: "https://github.com/t-k/fireemu#readme",
+    homepage: "https://t-k.github.io/fireemu/",
     repository: {
       type: "git",
       url: "git+https://github.com/t-k/fireemu.git",

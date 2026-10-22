@@ -15,6 +15,7 @@ pub mod index_messages;
 pub mod local;
 pub mod partition;
 pub mod pipeline;
+pub mod pipeline_shape;
 pub mod production_status;
 pub mod query_messages;
 pub mod rest;

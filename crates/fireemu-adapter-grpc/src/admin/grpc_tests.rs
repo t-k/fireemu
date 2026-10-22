@@ -74,6 +74,7 @@ fn rest(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
         remote_peer: false,
         browser_metadata: false,
         batch_field_order: Vec::new(),
+        key_order: crate::rest::json_syntax::KeyOrder::default(),
     });
     (response.status, response.body)
 }

@@ -1,5 +1,4 @@
-//! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1 and O-2 programs; the
-//! O-3 and O-4 programs wait for `PX1b` and `PX1d`, see `NOT_YET_REPLAYED`,
+//! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1, O-2 and O-3 programs,
 //! `conformance/fs-ent-pipeline-requests.json`) against the in-process REST surface under both
 //! profiles and compares each answer with the production recording
 //! (`conformance/fs-ent-pipeline-production.json`): the status, the result documents as a
@@ -11,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
+use fireemu_adapter_grpc::rest::json_syntax::KeyOrder;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_session::clock::VirtualClock;
@@ -19,23 +19,6 @@ use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
-
-/// Programs the fixture records that this test does not replay yet: FS-ENT-ORACLE O-3 and O-4
-/// (recorded 2026-10-20). `PX1b` maps their answers into the strict profile and replays them; each
-/// must be in the export, so the list cannot hide a program that is not there.
-const NOT_YET_REPLAYED: &[&str] = &[
-    "fs-ent-pipeline/o3/aliases",
-    "fs-ent-pipeline/o3/comparisons",
-    "fs-ent-pipeline/o3/literals",
-    "fs-ent-pipeline/o3/functions",
-    "fs-ent-pipeline/o4/aliases",
-    "fs-ent-pipeline/o4/stages",
-    "fs-ent-pipeline/o4/conditions",
-    "fs-ent-pipeline/o4/literals",
-    "fs-ent-pipeline/o4/functions",
-    "fs-ent-pipeline/o4/documents",
-    "fs-ent-pipeline/o4/comparisons",
-];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
@@ -123,7 +106,18 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("fs-ent-pipeline/results/metadata#distinct", "distinct is outside the subset"),
     ("fs-ent-pipeline/results/metadata#limit", "without a sort production returns another order than document names, so limit keeps other documents (PX2)"),
     ("fs-ent-pipeline/results/metadata#remove-fields", "remove_fields is outside the subset"),
+    (
+        "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
+        "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
+    ),
 ];
+
+/// A fixture with the key order of its objects as written.
+fn read_ordered(name: &str) -> (Value, KeyOrder) {
+    let path = format!("{}/../../conformance/{name}", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(&text).unwrap()
+}
 
 fn read(name: &str) -> Value {
     let path = format!("{}/../../conformance/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -158,6 +152,17 @@ fn state(strict: bool) -> RestState {
 }
 
 fn call(s: &RestState, method: &str, path: &str, body: &Value) -> (u16, Value) {
+    call_ordered(s, method, path, body, &KeyOrder::default())
+}
+
+/// A request whose body keeps the key order it was written in.
+fn call_ordered(
+    s: &RestState,
+    method: &str,
+    path: &str,
+    body: &Value,
+    key_order: &KeyOrder,
+) -> (u16, Value) {
     let r = s.handle(&RestRequest {
         method: method.to_owned(),
         path: format!("/v1/{path}"),
@@ -169,6 +174,7 @@ fn call(s: &RestState, method: &str, path: &str, body: &Value) -> (u16, Value) {
         app_check: Vec::new(),
         body: body.clone(),
         batch_field_order: Vec::new(),
+        key_order: key_order.clone(),
     });
     (r.status, r.body)
 }
@@ -219,6 +225,29 @@ fn double(value: &Value) -> Value {
     })
 }
 
+/// An error message in a comparable form. A missing-separator refusal names the document parent
+/// and the index where the separator is missing, which is that name's length: the recorded
+/// name carries the placeholder project ID while production counted the real one, so the
+/// name is written relative to its documents root and the index is left out (fireemu's index
+/// is pinned against its own name in the local tests).
+fn message(text: &str) -> String {
+    let parent = text
+        .strip_prefix("Document parent name \"")
+        .and_then(|rest| rest.split_once("\" lacks \"/\" at index "))
+        .filter(|(_, index)| {
+            index
+                .strip_suffix('.')
+                .is_some_and(|n| n.parse::<usize>().is_ok())
+        });
+    match parent {
+        Some((name, _)) => format!(
+            "Document parent name \"{}\" lacks \"/\" at index <n>.",
+            relative(name)
+        ),
+        None => text.to_owned(),
+    }
+}
+
 /// A Firestore value or document in a comparable form.
 fn normalize(value: &Value) -> Value {
     match value {
@@ -226,10 +255,11 @@ fn normalize(value: &Value) -> Value {
             let mut out = serde_json::Map::new();
             for (key, inner) in map {
                 let inner = match key.as_str() {
-                    "doubleValue" => double(inner),
+                    "doubleValue" | "latitude" | "longitude" => double(inner),
                     "referenceValue" | "name" => json!(relative(inner.as_str().unwrap())),
                     "timestampValue" => json!(timestamp(inner.as_str().unwrap())),
                     "createTime" | "updateTime" => json!("<t>"),
+                    "message" if inner.is_string() => json!(message(inner.as_str().unwrap())),
                     _ => normalize(inner),
                 };
                 out.insert(key.clone(), inner);
@@ -272,19 +302,23 @@ fn answer(status: u16, body: &Value) -> Value {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn the_pipeline_corpus_replays_as_production_answered() {
-    let requests = read("fs-ent-pipeline-requests.json");
+    let (requests, order) = read_ordered("fs-ent-pipeline-requests.json");
     let production = read("fs-ent-pipeline-production.json");
+    // A stopped run's private fixture (`fixture.partial.json`) is never replayed as production:
+    // it holds programs finished by one recording, without the second recording's rows.
+    assert!(production.get("partial").is_none(), "a partial fixture");
+    assert!(
+        production["programs"]
+            .as_object()
+            .is_some_and(|programs| programs.values().all(|p| p.get("recordings").is_none())),
+        "a partial fixture"
+    );
     for strict in [true, false] {
         let s = state(strict);
         let mut differing = Vec::new();
         let mut compared = 0;
-        let mut skipped = Vec::new();
-        for program in requests["programs"].as_array().unwrap() {
+        for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
             let id = program["id"].as_str().unwrap();
-            if NOT_YET_REPLAYED.contains(&id) {
-                skipped.push(id);
-                continue;
-            }
             for seed in program["seed"].as_array().unwrap() {
                 let (status, body) = call(
                     &s,
@@ -295,16 +329,30 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 assert_eq!(status, 200, "{id} seed: {body}");
             }
             let recorded = &production["programs"][id]["steps"];
-            for step in program["steps"].as_array().unwrap() {
+            for (n, step) in program["steps"].as_array().unwrap().iter().enumerate() {
                 let step_id = step["id"].as_str().unwrap();
                 let row = format!("{id}#{step_id}");
                 let rpc = step["rpc"].as_str().unwrap();
-                let (status, body) =
-                    call(&s, "POST", &format!("{DOCS}:{rpc}"), &fill(&step["body"]));
+                let (status, body) = if rpc == "get" {
+                    let parent = step["parent"].as_str().unwrap();
+                    call(&s, "GET", &format!("{DOCS}/{parent}"), &Value::Null)
+                } else {
+                    call_ordered(
+                        &s,
+                        "POST",
+                        &format!("{DOCS}:{rpc}"),
+                        &fill(&step["body"]),
+                        &order.rebased(&format!("/programs/{p}/steps/{n}/body"), ""),
+                    )
+                };
                 let expected = &recorded[step_id];
                 assert!(!expected.is_null(), "{row} has no production row");
                 let matches = if rpc == "commit" {
                     u64::from(status) == expected["status"].as_u64().unwrap()
+                } else if rpc == "get" {
+                    // A document read: the status and the normalized document.
+                    json!({"status": status, "body": normalize(&body)})
+                        == json!({"status": expected["status"], "body": normalize(&expected["body"])})
                 } else {
                     answer(status, &body)
                         == answer(
@@ -326,7 +374,6 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             }
         }
         assert!(compared > 200, "{compared}");
-        assert_eq!(skipped, NOT_YET_REPLAYED);
         let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
         let unexpected: Vec<_> = differing.iter().filter(|(row, _, _)| !known(row)).collect();
         assert!(
@@ -339,7 +386,9 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 .join("\n")
         );
         // Each allowlist entry still differs, and fireemu answers it as pinned: the result
-        // order row with two of the three documents, every other row with UNIMPLEMENTED.
+        // order row with two of the three documents, the unknown function after an empty
+        // select with the empty select's text under the emulator profile, every other row
+        // (that one under strict too) with UNIMPLEMENTED.
         for (known, reason) in KNOWN_DIFFERENCES {
             let Some((_, got, _)) = differing.iter().find(|(row, _, _)| row == known) else {
                 panic!("strict={strict}: {known} ({reason}) matches production now; remove it");
@@ -349,6 +398,15 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 assert_eq!(
                     got["results"].as_array().map(Vec::len),
                     Some(2),
+                    "{known}: {got}"
+                );
+            } else if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
+                && !strict
+            {
+                assert_eq!(got["status"], 400, "{known}: {got}");
+                assert_eq!(
+                    got["body"][0]["error"]["message"],
+                    "The 'select(...)' stage requires at least one field.",
                     "{known}: {got}"
                 );
             } else {

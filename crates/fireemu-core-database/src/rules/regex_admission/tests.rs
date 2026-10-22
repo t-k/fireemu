@@ -2073,3 +2073,139 @@ fn persistent_varying_histories_match_scalar_snapshots() {
         }
     }
 }
+
+fn scalar_collection_constructor(items: &[Automaton], union: bool) -> Graph {
+    fn copy(g: &mut Graph, from: usize, to: usize) {
+        let row = g.states[to].clone();
+        g.states[from].accept |= row.accept;
+        g.states[from].edges.extend(row.edges);
+        g.states[from].edges.sort_unstable();
+        g.states[from].edges.dedup();
+    }
+    fn append(g: &mut Graph, child: &Graph) -> usize {
+        let offset = g.states.len();
+        g.states.extend(child.states.iter().map(|row| {
+            State {
+                accept: row.accept,
+                edges: row
+                    .edges
+                    .iter()
+                    .map(|e| Edge {
+                        to: e.to + offset,
+                        ..*e
+                    })
+                    .collect(),
+            }
+        }));
+        child.initial + offset
+    }
+    let mut children: Vec<_> = items
+        .iter()
+        .map(|a| {
+            let mut graph = a.expanded().unwrap();
+            graph.ensure_dense().unwrap();
+            graph
+        })
+        .collect();
+    if union {
+        let mut g = Graph::empty();
+        for child in children {
+            if child.accepting().is_empty() {
+                continue;
+            }
+            let initial = append(&mut g, &child);
+            copy(&mut g, 0, initial);
+        }
+        g.deterministic = false;
+        return g;
+    }
+    if children.iter().any(|g| g.accepting().is_empty()) {
+        return Graph::empty();
+    }
+    let mut g = children.remove(0);
+    let mut accepting = g.accepting();
+    for child in children {
+        if child.accepts(child.initial) && child.outgoing(child.initial).next().is_none() {
+            continue;
+        }
+        let offset = g.state_count();
+        let initial = append(&mut g, &child);
+        let mut next: Vec<_> = child.accepting().into_iter().map(|q| q + offset).collect();
+        for q in accepting {
+            g.states[q].accept = false;
+            copy(&mut g, q, initial);
+            if g.states[q].accept {
+                next.push(q);
+            }
+        }
+        accepting = next;
+    }
+    g.deterministic = false;
+    g
+}
+
+#[test]
+fn persistent_collection_routing_long_inputs_reach_actual_guard() {
+    let word = Automaton::Singleton(vec![97; 30000]);
+    let graph = Automaton::Graph(Automaton::literal("b").expanded().unwrap());
+    for union in [false, true] {
+        let items = [word.clone(), graph.clone()];
+        let mut actual = if union {
+            Automaton::collection_union(&items)
+        } else {
+            Automaton::concat(&items)
+        }
+        .unwrap();
+        assert_eq!(actual.minimize(5000), Err(Failure::Resource));
+    }
+}
+
+#[test]
+fn persistent_collection_routing_preserves_unminimized_identity_and_counts() {
+    let values = [
+        Automaton::Graph(Graph::empty()),
+        Automaton::Graph(Automaton::literal("").expanded().unwrap()),
+        Automaton::Graph(Automaton::literal("ab").expanded().unwrap()),
+        Automaton::literal("a").optional().unwrap(),
+        Automaton::literal("b").star().unwrap(),
+    ];
+    for first in &values {
+        for second in &values {
+            for third in &values {
+                let items = [first.clone(), second.clone(), third.clone()];
+                for union in [false, true] {
+                    let expected = scalar_collection_constructor(&items, union);
+                    WORD_MATERIALIZATIONS.with(|n| n.set(0));
+                    let actual = if union {
+                        Automaton::collection_union(&items)
+                    } else {
+                        Automaton::concat(&items)
+                    }
+                    .unwrap()
+                    .expanded()
+                    .unwrap();
+                    assert_eq!(actual.initial, expected.initial);
+                    assert_eq!(actual.state_count(), expected.state_count());
+                    assert_eq!(actual.deterministic, expected.deterministic);
+                    for q in 0..actual.state_count() {
+                        assert_eq!(actual.accepts(q), expected.accepts(q));
+                        assert_eq!(
+                            actual.outgoing(q).collect::<BTreeSet<_>>(),
+                            expected.outgoing(q).collect::<BTreeSet<_>>()
+                        );
+                    }
+                    WORD_MATERIALIZATIONS.with(|n| assert_eq!(n.get(), 0));
+                    for threshold in [0, 2, 5, 5000] {
+                        let mut a = actual.clone();
+                        let mut e = expected.clone();
+                        let outcome = a.minimize(threshold);
+                        assert_eq!(outcome, e.minimize(threshold));
+                        if outcome.is_ok() {
+                            assert_eq!(a.normal(), e.normal());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

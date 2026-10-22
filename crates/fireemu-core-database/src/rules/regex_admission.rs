@@ -225,6 +225,15 @@ impl Graph {
             .collect()
     }
 
+    // Import freezes the child's whole store version under a fresh namespace.
+    // Legacy Dense append below remains separate for explicit reference paths.
+    fn append_store(&mut self, other: &Self) -> Result<usize, Failure> {
+        self.ensure_store();
+        let child = persistent::Store::from_graph(other);
+        let offset = self.store.as_mut().unwrap().import(&child)?;
+        Ok(offset + other.initial)
+    }
+
     fn append(&mut self, other: &Self) -> Result<usize, Failure> {
         self.ensure_dense()?;
         let offset = self.states.len();
@@ -564,12 +573,12 @@ impl Automaton {
                 continue;
             }
             let offset = result.state_count();
-            let initial = result.append(&graph)?;
+            let initial = result.append_store(&graph)?;
             let mut next: Vec<_> = graph.accepting().iter().map(|i| i + offset).collect();
             for i in accepting {
-                result.states[i].accept = false;
+                result.set_accept(i, false);
                 result.copy_edges(i, initial)?;
-                if result.states[i].accept {
+                if result.accepts(i) {
                     next.push(i);
                 }
             }
@@ -586,7 +595,7 @@ impl Automaton {
             if graph.accepting().is_empty() {
                 continue;
             }
-            let initial = result.append(&graph)?;
+            let initial = result.append_store(&graph)?;
             result.copy_edges(0, initial)?;
         }
         result.deterministic = false;

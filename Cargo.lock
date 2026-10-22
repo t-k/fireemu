@@ -915,6 +915,7 @@ name = "fireemu-export-publication"
 version = "0.28.0"
 dependencies = [
  "exacl",
+ "fireemu-fd-acl",
  "nix",
  "proptest",
  "rustix",

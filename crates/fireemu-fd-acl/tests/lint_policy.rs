@@ -106,8 +106,8 @@ const EXPECTED_ALLOWANCE: &str = "# [ allow ( unsafe_code ) ] mod ffi {";
 const FFI_FILE: &str = "src/macos.rs";
 /// The FFI module's name.
 const FFI_MODULE: &str = "ffi";
-/// `acl_get_fd_np`, `acl_get_entry` and `acl_free`, one `unsafe` block each.
-const EXPECTED_UNSAFE_BLOCKS: usize = 3;
+/// `acl_get_fd_np`, `acl_get_entry`, `acl_init`, `acl_set_fd_np` and `acl_free`, one block each.
+const EXPECTED_UNSAFE_BLOCKS: usize = 5;
 
 /// A token of Rust source and the line it starts on.
 ///

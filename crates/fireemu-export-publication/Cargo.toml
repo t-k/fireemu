@@ -13,22 +13,11 @@ rustix = { version = "1", features = ["fs", "process"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 exacl = "0.13"
+fireemu-fd-acl = { path = "../fireemu-fd-acl" }
 nix = { version = "0.30", default-features = false, features = ["user"] }
 
 [dev-dependencies]
 proptest.workspace = true
 
-# Keep the workspace lints, with one audited native ACL module allowed to bind macOS fd APIs.
-# Every other module still denies unsafe code.
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "warn"
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(kani)"] }
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-module_name_repetitions = "allow"
-must_use_candidate = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
+[lints]
+workspace = true

@@ -18,11 +18,6 @@ use std::path::Path;
 
 use exacl::{AclEntry, AclEntryKind};
 
-// The only unsafe-code exception: the audited, owned native fd ACL binding.
-#[allow(unsafe_code)]
-#[path = "acl_native.rs"]
-mod native;
-
 /// The principals that already control a directory, by the names `exacl` reports for them.
 ///
 /// A name is compared as a whole against the name the user database gives each trusted uid; no
@@ -142,8 +137,10 @@ pub(crate) fn check(
 
 /// Clears and reads back the ACL of the stage held by `directory`, never by its old name.
 pub(crate) fn clear_stage_acl(directory: std::os::fd::BorrowedFd<'_>) -> Result<(), String> {
-    let cleared = native::clear(directory).map_err(|error| error.to_string());
-    let empty = native::is_empty(directory).map_err(|error| error.to_string());
+    let cleared = fireemu_fd_acl::clear_extended_acl(directory).map_err(|error| error.to_string());
+    let empty = fireemu_fd_acl::fd_has_extended_acl(directory)
+        .map(|present| !present)
+        .map_err(|error| error.to_string());
     settle_stage_acl(cleared, empty)
 }
 

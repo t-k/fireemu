@@ -18,6 +18,19 @@ pub fn fd_has_extended_acl(descriptor: BorrowedFd<'_>) -> io::Result<bool> {
     raw_fd_has_extended_acl(descriptor.as_raw_fd())
 }
 
+/// Removes all extended ACL entries from the object held by `descriptor`.
+///
+/// No path is resolved, even when the object's former name has been replaced. An unsupported
+/// filesystem or any allocation/set error is returned to the caller; callers that require an
+/// empty ACL must independently read it back with [`fd_has_extended_acl`].
+pub fn clear_extended_acl(descriptor: BorrowedFd<'_>) -> io::Result<()> {
+    raw_clear_extended_acl(descriptor.as_raw_fd())
+}
+
+fn raw_clear_extended_acl(descriptor: c_int) -> io::Result<()> {
+    ffi::ExtendedAcl::empty()?.apply_to_descriptor(descriptor)
+}
+
 /// [`fd_has_extended_acl`] on a raw descriptor number, which may be invalid.
 ///
 /// This stays private: the public function takes a `BorrowedFd`, which guarantees that the
@@ -78,18 +91,43 @@ mod ffi {
     const ACL_FIRST_ENTRY: c_int = 0;
 
     extern "C" {
+        fn acl_init(count: c_int) -> *mut c_void;
+        fn acl_set_fd_np(fd: c_int, acl: *mut c_void, acl_type: c_uint) -> c_int;
         fn acl_get_fd_np(fd: c_int, acl_type: c_uint) -> *mut c_void;
         fn acl_get_entry(acl: *mut c_void, entry_id: c_int, entry_p: *mut *mut c_void) -> c_int;
         fn acl_free(obj_p: *mut c_void) -> c_int;
     }
 
-    /// An ACL returned by `acl_get_fd_np`, owned and freed once on drop.
+    /// An ACL returned by `acl_get_fd_np` or `acl_init`, owned and freed once on drop.
     ///
     /// The pointer makes this type neither `Send` nor `Sync`, so the ACL, including the
     /// entry cursor that `acl_get_entry` moves, is only ever used by one thread.
     pub(super) struct ExtendedAcl(NonNull<c_void>);
 
     impl ExtendedAcl {
+        /// Allocates an owned, empty extended ACL.
+        pub(super) fn empty() -> io::Result<Self> {
+            // SAFETY: zero is a valid entry count. The function returns either NULL with errno,
+            // read immediately, or an independent allocation owned by Self and freed once on drop.
+            let acl = unsafe { acl_init(0) };
+            NonNull::new(acl)
+                .map(Self)
+                .ok_or_else(io::Error::last_os_error)
+        }
+
+        /// Applies this live ACL to an open descriptor without retaining either argument.
+        pub(super) fn apply_to_descriptor(&self, descriptor: c_int) -> io::Result<()> {
+            // SAFETY: self owns the valid ACL for the duration of this call. The library copies
+            // its entries, keeping neither pointer nor descriptor. An invalid descriptor returns
+            // EBADF rather than accessing memory; the public API requires a live BorrowedFd.
+            let status = unsafe { acl_set_fd_np(descriptor, self.0.as_ptr(), ACL_TYPE_EXTENDED) };
+            if status == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+
         /// Reads the extended ACL of `descriptor`, or the error of a NULL answer.
         pub(super) fn of_descriptor(descriptor: c_int) -> io::Result<Self> {
             // SAFETY: `acl_get_fd_np` takes both arguments by value and keeps neither. Any
@@ -120,7 +158,7 @@ mod ffi {
 
     impl Drop for ExtendedAcl {
         fn drop(&mut self) {
-            // SAFETY: `self.0` came from `acl_get_fd_np`, is released here exactly once, and
+            // SAFETY: `self.0` came from `acl_get_fd_np` or `acl_init`, is freed exactly once, and
             // is not used afterwards, because nothing else holds it. `acl_free` only fails
             // for a pointer that the ACL library did not allocate, so its status is ignored.
             unsafe { acl_free(self.0.as_ptr()) };
@@ -239,6 +277,84 @@ mod tests {
             .create(&inherited_directory)
             .unwrap();
         assert!(has_extended_acl(&inherited_directory).unwrap());
+    }
+
+    #[test]
+    fn clearing_allow_deny_and_inherited_entries_leaves_empty_descriptors() {
+        let scratch = Scratch::new("clear");
+        for (name, entry) in [
+            ("allow", "everyone allow read"),
+            ("deny", "everyone deny delete"),
+        ] {
+            let path = scratch.path().join(name);
+            std::fs::write(&path, b"key").unwrap();
+            chmod(&["+a", entry], &path);
+            let file = std::fs::File::open(&path).unwrap();
+            assert!(fd_has_extended_acl(file.as_fd()).unwrap());
+            super::clear_extended_acl(file.as_fd()).unwrap();
+            assert!(!fd_has_extended_acl(file.as_fd()).unwrap());
+            super::clear_extended_acl(file.as_fd()).unwrap();
+            assert!(!fd_has_extended_acl(file.as_fd()).unwrap());
+        }
+        let parent = scratch.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        chmod(
+            &[
+                "+a",
+                "everyone allow list,read,file_inherit,directory_inherit",
+            ],
+            &parent,
+        );
+        for (name, directory) in [("child-file", false), ("child-directory", true)] {
+            let child = parent.join(name);
+            if directory {
+                std::fs::create_dir(&child).unwrap();
+            } else {
+                std::fs::write(&child, b"key").unwrap();
+            }
+            let file = std::fs::File::open(&child).unwrap();
+            assert!(fd_has_extended_acl(file.as_fd()).unwrap());
+            super::clear_extended_acl(file.as_fd()).unwrap();
+            assert!(!fd_has_extended_acl(file.as_fd()).unwrap());
+            assert!(has_extended_acl(&parent).unwrap());
+        }
+    }
+
+    #[test]
+    fn clearing_a_replaced_directory_changes_only_the_open_object() {
+        let scratch = Scratch::new("clear-replaced");
+        let path = scratch.path().join("stage");
+        std::fs::create_dir(&path).unwrap();
+        chmod(&["+a", "everyone allow read"], &path);
+        let held = std::fs::File::open(&path).unwrap();
+        let moved = scratch.path().join("moved");
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        chmod(&["+a", "everyone allow read"], &path);
+        let victim_before = std::process::Command::new("/bin/ls")
+            .arg("-lde")
+            .arg(&path)
+            .output()
+            .unwrap()
+            .stdout;
+        assert!(fd_has_extended_acl(held.as_fd()).unwrap());
+        super::clear_extended_acl(held.as_fd()).unwrap();
+        assert!(!fd_has_extended_acl(held.as_fd()).unwrap());
+        assert!(!has_extended_acl(&moved).unwrap());
+        assert!(has_extended_acl(&path).unwrap());
+        let victim_after = std::process::Command::new("/bin/ls")
+            .arg("-lde")
+            .arg(&path)
+            .output()
+            .unwrap()
+            .stdout;
+        assert_eq!(victim_before, victim_after);
+    }
+
+    #[test]
+    fn clearing_an_invalid_descriptor_preserves_the_set_error() {
+        let error = super::raw_clear_extended_acl(-1).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(EBADF));
     }
 
     #[test]

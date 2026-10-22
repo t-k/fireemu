@@ -52,6 +52,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> RestRespons
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
     })
 }
 

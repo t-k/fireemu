@@ -299,7 +299,11 @@ fn decode_map(m: &pb::MapValue, parent_depth: u32) -> Result<Value, DecodeError>
     }
     let depth = nested_depth(parent_depth)?;
     let mut out = BTreeMap::new();
-    for (k, v) in &m.fields {
+    // In key order, so that the first refusal of a map is the same on every run (the wire map
+    // keeps no order).
+    let mut entries: Vec<_> = m.fields.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (k, v) in entries {
         if k == "__name__" {
             return Err(DecodeError::InvalidFieldPath(
                 "field name __name__ is reserved".into(),

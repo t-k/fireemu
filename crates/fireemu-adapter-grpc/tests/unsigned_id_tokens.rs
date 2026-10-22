@@ -211,6 +211,7 @@ fn patch(state: &RestState, path: &str, authorization: &str) -> (u16, Value) {
         app_check: Vec::new(),
         body: json!({"fields": {"v": {"integerValue": "1"}}}),
         batch_field_order: Vec::new(),
+        key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
         origin: None,
         remote_peer: false,
         browser_metadata: false,

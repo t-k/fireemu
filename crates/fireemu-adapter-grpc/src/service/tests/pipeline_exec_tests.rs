@@ -123,7 +123,7 @@ fn field_ref(path: &str) -> pb::Value {
 fn pipeline(case: &Case, prefix: &str) -> pb::ExecutePipelineRequest {
     let mut stages = vec![stage(
         "collection",
-        value(pb::value::ValueType::StringValue("/items".to_owned())),
+        value(pb::value::ValueType::ReferenceValue("/items".to_owned())),
     )];
     if let Some(literal) = &case.literal {
         stages.push(stage(
@@ -316,6 +316,9 @@ fn service_for(case: &Case) -> GatewayService {
     seed(&backend, case);
     let mut gateway = test_gateway();
     gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    // The executor against the lowering is the same in both profiles; the emulator profile
+    // answers every offset and limit the cases draw (strict answers only the recorded ones).
+    gateway.ctx.policy = fireemu_core_firestore::index::IndexValidationPolicy::Emulator;
     GatewayService::local(gateway, backend)
 }
 
@@ -600,8 +603,8 @@ async fn a_where_copies_only_matching_documents() {
     assert!(executed.pages.cloned_field_bytes < 2 * 4096);
 }
 
-/// Under strict a refusal found at run time can follow results already streamed, and rows
-/// after a used-up limit are never evaluated.
+/// A refusal found at run time can follow results already streamed, and rows after a used-up
+/// limit are never evaluated.
 #[tokio::test]
 async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
     let backend = test_backend();
@@ -611,11 +614,14 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
             writes: [
                 (
                     "a",
+                    pb::value::ValueType::ReferenceValue(format!("{PARENT}/o/z/s/y")),
+                ),
+                // The parent of a top-level document is the documents root, whose ID production
+                // refuses at run time (FS-ENT-ORACLE O-1).
+                (
+                    "b",
                     pb::value::ValueType::ReferenceValue(format!("{PARENT}/o/z")),
                 ),
-                // An integer is an argument type production has not answered (it answered a
-                // string, FS-ENT-ORACLE O-3).
-                ("b", pb::value::ValueType::IntegerValue(7)),
             ]
             .into_iter()
             .map(|(id, r)| pb::Write {
@@ -632,12 +638,15 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
         .unwrap();
     let mut gateway = test_gateway();
     gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    // The emulator profile answers the run-time refusal (strict answers it only in a shape
+    // production refused).
+    gateway.ctx.policy = fireemu_core_firestore::index::IndexValidationPolicy::Emulator;
     let service = GatewayService::local(gateway, backend);
     let request = |limit: Option<i64>| {
         let mut stages = vec![
             stage(
                 "collection",
-                value(pb::value::ValueType::StringValue("/items".to_owned())),
+                value(pb::value::ValueType::ReferenceValue("/items".to_owned())),
             ),
             stage(
                 "select",
@@ -646,7 +655,11 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
                         "id".to_owned(),
                         value(pb::value::ValueType::FunctionValue(pb::Function {
                             name: "document_id".to_owned(),
-                            args: vec![field_ref("r")],
+                            args: vec![value(pb::value::ValueType::FunctionValue(pb::Function {
+                                name: "parent".to_owned(),
+                                args: vec![field_ref("r")],
+                                ..Default::default()
+                            }))],
                             ..Default::default()
                         })),
                     )]
@@ -681,7 +694,11 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
     let first = stream.next().await.unwrap().unwrap();
     assert_eq!(first.results.len(), 1);
     let refusal = stream.next().await.unwrap().unwrap_err();
-    assert_eq!(refusal.code(), tonic::Code::Unimplemented);
+    assert_eq!(refusal.code(), tonic::Code::InvalidArgument);
+    assert_eq!(
+        refusal.message(),
+        "document_id(...) requires a non-empty path."
+    );
     assert!(stream.next().await.is_none());
     assert_eq!(executor(&service, request(Some(1))).await.len(), 1);
 }

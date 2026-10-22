@@ -75,6 +75,7 @@ fn call_as(
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: crate::rest::json_syntax::KeyOrder::default(),
         origin: None,
         remote_peer: false,
         browser_metadata: false,

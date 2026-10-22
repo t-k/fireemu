@@ -21,7 +21,7 @@ PINS = {
   "dtolnay/rust-toolchain" => "6bed0761d98439e5a578e2877258200ad565ba87",
   "taiki-e/install-action" => "7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c",
   "Swatinem/rust-cache" => "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
-  "pnpm/action-setup" => "f40ffcd9367d9f12939873eb1018b921a783ffaa",
+  "pnpm/action-setup" => "b906affcce14559ad1aafd4ab0e942779e9f58b1",
   "actions/setup-node" => "49933ea5288caeca8642d1e84afbd3f7d6820020",
 }.freeze
 

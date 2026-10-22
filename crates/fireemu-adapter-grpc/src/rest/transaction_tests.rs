@@ -49,6 +49,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
         app_check: Vec::new(),
         body,
         batch_field_order: Vec::new(),
+        key_order: crate::rest::json_syntax::KeyOrder::default(),
     });
     (response.status, response.body)
 }

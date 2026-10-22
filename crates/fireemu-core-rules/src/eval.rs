@@ -5117,7 +5117,7 @@ fn bind_function_captures(
 // Int / float equality follows the Rules language (numeric comparison), so the widening cast
 // and the exact float comparison are intentional.
 #[cfg(test)]
-std::thread_local! { static EQUALITY_WORK: core::cell::Cell<usize> = const { core::cell::Cell::new(0) }; }
+std::thread_local! { static EQUALITY_WORK: core::cell::Cell<usize> = const { core::cell::Cell::new(0) }; static FORCE_SCALAR_COLLISION: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; }
 
 #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
 fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
@@ -6037,6 +6037,10 @@ fn scalar_kind(value: &RulesValue) -> Option<ScalarKind> {
 }
 
 fn scalar_fingerprint(value: &RulesValue) -> u64 {
+    #[cfg(test)]
+    if FORCE_SCALAR_COLLISION.with(core::cell::Cell::get) {
+        return 0;
+    }
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     match value {
         RulesValue::Int(value) => value.hash(&mut hash),
@@ -6805,6 +6809,35 @@ service cloud.firestore {
             }
         }
         RulesValue::Set(out)
+    }
+
+    #[test]
+    fn indexed_collection_digest_collisions_preserve_exact_values_and_order() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                super::FORCE_SCALAR_COLLISION.with(|enabled| enabled.set(false));
+            }
+        }
+        super::FORCE_SCALAR_COLLISION.with(|enabled| enabled.set(true));
+        let _reset = Reset;
+        assert_eq!(
+            super::scalar_fingerprint(&RulesValue::String("first".into())),
+            super::scalar_fingerprint(&RulesValue::String("second".into()))
+        );
+        let items: Vec<_> = (0..100)
+            .map(|n| RulesValue::String(format!("key-{n}")))
+            .collect();
+        let expected = linear_set(items.iter().chain(items.iter().rev()).cloned());
+        assert_eq!(
+            super::make_set(items.iter().chain(items.iter().rev()).cloned()),
+            expected
+        );
+        let ints: Vec<_> = (0..100).map(RulesValue::Int).collect();
+        assert_eq!(
+            super::make_set(ints.iter().chain(ints.iter().rev()).cloned()),
+            linear_set(ints)
+        );
     }
 
     #[test]

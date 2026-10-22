@@ -432,7 +432,9 @@ fn rest_round_trips_all_standard_value_types_and_preserves_refused_writes() {
     let (status, masked) = call(
         &s,
         "GET",
-        &format!("{DOCS}/types/all?mask.fieldPaths=null&mask.fieldPaths=map.nested&mask.fieldPaths=missing"),
+        &format!(
+            "{DOCS}/types/all?mask.fieldPaths=null&mask.fieldPaths=map.nested&mask.fieldPaths=missing"
+        ),
         Value::Null,
     );
     assert_eq!(status, 200, "{masked}");
@@ -2310,7 +2312,9 @@ fn put_rules(s: &RestState, source: &str) -> (u16, Value) {
 
 #[test]
 fn the_emulator_security_rules_route_replaces_the_ruleset_and_reports_the_compiler() {
-    let s = state(Some("rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{document=**} { allow read, write: if false; }\n  }\n}\n"));
+    let s = state(Some(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{document=**} { allow read, write: if false; }\n  }\n}\n",
+    ));
     // The ruleset that is loaded denies everything, with no credential in play.
     let (status, _) = call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
     assert_eq!(status, 403);
@@ -2465,7 +2469,10 @@ fn the_rule_coverage_route_reports_every_expression_by_its_source_position() {
     assert!(html.contains("coverage-expr"));
 
     // Loading a new ruleset drops the positions that described the old one.
-    put_rules(&s, "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} { allow read: if true; }\n  }\n}\n");
+    put_rules(
+        &s,
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} { allow read: if true; }\n  }\n}\n",
+    );
     let (_, body) = call_as(
         &s,
         "GET",
@@ -5338,7 +5345,13 @@ fn explain_rest_authorization_denies_without_metrics_or_leaked_transactions() {
             for analyze in [false, true] {
                 let mut request = explain_body(aggregation, analyze);
                 request["newTransaction"] = json!({"readOnly": {}});
-                let (status, body) = call_as(&s, "POST", &format!("{DOCS}:{}", explain_method(aggregation)), request, None);
+                let (status, body) = call_as(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:{}", explain_method(aggregation)),
+                    request,
+                    None,
+                );
                 assert_eq!(status, 403, "{body}");
                 // The array wraps every streaming-method error; for a Rules denial that comes
                 // from an exploratory probe only (not closure evidence).
@@ -5348,7 +5361,14 @@ fn explain_rest_authorization_denies_without_metrics_or_leaked_transactions() {
             }
         }
         let parent = fireemu_adapter_grpc::decode::parse_parent(&DOCS[4..]).unwrap();
-        assert_eq!(s.local.database_handle(&parent).unwrap().with(|db| Ok(db.transaction_bookkeeping_stats().active)).unwrap(), 0);
+        assert_eq!(
+            s.local
+                .database_handle(&parent)
+                .unwrap()
+                .with(|db| Ok(db.transaction_bookkeeping_stats().active))
+                .unwrap(),
+            0
+        );
     }
 }
 
@@ -7221,14 +7241,10 @@ fn rest_execute_pipeline_select_refusals_answer_production_bodies() {
         let (status, body) = select(&format!(r#""m": {field}, "m.r": {field}"#));
         assert_eq!(status, 400, "{body}");
         assert_eq!(body, overlap("m.r"), "strict={strict}");
-        // The other order: the official emulator names the later alias; production has not
-        // refused it.
+        // O5 records the reversed alias order and its exact overlap field.
         let (status, body) = select(&format!(r#""m.r": {field}, "m": {field}"#));
-        if strict {
-            assert_eq!(status, 501, "{body}");
-        } else {
-            assert_eq!(body, overlap("m"), "{body}");
-        }
+        assert_eq!(status, 400, "strict={strict}: {body}");
+        assert_eq!(body, overlap("m"), "strict={strict}: {body}");
         let wide: Vec<String> = (0..65).map(|k| format!(r#""a{k:02}": {field}"#)).collect();
         let (status, body) = select(&wide.join(", "));
         assert_eq!(status, 400, "{body}");
@@ -7384,7 +7400,9 @@ fn rest_execute_pipeline_answers_the_o2_rows() {
 fn rest_execute_pipeline_checks_the_owner_first_and_transcodes_strictly() {
     let s = enterprise_state(
         true,
-        Some("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }"),
+        Some(
+            "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }",
+        ),
     );
     let (status, body) = call_as(
         &s,
@@ -7618,7 +7636,9 @@ fn rest_execute_pipeline_transcodes_every_request_field() {
 fn rest_execute_pipeline_runs_for_the_owner_under_rules() {
     let s = enterprise_state(
         true,
-        Some("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }"),
+        Some(
+            "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }",
+        ),
     );
     seed_nest(&s);
     let body =

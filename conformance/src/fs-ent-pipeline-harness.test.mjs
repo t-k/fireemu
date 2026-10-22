@@ -806,8 +806,7 @@ test("a seed commit is a reviewed single-document write into the named database"
 });
 
 test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", async () => {
-  const { ceilings, harnessDigest, programDigest, selectPrograms } =
-    await import("./fs-query-index/run.mjs");
+  const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
   const { readFile } = await import("node:fs/promises");
   const {
     O5_FUNCTION_NAMES,
@@ -891,7 +890,12 @@ test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", a
     allO5.reduce((n, p) => n + p.steps.length, 0),
     310,
   );
-  const harness = await harnessDigest();
+  const harness = createHash("sha256")
+    .update(await readFile(new URL("./fs-ent-pipeline/harness.mjs", import.meta.url), "utf8"))
+    .update("\n")
+    .update(await readFile(new URL("./fs-ent-pipeline/session.mjs", import.meta.url), "utf8"))
+    .update("\n")
+    .digest("hex");
   for (const program of allO5) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
     assert.equal(recorded[program.id]?.harnessDigest, harness, program.id);

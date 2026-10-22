@@ -6148,14 +6148,23 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
         args: vec![value],
         options: std::collections::HashMap::default(),
     };
+    let recorded = client
+        .execute_pipeline(request(vec![typed("collection", s("/users/u1"))]))
+        .await
+        .unwrap_err();
+    assert_eq!(recorded.code(), tonic::Code::InvalidArgument);
+    assert_eq!(
+        recorded.message(),
+        "Expected collection_name to be REFERENCE_VALUE, but was STRING_VALUE."
+    );
+    assert_eq!(
+        recorded.metadata().get("fireemu-code").unwrap(),
+        "FS_PIPE_INVALID"
+    );
     for (what, bad) in [
         (
             "collection(null)",
             request(vec![typed("collection", pb::Value { value_type: None })]),
-        ),
-        (
-            "collection(document path)",
-            request(vec![typed("collection", s("/users/u1"))]),
         ),
         (
             "unknown option",
@@ -7270,9 +7279,9 @@ async fn execute_pipeline_recorded_refusals_answer_production_texts() {
         } else {
             assert_eq!(overlap.code(), tonic::Code::InvalidArgument);
             assert_eq!(
-            overlap.message(),
-            "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
-        );
+                overlap.message(),
+                "The request is invalid because the 'select(...)' stage is attempting to set a parent document and one of its child fields simultaneously. In this case the parent document reference of 'm.r' overlaps with a child field already being configured in this stage.\n\nTo fix this issue, either set only the parent document reference, or explicitly set all the child fields individually."
+            );
             assert_eq!(
                 fireemu_adapter_grpc::production_status::details_to_json(overlap.details()),
                 Some(vec![serde_json::json!({

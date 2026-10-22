@@ -679,6 +679,20 @@ proptest! {
         );
     }
 
+    #[test]
+    fn reused_glob_matcher_agrees_with_the_reference_after_cancellation(
+        pattern in glob_fragments(),
+        names in proptest::collection::vec(glob_names(), 0..30),
+    ) {
+        let glob = fireemu_core_storage::glob::Glob::new(&pattern);
+        let mut matcher = glob.matcher();
+        for name in names {
+            let _ = matcher.matches_unless(&name, &|| true);
+            prop_assert_eq!(matcher.matches_unless(&name, &|| false), Some(reference_glob::matches(&pattern, &name)));
+            prop_assert_eq!(matcher.matches_unless("", &|| false), Some(reference_glob::matches(&pattern, "")));
+        }
+    }
+
     /// A filtered listing walked page by page equals the reference listing of the names the
     /// reference filter accepts (offsets inclusive and exclusive, glob over the whole name).
     #[test]

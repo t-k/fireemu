@@ -1,9 +1,10 @@
-import { createResource, createSignal, For, Show, type Component } from "solid-js";
+import { createSignal, For, Show, type Component } from "solid-js";
 import { t } from "../i18n";
 import { appState } from "../state";
-import { AsyncButton, Field, Section, Spinner } from "../components/common";
+import { AsyncButton, Field, Section, FetchState } from "../components/common";
 import { getRules } from "../api/control";
 import { settle } from "../api/client";
+import { createScopedFetch } from "../lib/rules-state";
 import { productScope, statusLabelKey, type ProductStatus } from "../lib/products";
 
 /** Tailwind classes for a product-scope status badge. */
@@ -62,10 +63,33 @@ const CopyBlock: Component<{ text: string; testId: string }> = (props) => {
   );
 };
 
+const RulesStatus: Component<{ which: "firestore" | "storage" }> = (props) => {
+  const info = createScopedFetch(
+    () => JSON.stringify([appState.session(), appState.project()]),
+    () => settle(getRules(props.which)),
+  );
+  return (
+    <FetchState
+      loading={info.loading() && info.data() === undefined}
+      error={info.data() === undefined ? info.error() : null}
+      stale={info.data() !== undefined ? info.error() : null}
+      onRetry={info.refetch}
+    >
+      <Show when={info.loading()}>
+        <span role="status">{t("rules.refreshing")}</span>
+      </Show>
+      <Show when={info.data()}>
+        {(data) => <span>{data().loaded ? t("rules.loaded") : t("rules.notLoaded")}</span>}
+      </Show>
+      <AsyncButton class="btn" onClick={info.refetch} testId={`overview-${props.which}-refresh`}>
+        {t("rules.refresh")}
+      </AsyncButton>
+    </FetchState>
+  );
+};
+
 const Overview: Component = () => {
   const config = appState.config;
-  const [firestoreRules] = createResource(() => settle(getRules("firestore")));
-  const [storageRules] = createResource(() => settle(getRules("storage")));
   // The environment for the selected session's project: what the header shows is what
   // an SDK pointed here talks to. The daemon's own default project is shown separately.
   const hosts = () =>
@@ -146,14 +170,10 @@ const Overview: Component = () => {
             {config().rulesEnforced ? t("overview.rulesEnforced") : t("overview.rulesDisabled")}
           </Field>
           <Field label={t("overview.rulesFirestore")}>
-            <Show when={!firestoreRules.loading} fallback={<Spinner />}>
-              {firestoreRules()?.unwrapOr(null)?.loaded ? t("app.yes") : t("app.no")}
-            </Show>
+            <RulesStatus which="firestore" />
           </Field>
           <Field label={t("overview.rulesStorage")}>
-            <Show when={!storageRules.loading} fallback={<Spinner />}>
-              {storageRules()?.unwrapOr(null)?.loaded ? t("app.yes") : t("app.no")}
-            </Show>
+            <RulesStatus which="storage" />
           </Field>
         </Section>
         <Section title={t("overview.sessions")}>

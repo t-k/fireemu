@@ -1655,7 +1655,7 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     use fireemu_core_rules::parse::parse_ruleset;
 
     let s = state(Arc::new(AtomicUsize::new(0)));
-    let source = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if id != 'secret'; } } }";
+    let source = "// 日😀\r\n rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if id != 'secret'; } } }";
     assert_eq!(
         handle(&s, "PUT", "/v1/rules", &json!({"source": source})).status,
         200
@@ -1666,6 +1666,11 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     assert_eq!(empty.status, 200, "{}", empty.body);
     assert_eq!(empty.body["requests"], json!([]));
     assert_eq!(empty.body["loaded"], true);
+    assert_eq!(empty.body["source"], source);
+    assert_eq!(
+        empty.body["generation"],
+        s.rules.snapshot().unwrap().generation().to_string()
+    );
     assert_eq!(
         handle(
             &s,
@@ -2737,4 +2742,96 @@ async fn await_idle_scope_keeps_default_and_wakes_on_future_retry_transition() {
     let response =
         fireemu_adapter_http::control::await_idle(&state, &json!({"timeoutSeconds": 0})).await;
     assert_eq!(response.status, 504);
+}
+
+#[test]
+fn request_trace_metadata_is_bound_to_the_snapshot_across_reload_and_clear() {
+    use fireemu_core_rules::coverage::RequestTrace;
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let read = || handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    let empty = read();
+    assert_eq!(empty.body["source"], serde_json::Value::Null);
+    assert!(empty.body["generation"].as_str().is_some());
+    let source = "service cloud.firestore { match /databases/{d}/documents { match /{p=**} { allow read: if true; } } }";
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source":source})).status,
+        200
+    );
+    let a = s.rules.snapshot().unwrap();
+    let first = read();
+    assert_eq!(first.body["source"], source);
+    assert_eq!(
+        handle(
+            &s,
+            "PUT",
+            "/v1/storage/rules",
+            &json!({"source": STORAGE_VALID})
+        )
+        .status,
+        200
+    );
+    let storage = handle(&s, "GET", "/v1/storage/rules", &json!({})).body;
+
+    assert_eq!(first.body["generation"], a.generation().to_string());
+    let trace = |sequence| RequestTrace {
+        sequence,
+        method: "get",
+        path: "notes/a".into(),
+        allowed: true,
+        reason: String::new(),
+        uid: None,
+        expressions: Vec::new(),
+    };
+    a.diagnostics
+        .lock()
+        .unwrap()
+        .push(&fireemu_core_rules::coverage::Coverage::default(), trace);
+    assert_eq!(read().body["requests"].as_array().unwrap().len(), 1);
+    // Identical bytes still publish a new generation and a fresh diagnostics ring.
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source":source})).status,
+        200
+    );
+    let b = read();
+    assert_eq!(b.body["source"], source);
+    assert_ne!(b.body["generation"], first.body["generation"]);
+    assert_eq!(b.body["requests"], json!([]));
+    assert_eq!(
+        handle(&s, "GET", "/v1/storage/rules", &json!({})).body,
+        storage
+    );
+    // A session data reset is distinct from publishing or restoring a ruleset.
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
+        200
+    );
+    assert_eq!(read().body, b.body);
+
+    // A late evaluation on the retained snapshot cannot populate the new ring.
+    a.diagnostics
+        .lock()
+        .unwrap()
+        .push(&fireemu_core_rules::coverage::Coverage::default(), trace);
+    assert_eq!(a.diagnostics.lock().unwrap().requests().len(), 2);
+    assert_eq!(read().body["requests"], json!([]));
+    // Failed compilation must not change either the source or its generation.
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source":"broken"})).status,
+        400
+    );
+    assert_eq!(read().body, b.body);
+    assert_eq!(handle(&s, "DELETE", "/v1/rules", &json!({})).status, 200);
+    let cleared = read();
+    assert_eq!(cleared.body["source"], serde_json::Value::Null);
+    assert_eq!(cleared.body["loaded"], false);
+    assert_ne!(cleared.body["generation"], b.body["generation"]);
+    assert_eq!(cleared.body["requests"], json!([]));
+    // Restoring captured loaded rules publishes a new generation, never the old diagnostics.
+    let restored_generation = s.rules.replace_loaded((*a.loaded()).clone()).unwrap();
+    let restored = read();
+    assert_eq!(restored.body["source"], source);
+    assert_eq!(restored.body["generation"], restored_generation.to_string());
+    assert_ne!(restored.body["generation"], first.body["generation"]);
+    assert_ne!(restored.body["generation"], cleared.body["generation"]);
+    assert_eq!(restored.body["requests"], json!([]));
 }

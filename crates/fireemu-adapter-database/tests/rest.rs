@@ -282,7 +282,7 @@ fn percent_encoded_paths_are_decoded() {
 }
 
 #[test]
-fn settings_are_permission_denied_until_rules_are_served() {
+fn settings_are_forbidden_without_an_administrator_credential() {
     let mut db = db();
     assert_eq!(
         call(&mut db, "GET", "/.settings/rules.json?ns=q1", ""),

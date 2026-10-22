@@ -21,6 +21,7 @@ pub mod number;
 pub mod path;
 pub mod push_id;
 pub mod query;
+pub mod rules;
 pub mod server_value;
 pub mod tree;
 

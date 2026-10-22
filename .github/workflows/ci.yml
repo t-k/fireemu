@@ -102,6 +102,10 @@ jobs:
         run: pnpm -C conformance install --frozen-lockfile
       - name: tests (profile pr, retries 0)
         run: cargo nextest run --workspace --profile pr
+      - name: RTDB rules route refuses a real non-loopback peer
+        env:
+          FIREEMU_REQUIRE_NON_LOOPBACK_TEST: "1"
+        run: cargo nextest run -p fireemu-adapter-database --test server --profile pr --no-capture -E 'test(the_rules_route_answers_loopback_peers_only_however_its_path_is_written)'
       - name: limit catalog matches generated constants
         run: cargo run -p limit-catalog-gen -- check
       - name: requirement / mutant / loom traceability

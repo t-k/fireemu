@@ -240,7 +240,7 @@ Under the `emulator` profile, a request that names an unknown tenant creates it,
 | Development default | Setting | With `productionExact` |
 |---|---|---|
 | Unsigned custom tokens from the Admin SDK in emulator mode are accepted | `auth.allowUnsignedCustomTokens` | Refused; configure `auth.customTokenSigners` with your service accounts' public keys |
-| `@firebase/rules-unit-testing`'s unsigned mock ID token is accepted by Firestore and Storage Security Rules | `auth.allowUnsignedIdTokens` | Refused, as production refuses an unsigned token |
+| `@firebase/rules-unit-testing`'s unsigned mock ID token is accepted by Firestore, Storage and Realtime Database Security Rules | `auth.allowUnsignedIdTokens` | Refused, as production refuses an unsigned token |
 | Identity-provider sign-in accepts fixture assertions and the sign-in widget | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, and SAML responses with the provider's certificates |
 
 Fixture assertions skip only the signature check. Under `strict`, sign-in through an `oidc.*` or `saml.*` provider is still refused when the provider has no configuration (declare it in `auth.providers`, or create it through the Admin API) or is disabled, with production's `OPERATION_NOT_ALLOWED : The identity provider configuration is not found.` or `... is disabled.`. Built-in providers such as `google.com` sign in without a console configuration; see [Other development conveniences](../../guides/profiles/#other-development-conveniences).

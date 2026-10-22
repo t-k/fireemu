@@ -34,6 +34,14 @@ impl Refusal {
     }
 }
 
+/// Whether `raw_path` reaches the rules route as [`location`] routes it: its first
+/// non-empty segment, percent-decoded, is `.settings`, however many slashes come first and
+/// whatever follows (review r11 M34). Decided before the credential is read.
+pub fn names_settings(raw_path: &str) -> bool {
+    let stem = raw_path.strip_suffix(".json").unwrap_or(raw_path);
+    percent_decode(stem).split('/').find(|s| !s.is_empty()) == Some(".settings")
+}
+
 /// The location part of a target: the raw `/a/b.json` path made into a database path.
 pub enum Location {
     /// A database path.
@@ -57,6 +65,32 @@ pub fn split_target(target: &str) -> (&str, BTreeMap<String, String>) {
         })
         .collect();
     (path, params)
+}
+
+/// The refusal of an ambiguous request (review r11 M35, M36, ruling 18): a query parameter
+/// given more than once, or more than one credential (`auth`, `access_token`, an
+/// `Authorization` header). The official emulator takes the first value and prefers `auth`;
+/// a request that could mean two things is refused here instead (a listed difference).
+pub fn check_ambiguity(target: &str, authorization_count: usize) -> Result<(), Refusal> {
+    let query = target.split_once('?').map_or("", |(_, query)| query);
+    let mut seen = std::collections::BTreeSet::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let name = percent_decode(pair.split_once('=').map_or(pair, |(name, _)| name));
+        if !seen.insert(name.clone()) {
+            return Err(Refusal::bad(format!(
+                "Ambiguous request: the query parameter '{name}' is given more than once."
+            )));
+        }
+    }
+    let credentials = usize::from(seen.contains("auth"))
+        + usize::from(seen.contains("access_token"))
+        + authorization_count;
+    if credentials > 1 {
+        return Err(Refusal::bad(
+            "Ambiguous request: more than one credential (auth, access_token or an Authorization header).",
+        ));
+    }
+    Ok(())
 }
 
 /// Decodes `%XX` escapes; a malformed escape stays as it is. `+` is not a space.
@@ -94,7 +128,7 @@ pub fn location(raw_path: &str, writing: bool, limits: &Limits) -> Result<Locati
         });
     };
     let decoded = percent_decode(stem);
-    if decoded.split('/').find(|s| !s.is_empty()) == Some(".settings") {
+    if names_settings(raw_path) {
         return Ok(Location::Settings);
     }
     let path = Path::parse(&decoded, limits).map_err(|err| match err.kind {

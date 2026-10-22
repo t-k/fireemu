@@ -282,7 +282,7 @@
         "allowUnsignedIdTokens": {
           "type": "boolean",
           "default": true,
-          "description": "Allow unsigned mock ID token fallback after normal verification fails on Firestore and Storage Security Rules surfaces. Defaults to true in both profiles, and to false under productionExact; an explicit value wins. Under strict the fallback accepts only the createMockUserToken shape: exactly three JWT segments, header bytes {\"alg\":\"none\",\"type\":\"JWT\"}, an empty signature, a subject and the routed project as audience; exp is not checked by the fallback. Under emulator the fallback accepts any unsigned token with the required claims. false disables only this fallback: fireemu-issued unsigned ID tokens (header typ, not type) that pass normal verification remain accepted. Changing only an issued token's header to the SDK shape can still pass normal verification. For a refusal test, use the SDK helper's default iat 0 / exp 3600, or that exact shape and those times, with a clock after expiry including Firestore's 30-second allowance. Set auth.idTokenSigning to session-rsa to refuse all unsigned ID tokens. Callable Functions, Identity Toolkit and App Check are not affected."
+          "description": "Allow unsigned mock ID token fallback after normal verification fails on Firestore, Storage and Realtime Database Security Rules surfaces. Defaults to true in both profiles, and to false under productionExact; an explicit value wins. Under strict the fallback accepts only the createMockUserToken shape: exactly three JWT segments, header bytes {\"alg\":\"none\",\"type\":\"JWT\"}, an empty signature, a subject and the routed project as audience; exp is not checked by the fallback. Under emulator the fallback accepts any unsigned token with the required claims. false disables only this fallback: fireemu-issued unsigned ID tokens (header typ, not type) that pass normal verification remain accepted. Changing only an issued token's header to the SDK shape can still pass normal verification. For a refusal test, use the SDK helper's default iat 0 / exp 3600, or that exact shape and those times, with a clock after expiry including Firestore's 30-second allowance. Set auth.idTokenSigning to session-rsa to refuse all unsigned ID tokens. Callable Functions, Identity Toolkit and App Check are not affected."
         },
         "customTokenSigners": {
           "type": "object",
@@ -849,7 +849,7 @@
         "defaultAccess": {
           "enum": ["open", "locked"],
           "default": "open",
-          "description": "What a database without a rules file allows. fireemu does not evaluate Realtime Database rules files yet. \"open\" (development default, as the official emulator): every request. \"locked\" (productionExact; strict profile only): only the emulator's owner credential (Authorization: Bearer owner), as a new production database in locked mode admits only administrators."
+          "description": "What a database instance without a rules file allows; an instance with one follows its rules. \"open\" (development default, as the official emulator): every request. \"locked\" (productionExact; strict profile only): only the emulator's owner credential (Authorization: Bearer owner), as a new production database in locked mode admits only administrators."
         }
       }
     },

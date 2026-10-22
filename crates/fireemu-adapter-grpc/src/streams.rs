@@ -400,6 +400,71 @@ enum Resume {
     Invalid,
 }
 
+/// An immutable snapshot row is encoded only after its outbound channel slot is reserved.
+/// This retains O(N) shared handles and the payloads they own, not O(page) snapshot memory.
+#[derive(Debug, Clone, PartialEq)]
+enum PendingListenResponse {
+    Wire(pb::ListenResponse),
+    Document {
+        document: Arc<Document>,
+        target_id: i32,
+        removed: bool,
+    },
+}
+
+impl From<pb::ListenResponse> for PendingListenResponse {
+    fn from(response: pb::ListenResponse) -> Self {
+        Self::Wire(response)
+    }
+}
+
+impl PendingListenResponse {
+    #[cfg(test)]
+    fn as_wire(&self) -> Option<&pb::ListenResponse> {
+        match self {
+            Self::Wire(response) => Some(response),
+            Self::Document { .. } => None,
+        }
+    }
+
+    /// The lifecycle observer only needs response kinds and target identities. Keep its complete batch framing without copying or encoding a document payload.
+    fn observer_metadata(&self) -> pb::ListenResponse {
+        match self {
+            Self::Wire(response) => response.clone(),
+            Self::Document {
+                target_id, removed, ..
+            } => pb::ListenResponse {
+                response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                    pb::DocumentChange {
+                        document: None,
+                        target_ids: if *removed { vec![] } else { vec![*target_id] },
+                        removed_target_ids: if *removed { vec![*target_id] } else { vec![] },
+                    },
+                )),
+            },
+        }
+    }
+
+    fn encode(self) -> pb::ListenResponse {
+        match self {
+            Self::Wire(response) => response,
+            Self::Document {
+                document,
+                target_id,
+                removed,
+            } => pb::ListenResponse {
+                response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                    pb::DocumentChange {
+                        document: Some(encode_listen_document(&document)),
+                        target_ids: if removed { vec![] } else { vec![target_id] },
+                        removed_target_ids: if removed { vec![target_id] } else { vec![] },
+                    },
+                )),
+            },
+        }
+    }
+}
+
 // The flags are independent facts of one target (once, server-assigned id, current).
 #[allow(clippy::struct_excessive_bools)]
 struct TargetState {
@@ -417,12 +482,14 @@ struct TargetState {
     /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
     /// Responses produced by the last refresh, drained by the caller.
-    pending: Vec<pb::ListenResponse>,
+    pending: Vec<PendingListenResponse>,
 }
 
 #[cfg(test)]
 thread_local! {
     static FULL_TARGET_REFRESHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ENCODED_LISTEN_DOCUMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LISTEN_DOCUMENT_HANDLES: std::cell::RefCell<Vec<std::sync::Weak<Document>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[derive(Debug, Clone)]
@@ -447,6 +514,7 @@ pub const MAX_LISTEN_TARGETS: usize = 1000;
 
 /// Optional observer used by transports that need lifecycle diagnostics at the exact point
 /// where one request has been applied and its response batch has been constructed.
+/// Document payloads are omitted: observers consume lifecycle kinds and target identities.
 pub(crate) trait ListenObserver: Send + Sync {
     fn exchange(&self, request: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]);
 }
@@ -529,7 +597,7 @@ pub(crate) async fn listen_stream_observed(
         .filter(|_| transport == ListenTransport::Grpc)
         .and_then(|rules| rules.listen_expiry(&ctx.principal));
     loop {
-        let mut out: Vec<pb::ListenResponse> = Vec::new();
+        let mut out: Vec<PendingListenResponse> = Vec::new();
         let mut request = None;
         let until_deadline = until_stream_deadline(&ctx, stream_deadline);
         if until_deadline == Some(Duration::ZERO) {
@@ -561,8 +629,7 @@ pub(crate) async fn listen_stream_observed(
                 Some(Err(e)) => Err(e),
                 Some(Ok(_)) if deadline_reached(&ctx, stream_deadline) => Err(lifetime_reached()),
                 Some(Ok(req)) => {
-                    // Subscribe before the request can select its initial snapshot. Parsing
-                    // here has no refusal side effects; the handler preserves error order.
+                    // Subscribe before the request can select its initial snapshot. Parsing here has no refusal side effects; the handler preserves error order.
                     if parent.is_none() {
                         if let Ok(database) = database_parent(&req.database) {
                             events = ListenEvents::Database(ctx.local.subscribe_listen(&database));
@@ -644,12 +711,18 @@ pub(crate) async fn listen_stream_observed(
             }},
         };
         if let Some(observer) = observer.as_ref() {
-            observer.exchange(request.as_ref(), &out);
+            let metadata = out
+                .iter()
+                .map(PendingListenResponse::observer_metadata)
+                .collect::<Vec<_>>();
+            observer.exchange(request.as_ref(), &metadata);
         }
-        for r in out {
-            if tx.send(Ok(r)).await.is_err() {
+        for response in out {
+            let Ok(permit) = tx.reserve().await else {
                 return;
-            }
+            };
+            let response = response.encode();
+            permit.send(Ok(response));
         }
         match outcome {
             Ok(true) => {}
@@ -745,7 +818,7 @@ fn handle_listen_request(
     req: &pb::ListenRequest,
     database_hash_cache: &mut Option<DatabaseHashCache>,
     last_snapshot_version: &mut Option<CommitVersion>,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) -> Result<(), Status> {
     if parent.is_none() {
         if req.database.is_empty() {
@@ -918,7 +991,7 @@ fn resume_of(target: &pb::Target, binding: &TokenBinding) -> Option<Resume> {
 /// The answer to a target that cannot be decoded. A refused index is acknowledged first and
 /// removed after, as production does (`native/target-protocol/missing-index`: ADD[1], then
 /// REMOVE[1] with code 9); any other refusal is a removal alone.
-fn decode_refusal(id: i32, error: &Status) -> Vec<pb::ListenResponse> {
+fn decode_refusal(id: i32, error: &Status) -> Vec<PendingListenResponse> {
     let mut out = Vec::new();
     if error.code() == tonic::Code::FailedPrecondition {
         out.push(target_change(
@@ -943,7 +1016,7 @@ fn malformed_token_refusal(
     target: &pb::Target,
     kind: &TargetKind,
     id: i32,
-) -> Option<pb::ListenResponse> {
+) -> Option<PendingListenResponse> {
     let binding = TokenBinding {
         epoch: ctx.local.epoch(),
         strict: ctx.gateway.production_refusals(),
@@ -1062,7 +1135,7 @@ fn refresh_all(
     mut input: RefreshInput,
     database_hash_cache: &mut Option<DatabaseHashCache>,
     last_snapshot_version: &mut Option<CommitVersion>,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) -> Result<(), Status> {
     let Some(parent) = parent else { return Ok(()) };
     // Authentication / reset failures end the stream (every target is removed with the
@@ -1129,8 +1202,7 @@ fn refresh_all(
                     resume_token(version, &binding)
                 };
                 let delta_paths = complete_delta_paths(&input, version);
-                // Authorization is still evaluated below. Only target addition at exactly
-                // the already-delivered snapshot may reuse an existing current target.
+                // Authorization is still evaluated below. Only target addition at exactly the already-delivered snapshot may reuse an existing current target.
                 let reuse_current = matches!(input, RefreshInput::AddedTarget)
                     && *last_snapshot_version == Some(version);
                 let mut removed = Vec::new();
@@ -1313,14 +1385,16 @@ fn refresh_target_full(
     } else {
         ResumeAnswer::Exact
     };
-    let current: Vec<Document> = match &state.kind {
+    let current: Vec<Arc<Document>> = match &state.kind {
         TargetKind::Documents(paths) => paths
             .iter()
-            .filter_map(|path| db.get(path).cloned())
+            .filter_map(|path| db.get_shared(path))
             .collect(),
-        TargetKind::Query(query) => db
-            .run_query(query, None)
-            .map_err(|error| crate::encode::status_from_error(&error))?,
+        TargetKind::Query(query) => {
+            db.run_query_shared_with_stats(query, None)
+                .map_err(|error| crate::encode::status_from_error(&error))?
+                .0
+        }
     };
     let mut next_known: BTreeMap<DocumentPath, CommitVersion> = BTreeMap::new();
     let mut changed = 0_usize;
@@ -1328,7 +1402,7 @@ fn refresh_target_full(
         next_known.insert(doc.path.clone(), doc.version);
         if state.known.get(&doc.path) != Some(&doc.version) {
             changed += 1;
-            out_change(doc, id, &mut state.pending);
+            out_change(Arc::clone(doc), id, &mut state.pending);
         }
     }
     let departed: Vec<&DocumentPath> = state
@@ -1430,7 +1504,7 @@ fn resume_answer_of(ctx: &StreamContext, target: &pb::Target, kind: &TargetKind)
 /// The recorded count-only existence filter: the target, the number of documents it matches and
 /// an empty bloom filter (hash count 0, no bitmap, no padding), as production sent it in the rows
 /// above.
-fn count_only_filter(id: i32, count: usize) -> pb::ListenResponse {
+fn count_only_filter(id: i32, count: usize) -> PendingListenResponse {
     existence_filter(
         id,
         count,
@@ -1448,7 +1522,7 @@ fn existence_filter(
     id: i32,
     count: usize,
     unchanged: Option<pb::BloomFilter>,
-) -> pb::ListenResponse {
+) -> PendingListenResponse {
     pb::ListenResponse {
         response_type: Some(pb::listen_response::ResponseType::Filter(
             pb::ExistenceFilter {
@@ -1458,6 +1532,7 @@ fn existence_filter(
             },
         )),
     }
+    .into()
 }
 
 /// Applies one complete changed-path set to a target. Returns `false` when the query shape
@@ -1474,10 +1549,10 @@ fn refresh_target_delta(
         TargetKind::Documents(paths) => {
             for path in paths.iter().filter(|path| changed_paths.contains(*path)) {
                 examined += 1;
-                match db.get(path) {
+                match db.get_shared(path) {
                     Some(document) => {
                         if state.known.get(path) != Some(&document.version) {
-                            out_change(document, id, &mut state.pending);
+                            out_change(Arc::clone(&document), id, &mut state.pending);
                             state.known.insert(path.clone(), document.version);
                         }
                     }
@@ -1505,10 +1580,10 @@ fn refresh_target_delta(
                 .iter()
                 .map(|document| document.path.clone())
                 .collect::<BTreeSet<_>>();
-            for document in &matched {
+            for document in matched {
                 if state.known.get(&document.path) != Some(&document.version) {
-                    out_change(document, id, &mut state.pending);
                     state.known.insert(document.path.clone(), document.version);
+                    out_change(Arc::new(document), id, &mut state.pending);
                 }
             }
             for path in changed_paths {
@@ -1540,24 +1615,28 @@ fn out_removal(
     path: &DocumentPath,
     id: i32,
     read_time: prost_types::Timestamp,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) {
-    let response_type = if let Some(document) = db.get(path) {
-        pb::listen_response::ResponseType::DocumentChange(pb::DocumentChange {
-            document: Some(encode_document(document)),
-            target_ids: vec![],
-            removed_target_ids: vec![id],
-        })
+    if let Some(document) = db.get_shared(path) {
+        out.push(PendingListenResponse::Document {
+            document,
+            target_id: id,
+            removed: true,
+        });
     } else {
-        pb::listen_response::ResponseType::DocumentDelete(pb::DocumentDelete {
-            document: path.resource_name(),
-            removed_target_ids: vec![id],
-            read_time: Some(read_time),
-        })
-    };
-    out.push(pb::ListenResponse {
-        response_type: Some(response_type),
-    });
+        out.push(
+            pb::ListenResponse {
+                response_type: Some(pb::listen_response::ResponseType::DocumentDelete(
+                    pb::DocumentDelete {
+                        document: path.resource_name(),
+                        removed_target_ids: vec![id],
+                        read_time: Some(read_time),
+                    },
+                )),
+            }
+            .into(),
+        );
+    }
 }
 
 /// Resume: the target's state at the token becomes the known state, so the diff carries
@@ -1655,7 +1734,7 @@ fn synchronize_database_generation(
     local: &LocalBackend,
     cache: &mut Option<DatabaseHashCache>,
     targets: &mut BTreeMap<i32, TargetState>,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) -> u64 {
     let (hash, generation_changed) = cached_database_hash(parent, local, cache);
     if generation_changed {
@@ -1664,7 +1743,10 @@ fn synchronize_database_generation(
     hash
 }
 
-fn invalidate_targets(targets: &mut BTreeMap<i32, TargetState>, out: &mut Vec<pb::ListenResponse>) {
+fn invalidate_targets(
+    targets: &mut BTreeMap<i32, TargetState>,
+    out: &mut Vec<PendingListenResponse>,
+) {
     for (id, state) in targets {
         state.known.clear();
         state.resume = None;
@@ -1741,27 +1823,36 @@ fn known_at(
     kind: &TargetKind,
     version: CommitVersion,
 ) -> Result<BTreeMap<DocumentPath, CommitVersion>, Status> {
-    let docs: Vec<Document> = match kind {
+    let docs: Vec<Arc<Document>> = match kind {
         TargetKind::Documents(paths) => paths
             .iter()
-            .filter_map(|p| db.get_at(p, version).cloned())
+            .filter_map(|p| db.get_at_shared(p, version))
             .collect(),
-        TargetKind::Query(query) => db
-            .run_query(query, Some(version))
-            .map_err(|e| crate::encode::status_from_error(&e))?,
+        TargetKind::Query(query) => {
+            db.run_query_shared_with_stats(query, Some(version))
+                .map_err(|e| crate::encode::status_from_error(&e))?
+                .0
+        }
     };
-    Ok(docs.into_iter().map(|d| (d.path, d.version)).collect())
+    Ok(docs
+        .into_iter()
+        .map(|d| (d.path.clone(), d.version))
+        .collect())
 }
 
-fn out_change(doc: &Document, id: i32, out: &mut Vec<pb::ListenResponse>) {
-    out.push(pb::ListenResponse {
-        response_type: Some(pb::listen_response::ResponseType::DocumentChange(
-            pb::DocumentChange {
-                document: Some(encode_document(doc)),
-                target_ids: vec![id],
-                removed_target_ids: vec![],
-            },
-        )),
+fn encode_listen_document(document: &Document) -> pb::Document {
+    #[cfg(test)]
+    ENCODED_LISTEN_DOCUMENTS.with(|count| count.set(count.get() + 1));
+    encode_document(document)
+}
+
+fn out_change(doc: Arc<Document>, id: i32, out: &mut Vec<PendingListenResponse>) {
+    #[cfg(test)]
+    LISTEN_DOCUMENT_HANDLES.with(|handles| handles.borrow_mut().push(Arc::downgrade(&doc)));
+    out.push(PendingListenResponse::Document {
+        document: doc,
+        target_id: id,
+        removed: false,
     });
 }
 
@@ -1770,7 +1861,7 @@ fn target_change(
     target_ids: Vec<i32>,
     resume_token: Option<Vec<u8>>,
     read_time: Option<prost_types::Timestamp>,
-) -> pb::ListenResponse {
+) -> PendingListenResponse {
     pb::ListenResponse {
         response_type: Some(pb::listen_response::ResponseType::TargetChange(
             pb::TargetChange {
@@ -1782,9 +1873,10 @@ fn target_change(
             },
         )),
     }
+    .into()
 }
 
-fn removed_with_cause(id: i32, e: &Status) -> pb::ListenResponse {
+fn removed_with_cause(id: i32, e: &Status) -> PendingListenResponse {
     pb::ListenResponse {
         response_type: Some(pb::listen_response::ResponseType::TargetChange(
             pb::TargetChange {
@@ -1800,6 +1892,7 @@ fn removed_with_cause(id: i32, e: &Status) -> pb::ListenResponse {
             },
         )),
     }
+    .into()
 }
 
 /// Commit result in wire form (shared by the write stream).
@@ -2065,7 +2158,12 @@ mod refresh_tests {
         }
     }
 
-    fn assert_reset_replay(out: &[pb::ListenResponse], value: &str) {
+    fn assert_reset_replay(out: &[PendingListenResponse], value: &str) {
+        let out = out
+            .iter()
+            .cloned()
+            .map(PendingListenResponse::encode)
+            .collect::<Vec<_>>();
         assert!(out.iter().any(|response| matches!(
             &response.response_type,
             Some(pb::listen_response::ResponseType::TargetChange(change))
@@ -2121,7 +2219,7 @@ mod refresh_tests {
                         &query_request(i32::try_from(step).unwrap() + 2, "restored"),
                         &mut fixture.cache, &mut fixture.last_snapshot_version, out).unwrap();
                     for response in out {
-                        if let Some(pb::listen_response::ResponseType::TargetChange(change)) = response.response_type.as_mut() {
+                        if let PendingListenResponse::Wire(pb::ListenResponse { response_type: Some(pb::listen_response::ResponseType::TargetChange(change)) }) = response {
                             change.resume_token.clear();
                         }
                     }
@@ -2131,6 +2229,109 @@ mod refresh_tests {
                 proptest::prop_assert_eq!(known(&optimized), known(&reference));
             }
         }
+    }
+
+    #[test]
+    #[ignore = "bounded initial snapshot encoding measurement"]
+    fn measure_listen_initial_snapshot_encoding() {
+        use prost::Message as _;
+        use std::hash::Hasher as _;
+        let eager = std::env::var_os("FIREEMU_LISTEN_MEASURE_EAGER").is_some();
+        let count = std::env::var("FIREEMU_LISTEN_MEASURE_DOCUMENTS")
+            .ok()
+            .map_or(3000, |value| value.parse::<usize>().unwrap());
+        let mut fixture = generation_fixture();
+        for start in (0..count).step_by(500) {
+            let writes = (start..(start + 500).min(count))
+                .map(|index| {
+                    let mut write = set(&format!("restored/d{index:05}"));
+                    let WriteOp::Set { fields, .. } = &mut write.op else {
+                        unreachable!()
+                    };
+                    fields.insert("payload".to_owned(), Value::String("x".repeat(20 * 1024)));
+                    write
+                })
+                .collect::<Vec<_>>();
+            fixture
+                .context
+                .local
+                .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        ENCODED_LISTEN_DOCUMENTS.with(|counter| counter.set(0));
+        let start = std::time::Instant::now();
+        let mut plans = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut plans,
+        )
+        .unwrap();
+        let selection_micros = start.elapsed().as_micros();
+        assert_eq!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get), 0);
+        let selected_handles = plans
+            .iter()
+            .filter(|plan| matches!(plan, PendingListenResponse::Document { .. }))
+            .count();
+        let mut digest = std::hash::DefaultHasher::new();
+        let mut total_wire_bytes = 0;
+        let mut peak_generated_wire_bytes = 0;
+        let mut first_document_micros = None;
+        let mut encoded_before_first_document = 0;
+        let mut consume = |mut response: pb::ListenResponse| {
+            if first_document_micros.is_none()
+                && matches!(
+                    response.response_type,
+                    Some(pb::listen_response::ResponseType::DocumentChange(_))
+                )
+            {
+                first_document_micros = Some(start.elapsed().as_micros());
+                encoded_before_first_document = ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get);
+            }
+            if let Some(pb::listen_response::ResponseType::TargetChange(change)) =
+                response.response_type.as_mut()
+            {
+                change.resume_token.clear();
+            }
+            let bytes = response.encode_to_vec();
+            digest.write(&bytes);
+            total_wire_bytes += bytes.len();
+            peak_generated_wire_bytes = peak_generated_wire_bytes.max(bytes.len());
+        };
+        if eager {
+            let responses = plans
+                .into_iter()
+                .map(PendingListenResponse::encode)
+                .collect::<Vec<_>>();
+            for response in responses {
+                consume(response);
+            }
+            peak_generated_wire_bytes = total_wire_bytes;
+        } else {
+            for plan in plans {
+                consume(plan.encode());
+            }
+        }
+        assert_eq!(
+            ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get),
+            count + 1
+        );
+        eprintln!(
+            "listen_encoding_measure {}",
+            serde_json::json!({
+                "eager_encoding_reference": eager, "documents": count + 1, "payload_bytes": count * 20 * 1024,
+                "selected_handles": selected_handles, "selection_micros": selection_micros,
+                "first_encoded_document_micros": first_document_micros, "encoded_before_first_document": encoded_before_first_document,
+                "peak_generated_wire_bytes": peak_generated_wire_bytes, "total_wire_bytes": total_wire_bytes,
+                "normalized_wire_digest": digest.finish(), "retained_memory_bound": "O(N) handles and retained immutable payloads"
+            })
+        );
     }
 
     #[test]
@@ -2244,8 +2445,7 @@ mod refresh_tests {
             .send(Ok(query_request(1, "restored")))
             .await
             .unwrap();
-        // Receiving ADD proves the initial snapshot is selected. With capacity one,
-        // the remaining initial rows hold the stream while both databases commit.
+        // Receiving ADD proves the initial snapshot is selected. With capacity one, the remaining initial rows hold the stream while both databases commit.
         outbound.recv().await.unwrap().unwrap();
         let busy_path = crate::encode::decode_document_name(
             "projects/demo-app/databases/busy/documents/items/a",
@@ -2407,6 +2607,411 @@ mod refresh_tests {
     }
 
     #[test]
+    fn deferred_snapshot_rows_and_boundaries_survive_writes_deletes_and_restore() {
+        let mut fixture = generation_fixture();
+        let existing = fixture.targets.get_mut(&1).unwrap();
+        existing.known.clear();
+        existing.current = false;
+        fixture.last_snapshot_version = None;
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(2, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let original_boundary = global_boundary(&out).1;
+        let original_token = global_boundary(&out).0.to_vec();
+        let parent = fixture.parent.as_ref().unwrap();
+        fixture
+            .context
+            .local
+            .commit_writes(
+                parent,
+                &[Write {
+                    op: WriteOp::Delete {
+                        path: path("restored/a"),
+                    },
+                    precondition: None,
+                    transforms: Vec::new(),
+                }],
+                &|_, _, _| Ok(()),
+            )
+            .unwrap();
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &restored_snapshot("replacement"))
+            .unwrap();
+        let encoded = out
+            .into_iter()
+            .map(PendingListenResponse::encode)
+            .collect::<Vec<_>>();
+        let document = encoded
+            .iter()
+            .find_map(|response| match response.response_type.as_ref() {
+                Some(pb::listen_response::ResponseType::DocumentChange(change)) => {
+                    change.document.as_ref()
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            document.fields["v"].value_type,
+            Some(pb::value::ValueType::StringValue("before".to_owned()))
+        );
+        assert_eq!(document.update_time, original_boundary);
+        let current = encoded.iter().position(|response| matches!(response.response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Current as i32)).unwrap();
+        assert!(current > 1);
+        for id in [1, 2] {
+            let row = encoded.iter().position(|response| matches!(response.response_type.as_ref(), Some(pb::listen_response::ResponseType::DocumentChange(change)) if change.target_ids == [id])).unwrap();
+            let boundary = encoded.iter().position(|response| matches!(response.response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Current as i32 && change.target_ids == [id] && change.resume_token == original_token && change.read_time == original_boundary)).unwrap();
+            assert!(row < boundary);
+        }
+        assert!(
+            matches!(encoded.last().unwrap().response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_ids.is_empty() && change.read_time == original_boundary)
+        );
+    }
+
+    #[tokio::test]
+    async fn deferred_stream_keeps_snapshot_rows_before_current_during_writes() {
+        let fixture = generation_fixture();
+        let local = Arc::clone(&fixture.context.local);
+        let parent = fixture.parent.as_ref().unwrap().clone();
+        local
+            .commit_writes(&parent, &[set("restored/b")], &|_, _, _| Ok(()))
+            .unwrap();
+        let expected = local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .map(|document| encode_document(&document))
+            .collect::<Vec<_>>();
+        let (requests, inbound) = mpsc::channel(1);
+        let (responses, mut outbound) = mpsc::channel(1);
+        let stream = tokio::spawn(listen_stream(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+        ));
+        requests
+            .send(Ok(query_request(1, "restored")))
+            .await
+            .unwrap();
+        let add = outbound.recv().await.unwrap().unwrap();
+        assert!(
+            matches!(add.response_type, Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Add as i32)
+        );
+        let mut remove = set("restored/a");
+        remove.op = WriteOp::Delete {
+            path: path("restored/a"),
+        };
+        local
+            .commit_writes(
+                &parent,
+                &[remove, set("restored/b"), set("restored/c")],
+                &|_, _, _| Ok(()),
+            )
+            .unwrap();
+        let mut actual = Vec::new();
+        let mut current_token = None;
+        loop {
+            let response = tokio::time::timeout(Duration::from_secs(5), outbound.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            match response.response_type.unwrap() {
+                pb::listen_response::ResponseType::DocumentChange(change) => {
+                    assert!(
+                        current_token.is_none(),
+                        "CURRENT follows every row of this target"
+                    );
+                    actual.push(change.document.unwrap());
+                }
+                pb::listen_response::ResponseType::TargetChange(change)
+                    if change.target_change_type
+                        == pb::target_change::TargetChangeType::Current as i32 =>
+                {
+                    current_token = Some(change.resume_token);
+                }
+                pb::listen_response::ResponseType::TargetChange(change)
+                    if change.target_ids.is_empty() =>
+                {
+                    assert_eq!(current_token, Some(change.resume_token));
+                    break;
+                }
+                _ => panic!("unexpected initial snapshot response"),
+            }
+        }
+        assert_eq!(actual, expected);
+        drop(outbound);
+        drop(requests);
+        stream.await.unwrap();
+    }
+
+    struct MetadataOnlyObserver;
+
+    impl ListenObserver for MetadataOnlyObserver {
+        fn exchange(&self, _: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]) {
+            let documents = responses
+                .iter()
+                .filter_map(|response| match response.response_type.as_ref() {
+                    Some(pb::listen_response::ResponseType::DocumentChange(change)) => Some(change),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(documents.len(), 64);
+            assert!(documents
+                .iter()
+                .all(|change| change.document.is_none() && change.target_ids == [1]));
+            assert!(
+                matches!(responses.first().unwrap().response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Add as i32)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_receiver_bounds_encoding_and_releases_snapshot_handles_on_drop() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        let writes = (0..63)
+            .map(|index| {
+                let mut write = set(&format!("restored/d{index:03}"));
+                let WriteOp::Set { fields, .. } = &mut write.op else {
+                    unreachable!()
+                };
+                fields.insert("payload".to_owned(), Value::String("x".repeat(20 * 1024)));
+                write
+            })
+            .collect::<Vec<_>>();
+        fixture
+            .context
+            .local
+            .commit_writes(parent, &writes, &|_, _, _| Ok(()))
+            .unwrap();
+        let baseline = fixture
+            .context
+            .local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .map(|document| {
+                let count = Arc::strong_count(&document);
+                (document, count)
+            })
+            .collect::<Vec<_>>();
+        let local = Arc::clone(&fixture.context.local);
+        let (requests, inbound) = mpsc::channel(1);
+        let (responses, mut outbound) = mpsc::channel(1);
+        ENCODED_LISTEN_DOCUMENTS.with(|count| count.set(0));
+        LISTEN_DOCUMENT_HANDLES.with(|handles| handles.borrow_mut().clear());
+        let stream = tokio::spawn(listen_stream_observed(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+            Some(Arc::new(MetadataOnlyObserver)),
+            ListenTransport::WebChannel,
+        ));
+        requests
+            .send(Ok(query_request(1, "restored")))
+            .await
+            .unwrap();
+        let add = outbound.recv().await.unwrap().unwrap();
+        assert!(
+            matches!(add.response_type, Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Add as i32)
+        );
+        tokio::task::yield_now().await;
+        assert!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get) <= 1);
+        drop(outbound);
+        drop(requests);
+        stream.await.unwrap();
+        assert!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get) <= 1);
+        LISTEN_DOCUMENT_HANDLES.with(|handles| {
+            assert_eq!(handles.borrow().len(), 64);
+            for weak in handles.borrow().iter() {
+                if let Some(document) = weak.upgrade() {
+                    let (original, count) = baseline
+                        .iter()
+                        .find(|(original, _)| Arc::ptr_eq(original, &document))
+                        .expect("only store-owned rows remain alive");
+                    assert_eq!(Arc::strong_count(original), count + 1);
+                }
+            }
+        });
+        assert_eq!(local.listen_ring_count(), 0);
+    }
+
+    #[test]
+    fn same_version_target_add_reauthorizes_existing_targets_after_rules_reload() {
+        const ALLOW: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{path=**} { allow read: if true; } } }";
+        const DENY: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{path=**} { allow read: if false; } } }";
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        let rules = Arc::new(fireemu_core_rules::runtime::RulesetSlot::new(
+            fireemu_core_rules::runtime::LoadedRules::from_source(ALLOW).unwrap(),
+        ));
+        let auth = Arc::new(std::sync::Mutex::new(
+            fireemu_core_auth::store::AuthStore::new(
+                "demo-app",
+                fireemu_core_types::determinism::SplitMix64::new(3),
+                fireemu_core_auth::mfa::TotpPolicy::default(),
+            ),
+        ));
+        fixture.context.rules = Some(Arc::new(RulesEnforcer::new(
+            Arc::clone(&rules),
+            auth,
+            Arc::new(std::sync::Mutex::new(VirtualClock::new(
+                LogicalInstant::UNIX_EPOCH,
+            ))),
+        )));
+        fixture.context.principal = Principal::Anonymous;
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert!(fixture.targets[&1].current);
+        rules.replace_source(DENY).unwrap();
+        out.clear();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(2, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert!(fixture.targets.is_empty());
+        let denied = out
+            .iter()
+            .filter_map(PendingListenResponse::as_wire)
+            .filter_map(|response| match response.response_type.as_ref() {
+                Some(pb::listen_response::ResponseType::TargetChange(change))
+                    if change.cause.as_ref().is_some_and(|cause| cause.code == 7) =>
+                {
+                    Some(change.target_ids.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(denied, vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn listen_document_target_selection_shares_store_document_identity() {
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        let stored = fixture
+            .context
+            .local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut request = query_request(1, "restored");
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+            request.target_change.as_mut()
+        else {
+            unreachable!()
+        };
+        target.target_type = Some(pb::target::TargetType::Documents(
+            pb::target::DocumentsTarget {
+                documents: vec![path("restored/a").resource_name()],
+            },
+        ));
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &request,
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let rows = out
+            .iter()
+            .filter_map(|plan| match plan {
+                PendingListenResponse::Document { document, .. } => Some(document),
+                PendingListenResponse::Wire(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert!(stored.iter().any(|document| Arc::ptr_eq(document, rows[0])));
+    }
+
+    #[test]
+    fn listen_snapshot_selection_shares_store_document_identity() {
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        let stored = fixture
+            .context
+            .local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let rows = out
+            .iter()
+            .filter_map(|plan| match plan {
+                PendingListenResponse::Document { document, .. } => Some(document),
+                PendingListenResponse::Wire(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert!(stored.iter().any(|document| Arc::ptr_eq(document, rows[0])));
+    }
+
+    #[test]
+    fn snapshot_selection_defers_document_encoding_until_delivery() {
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        ENCODED_LISTEN_DOCUMENTS.with(|count| count.set(0));
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get), 0);
+        assert_eq!(out.len(), 4);
+    }
+
+    #[test]
     fn same_version_target_add_queries_each_target_only_once() {
         for count in [1, 10, 100] {
             let mut fixture = generation_fixture();
@@ -2427,7 +3032,7 @@ mod refresh_tests {
                 .unwrap();
                 assert_eq!(fixture.targets.len(), usize::try_from(id).unwrap());
                 assert!(out.iter().any(|response| matches!(
-                    response.response_type.as_ref(),
+                    response.as_wire().and_then(|wire| wire.response_type.as_ref()),
                     Some(pb::listen_response::ResponseType::TargetChange(change))
                     if change.target_change_type == pb::target_change::TargetChangeType::Current as i32
                         && change.target_ids == [id]
@@ -2635,16 +3240,21 @@ mod refresh_tests {
         }
         assert_eq!(examined, 50);
     }
-    fn global_boundary(out: &[pb::ListenResponse]) -> (&[u8], Option<prost_types::Timestamp>) {
+    fn global_boundary(out: &[PendingListenResponse]) -> (&[u8], Option<prost_types::Timestamp>) {
         out.iter()
             .rev()
-            .find_map(|response| match response.response_type.as_ref() {
-                Some(pb::listen_response::ResponseType::TargetChange(change))
-                    if change.target_ids.is_empty() && !change.resume_token.is_empty() =>
+            .find_map(|response| {
+                match response
+                    .as_wire()
+                    .and_then(|wire| wire.response_type.as_ref())
                 {
-                    Some((change.resume_token.as_slice(), change.read_time))
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.target_ids.is_empty() && !change.resume_token.is_empty() =>
+                    {
+                        Some((change.resume_token.as_slice(), change.read_time))
+                    }
+                    _ => None,
                 }
-                _ => None,
             })
             .expect("global boundary")
     }
@@ -2694,13 +3304,18 @@ mod refresh_tests {
         .unwrap();
         let echoed = out
             .iter()
-            .find_map(|response| match response.response_type.as_ref() {
-                Some(pb::listen_response::ResponseType::TargetChange(change))
-                    if change.resume_token == token =>
+            .find_map(|response| {
+                match response
+                    .as_wire()
+                    .and_then(|wire| wire.response_type.as_ref())
                 {
-                    Some(change)
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.resume_token == token =>
+                    {
+                        Some(change)
+                    }
+                    _ => None,
                 }
-                _ => None,
             })
             .expect("captured issuance survives its eviction during this refresh");
         assert_eq!(echoed.read_time, Some(old_time));
@@ -2721,13 +3336,13 @@ mod refresh_tests {
             &mut out,
         )
         .unwrap();
-        assert!(out
-            .iter()
-            .any(|response| matches!(response.response_type.as_ref(),
+        assert!(out.iter().any(
+            |response| matches!(response.as_wire().and_then(|wire| wire.response_type.as_ref()),
             Some(pb::listen_response::ResponseType::TargetChange(change))
                 if change.target_change_type == pb::target_change::TargetChangeType::Reset as i32
-                    && change.target_ids == [3])));
-        assert!(!out.iter().any(|response| matches!(response.response_type.as_ref(),
+                    && change.target_ids == [3])
+        ));
+        assert!(!out.iter().any(|response| matches!(response.as_wire().and_then(|wire| wire.response_type.as_ref()),
             Some(pb::listen_response::ResponseType::TargetChange(change)) if change.resume_token == token)));
     }
 
@@ -2768,12 +3383,12 @@ mod refresh_tests {
             &mut new,
         )
         .unwrap();
-        assert!(new
-            .iter()
-            .any(|response| matches!(response.response_type.as_ref(),
+        assert!(new.iter().any(
+            |response| matches!(response.as_wire().and_then(|wire| wire.response_type.as_ref()),
             Some(pb::listen_response::ResponseType::TargetChange(change))
                 if change.target_change_type == pb::target_change::TargetChangeType::Reset as i32
-                    && change.target_ids == [2])));
+                    && change.target_ids == [2])
+        ));
     }
 }
 

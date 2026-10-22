@@ -944,8 +944,7 @@ impl ListenSubscription {
 
 impl Drop for ListenSubscription {
     fn drop(&mut self) {
-        // Close before checking under the registry lock: concurrent final drops must
-        // not both count the other receiver while its automatic field drop is pending.
+        // Close before checking under the registry lock: concurrent final drops must not both count the other receiver while its automatic field drop is pending.
         drop(self.receiver.take());
         let mut registry = self
             .registry
@@ -1614,6 +1613,93 @@ mod tests {
 
     fn parent(database: &str) -> Parent {
         parse_parent(&format!("projects/demo-app/databases/{database}/documents")).unwrap()
+    }
+
+    #[test]
+    fn listen_subscribe_during_commit_precedes_the_snapshot_and_receives_publication() {
+        let backend = Arc::new(admission_backend());
+        let database = parent("(default)");
+        let (entered, publishing) = std::sync::mpsc::sync_channel(1);
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let writer_release = Arc::clone(&release);
+        backend.set_change_sink(Arc::new(move |_| {
+            entered.send(()).unwrap();
+            writer_release.wait();
+        }));
+        std::thread::scope(|scope| {
+            let writer_backend = Arc::clone(&backend);
+            let writer = scope.spawn(move || {
+                writer_backend
+                    .commit(&pb::CommitRequest {
+                        database: "projects/demo-app/databases/(default)".to_owned(),
+                        writes: vec![pb::Write {
+                            operation: Some(pb::write::Operation::Update(pb::Document {
+                                name: "projects/demo-app/databases/(default)/documents/items/a"
+                                    .to_owned(),
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                    .unwrap()
+            });
+            // The sink pauses after the mutation and before broadcast, still under the database write lock. Registering here cannot lose that commit.
+            publishing.recv().unwrap();
+            let mut events = backend.subscribe_listen(&database);
+            let reader_backend = Arc::clone(&backend);
+            let reader_database = database.clone();
+            let reader = scope.spawn(move || reader_backend.snapshot(&reader_database).unwrap());
+            release.wait();
+            writer.join().unwrap();
+            let (version, _) = reader.join().unwrap();
+            assert_eq!(version.value(), 1);
+            assert_eq!(events.try_recv().unwrap().version, version.value());
+        });
+        assert_eq!(backend.listen_ring_count(), 0);
+        let mut late = backend.subscribe_listen(&database);
+        assert_eq!(backend.snapshot(&database).unwrap().0.value(), 1);
+        assert!(matches!(
+            late.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn listen_drop_and_subscribe_interleavings_preserve_the_active_ring() {
+        let backend = admission_backend();
+        let database = parent("(default)");
+        let mut retiring = backend.subscribe_listen(&database);
+        let old_sender = Arc::clone(&retiring.sender);
+        // Force the exact gap between closing the final receiver and taking the registry lock. A replacement subscriber must keep this sender registered.
+        drop(retiring.receiver.take());
+        let mut replacement = backend.subscribe_listen(&database);
+        assert!(Arc::ptr_eq(&old_sender, &replacement.sender));
+        drop(retiring);
+        assert_eq!(backend.listen_ring_count(), 1);
+        backend.publish_notification(CommitNotification {
+            project: "demo-app".to_owned(),
+            database: "(default)".to_owned(),
+            version: 1,
+            reset: false,
+            changes: Arc::from([]),
+        });
+        assert_eq!(replacement.try_recv().unwrap().version, 1);
+        drop(replacement);
+        // A transient publisher Arc does not prevent last-subscriber cleanup.
+        assert_eq!(backend.listen_ring_count(), 0);
+        let mut fresh = backend.subscribe_listen(&database);
+        assert!(!Arc::ptr_eq(&old_sender, &fresh.sender));
+        backend.publish_notification(CommitNotification {
+            project: "demo-app".to_owned(),
+            database: "(default)".to_owned(),
+            version: 2,
+            reset: false,
+            changes: Arc::from([]),
+        });
+        assert_eq!(fresh.try_recv().unwrap().version, 2);
+        drop(fresh);
+        assert_eq!(backend.listen_ring_count(), 0);
     }
 
     #[test]

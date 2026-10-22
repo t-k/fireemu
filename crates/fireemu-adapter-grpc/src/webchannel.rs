@@ -2459,6 +2459,92 @@ mod tests {
     }
 
     #[test]
+    fn listen_lifecycle_trace_does_not_depend_on_document_payloads() {
+        let request = pb::ListenRequest {
+            target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+                target_id: 7,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        for accepted in [false, true] {
+            for budget in [0, 1, 2, 3, usize::MAX] {
+                let mut responses = vec![pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                        pb::DocumentChange {
+                            document: Some(pb::Document {
+                                name: "private-document".to_owned(),
+                                ..Default::default()
+                            }),
+                            target_ids: vec![7],
+                            removed_target_ids: vec![9, 7],
+                        },
+                    )),
+                }];
+                if accepted {
+                    responses.insert(
+                        0,
+                        pb::ListenResponse {
+                            response_type: Some(pb::listen_response::ResponseType::TargetChange(
+                                pb::TargetChange {
+                                    target_change_type: pb::target_change::TargetChangeType::Add
+                                        as i32,
+                                    target_ids: vec![7],
+                                    ..Default::default()
+                                },
+                            )),
+                        },
+                    );
+                }
+                responses.push(pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::TargetChange(
+                        pb::TargetChange {
+                            target_change_type: pb::target_change::TargetChangeType::Remove as i32,
+                            target_ids: vec![7],
+                            cause: Some(fireemu_proto_firestore::google::rpc::Status {
+                                code: 7,
+                                message: "denied".to_owned(),
+                                details: Vec::new(),
+                            }),
+                            ..Default::default()
+                        },
+                    )),
+                });
+                responses.push(pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::TargetChange(
+                        pb::TargetChange {
+                            target_change_type: pb::target_change::TargetChangeType::NoChange
+                                as i32,
+                            resume_token: vec![1, 2, 3],
+                            ..Default::default()
+                        },
+                    )),
+                });
+                let mut metadata = responses.clone();
+                for response in &mut metadata {
+                    if let Some(pb::listen_response::ResponseType::DocumentChange(change)) =
+                        response.response_type.as_mut()
+                    {
+                        change.document = None;
+                    }
+                }
+                let mut full_state = ListenTraceState::default();
+                let mut deferred_state = ListenTraceState::default();
+                let full = full_state.exchange_events(1, Some(&request), &responses, budget);
+                let deferred = deferred_state.exchange_events(1, Some(&request), &metadata, budget);
+                assert_eq!(
+                    full.iter().map(format_trace_event).collect::<Vec<_>>(),
+                    deferred.iter().map(format_trace_event).collect::<Vec<_>>()
+                );
+                assert_eq!(full_state.active, deferred_state.active);
+                assert_eq!(full_state.completed, deferred_state.completed);
+                assert_eq!(full_state.next_lifetime, u64::from(accepted));
+                assert_eq!(full_state.next_lifetime, deferred_state.next_lifetime);
+            }
+        }
+    }
+
+    #[test]
     fn listen_trace_assigns_a_new_lifetime_when_a_target_id_is_reused() {
         let mut trace = ListenTraceState::default();
 

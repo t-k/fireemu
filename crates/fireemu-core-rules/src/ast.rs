@@ -14,13 +14,22 @@ pub struct Span {
 }
 
 /// A parsed ruleset.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Ruleset {
     /// `rules_version` if declared.
     pub version: Option<String>,
     /// Services.
     pub services: Vec<Service>,
     pub(crate) value_dependencies: ValueDependencies,
+    pub(crate) function_scopes: Vec<Arc<crate::scope::ServiceScopes>>,
+}
+
+impl PartialEq for Ruleset {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.services == other.services
+            && self.value_dependencies == other.value_dependencies
+    }
 }
 
 /// Document-shaped values a compiled ruleset may read.

@@ -678,6 +678,8 @@ export const en = {
   "functions.timelineNoMatch": "No events match these filters.",
   "functions.timelineUngroupedLogs":
     "{count} retained log lines have no matching event in this window.",
+  "functions.timelineNoOutcomes":
+    "No retained outcome records for this event and attempt in the current stream window.",
 } as const;
 
 export type MessageKey = keyof typeof en;

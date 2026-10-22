@@ -1,4 +1,13 @@
-import { createEffect, createSignal, For, Show, onCleanup, type Component } from "solid-js";
+import {
+  createEffect,
+  createSignal,
+  For,
+  Show,
+  onCleanup,
+  type Component,
+  type Accessor,
+  untrack,
+} from "solid-js";
 import { t } from "../i18n";
 import { appState } from "../state";
 import {
@@ -15,6 +24,8 @@ import {
   putRules,
   ruleCoverage,
   rulesRequests,
+  rulesDiagnostics,
+  clearRulesDiagnostics,
   type RulesExprValue,
   type RulesRequest,
   type RuleCoverage,
@@ -244,13 +255,36 @@ const moveExpression = (event: KeyboardEvent) => {
   }
 };
 
-const RulesRequestsPanel: Component<{ scope: string; session: string }> = (props) => {
+/** Remember an interval snapshot only while it remains the visible fallback. */
+export const createPreviousInterval = <T,>(current: Accessor<T | undefined>) => {
+  const [previous, setPrevious] = createSignal<T | undefined>();
+  createEffect(() => {
+    if (untrack(previous) !== current()) setPrevious(undefined);
+  });
+  onCleanup(() => setPrevious(undefined));
+  return { previous, remember: () => setPrevious(() => current()) };
+};
+
+const RulesRequestsPanel: Component<{ scope: string; session: string; revision: number }> = (
+  props,
+) => {
   const list = createScopedFetch(
     () => props.scope,
     () => settle(rulesRequests(props.session)),
   );
   const [selected, setSelected] = createSignal<string | null>(null);
   const [position, setPosition] = createSignal<Position | null>(null);
+  const interval = createPreviousInterval(list.data);
+  createEffect(() => {
+    const revision = props.revision;
+    if (revision > 0)
+      untrack(() => {
+        setSelected(null);
+        setPosition(null);
+        interval.remember();
+        void list.refetch();
+      });
+  });
   const requests = () => list.data()?.requests ?? [];
   const identity = (r: RulesRequest) =>
     JSON.stringify([props.scope, r.service, list.data()?.generation ?? null, r.sequence]);
@@ -275,6 +309,9 @@ const RulesRequestsPanel: Component<{ scope: string; session: string }> = (props
         </AsyncButton>
       }
     >
+      <Show when={interval.previous() !== undefined && interval.previous() === list.data()}>
+        <p role="status">{t("rules.diagnosticsPreviousInterval")}</p>
+      </Show>
       <FetchState
         loading={list.loading() && list.data() === undefined}
         error={list.data() === undefined ? list.error() : null}
@@ -410,7 +447,9 @@ const RulesRequestsPanel: Component<{ scope: string; session: string }> = (props
   );
 };
 
-const RulesCoveragePanel: Component<{ scope: string; project: string }> = (props) => {
+const RulesCoveragePanel: Component<{ scope: string; project: string; revision: number }> = (
+  props,
+) => {
   const cov = createScopedFetch(
     () => props.scope,
     () => settle(ruleCoverage(props.project)),
@@ -424,6 +463,16 @@ const RulesCoveragePanel: Component<{ scope: string; project: string }> = (props
     selection()?.snapshot === cov.data() ? (selection()?.position ?? null) : null;
   const setPosition = (position: Position | null) =>
     setSelection(position && cov.data() ? { snapshot: cov.data()!, position } : null);
+  const interval = createPreviousInterval(cov.data);
+  createEffect(() => {
+    const revision = props.revision;
+    if (revision > 0)
+      untrack(() => {
+        setPosition(null);
+        interval.remember();
+        void cov.refetch();
+      });
+  });
   const rows = () => (cov.data() ? coverageRows(cov.data()!.report) : []);
   const summary = () => (cov.data() ? coverageSummary(cov.data()!) : { reached: 0, total: 0 });
   const file = () =>
@@ -441,6 +490,9 @@ const RulesCoveragePanel: Component<{ scope: string; project: string }> = (props
         </AsyncButton>
       }
     >
+      <Show when={interval.previous() !== undefined && interval.previous() === cov.data()}>
+        <p role="status">{t("rules.diagnosticsPreviousInterval")}</p>
+      </Show>
       <FetchState
         loading={cov.loading() && cov.data() === undefined}
         error={cov.data() === undefined ? cov.error() : null}
@@ -513,6 +565,130 @@ const RulesCoveragePanel: Component<{ scope: string; project: string }> = (props
   );
 };
 
+const RulesDiagnosticsPanel: Component<{
+  scope: string;
+  session: string;
+  onCleared: () => void;
+}> = (props) => {
+  const info = createScopedFetch(
+    () => props.scope,
+    () => settle(rulesDiagnostics(props.session)),
+  );
+  const [error, setError] = createSignal<string | null>(null);
+  const [uncertain, setUncertain] = createSignal(false);
+  const [clearing, setClearing] = createSignal(false);
+  let alive = true;
+  onCleanup(() => {
+    alive = false;
+  });
+  const refresh = async () => {
+    if (clearing()) return;
+    await info.refetch();
+    if (alive && !info.error()) {
+      setUncertain(false);
+      setError(null);
+    }
+  };
+  const validIdentity = () =>
+    info.data()?.service === "firestore" &&
+    /^\d+$/.test(info.data()?.generation ?? "") &&
+    /^\d+$/.test(info.data()?.interval ?? "");
+  const clear = async () => {
+    const displayed = info.data();
+    if (
+      !displayed ||
+      !validIdentity() ||
+      info.error() ||
+      info.loading() ||
+      uncertain() ||
+      clearing()
+    )
+      return;
+    setError(null);
+    setClearing(true);
+    const result = await clearRulesDiagnostics(
+      props.session,
+      displayed.generation,
+      displayed.interval,
+    );
+    if (!alive) return;
+    setClearing(false);
+    result.match(
+      (next) => {
+        info.replace(next);
+        props.onCleared();
+      },
+      (failure) => {
+        setError(failure.message);
+        setUncertain(true);
+      },
+    );
+  };
+  return (
+    <Section
+      title={t("rules.diagnosticsTitle")}
+      actions={
+        <>
+          <AsyncButton onClick={refresh} disabled={clearing()} testId="rules-diagnostics-refresh">
+            {t("rules.refresh")}
+          </AsyncButton>
+          <AsyncButton
+            onClick={clear}
+            testId="rules-diagnostics-clear"
+            disabled={
+              !validIdentity() ||
+              !info.data()?.loaded ||
+              info.loading() ||
+              !!info.error() ||
+              uncertain()
+            }
+          >
+            {t("rules.diagnosticsClear")}
+          </AsyncButton>
+        </>
+      }
+    >
+      <p>{t("rules.diagnosticsBoundary")}</p>
+      <p>{t("rules.diagnosticsWarning")}</p>
+      <ErrorBanner message={error()} />
+      <Show when={uncertain()}>
+        <p role="status">{t("rules.diagnosticsUnknown")}</p>
+      </Show>
+      <FetchState
+        loading={info.loading() && !info.data()}
+        error={!info.data() ? info.error() : null}
+        stale={info.data() ? info.error() : null}
+        onRetry={refresh}
+      >
+        <Show when={info.loading()}>
+          <p role="status">{t("rules.refreshing")}</p>
+        </Show>
+        <Show when={info.data()}>
+          {(d) => (
+            <div data-testid="rules-diagnostics-stats">
+              <p>
+                {t("rules.diagnosticsCounts", {
+                  generation: d().generation,
+                  interval: d().interval,
+                  expressions: d().expressionCount,
+                  values: d().distinctValueCount,
+                  observations: d().observationCount,
+                  traces: d().requestTraceCount,
+                  capacity: d().requestTraceCapacity,
+                })}
+              </p>
+              <p>{t("rules.diagnosticsEstimate", { bytes: d().estimatedCoverageBytes })}</p>
+              <Show when={!d().loaded}>
+                <p>{t("rules.diagnosticsUnconfigured")}</p>
+              </Show>
+            </div>
+          )}
+        </Show>
+      </FetchState>
+    </Section>
+  );
+};
+
 const Rules: Component = () => {
   const scope = () => JSON.stringify([appState.session(), appState.project()]);
   return (
@@ -526,12 +702,23 @@ const Rules: Component = () => {
       <Show when={scope()} keyed>
         {(key) => {
           const [session, project] = JSON.parse(key) as [string, string];
+          const [diagnosticRevision, setDiagnosticRevision] = createSignal(0);
           return (
             <>
               <RulesEditor which="firestore" title={t("rules.firestore")} scope={key} />
               <RulesEditor which="storage" title={t("rules.storage")} scope={key} />
-              <RulesRequestsPanel scope={key} session={session} />
-              <RulesCoveragePanel scope={key} project={project} />
+              <Show
+                when={session === "default"}
+                fallback={<p>{t("rules.diagnosticsUnsupported")}</p>}
+              >
+                <RulesDiagnosticsPanel
+                  scope={key}
+                  session={session}
+                  onCleared={() => setDiagnosticRevision((n) => n + 1)}
+                />
+              </Show>
+              <RulesRequestsPanel scope={key} session={session} revision={diagnosticRevision()} />
+              <RulesCoveragePanel scope={key} project={project} revision={diagnosticRevision()} />
             </>
           );
         }}

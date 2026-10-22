@@ -268,3 +268,28 @@ export const ruleCoverage = (project: string): ResultAsync<RuleCoverage, ApiErro
     "GET",
     `firestore/emulator/v1/projects/${encodeURIComponent(project)}:ruleCoverage`,
   );
+
+/** Fireemu collection intervals are separated when completed evaluations merge. */
+export type RulesDiagnostics = {
+  service: "firestore";
+  loaded: boolean;
+  generation: string;
+  interval: string;
+  expressionCount: number;
+  distinctValueCount: number;
+  observationCount: number;
+  requestTraceCount: number;
+  requestTraceCapacity: number;
+  estimatedCoverageBytes: number;
+};
+export const rulesDiagnostics = (session: string): ResultAsync<RulesDiagnostics, ApiError> =>
+  request("GET", `${base(session)}/rules/diagnostics`);
+export const clearRulesDiagnostics = (
+  session: string,
+  generation: string,
+  interval: string,
+): ResultAsync<RulesDiagnostics, ApiError> =>
+  request("POST", `${base(session)}/rules/diagnostics:clear`, {
+    expectedGeneration: generation,
+    expectedInterval: interval,
+  });

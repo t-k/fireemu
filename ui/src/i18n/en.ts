@@ -680,6 +680,24 @@ export const en = {
     "{count} retained log lines have no matching event in this window.",
   "functions.timelineNoOutcomes":
     "No retained outcome records for this event and attempt in the current stream window.",
+  "rules.diagnosticsTitle": "Firestore diagnostic collection",
+  "rules.diagnosticsBoundary":
+    "Intervals collect results when completed evaluations merge. An evaluation started before clearing may finish in the new interval.",
+  "rules.diagnosticsEstimate":
+    "Estimated coverage memory: {bytes} bytes. Excludes source, AST, trace payloads, allocator and map control overhead, mutex/Arc overhead, and process RSS.",
+  "rules.diagnosticsCounts":
+    "Generation {generation}, interval {interval}: {expressions} expressions, {values} distinct values, {observations} observations; {traces}/{capacity} retained request traces.",
+  "rules.diagnosticsClear": "Clear collected diagnostics",
+  "rules.diagnosticsWarning":
+    "Clearing discards coverage and retained request traces. Rules source and unsaved drafts are preserved.",
+  "rules.diagnosticsUnknown":
+    "The clear result is unknown or refused. Refresh this inspection before another clear; clearing is never retried automatically.",
+  "rules.diagnosticsUnsupported":
+    "Diagnostic collection controls are available only for Firestore in the default session.",
+  "rules.diagnosticsUnconfigured":
+    "No Firestore rules are loaded; there are no loaded-rule diagnostics to clear.",
+  "rules.diagnosticsPreviousInterval":
+    "Previous interval snapshot retained until a successful refresh; these records precede the diagnostic clear.",
 } as const;
 
 export type MessageKey = keyof typeof en;

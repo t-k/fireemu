@@ -2,7 +2,8 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor, cleanup } from "@solidjs/testing-library";
 import { MemoryRouter, Route } from "@solidjs/router";
 import { okAsync, errAsync, ResultAsync } from "neverthrow";
-import Rules from "./Rules";
+import Rules, { createPreviousInterval } from "./Rules";
+import { createRoot, createSignal } from "solid-js";
 import Overview from "./Overview";
 import { appState } from "../state";
 import * as api from "../api/control";
@@ -13,6 +14,8 @@ vi.mock("../api/control", async (importOriginal) => ({
   dropRules: vi.fn(),
   rulesRequests: vi.fn(),
   ruleCoverage: vi.fn(),
+  rulesDiagnostics: vi.fn(),
+  clearRulesDiagnostics: vi.fn(),
 }));
 const source = "// 日😀\r\nallow get: if false;";
 const start = new TextEncoder().encode(source.slice(0, source.indexOf("false"))).length;
@@ -73,6 +76,20 @@ beforeEach(() => {
   vi.mocked(api.ruleCoverage).mockImplementation(() => okAsync(coverage));
   vi.mocked(api.putRules).mockImplementation(() => okAsync({}));
   vi.mocked(api.dropRules).mockImplementation(() => okAsync({}));
+  vi.mocked(api.rulesDiagnostics).mockImplementation(() =>
+    okAsync({
+      service: "firestore",
+      loaded: false,
+      generation: "0",
+      interval: "0",
+      expressionCount: 0,
+      distinctValueCount: 0,
+      observationCount: 0,
+      requestTraceCount: 0,
+      requestTraceCapacity: 100,
+      estimatedCoverageBytes: 0,
+    }),
+  );
 });
 
 describe("rules diagnostic state and provenance", () => {
@@ -334,5 +351,278 @@ describe("rules diagnostic state and provenance", () => {
       expect(h.getByTestId("rules-coverage-source").textContent).toBe(nextSource),
     );
     expect(h.queryByTestId("rules-coverage-highlight")).toBeNull();
+  });
+});
+
+describe("explicit diagnostics intervals", () => {
+  const stats = () => ({
+    service: "firestore" as const,
+    loaded: true,
+    generation: "7",
+    interval: "3",
+    expressionCount: 2,
+    distinctValueCount: 4,
+    observationCount: 8,
+    requestTraceCount: 1,
+    requestTraceCapacity: 100,
+    estimatedCoverageBytes: 512,
+  });
+  it("clears only the displayed identity and preserves an editor draft", async () => {
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+    vi.mocked(api.clearRulesDiagnostics).mockImplementation(() =>
+      okAsync({ ...stats(), interval: "4" }),
+    );
+    const h = mount();
+    const editor = await h.findByLabelText("Currently loaded source", {
+      selector: "#rules-firestore",
+    });
+    fireEvent.input(editor, { target: { value: "retained draft" } });
+    await h.findByTestId("rules-diagnostics-stats");
+    fireEvent.click(h.getByTestId("rules-diagnostics-clear"));
+    await waitFor(() =>
+      expect(api.clearRulesDiagnostics).toHaveBeenCalledWith("default", "7", "3"),
+    );
+    expect((editor as HTMLTextAreaElement).value).toBe("retained draft");
+  });
+  it("never retries an ambiguous destructive clear automatically", async () => {
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+    vi.mocked(api.clearRulesDiagnostics).mockImplementation(() =>
+      errAsync({ status: 0, message: "connection lost" }),
+    );
+    const h = mount();
+    await h.findByTestId("rules-diagnostics-stats");
+    fireEvent.click(h.getByTestId("rules-diagnostics-clear"));
+    await h.findByText(/connection lost/);
+    expect(api.clearRulesDiagnostics).toHaveBeenCalledTimes(1);
+    expect((h.getByTestId("rules-diagnostics-clear") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(h.getByTestId("rules-diagnostics-refresh"));
+    await waitFor(() => expect(api.rulesDiagnostics).toHaveBeenCalledTimes(2));
+    expect(api.clearRulesDiagnostics).toHaveBeenCalledTimes(1);
+  });
+  it("keeps stale inspection visible and disables clear until retry succeeds", async () => {
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+    const h = mount();
+    await h.findByTestId("rules-diagnostics-stats");
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() =>
+      errAsync({ status: 500, message: "inspection offline" }),
+    );
+    fireEvent.click(h.getByTestId("rules-diagnostics-refresh"));
+    await h.findByTestId("fetch-stale");
+    expect(h.getByTestId("rules-diagnostics-stats").textContent).toContain("interval 3");
+    expect((h.getByTestId("rules-diagnostics-clear") as HTMLButtonElement).disabled).toBe(true);
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() =>
+      okAsync({ ...stats(), interval: "4" }),
+    );
+    fireEvent.click(h.getByText("Retry"));
+    await waitFor(() => expect(h.queryByTestId("fetch-stale")).toBeNull());
+    await waitFor(() =>
+      expect(h.getByTestId("rules-diagnostics-stats").textContent).toContain("interval 4"),
+    );
+  });
+  it("ignores late clear after a project switch and keeps the new draft", async () => {
+    let resolve!: (value: api.RulesDiagnostics) => void;
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+    vi.mocked(api.clearRulesDiagnostics).mockImplementation(() =>
+      ResultAsync.fromSafePromise(
+        new Promise<api.RulesDiagnostics>((r) => {
+          resolve = r;
+        }),
+      ),
+    );
+    const h = mount();
+    await h.findByTestId("rules-diagnostics-stats");
+    fireEvent.click(h.getByTestId("rules-diagnostics-clear"));
+    appState.setSessions([{ name: "default", project: "demo-b" }]);
+    await waitFor(() => expect(api.rulesDiagnostics).toHaveBeenCalledTimes(2));
+    const editor = await h.findByLabelText("Currently loaded source", {
+      selector: "#rules-firestore",
+    });
+    fireEvent.input(editor, { target: { value: "new scope draft" } });
+    const fetches = vi.mocked(api.rulesRequests).mock.calls.length;
+    resolve({ ...stats(), interval: "99" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.getByTestId("rules-diagnostics-stats").textContent).toContain("interval 3");
+    expect((editor as HTMLTextAreaElement).value).toBe("new scope draft");
+    expect(api.rulesRequests).toHaveBeenCalledTimes(fetches);
+  });
+  it("does not enable clear for an unrelated service with otherwise valid identity", async () => {
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() =>
+      okAsync({ ...stats(), service: "storage" as "firestore" }),
+    );
+    const h = mount();
+    await h.findByTestId("rules-diagnostics-stats");
+    expect((h.getByTestId("rules-diagnostics-clear") as HTMLButtonElement).disabled).toBe(true);
+  });
+  it("disables concurrent inspection and duplicate clear while a destructive request is pending", async () => {
+    let resolve!: (value: api.RulesDiagnostics) => void;
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+    vi.mocked(api.clearRulesDiagnostics).mockImplementation(() =>
+      ResultAsync.fromSafePromise(
+        new Promise<api.RulesDiagnostics>((r) => {
+          resolve = r;
+        }),
+      ),
+    );
+    const h = mount();
+    await h.findByTestId("rules-diagnostics-stats");
+    const clear = h.getByTestId("rules-diagnostics-clear") as HTMLButtonElement;
+    fireEvent.click(clear);
+    expect(clear.disabled).toBe(true);
+    expect((h.getByTestId("rules-diagnostics-refresh") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(clear);
+    expect(api.clearRulesDiagnostics).toHaveBeenCalledTimes(1);
+    resolve({ ...stats(), interval: "4" });
+    await waitFor(() =>
+      expect((h.getByTestId("rules-diagnostics-refresh") as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+  });
+  for (const status of [401, 500, 0])
+    it(`shows diagnostics ${status} as a fetch error and recovers`, async () => {
+      vi.mocked(api.rulesDiagnostics).mockImplementation(() =>
+        errAsync({ status, message: "diagnostics unavailable" }),
+      );
+      const h = mount();
+      await h.findByTestId("fetch-error");
+      expect(h.queryByTestId("rules-diagnostics-stats")).toBeNull();
+      expect((h.getByTestId("rules-diagnostics-clear") as HTMLButtonElement).disabled).toBe(true);
+      vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+      fireEvent.click(h.getByTestId("fetch-retry"));
+      await h.findByTestId("rules-diagnostics-stats");
+      expect(h.queryByTestId("fetch-error")).toBeNull();
+    });
+  it("clears recorded selections after success even when their refreshed reads fail", async () => {
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+    vi.mocked(api.clearRulesDiagnostics).mockImplementation(() =>
+      okAsync({ ...stats(), interval: "4" }),
+    );
+    const h = mount();
+    await h.findByTestId("rules-requests");
+    fireEvent.click(h.getByTestId("rules-request-trace-1"));
+    fireEvent.click(h.getByTestId("rules-request-expression-0"));
+    fireEvent.click(h.getByTestId("rules-coverage-expression-0"));
+    vi.mocked(api.rulesRequests).mockImplementation(() =>
+      errAsync({ status: 500, message: "requests refresh failed" }),
+    );
+    vi.mocked(api.ruleCoverage).mockImplementation(() =>
+      errAsync({ status: 500, message: "coverage refresh failed" }),
+    );
+    fireEvent.click(h.getByTestId("rules-diagnostics-clear"));
+    await waitFor(() => expect(h.getAllByTestId("fetch-stale")).toHaveLength(2));
+    expect(h.getByTestId("rules-coverage-source").textContent).toBe(source);
+    expect(h.queryByTestId("rules-request-highlight")).toBeNull();
+    expect(h.queryByTestId("rules-coverage-highlight")).toBeNull();
+    expect(h.getByTestId("rules-diagnostics-stats").textContent).toContain("interval 4");
+  });
+  it("does not import a late inspection from a prior session", async () => {
+    let resolve!: (value: api.RulesDiagnostics) => void;
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() =>
+      ResultAsync.fromSafePromise(
+        new Promise<api.RulesDiagnostics>((r) => {
+          resolve = r;
+        }),
+      ),
+    );
+    const h = mount();
+    await waitFor(() => expect(api.rulesDiagnostics).toHaveBeenCalledTimes(1));
+    appState.setSession("other");
+    await h.findByText(
+      "Diagnostic collection controls are available only for Firestore in the default session.",
+    );
+    resolve(stats());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.queryByTestId("rules-diagnostics-stats")).toBeNull();
+    expect(h.queryByTestId("rules-diagnostics-clear")).toBeNull();
+  });
+  it("does not enable clear when generation identity is missing", async () => {
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() =>
+      okAsync({ ...stats(), generation: "" }),
+    );
+    const h = mount();
+    await h.findByTestId("rules-diagnostics-stats");
+    expect((h.getByTestId("rules-diagnostics-clear") as HTMLButtonElement).disabled).toBe(true);
+  });
+  it("retires previous-interval notices after retry replaces both fallbacks without touching a draft", async () => {
+    vi.mocked(api.rulesDiagnostics).mockImplementation(() => okAsync(stats()));
+    vi.mocked(api.clearRulesDiagnostics).mockImplementation(() =>
+      okAsync({ ...stats(), interval: "4" }),
+    );
+    const h = mount();
+    const editor = await h.findByLabelText("Currently loaded source", {
+      selector: "#rules-firestore",
+    });
+    fireEvent.input(editor, { target: { value: "draft remains" } });
+    vi.mocked(api.rulesRequests).mockImplementation(() =>
+      errAsync({ status: 500, message: "old trace retained" }),
+    );
+    vi.mocked(api.ruleCoverage).mockImplementation(() =>
+      errAsync({ status: 500, message: "old coverage retained" }),
+    );
+    fireEvent.click(h.getByTestId("rules-diagnostics-clear"));
+    await waitFor(() =>
+      expect(h.getAllByText(/Previous interval snapshot retained/)).toHaveLength(2),
+    );
+    expect((editor as HTMLTextAreaElement).value).toBe("draft remains");
+    vi.mocked(api.rulesRequests).mockImplementation(() =>
+      okAsync(trace("7", "replacement recorded source")),
+    );
+    vi.mocked(api.ruleCoverage).mockImplementation(() =>
+      okAsync({
+        ...coverage,
+        rules: { files: [{ name: "firestore.rules", content: "replacement coverage source" }] },
+      }),
+    );
+    fireEvent.click(h.getByTestId("rules-requests-refresh"));
+    fireEvent.click(h.getByTestId("rules-coverage-refresh"));
+    await waitFor(() =>
+      expect(h.queryAllByText(/Previous interval snapshot retained/)).toHaveLength(0),
+    );
+    expect(h.getByTestId("rules-coverage-source").textContent).toBe("replacement coverage source");
+    expect((editor as HTMLTextAreaElement).value).toBe("draft remains");
+    appState.setSession("other");
+    await waitFor(() =>
+      expect(h.queryAllByText(/Previous interval snapshot retained/)).toHaveLength(0),
+    );
+  });
+});
+
+describe("previous interval payload lifetime", () => {
+  it("releases the prior payload after a successful replacement while retaining a failed-read fallback", async () => {
+    const old = { source: "old source", values: Array.from({ length: 100 }, () => "retained") };
+    let update!: (value: typeof old) => void;
+    let interval!: ReturnType<typeof createPreviousInterval<typeof old>>;
+    const dispose = createRoot((cleanupScope) => {
+      const [current, setCurrent] = createSignal(old);
+      update = setCurrent;
+      interval = createPreviousInterval(current);
+      return cleanupScope;
+    });
+    try {
+      interval.remember();
+      await Promise.resolve();
+      expect(interval.previous()).toBe(old);
+      // A refresh failure leaves the current successful response unchanged.
+      await Promise.resolve();
+      expect(interval.previous()).toBe(old);
+      update({ source: "replacement", values: [] });
+      await waitFor(() => expect(interval.previous()).toBeUndefined());
+    } finally {
+      dispose();
+    }
+  });
+  it("releases the retained payload when its scope is disposed", () => {
+    let interval!: ReturnType<typeof createPreviousInterval<object>>;
+    const snapshot = { source: "old scope" };
+    const dispose = createRoot((cleanupScope) => {
+      interval = createPreviousInterval(() => snapshot);
+      interval.remember();
+      return cleanupScope;
+    });
+    expect(interval.previous()).toBe(snapshot);
+    dispose();
+    expect(interval.previous()).toBeUndefined();
   });
 });

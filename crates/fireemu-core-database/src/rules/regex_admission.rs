@@ -11,6 +11,7 @@ const PROTOTYPE_EDGES: usize = 2_000_000;
 #[derive(Debug, PartialEq, Eq)]
 enum Failure {
     Resource,
+    Allocation,
     NonTerminatingCanonicalConstruction,
     Inconclusive,
     Integer,
@@ -475,18 +476,19 @@ impl Automaton {
 
     fn concat(items: &[Self]) -> Result<Self, Failure> {
         if items.iter().all(|a| matches!(a, Self::Singleton(_))) {
+            let length = items.iter().try_fold(0_usize, |length, item| {
+                let Self::Singleton(part) = item else {
+                    unreachable!()
+                };
+                length.checked_add(part.len()).ok_or(Failure::Allocation)
+            })?;
             let mut units = Vec::new();
+            reserve_word_units(&mut units, length)?;
             for item in items {
                 let Self::Singleton(part) = item else {
                     unreachable!()
                 };
-                state_bound(
-                    units
-                        .len()
-                        .checked_add(part.len())
-                        .ok_or(Failure::Inconclusive)?,
-                )?;
-                units.extend(part);
+                units.extend_from_slice(part);
             }
             return Ok(Self::Singleton(units));
         }
@@ -834,3 +836,10 @@ mod java21_case;
 mod minimize;
 
 thread_local! { static WORD_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+// This is an actual host allocation/capacity result, never the canonical guard.
+fn reserve_word_units(units: &mut Vec<u16>, additional: usize) -> Result<(), Failure> {
+    units
+        .try_reserve_exact(additional)
+        .map_err(|_| Failure::Allocation)
+}

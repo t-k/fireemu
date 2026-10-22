@@ -1493,3 +1493,36 @@ fn certified_word_clones_share_bytes_but_append_has_fresh_snapshot_identities() 
     assert!(union.word.is_none());
     assert_eq!(union.state_count(), 7);
 }
+
+#[test]
+fn source_sized_singleton_concat_has_no_prototype_word_length_refusal() {
+    let source = "^".to_owned() + &"[a-a]".repeat(30000) + "$";
+    let tree = reader::literal(&source, false).unwrap();
+    let mut trace = Vec::new();
+    let value = tree.compile(5000, &mut trace).unwrap();
+    let Automaton::Singleton(units) = value else {
+        panic!("lost canonical singleton shortcut");
+    };
+    assert_eq!(units, vec![97; 30000]);
+    assert_eq!(trace.len(), 30001);
+    assert!(trace.iter().all(|step| step.guard.is_none()));
+}
+
+#[test]
+fn actual_word_capacity_failure_is_distinct_from_canonical_resource_refusal() {
+    assert_eq!(
+        reserve_word_units(&mut Vec::new(), usize::MAX),
+        Err(Failure::Allocation)
+    );
+}
+
+#[test]
+fn singleton_concat_preserves_chunk_order_and_empty_chunks() {
+    let value = Automaton::concat(&[
+        Automaton::Singleton(vec![1, 2]),
+        Automaton::Singleton(vec![]),
+        Automaton::Singleton(vec![3, 4]),
+    ])
+    .unwrap();
+    assert_eq!(value.normal(), "S:0001,0002,0003,0004");
+}

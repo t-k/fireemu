@@ -8729,6 +8729,7 @@ mod tests {
     #[test]
     fn database_rules_files_apply_where_firebase_tools_loads_them() {
         let base = std::path::Path::new("/proj");
+        let expected_file = |name: &str| base.join(name).to_string_lossy().into_owned();
         let resolved = |firebase: Value, rc: Option<Value>| {
             let mut cfg = RuntimeConfig::default();
             cfg.apply_firebase_json(&firebase, base, &Selection::default())
@@ -8742,7 +8743,7 @@ mod tests {
                 None
             )
             .unwrap(),
-            vec![("demo-p-default-rtdb".to_owned(), "/proj/r.json".to_owned())]
+            vec![("demo-p-default-rtdb".to_owned(), expected_file("r.json"))]
         );
         // Without rules, or with an empty array, there are none (firebase-tools accepts both).
         for none in [json!({"database": {}}), json!({"database": []})] {
@@ -8761,10 +8762,10 @@ mod tests {
             )
             .unwrap(),
             vec![
-                ("i1".to_owned(), "/proj/a.json".to_owned()),
-                ("m1".to_owned(), "/proj/b.json".to_owned()),
-                ("m2".to_owned(), "/proj/b.json".to_owned()),
-                ("m1".to_owned(), "/proj/c.json".to_owned()),
+                ("i1".to_owned(), expected_file("a.json")),
+                ("m1".to_owned(), expected_file("b.json")),
+                ("m2".to_owned(), expected_file("b.json")),
+                ("m1".to_owned(), expected_file("c.json")),
             ]
         );
         // A target that names no instances stops the start, as firebase-tools does.

@@ -1162,9 +1162,18 @@ test("C entrypoint binds the 338 compiled inputs including resource IAM before w
     })
       .trim()
       .split("\n")
-      .filter((path) => path !== iam);
+      .filter((path) => path.startsWith("crates/") && path.endsWith(".rs") && path !== iam);
     const paths = [iam, ...candidates].slice(0, 338);
     assert.equal(paths.length, 338);
+    assert.equal(paths[0], iam);
+    const inputBytes = paths.reduce(
+      (total, path) => total + readFileSync(join(root, path)).length,
+      0,
+    );
+    assert.ok(
+      inputBytes <= 20_000_000,
+      `compiled-input fixture exceeds the byte bound: ${inputBytes}`,
+    );
     const files = Object.fromEntries(
       paths.map((path) => [path, hash(readFileSync(join(root, path)))]),
     );

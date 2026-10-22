@@ -90,6 +90,7 @@ const LOG_BUFFER_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const STDERR_LINE_BYTE_LIMIT: usize = 256 * 1024;
 const STDERR_TRUNCATION_MARKER: &str = "...[truncated]";
 static RUNNER_SANDBOX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static RUNNER_DIAGNOSTIC_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Converts canonical Windows drive/UNC paths to paths accepted by Node's loaders.
 /// Call only at the Windows Node boundary; other device namespaces stay unchanged.
@@ -114,18 +115,27 @@ pub struct RunnerLog {
     level: String,
     message: String,
     function: Option<String>,
+    invocation_id: Option<String>,
+    truncated: bool,
     user: bool,
     fields: Map<String, Value>,
 }
 
 impl RunnerLog {
+    #[cfg(test)]
     fn raw(message: impl Into<String>) -> Self {
+        Self::raw_with_truncation(message, false)
+    }
+
+    fn raw_with_truncation(message: impl Into<String>, truncated: bool) -> Self {
         let message = message.into();
         Self {
             display: message.clone(),
             level: "info".to_owned(),
             message,
             function: None,
+            invocation_id: None,
+            truncated,
             user: false,
             fields: Map::new(),
         }
@@ -151,6 +161,8 @@ impl RunnerLog {
             level,
             message,
             function: function.map(str::to_owned),
+            invocation_id: invocation_id.map(str::to_owned),
+            truncated: false,
             user,
             fields,
         }
@@ -163,6 +175,7 @@ impl RunnerLog {
             .saturating_add(self.level.len())
             .saturating_add(self.message.len())
             .saturating_add(self.function.as_ref().map_or(0, String::len))
+            .saturating_add(self.invocation_id.as_ref().map_or(0, String::len))
             .saturating_add(
                 serde_json::to_vec(&self.fields).map_or(usize::MAX, |fields| fields.len()),
             )
@@ -175,6 +188,8 @@ impl RunnerLog {
             "warning".clone_into(&mut self.level);
             self.message = marker;
             self.function = None;
+            self.invocation_id = None;
+            self.truncated = true;
             self.user = false;
             self.fields.clear();
         }
@@ -203,6 +218,18 @@ impl RunnerLog {
     #[must_use]
     pub fn function(&self) -> Option<&str> {
         self.function.as_deref()
+    }
+
+    /// Invocation ID supplied by the runner frame, never by user fields or display text.
+    #[must_use]
+    pub fn invocation_id(&self) -> Option<&str> {
+        self.invocation_id.as_deref()
+    }
+
+    /// Whether the runner retained only a truncation marker or bounded stderr prefix.
+    #[must_use]
+    pub const fn is_truncated(&self) -> bool {
+        self.truncated
     }
 
     /// Whether this is function user output rather than a runner diagnostic.
@@ -276,7 +303,7 @@ impl LogBuffer {
 
 async fn read_bounded_stderr_line<R: AsyncBufRead + Unpin>(
     reader: &mut R,
-) -> std::io::Result<Option<String>> {
+) -> std::io::Result<Option<(String, bool)>> {
     let keep = STDERR_LINE_BYTE_LIMIT - STDERR_TRUNCATION_MARKER.len();
     let mut bytes = Vec::new();
     let mut saw_input = false;
@@ -316,7 +343,7 @@ async fn read_bounded_stderr_line<R: AsyncBufRead + Unpin>(
     if truncated {
         line.push_str(STDERR_TRUNCATION_MARKER);
     }
-    Ok(Some(line))
+    Ok(Some((line, truncated)))
 }
 
 /// How to start (and restart) a runner.
@@ -345,6 +372,7 @@ impl std::fmt::Debug for SpawnSpec {
 
 /// A running runner.
 pub struct Runner {
+    diagnostic_id: u64,
     child: AsyncMutex<Option<RunnerChild>>,
     #[cfg(unix)]
     _lifetime_guard: RunnerLifetimeGuard,
@@ -610,10 +638,11 @@ impl Runner {
             let logs = logs.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
-                while let Ok(Some(line)) = read_bounded_stderr_line(&mut reader).await {
+                while let Ok(Some((line, truncated))) = read_bounded_stderr_line(&mut reader).await
+                {
                     eprintln!("{label} {line}");
                     if let Ok(mut l) = logs.lock() {
-                        l.push(RunnerLog::raw(line));
+                        l.push(RunnerLog::raw_with_truncation(line, truncated));
                     }
                 }
             })
@@ -815,6 +844,7 @@ impl Runner {
         process_group_guard.disarm();
         let credential_sandbox = credential_sandbox_guard.into_path();
         Ok(Self {
+            diagnostic_id: RUNNER_DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             child: AsyncMutex::new(Some(child)),
             #[cfg(unix)]
             _lifetime_guard: lifetime_guard,
@@ -829,6 +859,12 @@ impl Runner {
             clock_sequence: AtomicU64::new(0),
             clock_status,
         })
+    }
+
+    /// Process-local identity for diagnostic cursors; a replacement never reuses its predecessor's cursor.
+    #[must_use]
+    pub const fn diagnostic_id(&self) -> u64 {
+        self.diagnostic_id
     }
 
     /// Whether the runner process is still alive.
@@ -1918,6 +1954,69 @@ sys.stdin.readline()
     }
 
     #[test]
+    fn invocation_attribution_cannot_be_forged_by_user_fields_or_raw_text() {
+        let fields =
+            serde_json::Map::from_iter([("invocationId".to_owned(), serde_json::json!("forged"))]);
+        let log = RunnerLog::structured(
+            "info",
+            "info forged text",
+            Some("real-2"),
+            Some("consume"),
+            true,
+            fields,
+        );
+        assert_eq!(log.invocation_id(), Some("real-2"));
+        assert_eq!(RunnerLog::raw("info real-2 forged").invocation_id(), None);
+        let oversized = RunnerLog::structured(
+            "info",
+            "x".repeat(super::LOG_ENTRY_BYTE_LIMIT),
+            Some("real-2"),
+            Some("consume"),
+            true,
+            serde_json::Map::new(),
+        );
+        assert_eq!(oversized.invocation_id(), None);
+        assert_eq!(oversized.function(), None);
+        assert!(oversized.is_truncated());
+        // The retained trusted ID has its own allocation in addition to the display prefix.
+        let large_id = "x".repeat(super::LOG_ENTRY_BYTE_LIMIT / 2);
+        let metadata_limit = RunnerLog::structured(
+            "info",
+            "short",
+            Some(&large_id),
+            Some("consume"),
+            true,
+            serde_json::Map::new(),
+        );
+        assert!(metadata_limit.is_truncated());
+        assert_eq!(metadata_limit.invocation_id(), None);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn trusted_log_attribution_is_independent_of_arbitrary_user_fields(id in "[a-z0-9-]{1,32}", forged in ".{0,64}", message in ".{0,64}") {
+            let fields = serde_json::Map::from_iter([("invocationId".to_owned(), serde_json::json!(forged))]);
+            let log = RunnerLog::structured("info", message, Some(&id), Some("consume"), true, fields);
+            proptest::prop_assert_eq!(log.invocation_id(), Some(id.as_str()));
+            let raw = RunnerLog::raw(log.display());
+            proptest::prop_assert_eq!(raw.invocation_id(), None);
+        }
+
+        #[test]
+        fn log_cursor_slices_match_the_bounded_sequence_model(count in 0usize..1200, cursor in 0u64..1500) {
+            let mut buffer = LogBuffer::default();
+            for index in 0..count { buffer.push(RunnerLog::raw(format!("line-{index}"))); }
+            let first = count.saturating_sub(LOG_CAPACITY);
+            let result = buffer.since(Some(cursor));
+            let start = usize::try_from(cursor).unwrap().clamp(first, count);
+            let expected: Vec<_> = (start..count).map(|index| format!("line-{index}")).collect();
+            proptest::prop_assert_eq!(result.next_seq, count as u64);
+            proptest::prop_assert_eq!(result.truncated, cursor < first as u64);
+            proptest::prop_assert_eq!(result.lines.iter().map(|line| line.display().to_owned()).collect::<Vec<_>>(), expected);
+        }
+    }
+
+    #[test]
     fn structured_runner_logs_keep_wire_metadata_separate_from_the_ui_line() {
         let fields = serde_json::Map::from_iter([("code".to_owned(), serde_json::json!(47))]);
         let log = RunnerLog::structured(
@@ -1933,6 +2032,7 @@ sys.stdin.readline()
         assert_eq!(log.level(), "warning");
         assert_eq!(log.message(), "payment delayed");
         assert_eq!(log.function(), Some("settlePayment"));
+        assert_eq!(log.invocation_id(), Some("inv-7"));
         assert!(log.is_user());
         assert_eq!(log.fields(), &fields);
     }

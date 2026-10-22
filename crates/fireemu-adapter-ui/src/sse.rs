@@ -175,19 +175,93 @@ fn invocation_json(r: &fireemu_adapter_functions::runtime::SequencedRecord) -> V
     })
 }
 
-fn initial_function_logs(
+/// Each codebase cursor belongs to exactly one runner identity, including across hot reloads.
+#[derive(Default)]
+pub(crate) struct FunctionLogCursors(std::collections::BTreeMap<String, (u64, u64)>);
+
+pub(crate) struct FunctionLogBatch {
+    pub(crate) lines: Vec<String>,
+    pub(crate) records: Vec<Value>,
+    pub(crate) scopes: Vec<Value>,
+    changed_scope: bool,
+    entries: Vec<(String, Option<Value>)>,
+}
+
+/// Collect every current runner. Cursor numbers have meaning only inside their runner scope.
+pub(crate) fn function_logs_since(
     runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime,
-) -> (Vec<String>, Option<u64>) {
-    let snapshot = runtime.runner().logs_since(None);
-    let mut lines = snapshot
-        .lines
-        .iter()
-        .map(|line| line.display().to_owned())
-        .collect::<Vec<_>>();
-    if snapshot.truncated {
-        lines.insert(0, LOG_TRUNCATION_MARKER.to_owned());
+    cursors: &mut FunctionLogCursors,
+) -> FunctionLogBatch {
+    let mut batch = FunctionLogBatch {
+        lines: Vec::new(),
+        records: Vec::new(),
+        scopes: Vec::new(),
+        changed_scope: false,
+        entries: Vec::new(),
+    };
+    let runners = runtime.current_runners();
+    cursors
+        .0
+        .retain(|name, _| runners.iter().any(|(current, _)| name == current));
+    for (codebase, runner) in runners {
+        let identity = runner.diagnostic_id();
+        let previous = cursors.0.get(&codebase).copied();
+        let replaced = previous.is_some_and(|(old, _)| old != identity);
+        let cursor = previous
+            .filter(|(old, _)| *old == identity)
+            .map(|(_, next)| next);
+        let snapshot = runner.logs_since(cursor);
+        let first = snapshot
+            .next_seq
+            .saturating_sub(u64::try_from(snapshot.lines.len()).unwrap_or(u64::MAX));
+        batch.changed_scope |= previous.is_none() || replaced || snapshot.truncated;
+        if snapshot.truncated || replaced {
+            batch.lines.push(LOG_TRUNCATION_MARKER.to_owned());
+            batch.entries.push((LOG_TRUNCATION_MARKER.to_owned(), None));
+        }
+        for (offset, line) in snapshot.lines.iter().enumerate() {
+            let sequence = first.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));
+            batch.lines.push(line.display().to_owned());
+            let record = json!({
+                "project": runtime.project(),
+                "codebase": codebase,
+                "runner": identity.to_string(),
+                "cursor": sequence.to_string(),
+                "line": line.display(),
+                "invocationId": line.invocation_id(),
+                "function": line.function(),
+                "truncated": line.is_truncated(),
+            });
+            batch.records.push(record.clone());
+            batch
+                .entries
+                .push((line.display().to_owned(), Some(record)));
+        }
+        batch.scopes.push(json!({
+            "codebase": codebase,
+            "runner": identity.to_string(),
+            "nextCursor": snapshot.next_seq.to_string(),
+            "truncated": snapshot.truncated,
+            "replaced": replaced,
+        }));
+        cursors.0.insert(codebase, (identity, snapshot.next_seq));
     }
-    (lines, Some(snapshot.next_seq))
+    batch
+}
+
+fn function_snapshot_json(
+    project: &str,
+    history: &fireemu_adapter_functions::runtime::HistorySlice,
+    logs: &FunctionLogBatch,
+) -> Value {
+    json!({
+        "generation": history.cursor.generation,
+        "project": project,
+        "logs": logs.lines,
+        "logRecords": logs.records,
+        "logScopes": logs.scopes,
+        "invocations": history.records.iter().map(invocation_json).collect::<Vec<_>>(),
+    })
 }
 
 /// `GET functions/logs`: `log` events with runner lines (stderr and `log` frames), and
@@ -213,46 +287,50 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_DEPTH);
     tokio::spawn(async move {
         let _slot = slot;
-        let (lines, mut log_cursor) = initial_function_logs(&runtime);
+        let mut log_cursors = FunctionLogCursors::default();
+        let logs = function_logs_since(&runtime, &mut log_cursors);
         let snapshot = runtime.history_since(None);
         let mut cursor = snapshot.cursor;
         if tx
             .send(event(
                 "snapshot",
-                &json!({
-                    "generation": cursor.generation,
-                    "logs": lines,
-                    "invocations": snapshot.records.iter().map(invocation_json).collect::<Vec<_>>(),
-                }),
+                &function_snapshot_json(runtime.project(), &snapshot, &logs),
             ))
             .await
             .is_err()
         {
             return;
         }
+        drop(logs);
         let mut poll = tokio::time::interval(LOG_POLL);
         let mut idle_ticks: u32 = 0;
         loop {
             poll.tick().await;
-            let log_slice = runtime.runner().logs_since(log_cursor);
-            log_cursor = Some(log_slice.next_seq);
+            let logs = function_logs_since(&runtime, &mut log_cursors);
             let slice = runtime.history_since(Some(cursor));
             cursor = slice.cursor;
             let mut sent_something = false;
-            if log_slice.truncated {
+            if logs.changed_scope {
                 sent_something = true;
                 if tx
-                    .send(event("log", &json!({"line": LOG_TRUNCATION_MARKER})))
+                    .send(event(
+                        "log-state",
+                        &json!({"project": runtime.project(), "logScopes": logs.scopes}),
+                    ))
                     .await
                     .is_err()
                 {
                     return;
                 }
             }
-            for line in log_slice.lines {
+            // Keep the plain text log contract, including explicit gap markers.
+            for (line, record) in logs.entries {
                 sent_something = true;
                 if tx
-                    .send(event("log", &json!({"line": line.display()})))
+                    .send(event(
+                        "log",
+                        &json!({"project": runtime.project(), "line": line, "record": record}),
+                    ))
                     .await
                     .is_err()
                 {
@@ -262,6 +340,7 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
             if slice.resync {
                 sent_something = true;
                 let payload = json!({
+                    "project": runtime.project(),
                     "generation": cursor.generation,
                     "invocations": slice.records.iter().map(invocation_json).collect::<Vec<_>>(),
                 });
@@ -271,11 +350,9 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
             } else {
                 for r in &slice.records {
                     sent_something = true;
-                    if tx
-                        .send(event("invocation", &invocation_json(r)))
-                        .await
-                        .is_err()
-                    {
+                    let mut record = invocation_json(r);
+                    record["project"] = json!(runtime.project());
+                    if tx.send(event("invocation", &record)).await.is_err() {
                         return;
                     }
                 }

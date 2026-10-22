@@ -756,6 +756,25 @@ struct QueuedPayload {
     admitted_at: LogicalInstant,
 }
 
+/// An atomically leased event and immutable inputs for encoding after releasing `Inner`.
+struct EventDispatch {
+    id: EventId,
+    spec: FunctionSpec,
+    attempt: u32,
+    epoch: Epoch,
+    payload: Arc<Value>,
+    raw_data: Option<Arc<str>>,
+    admitted_at: LogicalInstant,
+    dispatch_at: LogicalInstant,
+    key: String,
+    function_name: String,
+    runner: Arc<Runner>,
+    timeout: Duration,
+    retry: bool,
+    fault_outcome: Option<(InvokeOutcome, bool)>,
+    crash: bool,
+}
+
 struct PlannedDelivery {
     event: LogicalEvent,
     payload: QueuedPayload,
@@ -1191,6 +1210,8 @@ pub struct FunctionsRuntime {
     schedule_sweep: Mutex<()>,
     schedule_sweep_rerun: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
+    #[cfg(test)]
+    dispatch_encoding_probe: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// Only active Cloud Tasks dispatches own Tokio tasks. Reset and shutdown replace this set,
     /// which aborts every old-generation attempt and its retry timer.
     task_attempts: Mutex<tokio::task::JoinSet<()>>,
@@ -1444,6 +1465,8 @@ impl FunctionsRuntime {
             eventarc_registry: Mutex::new(eventarc_registry),
             schedule_sweep: Mutex::new(()),
             schedule_sweep_rerun: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            dispatch_encoding_probe: Mutex::new(None),
             inner: Mutex::new(Inner {
                 task_scheduler,
                 next_task: 0,
@@ -5477,6 +5500,7 @@ impl FunctionsRuntime {
         }
         // The inner lock excludes concurrent enqueue, retry release and completion. This pass only leases/starts existing records; faults do not enqueue, and spawned work must acquire the same lock. Queue-head traversal therefore sees the same ready set as a snapshot.
         let dispatch_outbox_len = inner.outbox.len();
+        let mut dispatches = Vec::new();
         let mut ready = inner
             .outbox
             .dispatchable_queue_heads()
@@ -5567,19 +5591,13 @@ impl FunctionsRuntime {
             let Some(queued) = inner.payloads.get(&id) else {
                 continue;
             };
-            let request = self.invoke_request(
-                id,
-                spec,
-                attempt,
-                epoch,
-                &queued.payload,
-                queued.admitted_at,
-                queued.raw_data.as_deref(),
-            );
+            let payload = Arc::clone(&queued.payload);
+            let raw_data = queued.raw_data.clone();
+            let admitted_at = queued.admitted_at;
+            let dispatch_at = self.now();
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
             *running_counts.entry(function_name.clone()).or_default() += 1;
-            let runtime = self.clone();
             let runner = runner.clone();
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
             let retry = spec.retry;
@@ -5589,6 +5607,62 @@ impl FunctionsRuntime {
                 let generation = Some(inner.epoch);
                 self.crash_and_respawn(index, generation);
             }
+            dispatches.push(EventDispatch {
+                id,
+                spec: spec.clone(),
+                attempt,
+                epoch,
+                payload,
+                raw_data,
+                admitted_at,
+                dispatch_at,
+                key,
+                function_name,
+                runner,
+                timeout,
+                retry,
+                fault_outcome,
+                crash,
+            });
+        }
+        debug_assert_eq!(
+            inner.outbox.len(),
+            dispatch_outbox_len,
+            "dispatch must not enqueue or remove outbox records while holding the inner lock"
+        );
+        drop(inner);
+        // Encode synchronously in reservation order, without an await/cancellation boundary.
+        // The leased slot and captured runner stay owned by this ticket until the existing
+        // completion path takes over. A reset kills that runner; a ticket never redirects.
+        for dispatch in dispatches {
+            let EventDispatch {
+                id,
+                spec,
+                attempt,
+                epoch,
+                payload,
+                raw_data,
+                admitted_at,
+                dispatch_at,
+                key,
+                function_name,
+                runner,
+                timeout,
+                retry,
+                fault_outcome,
+                crash,
+            } = dispatch;
+            let request = self.invoke_request_at(
+                id,
+                &spec,
+                attempt,
+                epoch,
+                &payload,
+                admitted_at,
+                raw_data.as_deref(),
+                dispatch_at,
+            );
+            let runtime = self.clone();
             tokio::spawn(async move {
                 let clock_error = runtime.sync_runner_clock(&runner).await.err();
                 let fault_outcome = fault_outcome
@@ -5645,13 +5719,9 @@ impl FunctionsRuntime {
                 }
             });
         }
-        debug_assert_eq!(
-            inner.outbox.len(),
-            dispatch_outbox_len,
-            "dispatch must not enqueue or remove outbox records while holding the inner lock"
-        );
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn invoke_request(
         &self,
@@ -5666,7 +5736,40 @@ impl FunctionsRuntime {
         Box<serde_json::value::RawValue>,
         fireemu_adapter_support::entropy::EntropyUnavailable,
     > {
-        let now = self.now();
+        self.invoke_request_at(
+            id,
+            spec,
+            attempt,
+            epoch,
+            event,
+            admitted_at,
+            raw_data,
+            self.now(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn invoke_request_at(
+        &self,
+        id: EventId,
+        spec: &FunctionSpec,
+        attempt: u32,
+        epoch: Epoch,
+        event: &Value,
+        admitted_at: LogicalInstant,
+        raw_data: Option<&str>,
+        now: LogicalInstant,
+    ) -> Result<
+        Box<serde_json::value::RawValue>,
+        fireemu_adapter_support::entropy::EntropyUnavailable,
+    > {
+        #[cfg(test)]
+        {
+            let probe = self.dispatch_encoding_probe.lock().unwrap().clone();
+            if let Some(probe) = probe {
+                probe();
+            }
+        }
         let deadline = now
             .checked_add(LogicalDuration::from_seconds(i64::from(
                 spec.timeout_seconds,
@@ -6810,6 +6913,169 @@ mod task_completion_tests {
                 "encode each before/after document once across all triggers"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn invocation_encoding_does_not_hold_the_global_queue_lock() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let runtime = runtime().await;
+        let acquired = Arc::new(AtomicBool::new(false));
+        let observed = acquired.clone();
+        let weak = Arc::downgrade(&runtime);
+        *runtime.dispatch_encoding_probe.lock().unwrap() = Some(Arc::new(move || {
+            observed.store(
+                weak.upgrade().unwrap().inner.try_lock().is_ok(),
+                Ordering::SeqCst,
+            );
+        }));
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            assert!(FunctionsRuntime::enqueue(
+                &mut inner,
+                runtime.config.session,
+                super::EventSource::Firestore,
+                "ok",
+                "example.event",
+                "documents/test",
+                runtime.now(),
+                &json!({"data": "x".repeat(1024 * 1024)}),
+                None
+            ));
+        }
+        runtime.dispatch_ready();
+        let idle = runtime.await_idle(Duration::from_secs(10)).await;
+        runtime.shutdown().await;
+        assert!(idle.is_ok());
+        assert!(
+            acquired.load(Ordering::SeqCst),
+            "encoding must let unrelated enqueue/completion acquire Inner"
+        );
+    }
+
+    #[tokio::test]
+    async fn resetting_a_reserved_encoding_ticket_never_reaches_a_replacement_runner() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let runtime = runtime().await;
+        let reset = Arc::new(AtomicBool::new(false));
+        let observed = reset.clone();
+        let weak = Arc::downgrade(&runtime);
+        *runtime.dispatch_encoding_probe.lock().unwrap() = Some(Arc::new(move || {
+            if !observed.swap(true, Ordering::SeqCst) {
+                weak.upgrade().unwrap().reset();
+            }
+        }));
+        {
+            let mut inner = runtime.inner.lock().unwrap();
+            assert!(FunctionsRuntime::enqueue(
+                &mut inner,
+                runtime.config.session,
+                super::EventSource::Firestore,
+                "ok",
+                "example.event",
+                "documents/test",
+                runtime.now(),
+                &json!({"data":{}}),
+                None
+            ));
+        }
+        let old_runner = runtime.runner().diagnostic_id();
+        runtime.dispatch_ready();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while runtime.runner().diagnostic_id() == old_runner {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let idle = runtime.await_idle(Duration::from_secs(10)).await;
+        let history = runtime.history();
+        let logs = runtime.runner().logs_since(None);
+        let running = runtime.status()["running"].as_u64().unwrap();
+        runtime.shutdown().await;
+        assert!(idle.is_ok());
+        assert!(
+            history.is_empty(),
+            "old epoch completion must not append history"
+        );
+        assert!(logs
+            .lines
+            .iter()
+            .all(|line| line.invocation_id() != Some("1-1")));
+        assert_eq!(running, 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_ticket_encoding_preserves_wire_bytes_raw_numbers_and_captured_deadline() {
+        use fireemu_core_functions::manifest::FunctionGeneration;
+        use fireemu_core_types::ids::{Epoch, EventId};
+        let runtime = runtime().await;
+        let mut spec = runtime.manifest.get("ok").unwrap().clone();
+        spec.generation = FunctionGeneration::First;
+        let captured = runtime.now();
+        for index in 1..=32 {
+            let raw = format!(r#"{{"z":{index}.00,"a":{{"last":true,"first":null}}}}"#);
+            let event =
+                json!({"id":index,"data":serde_json::from_str::<serde_json::Value>(&raw).unwrap()});
+            let before = runtime
+                .invoke_request(
+                    EventId::new(index),
+                    &spec,
+                    2,
+                    Epoch::initial(),
+                    &event,
+                    captured,
+                    Some(&raw),
+                )
+                .unwrap();
+            let after = runtime
+                .invoke_request_at(
+                    EventId::new(index),
+                    &spec,
+                    2,
+                    Epoch::initial(),
+                    &event,
+                    captured,
+                    Some(&raw),
+                    captured,
+                )
+                .unwrap();
+            assert_eq!(before.get(), after.get());
+            assert!(after.get().contains(&raw));
+        }
+        runtime
+            .clock
+            .lock()
+            .unwrap()
+            .advance_to(
+                captured
+                    .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(600))
+                    .unwrap(),
+            )
+            .unwrap();
+        let request = runtime
+            .invoke_request_at(
+                EventId::new(1),
+                &spec,
+                1,
+                Epoch::initial(),
+                &json!({"data":{}}),
+                captured,
+                None,
+                captured,
+            )
+            .unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(request.get()).unwrap();
+        assert_eq!(
+            decoded["deadline"],
+            captured
+                .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(
+                    i64::from(spec.timeout_seconds)
+                ))
+                .unwrap()
+                .to_rfc3339()
+                .unwrap()
+        );
+        runtime.shutdown().await;
     }
 
     #[tokio::test]

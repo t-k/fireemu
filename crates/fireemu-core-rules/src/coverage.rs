@@ -250,6 +250,50 @@ impl Coverage {
     }
 }
 
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+impl Coverage {
+    fn statistics(&self) -> (u64, u64, u64, u64) {
+        let mut distinct = 0u64;
+        let mut observations = 0u64;
+        let mut bytes = count(self.entries.len())
+            .saturating_mul(count(std::mem::size_of::<((usize, usize), CoverageEntry)>()));
+        for entry in self.entries.values() {
+            distinct = distinct.saturating_add(count(entry.values.len()));
+            bytes = bytes.saturating_add(
+                count(entry.values.capacity())
+                    .saturating_mul(count(std::mem::size_of::<(ExprValue, u64)>())),
+            );
+            for (value, seen) in &entry.values {
+                observations = observations.saturating_add(*seen);
+                bytes = bytes.saturating_add(match value {
+                    ExprValue::String(value) => count(value.capacity()),
+                    ExprValue::Undefined(cause) => count(cause.message.capacity()),
+                    _ => 0,
+                });
+            }
+        }
+        bytes = bytes.saturating_add(
+            count(self.indexes.len())
+                .saturating_mul(count(std::mem::size_of::<((usize, usize), ValueIndex)>())),
+        );
+        for index in self.indexes.values() {
+            bytes = bytes.saturating_add(
+                count(index.buckets.capacity())
+                    .saturating_mul(count(std::mem::size_of::<(u64, Vec<usize>)>())),
+            );
+            for positions in index.buckets.values() {
+                bytes = bytes.saturating_add(
+                    count(positions.capacity()).saturating_mul(count(std::mem::size_of::<usize>())),
+                );
+            }
+        }
+        (count(self.entries.len()), distinct, observations, bytes)
+    }
+}
+
 /// One node of a coverage report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoverageNode {
@@ -356,13 +400,53 @@ pub struct RequestTrace {
 /// [`REQUEST_TRACE_CAPACITY`] requests with their traces.
 #[derive(Debug, Default)]
 pub struct RulesDiagnostics {
+    interval_epoch: u64,
     coverage: Coverage,
     requests: VecDeque<RequestTrace>,
     next_sequence: u64,
     request_traces_enabled: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DiagnosticsStatistics {
+    pub(crate) interval_epoch: u64,
+    pub(crate) expression_count: u64,
+    pub(crate) distinct_value_count: u64,
+    pub(crate) observation_count: u64,
+    pub(crate) estimated_coverage_bytes: u64,
+    pub(crate) request_trace_count: u64,
+    pub(crate) request_trace_capacity: u64,
+    pub(crate) request_traces_enabled: bool,
+}
+
 impl RulesDiagnostics {
+    pub(crate) const fn interval_epoch(&self) -> u64 {
+        self.interval_epoch
+    }
+
+    pub(crate) fn statistics(&self) -> DiagnosticsStatistics {
+        let (expression_count, distinct_value_count, observation_count, estimated_coverage_bytes) =
+            self.coverage.statistics();
+        DiagnosticsStatistics {
+            interval_epoch: self.interval_epoch,
+            expression_count,
+            distinct_value_count,
+            observation_count,
+            estimated_coverage_bytes,
+            request_trace_count: count(self.requests.len()),
+            request_trace_capacity: count(REQUEST_TRACE_CAPACITY),
+            request_traces_enabled: self.request_traces_enabled,
+        }
+    }
+
+    /// Starts an explicit diagnostic interval; exhaustion leaves every observation intact.
+    pub(crate) fn reset_interval(&mut self) -> Option<u64> {
+        let next = self.interval_epoch.checked_add(1)?;
+        self.clear();
+        self.interval_epoch = next;
+        Some(next)
+    }
+
     /// Coverage accumulated since the ruleset was loaded.
     #[must_use]
     pub const fn coverage(&self) -> &Coverage {
@@ -588,5 +672,155 @@ mod index_tests {
                 println!("coverage size={size} repetition={repetition} record={record_elapsed:?} clone_merge={merge_elapsed:?} report_retained_bytes={vec_bytes} index_bucket_capacity={index_capacity} index_position_capacity={index_positions}");
             }
         }
+    }
+    #[test]
+    fn diagnostic_interval_statistics_and_reset_release_the_auxiliary_index() {
+        let mut diagnostics = RulesDiagnostics::default();
+        let mut coverage = Coverage::default();
+        for i in 0..1000 {
+            coverage.record(Span::default(), 1, ExprValue::String(format!("uid-{i}")));
+        }
+        diagnostics.merge_coverage(&coverage);
+        diagnostics.merge_coverage(&coverage);
+        let stats = diagnostics.statistics();
+        assert_eq!(
+            (
+                stats.expression_count,
+                stats.distinct_value_count,
+                stats.observation_count
+            ),
+            (1, 1000, 2000)
+        );
+        assert!(stats.estimated_coverage_bytes > 1000);
+        assert!(!diagnostics.coverage.indexes.is_empty());
+        assert_eq!(diagnostics.reset_interval(), Some(1));
+        let empty = diagnostics.statistics();
+        assert_eq!(
+            (
+                empty.expression_count,
+                empty.distinct_value_count,
+                empty.observation_count,
+                empty.estimated_coverage_bytes
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(diagnostics.coverage.indexes.is_empty());
+        diagnostics.interval_epoch = u64::MAX;
+        diagnostics.merge_coverage(&coverage);
+        let before = diagnostics.statistics();
+        assert_eq!(diagnostics.reset_interval(), None);
+        assert_eq!(diagnostics.statistics(), before);
+    }
+    #[test]
+    fn interval_exhaustion_refuses_the_public_clear_without_data_loss() {
+        let mut diagnostics = RulesDiagnostics {
+            interval_epoch: u64::MAX,
+            ..RulesDiagnostics::default()
+        };
+        diagnostics
+            .coverage
+            .record(Span::default(), 1, ExprValue::Int(1));
+        let loaded = crate::runtime::LoadedRules {
+            diagnostics: std::sync::Arc::new(std::sync::Mutex::new(diagnostics)),
+            ..crate::runtime::LoadedRules::default()
+        };
+        let slot = crate::runtime::RulesetSlot::new(loaded);
+        let before = slot.diagnostics_snapshot().unwrap();
+        assert_eq!(
+            slot.clear_diagnostics(0, u64::MAX),
+            Err(crate::runtime::RulesDiagnosticsError::IntervalExhausted)
+        );
+        assert_eq!(slot.diagnostics_snapshot().unwrap(), before);
+    }
+
+    #[test]
+    #[ignore = "bounded release diagnostic reset/index retention measurement"]
+    fn bounded_diagnostic_reset_releases_index_and_value_storage() {
+        for size in [1usize, 1000, 100_000] {
+            let slot = crate::runtime::RulesetSlot::default();
+            let snapshot = slot.snapshot().unwrap();
+            {
+                let mut diagnostics = snapshot.diagnostics.lock().unwrap();
+                for i in 0..size {
+                    diagnostics.coverage.record(
+                        Span::default(),
+                        1,
+                        ExprValue::String(format!("uid-{i}")),
+                    );
+                }
+                assert_eq!(!diagnostics.coverage.indexes.is_empty(), size >= 32);
+            }
+            let before = slot.diagnostics_snapshot().unwrap();
+            assert_eq!(
+                (before.distinct_value_count, before.observation_count),
+                (count(size), count(size))
+            );
+            let start = std::time::Instant::now();
+            let after = slot.clear_diagnostics(0, 0).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(
+                (
+                    after.interval_epoch,
+                    after.expression_count,
+                    after.distinct_value_count,
+                    after.observation_count,
+                    after.estimated_coverage_bytes
+                ),
+                (1, 0, 0, 0, 0)
+            );
+            let diagnostics = snapshot.diagnostics.lock().unwrap();
+            assert!(diagnostics.coverage.entries.is_empty());
+            assert!(diagnostics.coverage.indexes.is_empty());
+            println!("diagnostics_reset size={size} estimated_before={} estimated_after={} elapsed={elapsed:?}", before.estimated_coverage_bytes, after.estimated_coverage_bytes);
+        }
+    }
+    #[test]
+    fn diagnostic_observation_totals_saturate_without_merging_distinct_variants() {
+        let mut diagnostics = RulesDiagnostics::default();
+        diagnostics
+            .coverage
+            .record(Span::default(), 1, ExprValue::Int(1));
+        diagnostics
+            .coverage
+            .record(Span::default(), 1, ExprValue::Float(1.0));
+        diagnostics
+            .coverage
+            .entries
+            .get_mut(&(0, 1))
+            .unwrap()
+            .values[0]
+            .1 = u64::MAX;
+        let stats = diagnostics.statistics();
+        assert_eq!(
+            (
+                stats.expression_count,
+                stats.distinct_value_count,
+                stats.observation_count
+            ),
+            (1, 2, u64::MAX)
+        );
+    }
+    #[test]
+    fn diagnostic_byte_estimate_includes_the_auxiliary_index_payload() {
+        let mut coverage = Coverage::default();
+        for i in 0..1000 {
+            coverage.record(Span::default(), 1, ExprValue::String(format!("uid-{i}")));
+        }
+        let indexed = coverage.statistics().3;
+        let positions: usize = coverage
+            .indexes
+            .values()
+            .flat_map(|index| index.buckets.values())
+            .map(Vec::capacity)
+            .sum();
+        let mut without_index = coverage.clone();
+        without_index.indexes.clear();
+        assert_eq!(coverage, without_index);
+        assert!(
+            indexed
+                >= without_index.statistics().3.saturating_add(
+                    count(positions).saturating_mul(count(std::mem::size_of::<usize>()))
+                )
+        );
     }
 }

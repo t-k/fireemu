@@ -12,3 +12,5 @@ pub mod parse;
 pub mod regex;
 pub mod runtime;
 pub mod value;
+
+mod scope;

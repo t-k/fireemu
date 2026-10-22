@@ -815,8 +815,17 @@ test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", a
     seedHoldsVector,
   } = await import("./fs-ent-pipeline/corpus.mjs");
   // This historical subset is fixed; the dedicated coverage suite checks the full selector.
-  const originalIds = new Set(["fs-ent-pipeline/o5/names", "fs-ent-pipeline/o5/literal-keys", "fs-ent-pipeline/o5/function-order", "fs-ent-pipeline/o5/stage-order", "fs-ent-pipeline/o5/value-shapes", "fs-ent-pipeline/o5/function-names"]);
-  const o5 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o5/").filter((program) => originalIds.has(program.id));
+  const originalIds = new Set([
+    "fs-ent-pipeline/o5/names",
+    "fs-ent-pipeline/o5/literal-keys",
+    "fs-ent-pipeline/o5/function-order",
+    "fs-ent-pipeline/o5/stage-order",
+    "fs-ent-pipeline/o5/value-shapes",
+    "fs-ent-pipeline/o5/function-names",
+  ]);
+  const o5 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o5/").filter((program) =>
+    originalIds.has(program.id),
+  );
   assert.deepEqual(
     o5.map((p) => p.id),
     [

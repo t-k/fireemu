@@ -1387,99 +1387,304 @@ const o5AppendixProgram = {
   seed: [["ap5/d", { i: int(1), n: int(1), top: str("t") }]],
   steps: [
     // Draft 195.
-    step("proposed-n14-docid-where-then-empty", pipeline(collection("ap5"), stage("where", fn("equal", fn("document_id", int(1)), str("x"))), select({}))),
+    step(
+      "proposed-n14-docid-where-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("where", fn("equal", fn("document_id", int(1)), str("x"))),
+        select({}),
+      ),
+    ),
     // Draft 196.
-    step("proposed-n15-docid-add-then-empty", pipeline(collection("ap5"), stage("add_fields", mapOf({"a": fn("document_id", int(1))})), select({}))),
+    step(
+      "proposed-n15-docid-add-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("add_fields", mapOf({ a: fn("document_id", int(1)) })),
+        select({}),
+      ),
+    ),
     // Draft 197.
-    step("proposed-n76-map-add-then-empty", pipeline(collection("ap5"), stage("add_fields", mapOf({"a": fn("map", dbl(1.5), fld("i"))})), select({}))),
+    step(
+      "proposed-n76-map-add-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("add_fields", mapOf({ a: fn("map", dbl(1.5), fld("i")) })),
+        select({}),
+      ),
+    ),
     // Draft 198.
-    step("proposed-n78-docid-double-then-limit", pipeline(collection("ap5"), select({"v": fn("document_id", dbl(1.5))}), stage("limit", str("x")))),
+    step(
+      "proposed-n78-docid-double-then-limit",
+      pipeline(
+        collection("ap5"),
+        select({ v: fn("document_id", dbl(1.5)) }),
+        stage("limit", str("x")),
+      ),
+    ),
     // Draft 199.
-    step("proposed-n79-map-where-then-empty", pipeline(collection("ap5"), stage("where", fn("equal", fld("i"), fn("map", dbl(1.5), fld("i")))), select({}))),
+    step(
+      "proposed-n79-map-where-then-empty",
+      pipeline(
+        collection("ap5"),
+        stage("where", fn("equal", fld("i"), fn("map", dbl(1.5), fld("i")))),
+        select({}),
+      ),
+    ),
     // Draft 200.
-    step("proposed-n68-aggregate-bad-group-call", pipeline(collection("ap5"), stage("aggregate", mapOf({"c": fn("count", fld("n"))}), mapOf({"": fn("document_id", int(1))})))),
+    step(
+      "proposed-n68-aggregate-bad-group-call",
+      pipeline(
+        collection("ap5"),
+        stage(
+          "aggregate",
+          mapOf({ c: fn("count", fld("n")) }),
+          mapOf({ "": fn("document_id", int(1)) }),
+        ),
+      ),
+    ),
     // Draft 205.
-    step("proposed-type-tag-integer", pipeline(collection("ap5"), select({"v": mapOf({"__type__": int(1)})}))),
+    step(
+      "proposed-type-tag-integer",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: int(1) }) })),
+    ),
     // Draft 205.
-    step("proposed-type-tag-boolean", pipeline(collection("ap5"), select({"v": mapOf({"__type__": bool(true)})}))),
+    step(
+      "proposed-type-tag-boolean",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: bool(true) }) })),
+    ),
     // Draft 205.
-    step("proposed-type-tag-null", pipeline(collection("ap5"), select({"v": mapOf({"__type__": nul()})}))),
+    step(
+      "proposed-type-tag-null",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: nul() }) })),
+    ),
     // Draft 205.
-    step("proposed-type-tag-double", pipeline(collection("ap5"), select({"v": mapOf({"__type__": dbl(1.5)})}))),
+    step(
+      "proposed-type-tag-double",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: dbl(1.5) }) })),
+    ),
     // Draft 205.
-    step("proposed-type-tag-map", pipeline(collection("ap5"), select({"v": mapOf({"__type__": mapOf({})})}))),
+    step(
+      "proposed-type-tag-map",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: mapOf({}) }) })),
+    ),
     // Draft 205.
-    step("proposed-type-tag-array", pipeline(collection("ap5"), select({"v": mapOf({"__type__": list()})}))),
+    step(
+      "proposed-type-tag-array",
+      pipeline(collection("ap5"), select({ v: mapOf({ __type__: list() }) })),
+    ),
     // Draft 205.
-    step("proposed-type-tag-nested", pipeline(collection("ap5"), select({"v": mapOf({"a": mapOf({"__type__": int(1)})})}))),
+    step(
+      "proposed-type-tag-nested",
+      pipeline(collection("ap5"), select({ v: mapOf({ a: mapOf({ __type__: int(1) }) }) })),
+    ),
     // Draft 205.
-    step("proposed-type-tag-where", pipeline(collection("ap5"), stage("where", mapOf({"__type__": int(1)})))),
+    step(
+      "proposed-type-tag-where",
+      pipeline(collection("ap5"), stage("where", mapOf({ __type__: int(1) }))),
+    ),
     // Draft 205.
-    step("proposed-type-tag-function-argument", pipeline(collection("ap5"), select({"v": fn("equal", mapOf({"__type__": int(1)}), int(1))}))),
+    step(
+      "proposed-type-tag-function-argument",
+      pipeline(collection("ap5"), select({ v: fn("equal", mapOf({ __type__: int(1) }), int(1)) })),
+    ),
     // Draft 206.
-    step("proposed-empty-alias-unknown", pipeline(collection("ap5"), select({"": fn("nope_fn")}))),
+    step(
+      "proposed-empty-alias-unknown",
+      pipeline(collection("ap5"), select({ "": fn("nope_fn") })),
+    ),
     // Draft 206.
-    step("proposed-invalid-alias-integer-vector", pipeline(collection("ap5"), select({"a..b": fld("i"), "c": mapOf({"__type__": str("__vector__"), "value": list(int(1))})}))),
+    step(
+      "proposed-invalid-alias-integer-vector",
+      pipeline(
+        collection("ap5"),
+        select({
+          "a..b": fld("i"),
+          c: mapOf({ __type__: str("__vector__"), value: list(int(1)) }),
+        }),
+      ),
+    ),
     // Draft 206.
-    step("proposed-empty-alias-name-map", pipeline(collection("ap5"), select({"": mapOf({"__name__": int(1)})}))),
+    step(
+      "proposed-empty-alias-name-map",
+      pipeline(collection("ap5"), select({ "": mapOf({ __name__: int(1) }) })),
+    ),
     // Draft 206.
-    step("proposed-empty-alias-equal-one", pipeline(collection("ap5"), select({"": fn("equal", fld("i"))}))),
+    step(
+      "proposed-empty-alias-equal-one",
+      pipeline(collection("ap5"), select({ "": fn("equal", fld("i")) })),
+    ),
     // Draft 207.
-    step("proposed-vector-positive-infinity", pipeline(collection("ap5"), select({"v": mapOf({"__type__": str("__vector__"), "value": list(dbl("Infinity"))})}))),
+    step(
+      "proposed-vector-positive-infinity",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("__vector__"), value: list(dbl("Infinity")) }) }),
+      ),
+    ),
     // Draft 207.
-    step("proposed-vector-negative-infinity", pipeline(collection("ap5"), select({"v": mapOf({"__type__": str("__vector__"), "value": list(dbl("-Infinity"))})}))),
+    step(
+      "proposed-vector-negative-infinity",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("__vector__"), value: list(dbl("-Infinity")) }) }),
+      ),
+    ),
     // Draft 208.
-    step("proposed-reference-collection", pipeline(collection("ap5"), select({"v": o5RawReference("{docs}/c")}))),
+    step(
+      "proposed-reference-collection",
+      pipeline(collection("ap5"), select({ v: o5RawReference("{docs}/c") })),
+    ),
     // Draft 208.
-    step("proposed-reference-empty-segment", pipeline(collection("ap5"), select({"v": o5RawReference("{docs}/c//d")}))),
+    step(
+      "proposed-reference-empty-segment",
+      pipeline(collection("ap5"), select({ v: o5RawReference("{docs}/c//d") })),
+    ),
     // Draft 208.
-    step("proposed-reference-garbage", pipeline(collection("ap5"), select({"v": o5RawReference("garbage")}))),
+    step(
+      "proposed-reference-garbage",
+      pipeline(collection("ap5"), select({ v: o5RawReference("garbage") })),
+    ),
     // Draft 208.
-    step("proposed-reference-documents-root", pipeline(collection("ap5"), select({"v": o5RawReference("{docs}")}))),
+    step(
+      "proposed-reference-documents-root",
+      pipeline(collection("ap5"), select({ v: o5RawReference("{docs}") })),
+    ),
     // Draft 209.
-    step("proposed-add-reserved-alias", pipeline(collection("ap5"), stage("add_fields", mapOf({"__x__": fld("top")})))),
+    step(
+      "proposed-add-reserved-alias",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({ __x__: fld("top") }))),
+    ),
     // Draft 209.
-    step("proposed-distinct-dotted-alias", pipeline(collection("ap5"), stage("distinct", mapOf({"a.b": fld("top")})))),
+    step(
+      "proposed-distinct-dotted-alias",
+      pipeline(collection("ap5"), stage("distinct", mapOf({ "a.b": fld("top") }))),
+    ),
     // Draft 209.
-    step("proposed-aggregate-unrun-name", pipeline(collection("ap5"), stage("aggregate", mapOf({"v": fn("count")}), mapOf({"v": fld("top")})))),
+    step(
+      "proposed-aggregate-unrun-name",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ v: fn("count") }), mapOf({ v: fld("top") })),
+      ),
+    ),
     // Draft 210.
-    step("proposed-two-invalid-select-aliases", pipeline(collection("ap5"), select({"a..b": fld("i"), "c..d": fld("i")}))),
+    step(
+      "proposed-two-invalid-select-aliases",
+      pipeline(collection("ap5"), select({ "a..b": fld("i"), "c..d": fld("i") })),
+    ),
     // Draft 210.
-    step("proposed-empty-add-then-negative-limit", pipeline(collection("ap5"), stage("add_fields", mapOf({})), stage("limit", int(-1)))),
+    step(
+      "proposed-empty-add-then-negative-limit",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({})), stage("limit", int(-1))),
+    ),
     // Draft 210,220.
-    step("proposed-two-empty-stages", pipeline(collection("ap5"), select({}), stage("add_fields", mapOf({})))),
+    step(
+      "proposed-two-empty-stages",
+      pipeline(collection("ap5"), select({}), stage("add_fields", mapOf({}))),
+    ),
     // Draft 211.
-    step("proposed-select-name-field", pipeline(collection("ap5"), select({"__name__": fld("__name__")}))),
+    step(
+      "proposed-select-name-field",
+      pipeline(collection("ap5"), select({ __name__: fld("__name__") })),
+    ),
     // Draft 213,226.
-    step("proposed-docid-map", pipeline(collection("ap5"), select({"v": fn("document_id", mapOf({"a": int(1)}))}))),
+    step(
+      "proposed-docid-map",
+      pipeline(collection("ap5"), select({ v: fn("document_id", mapOf({ a: int(1) })) })),
+    ),
     // Draft 213,226.
-    step("proposed-docid-boolean", pipeline(collection("ap5"), select({"v": fn("document_id", bool(true))}))),
+    step(
+      "proposed-docid-boolean",
+      pipeline(collection("ap5"), select({ v: fn("document_id", bool(true)) })),
+    ),
     // Draft 213.
-    step("proposed-collectionid-integer", pipeline(collection("ap5"), select({"v": fn("collection_id", int(1))}))),
+    step(
+      "proposed-collectionid-integer",
+      pipeline(collection("ap5"), select({ v: fn("collection_id", int(1)) })),
+    ),
     // Draft 213.
-    step("proposed-parent-integer", pipeline(collection("ap5"), select({"v": fn("parent", int(1))}))),
+    step(
+      "proposed-parent-integer",
+      pipeline(collection("ap5"), select({ v: fn("parent", int(1)) })),
+    ),
     // Draft 218,227-P29.
-    step("proposed-where-field-map", pipeline(collection("ap5"), stage("where", mapOf({"a": fld("i")})))),
+    step(
+      "proposed-where-field-map",
+      pipeline(collection("ap5"), stage("where", mapOf({ a: fld("i") }))),
+    ),
     // Draft 218.
-    step("proposed-where-equal-array-field", pipeline(collection("ap5"), stage("where", fn("equal", fld("i"), list(fld("i")))))),
+    step(
+      "proposed-where-equal-array-field",
+      pipeline(collection("ap5"), stage("where", fn("equal", fld("i"), list(fld("i"))))),
+    ),
     // Draft 218.
-    step("proposed-where-nonliteral-map-key", pipeline(collection("ap5"), stage("where", fn("map", fld("i"), fld("i"))))),
+    step(
+      "proposed-where-nonliteral-map-key",
+      pipeline(collection("ap5"), stage("where", fn("map", fld("i"), fld("i")))),
+    ),
     // Draft 219,229.
-    step("proposed-aggregate-alias-invalid", pipeline(collection("ap5"), stage("aggregate", mapOf({"a..b": fn("count", fld("n"))}), mapOf({})))),
+    step(
+      "proposed-aggregate-alias-invalid",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ "a..b": fn("count", fld("n")) }), mapOf({})),
+      ),
+    ),
     // Draft 219.
-    step("proposed-aggregate-alias-length", pipeline(collection("ap5"), stage("aggregate", mapOf({"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": fn("count", fld("n"))}), mapOf({})))),
+    step(
+      "proposed-aggregate-alias-length",
+      pipeline(
+        collection("ap5"),
+        stage(
+          "aggregate",
+          mapOf({
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:
+              fn("count", fld("n")),
+          }),
+          mapOf({}),
+        ),
+      ),
+    ),
     // Draft 219.
-    step("proposed-distinct-alias-invalid", pipeline(collection("ap5"), stage("distinct", mapOf({"a..b": fld("top")})))),
+    step(
+      "proposed-distinct-alias-invalid",
+      pipeline(collection("ap5"), stage("distinct", mapOf({ "a..b": fld("top") }))),
+    ),
     // Draft 219.
-    step("proposed-distinct-alias-length", pipeline(collection("ap5"), stage("distinct", mapOf({"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": fld("top")})))),
+    step(
+      "proposed-distinct-alias-length",
+      pipeline(
+        collection("ap5"),
+        stage(
+          "distinct",
+          mapOf({
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:
+              fld("top"),
+          }),
+        ),
+      ),
+    ),
     // Draft 220.
-    step("proposed-empty-add-then-empty-alias", pipeline(collection("ap5"), stage("add_fields", mapOf({})), select({"": fld("i")}))),
+    step(
+      "proposed-empty-add-then-empty-alias",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({})), select({ "": fld("i") })),
+    ),
     // Draft 220.
-    step("proposed-empty-add-alias-then-empty-select", pipeline(collection("ap5"), stage("add_fields", mapOf({"": fld("i")})), select({}))),
+    step(
+      "proposed-empty-add-alias-then-empty-select",
+      pipeline(collection("ap5"), stage("add_fields", mapOf({ "": fld("i") })), select({})),
+    ),
     // Draft 221.
-    step("proposed-select-duplicate-quoted-path", pipeline(collection("ap5"), select({"a": fld("i"), "`a`": fld("i")}))),
+    step(
+      "proposed-select-duplicate-quoted-path",
+      pipeline(collection("ap5"), select({ a: fld("i"), "`a`": fld("i") })),
+    ),
     // Draft 227-draft-control.
-    step("proposed-known-function-where-array-control", pipeline(collection("ap5"), stage("where", list(fn("document_id", fld("__name__")))))),
+    step(
+      "proposed-known-function-where-array-control",
+      pipeline(collection("ap5"), stage("where", list(fn("document_id", fld("__name__"))))),
+    ),
     // Draft 228.
     step("proposed-limit-zero", pipeline(collection("ap5"), stage("limit", int(0)))),
     // Draft 228.
@@ -1487,43 +1692,132 @@ const o5AppendixProgram = {
     // Draft 228.
     step("proposed-offset-one", pipeline(collection("ap5"), stage("offset", int(1)))),
     // Draft 230.
-    step("proposed-n41-unknown-type-double", pipeline(collection("ap5"), select({"v": mapOf({"__type__": str("x"), "value": list(dbl(1.0))})}))),
+    step(
+      "proposed-n41-unknown-type-double",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("x"), value: list(dbl(1.0)) }) }),
+      ),
+    ),
     // Draft 230.
-    step("proposed-n60-array-holding-vector", pipeline(collection("ap5"), select({"v": list(mapOf({"__type__": str("__vector__"), "value": list(dbl(1.0))}))}))),
+    step(
+      "proposed-n60-array-holding-vector",
+      pipeline(
+        collection("ap5"),
+        select({ v: list(mapOf({ __type__: str("__vector__"), value: list(dbl(1.0)) })) }),
+      ),
+    ),
     // Draft 230.
-    step("proposed-n69-distinct-then-limit", pipeline(collection("ap5"), stage("distinct", mapOf({"a": fld("top")})), stage("limit", str("x")))),
+    step(
+      "proposed-n69-distinct-then-limit",
+      pipeline(
+        collection("ap5"),
+        stage("distinct", mapOf({ a: fld("top") })),
+        stage("limit", str("x")),
+      ),
+    ),
     // Draft 231.
-    step("proposed-r11-unknown-type-integer", pipeline(collection("ap5"), select({"v": mapOf({"__type__": str("x"), "value": list(int(1))})}))),
+    step(
+      "proposed-r11-unknown-type-integer",
+      pipeline(
+        collection("ap5"),
+        select({ v: mapOf({ __type__: str("x"), value: list(int(1)) }) }),
+      ),
+    ),
     // Draft 235,245.
-    step("proposed-reversed-overlap", pipeline(collection("ap5"), select({"m.r": fld("top"), "m": fld("top")}))),
+    step(
+      "proposed-reversed-overlap",
+      pipeline(collection("ap5"), select({ "m.r": fld("top"), m: fld("top") })),
+    ),
     // Draft 237.
-    step("proposed-missing-dotted-one", pipeline(collection("ap5"), select({"a.b": fld("missing")}))),
+    step(
+      "proposed-missing-dotted-one",
+      pipeline(collection("ap5"), select({ "a.b": fld("missing") })),
+    ),
     // Draft 237.
-    step("proposed-missing-dotted-deep", pipeline(collection("ap5"), select({"a.b.c": fld("missing")}))),
+    step(
+      "proposed-missing-dotted-deep",
+      pipeline(collection("ap5"), select({ "a.b.c": fld("missing") })),
+    ),
     // Draft 237.
-    step("proposed-missing-dotted-sibling", pipeline(collection("ap5"), select({"a.b": fld("missing"), "a.c": fld("top")}))),
+    step(
+      "proposed-missing-dotted-sibling",
+      pipeline(collection("ap5"), select({ "a.b": fld("missing"), "a.c": fld("top") })),
+    ),
     // Draft 243.
     step("proposed-collection-string", pipeline(stage("collection", str("ap5")))),
     // Draft 244.
-    step("proposed-select-alias-shape-dotted", pipeline(collection("ap5"), select({"a.b": fn("document_id", bool(true))}))),
+    step(
+      "proposed-select-alias-shape-dotted",
+      pipeline(collection("ap5"), select({ "a.b": fn("document_id", bool(true)) })),
+    ),
     // Draft 244.
-    step("proposed-select-alias-shape-quoted", pipeline(collection("ap5"), select({"`a`": fn("document_id", bool(true))}))),
+    step(
+      "proposed-select-alias-shape-quoted",
+      pipeline(collection("ap5"), select({ "`a`": fn("document_id", bool(true)) })),
+    ),
     // Draft 245.
-    step("proposed-reversed-literal-field-map", pipeline(collection("ap5"), select({"v": mapOf({"l": fld("i"), "k": fld("top")})}))),
+    step(
+      "proposed-reversed-literal-field-map",
+      pipeline(collection("ap5"), select({ v: mapOf({ l: fld("i"), k: fld("top") }) })),
+    ),
     // Draft 245.
-    step("proposed-reversed-function-field-map", pipeline(collection("ap5"), select({"b": fn("document_id", fld("__name__")), "a": fld("i")}))),
+    step(
+      "proposed-reversed-function-field-map",
+      pipeline(collection("ap5"), select({ b: fn("document_id", fld("__name__")), a: fld("i") })),
+    ),
     // Draft 227.
-    step("original-p30-where-unknown-array", pipeline(collection("ap5"), stage("where", list(fn("nope_fn"))))),
+    step(
+      "original-p30-where-unknown-array",
+      pipeline(collection("ap5"), stage("where", list(fn("nope_fn")))),
+    ),
     // Draft 229.
-    step("original-n19-count-field", pipeline(collection("ap5"), stage("aggregate", mapOf({"c": fn("count", fld("n"))}), mapOf({})), select({}))),
+    step(
+      "original-n19-count-field",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ c: fn("count", fld("n")) }), mapOf({})),
+        select({}),
+      ),
+    ),
     // Draft 229.
-    step("original-n21-count-zero", pipeline(collection("ap5"), stage("aggregate", mapOf({"c": fn("count")}), mapOf({})), select({}))),
+    step(
+      "original-n21-count-zero",
+      pipeline(
+        collection("ap5"),
+        stage("aggregate", mapOf({ c: fn("count") }), mapOf({})),
+        select({}),
+      ),
+    ),
     // Draft 212-original.
-    step("original-q3-top-level-parent-chain", pipeline(collection("ap5"), select({"v": fn("document_id", fn("parent", fn("parent", fld("__name__"))))}), stage("limit", str("x")))),
+    step(
+      "original-q3-top-level-parent-chain",
+      pipeline(
+        collection("ap5"),
+        select({ v: fn("document_id", fn("parent", fn("parent", fld("__name__")))) }),
+        stage("limit", str("x")),
+      ),
+    ),
     // Draft 236.
-    step("original-h9-two-failing-calls", pipeline(collection("ap5"), select({"a": fn("document_id", str("s")), "b": fn("parent", bool(true))}))),
+    step(
+      "original-h9-two-failing-calls",
+      pipeline(
+        collection("ap5"),
+        select({ a: fn("document_id", str("s")), b: fn("parent", bool(true)) }),
+      ),
+    ),
     // Draft 236.
-    step("original-m4242-00731", pipeline(collection("ap5"), select({"v": fn("collection_id", fld("top")), "`x y`": int(0), "a.b": fn("map", str("k"), fn("equal", fld("n"), fld("top")), str("k"), fld("top"))}))),
+    step(
+      "original-m4242-00731",
+      pipeline(
+        collection("ap5"),
+        select({
+          v: fn("collection_id", fld("top")),
+          "`x y`": int(0),
+          "a.b": fn("map", str("k"), fn("equal", fld("n"), fld("top")), str("k"), fld("top")),
+        }),
+      ),
+    ),
   ],
 };
 
@@ -1532,7 +1826,14 @@ const o5SubcollectionProgram = {
   seed: [["qs5/p/children/d", { i: int(1), n: int(1), top: str("t") }]],
   steps: [
     // Draft 212-subcollection.
-    step("proposed-q3-subcollection-parent-chain", pipeline(collection("qs5/p/children"), select({"v": fn("document_id", fn("parent", fn("parent", fld("__name__"))))}), stage("limit", str("x")))),
+    step(
+      "proposed-q3-subcollection-parent-chain",
+      pipeline(
+        collection("qs5/p/children"),
+        select({ v: fn("document_id", fn("parent", fn("parent", fld("__name__")))) }),
+        stage("limit", str("x")),
+      ),
+    ),
   ],
 };
 

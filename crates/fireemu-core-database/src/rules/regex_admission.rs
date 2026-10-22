@@ -2,7 +2,8 @@
 //! Prototype allocation bounds return Inconclusive and are never load-refusal policy.
 //! Independently specified from tagged-automaton behavior; no upstream code is embedded.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 const PROTOTYPE_STATES: usize = 20_000;
@@ -97,6 +98,41 @@ fn state_bound(count: usize) -> Result<(), Failure> {
     if count > PROTOTYPE_STATES {
         Err(Failure::Inconclusive)
     } else {
+        Ok(())
+    }
+}
+
+fn reserve_items<T>(items: &mut Vec<T>, additional: usize) -> Result<(), Failure> {
+    items
+        .try_reserve(additional)
+        .map_err(|_| Failure::Allocation)
+}
+
+// Hashes index candidates only; exact sorted identity sets decide equality.
+#[derive(Default)]
+struct SubsetIndex {
+    buckets: HashMap<u64, Vec<usize>>,
+}
+impl SubsetIndex {
+    fn digest(key: &[usize]) -> u64 {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hash);
+        hash.finish()
+    }
+    fn find(&self, digest: u64, key: &[usize], keys: &[Vec<usize>]) -> Option<usize> {
+        self.buckets
+            .get(&digest)?
+            .iter()
+            .copied()
+            .find(|&id| keys[id] == key)
+    }
+    fn insert(&mut self, digest: u64, id: usize) -> Result<(), Failure> {
+        self.buckets
+            .try_reserve(1)
+            .map_err(|_| Failure::Allocation)?;
+        let bucket = self.buckets.entry(digest).or_default();
+        reserve_items(bucket, 1)?;
+        bucket.push(id);
         Ok(())
     }
 }
@@ -393,11 +429,10 @@ impl Graph {
         }
         let initial = vec![self.initial];
         let mut subsets = vec![initial.clone()];
-        let mut intern = BTreeMap::from([(initial, 0)]);
+        let mut intern = SubsetIndex::default();
+        intern.insert(SubsetIndex::digest(&initial), 0)?;
         let mut out = vec![State::default()];
         let mut cursor = 0usize;
-        let mut edges = 0usize;
-        let mut subset_units = 1usize;
         while cursor < subsets.len() {
             guard_count(cursor as u64 + 1, threshold)?;
             out[cursor].accept = subsets[cursor].iter().any(|&i| self.accepts(i));
@@ -435,20 +470,20 @@ impl Graph {
                         }
                     }
                 }
-                let next: Vec<_> = active.keys().copied().collect();
-                let to = if let Some(&to) = intern.get(&next) {
+                let mut next = Vec::new();
+                reserve_items(&mut next, active.len())?;
+                next.extend(active.keys().copied());
+                let digest = SubsetIndex::digest(&next);
+                let to = if let Some(to) = intern.find(digest, &next, &subsets) {
                     to
                 } else {
                     // Every discovered reachable subset must later be dequeued.
                     // Refuse its inevitable guarded dequeue before queue allocation.
                     guard_count(subsets.len() as u64 + 1, threshold)?;
-                    state_bound(subsets.len() + 1)?;
-                    subset_units += next.len();
-                    if subset_units > PROTOTYPE_EDGES {
-                        return Err(Failure::Inconclusive);
-                    }
+                    reserve_items(&mut subsets, 1)?;
+                    reserve_items(&mut out, 1)?;
                     let to = subsets.len();
-                    intern.insert(next.clone(), to);
+                    intern.insert(digest, to)?;
                     subsets.push(next);
                     out.push(State::default());
                     to
@@ -461,15 +496,12 @@ impl Graph {
                         continue;
                     }
                 }
+                reserve_items(row, 1)?;
                 row.push(Edge {
                     lo: lo as u16,
                     hi,
                     to,
                 });
-                edges += 1;
-                if edges > PROTOTYPE_EDGES {
-                    return Err(Failure::Inconclusive);
-                }
             }
             cursor += 1;
         }

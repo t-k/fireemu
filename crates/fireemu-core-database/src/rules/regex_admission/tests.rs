@@ -2209,3 +2209,92 @@ fn persistent_collection_routing_preserves_unminimized_identity_and_counts() {
         }
     }
 }
+
+#[test]
+fn persistent_union_key_storage_does_not_replace_canonical_guard() {
+    let word = Automaton::Singleton(vec![97; 1000]);
+    let mut graph = Automaton::collection_union(&vec![word; 2001])
+        .unwrap()
+        .expanded()
+        .unwrap();
+    // The root consumes the first unit. Each following position contains one
+    // distinct ID from each imported namespace; the empty successor is counted.
+    assert_eq!(graph.state_count(), 1 + 2001 * 1001);
+    assert_eq!(graph.minimize(5000), Ok(Some(1002)));
+    assert_eq!(graph.state_count(), 1001);
+    let mut q = graph.initial;
+    let mut visited = BTreeSet::new();
+    for _ in 0..1000 {
+        assert!(visited.insert(q));
+        assert!(!graph.accepts(q));
+        let edges = graph.outgoing(q).collect::<Vec<_>>();
+        assert_eq!(edges.len(), 1);
+        assert_eq!((edges[0].lo, edges[0].hi), (97, 97));
+        q = edges[0].to;
+    }
+    assert!(!visited.contains(&q));
+    assert!(graph.accepts(q));
+    assert_eq!(graph.outgoing(q).count(), 0);
+}
+
+#[test]
+fn subset_index_verifies_colliding_identity_sets() {
+    let keys = vec![vec![1, 2], vec![1, 3], vec![]];
+    let mut index = SubsetIndex::default();
+    for id in 0..keys.len() {
+        index.insert(7, id).unwrap();
+    }
+    for (id, key) in keys.iter().enumerate() {
+        assert_eq!(index.find(7, key, &keys), Some(id));
+    }
+    assert_eq!(index.find(7, &[1, 4], &keys), None);
+    assert_eq!(index.find(8, &keys[0], &keys), None);
+}
+
+#[test]
+fn subset_storage_capacity_failure_is_distinct_from_guard() {
+    assert_eq!(
+        reserve_items(&mut Vec::<usize>::new(), usize::MAX),
+        Err(Failure::Allocation)
+    );
+    assert_eq!(
+        reserve_items(&mut Vec::<Edge>::new(), usize::MAX),
+        Err(Failure::Allocation)
+    );
+}
+
+#[test]
+fn subset_output_storage_does_not_replace_canonical_guard() {
+    let mut graph = Graph {
+        word: None,
+        store: None,
+        initial: 0,
+        deterministic: false,
+        states: (0..5000)
+            .map(|q| State {
+                accept: true,
+                edges: (0..402)
+                    .map(|unit| Edge {
+                        lo: unit,
+                        hi: unit,
+                        to: (q + usize::from(unit)) % 5000,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    // Every character reaches a singleton, unit1 reaches all5000 identities,
+    // and units402..FFFF reach the empty subset: exactly5001 guarded visits.
+    // Before dead removal there are5000*403+1 output intervals, above2m.
+    assert_eq!(graph.minimize(5000), Ok(Some(5001)));
+    assert_eq!(graph.state_count(), 1);
+    assert!(graph.accepts(graph.initial));
+    assert_eq!(
+        graph.outgoing(graph.initial).collect::<Vec<_>>(),
+        vec![Edge {
+            lo: 0,
+            hi: 401,
+            to: graph.initial
+        }]
+    );
+}

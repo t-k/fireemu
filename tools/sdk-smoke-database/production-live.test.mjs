@@ -241,3 +241,26 @@ test('HTTP receipts expose real cumulative inbound bytes and no per-response lim
     assert.ok(events.every(event => !Object.hasOwn(event.counters, 'responseBytes')));
   } finally { budget.close(); }
 });
+
+test('public primary namespace hosts allow omitted ns for WS and LP', () => {
+  for (const host of ['test-db.firebaseio.com', 'test-db.us-central1.firebasedatabase.app', 'test-db.europe-west1.firebasedatabase.app', 'test-db.asia-southeast1.firebasedatabase.app']) {
+    const c = { ...config(), databaseURL: `https://${host}`, allowedOrigins: [`https://${host}`, `wss://${host}`] };
+    for (const [scheme, path, kind] of [['wss', '/.ws', 'ws'], ['https', '/.lp', 'http']]) {
+      const url = `${scheme}://${host}${path}?v=5`;
+      assert.equal(assertEndpoint(url, kind, c).href, url);
+      assert.throws(() => assertEndpoint(`${url}&ns=wrong`, kind, c));
+      assert.throws(() => assertEndpoint(`${url}&ns=test-db&ns=test-db`, kind, c));
+    }
+  }
+});
+
+test('omitted ns cannot infer identity from arbitrary or mismatched allowed hosts', () => {
+  for (const host of ['other.firebaseio.com', 'test-db.s-usc1c-nss-1.firebaseio.com', 'test-db.firebaseio.com.evil.invalid', 'test-db.firebaseio.com:8443', 'test-db.unknown1.firebasedatabase.app', 'other.europe-west1.firebasedatabase.app', 'test-db.europe-west1.firebasedatabase.app.evil.invalid', 'test-db.europe-west1.extra.firebasedatabase.app', 'test-db.invalid']) {
+    const c = { ...config(), allowedOrigins: [`https://${host}`, `wss://${host}`] };
+    assert.throws(() => assertEndpoint(`wss://${host}/.ws?v=5`, 'ws', c));
+    assert.throws(() => assertEndpoint(`https://${host}/.lp?v=5`, 'http', c));
+  }
+  const c = config();
+  assert.throws(() => assertEndpoint('wss://test-db.europe-west1.firebasedatabase.app/.ws?v=5', 'ws', c));
+  assert.throws(() => assertEndpoint('wss://s-internal.firebaseio.com/.ws?v=5&ns=test-db', 'ws', c));
+});

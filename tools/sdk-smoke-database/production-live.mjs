@@ -10,7 +10,10 @@ const PAGE = 'http://rtdb-probe.invalid/';
 
 export function assertEndpoint(raw, kind, config) {
   const url = new URL(raw);
-  if (!['http', 'ws'].includes(kind) || url.username || url.password || url.hash || !config.allowedOrigins.includes(url.origin) || url.protocol !== (kind === 'ws' ? 'wss:' : 'https:') || url.pathname !== (kind === 'ws' ? '/.ws' : '/.lp') || url.searchParams.getAll('ns').length !== 1 || url.searchParams.get('ns') !== config.namespace || [...url.searchParams.keys()].some(k => /auth|token|credential/i.test(k))) {
+  const namespaces = url.searchParams.getAll('ns');
+  const primaryHost = url.host === `${config.namespace}.firebaseio.com` || ['us-central1', 'europe-west1', 'asia-southeast1'].some(region => url.host === `${config.namespace}.${region}.firebasedatabase.app`);
+  const namespaceMatches = namespaces.length === 0 ? primaryHost : namespaces.length === 1 && namespaces[0] === config.namespace;
+  if (!['http', 'ws'].includes(kind) || url.username || url.password || url.hash || !config.allowedOrigins.includes(url.origin) || url.protocol !== (kind === 'ws' ? 'wss:' : 'https:') || url.pathname !== (kind === 'ws' ? '/.ws' : '/.lp') || !namespaceMatches || [...url.searchParams.keys()].some(k => /auth|token|credential/i.test(k))) {
     throw Error(`Unapproved ${kind} endpoint: ${raw}`);
   }
   return url;

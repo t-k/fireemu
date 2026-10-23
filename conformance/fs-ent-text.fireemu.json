@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "productionExact": false,
+  "firestore": { "edition": "enterprise", "apiMode": "native" }
+}

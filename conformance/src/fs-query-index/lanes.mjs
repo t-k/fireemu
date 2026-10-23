@@ -3,6 +3,23 @@
 // comparison. `run.mjs` picks one with FIREEMU_SANDBOX_LANE (default `fs-query-index`).
 
 export const LANES = {
+  // Text observations reuse the existing named-database request guard and raw recorder.
+  // Native index creation, readiness and cleanup are separate coordinator-owned phases.
+  "fs-ent-text": {
+    id: "fs-ent-text",
+    taskId: "FS-ENT-TEXT-ORACLE",
+    corpus: "../fs-ent-pipeline/text-corpus.mjs",
+    fixture: "fs-ent-text-production.json",
+    indexes: null,
+    database: "entpipe1",
+    edition: "ENTERPRISE",
+    target:
+      "production Firestore REST v1 and gRPC google.firestore.v1 text search, Enterprise Native, database entpipe1",
+    localConfig: "fs-ent-text.fireemu.json",
+    firebaseJson: "fs-ent-text.firebase.json",
+    harness: "src/fs-ent-pipeline",
+    sources: ["src/fs-query-index", "src/fs-ent-pipeline"],
+  },
   "fs-query-index": {
     id: "fs-query-index",
     taskId: "FS-QUERY-INDEX-SANDBOX",

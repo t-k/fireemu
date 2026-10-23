@@ -1,0 +1,9 @@
+{
+  "firestore": [
+    {
+      "database": "entpipe1",
+      "rules": "firestore-probe.rules",
+      "indexes": "fs-ent-text.indexes.json"
+    }
+  ]
+}

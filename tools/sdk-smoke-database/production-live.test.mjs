@@ -205,3 +205,39 @@ test('socket closure failure prevents a successful receipt', async () => {
   await assert.rejects(runProductionLiveProbe({ playwright: harness.playwright, config: config(), bundlePaths: bundles, record() {} }), /Probe cleanup failed/);
   assert.equal(harness.calls.at(-1), 'browser');
 });
+
+test('final stop recorder failure still closes the browser after all contexts', async () => {
+  const harness = browserHarness();
+  const failure = Error('final stop persistence failed');
+  await assert.rejects(runProductionLiveProbe({ playwright: harness.playwright, config: config(), bundlePaths: bundles, record(event) { if (event.type === 'stop' && event.reason === 'closed') throw failure; } }), error => error instanceof AggregateError && error.errors.includes(failure));
+  assert.deepEqual(harness.calls, ['context', 'context', 'context', 'context', 'browser']);
+});
+
+test('primary failure survives concurrent recorder and browser cleanup failures', async () => {
+  const primary = Error('original page failure');
+  const recorder = Error('stop persistence failure');
+  const cleanup = Error('browser cleanup failure');
+  let browserClosed = false;
+  const page = { route: async () => {}, routeWebSocket: async () => {}, exposeFunction: async () => {}, on() {}, goto: async () => { throw primary; }, evaluate: async () => {} };
+  const browser = { newContext: async () => ({ newPage: async () => page, close: async () => {} }), close: async () => { browserClosed = true; throw cleanup; } };
+  await assert.rejects(runProductionLiveProbe({ playwright: { chromium: { launch: async () => browser } }, config: config(), bundlePaths: bundles, record(event) { if (event.type === 'stop') throw recorder; } }), error => error instanceof AggregateError && [primary, recorder, cleanup].every(failure => error.errors.includes(failure)));
+  assert.equal(browserClosed, true);
+});
+
+test('HTTP receipts expose real cumulative inbound bytes and no per-response limit counter', async () => {
+  const c = config();
+  c.limits.responseBytes = 5;
+  const events = [];
+  const budget = createBudget({ limits: c.limits, deadlineMs: 1000, record: event => events.push(event) });
+  try {
+    for (let i = 0; i < 2; i++) {
+      const fake = fakeRequest(200, ['ab', 'cd']);
+      const result = await relayHttp({ url: 'https://test-db.firebaseio.com/.lp?ns=test-db', method: 'GET', body: null, headers: {} }, { config: c, budget, request: fake.request });
+      assert.equal(result.body.toString(), 'abcd');
+    }
+    assert.equal(budget.snapshot().inboundBytes, 8);
+    assert.equal(Object.hasOwn(budget.snapshot(), 'responseBytes'), false);
+    assert.deepEqual(events.filter(event => event.type === 'http-chunk').map(event => event.counters.inboundBytes), [2, 4, 6, 8]);
+    assert.ok(events.every(event => !Object.hasOwn(event.counters, 'responseBytes')));
+  } finally { budget.close(); }
+});

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { performance } from 'node:perf_hooks';
 
-const COUNTERS = ['httpAttempts', 'wsConnections', 'clientMessages', 'serverMessages', 'outboundBytes', 'inboundBytes', 'responseBytes'];
+const COUNTERS = ['httpAttempts', 'wsConnections', 'clientMessages', 'serverMessages', 'outboundBytes', 'inboundBytes'];
 const APP = 'https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js';
 const DATABASE = 'https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js';
 const PAGE = 'http://rtdb-probe.invalid/';
@@ -17,7 +17,7 @@ export function assertEndpoint(raw, kind, config) {
 }
 
 export function createBudget({ limits, deadlineMs, record, now = () => performance.now() }) {
-  for (const key of COUNTERS) if (!Number.isSafeInteger(limits?.[key]) || limits[key] < 0) throw Error(`Invalid limit: ${key}`);
+  for (const key of [...COUNTERS, 'responseBytes']) if (!Number.isSafeInteger(limits?.[key]) || limits[key] < 0) throw Error(`Invalid limit: ${key}`);
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || typeof record !== 'function') throw Error('Invalid deadline or recorder');
   const counters = Object.fromEntries(COUNTERS.map(k => [k, 0]));
   const end = now() + deadlineMs;
@@ -195,6 +195,7 @@ export async function runProductionLiveProbe({ playwright, config, bundlePaths, 
   const closingSockets = new Set();
   const cleanupFailures = [];
   let browser;
+  let primaryError;
   let stoppedReason;
   let rejectStopped;
   const stopped = new Promise((_, reject) => { rejectStopped = reject; });
@@ -284,18 +285,19 @@ export async function runProductionLiveProbe({ playwright, config, bundlePaths, 
     budget.event({ type: 'probe-complete' });
     return { complete: true, counters: budget.snapshot() };
   } catch (error) {
-    budget.stop(error.message);
+    primaryError = error;
+    try { budget.stop(error.message); } catch (stopError) { cleanupFailures.push(stopError); }
     throw error;
   } finally {
-    budget.stop('closed');
+    try { budget.stop('closed'); } catch (stopError) { cleanupFailures.push(stopError); }
     unregister();
     for (const socket of sockets) closeSocket(socket);
-    const cleanup = await Promise.allSettled([...contexts].map(context => context.close()));
-    const browserCleanup = browser ? await Promise.allSettled([browser.close()]) : [];
+    const cleanup = await Promise.allSettled([...contexts].map(context => Promise.resolve().then(() => context.close())));
+    const browserCleanup = browser ? await Promise.allSettled([Promise.resolve().then(() => browser.close())]) : [];
     while (pending.size) await Promise.allSettled([...pending]);
     budget.close();
     const failures = [...cleanup, ...browserCleanup].filter(result => result.status === 'rejected').map(result => result.reason);
     failures.push(...cleanupFailures);
-    if (failures.length) throw new AggregateError(failures, 'Probe cleanup failed');
+    if (failures.length) throw new AggregateError(primaryError ? [primaryError, ...failures] : failures, 'Probe cleanup failed', { cause: primaryError });
   }
 }

@@ -215,6 +215,43 @@ fn loads(value: &serde_json::Value) -> Vec<u16> {
 }
 
 #[test]
+fn every_loaded_context_records_every_required_cell() {
+    let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "fixtures/rules-cells-official-emulator-4.11.2.json"
+    ))
+    .unwrap();
+    let mut missing = 0;
+    let mut examples = Vec::new();
+    for row in &corpus {
+        for (name, recorded) in [("jar", Some(row)), ("fireemu", row.get("fireemu"))] {
+            let Some(recorded) = recorded else { continue };
+            assert_eq!(recorded["cells"].as_array().unwrap().len(), CELLS.len());
+            for (i, cell) in CELLS.iter().enumerate() {
+                let context = if i < READ_CELLS {
+                    0
+                } else {
+                    1 + (i - READ_CELLS) / 2
+                };
+                let outcome = &recorded["cells"][i];
+                let recorded_status = matches!(outcome.as_u64(), Some(200 | 401 | 500));
+                // The oracle records this explicit realtime error instead of an HTTP status.
+                // It is an observed refusal, unlike a missing cell or a probe timeout.
+                let recorded_realtime_error =
+                    name == "jar" && matches!(*cell, "la" | "lu") && outcome == "internal_error";
+                if recorded["load"][context] == 200 && !(recorded_status || recorded_realtime_error)
+                {
+                    missing += 1;
+                    if examples.len() < 5 {
+                        examples.push(format!("{name} {cell}: {}", row["expr"]));
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(missing, 0, "unrecorded loaded cells: {examples:?}");
+}
+
+#[test]
 fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() {
     let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
         "fixtures/rules-cells-official-emulator-4.11.2.json"

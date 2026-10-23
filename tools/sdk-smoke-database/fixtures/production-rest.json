@@ -1,0 +1,1399 @@
+{
+  "version": 1,
+  "recordedAgainst": "production Firebase Realtime Database REST",
+  "observedAt": "2026-10-23",
+  "source": {
+    "publicCommit": "b8399bfe1",
+    "corpusSha256": "a9cbf4b0e83096d79038469ea179d8f98ca2719bf4708c59ba07ab6b4d0b9aff"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "rows": [
+        {
+          "id": "fresh-number-0-put",
+          "method": "PUT",
+          "path": "raw/round1/number0.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-0-get",
+          "method": "GET",
+          "path": "raw/round1/number0.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-1-put",
+          "method": "PUT",
+          "path": "raw/round1/number1.json",
+          "status": 200,
+          "bodyText": "1.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-1-get",
+          "method": "GET",
+          "path": "raw/round1/number1.json",
+          "status": 200,
+          "bodyText": "1.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-2-put",
+          "method": "PUT",
+          "path": "raw/round1/number2.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-2-get",
+          "method": "GET",
+          "path": "raw/round1/number2.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-3-put",
+          "method": "PUT",
+          "path": "raw/round1/number3.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-3-get",
+          "method": "GET",
+          "path": "raw/round1/number3.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-4-put",
+          "method": "PUT",
+          "path": "raw/round1/number4.json",
+          "status": 200,
+          "bodyText": "1.0E7",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-4-get",
+          "method": "GET",
+          "path": "raw/round1/number4.json",
+          "status": 200,
+          "bodyText": "1.0E7",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-5-put",
+          "method": "PUT",
+          "path": "raw/round1/number5.json",
+          "status": 200,
+          "bodyText": "9007199254740993",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-5-get",
+          "method": "GET",
+          "path": "raw/round1/number5.json",
+          "status": 200,
+          "bodyText": "9007199254740993",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-6-put",
+          "method": "PUT",
+          "path": "raw/round1/number6.json",
+          "status": 200,
+          "bodyText": "9223372036854775807",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-6-get",
+          "method": "GET",
+          "path": "raw/round1/number6.json",
+          "status": 200,
+          "bodyText": "9223372036854775807",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-7-put",
+          "method": "PUT",
+          "path": "raw/round1/number7.json",
+          "status": 200,
+          "bodyText": "9.223372036854776E18",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-7-get",
+          "method": "GET",
+          "path": "raw/round1/number7.json",
+          "status": 200,
+          "bodyText": "9.223372036854776E18",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-8-put",
+          "method": "PUT",
+          "path": "raw/round1/number8.json",
+          "status": 200,
+          "bodyText": "\"Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-8-get",
+          "method": "GET",
+          "path": "raw/round1/number8.json",
+          "status": 200,
+          "bodyText": "\"Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-9-put",
+          "method": "PUT",
+          "path": "raw/round1/number9.json",
+          "status": 200,
+          "bodyText": "\"-Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-9-get",
+          "method": "GET",
+          "path": "raw/round1/number9.json",
+          "status": 200,
+          "bodyText": "\"-Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-one",
+          "method": "PUT",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-one",
+          "method": "GET",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-one-point-zero",
+          "method": "PUT",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "1.0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-one-point-zero",
+          "method": "GET",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-negative-zero-point-zero",
+          "method": "PUT",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-negative-zero-point-zero",
+          "method": "GET",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-zero",
+          "method": "PUT",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-zero",
+          "method": "GET",
+          "path": "raw/round1/equal-value.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "priority-put-value",
+          "method": "PUT",
+          "path": "raw/round1/priority.json",
+          "status": 200,
+          "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+          "etag": null
+        },
+        {
+          "id": "priority-get-export-before",
+          "method": "GET",
+          "path": "raw/round1/priority.json",
+          "status": 200,
+          "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+          "etag": null
+        },
+        {
+          "id": "priority-get-priority",
+          "method": "GET",
+          "path": "raw/round1/priority/.priority.json",
+          "status": 200,
+          "bodyText": "2.0",
+          "etag": null
+        },
+        {
+          "id": "priority-put-priority",
+          "method": "PUT",
+          "path": "raw/round1/priority/.priority.json",
+          "status": 200,
+          "bodyText": "3.0",
+          "etag": null
+        },
+        {
+          "id": "priority-get-export-after",
+          "method": "GET",
+          "path": "raw/round1/priority.json",
+          "status": 200,
+          "bodyText": "{\".value\":1.0,\".priority\":3.0}",
+          "etag": null
+        },
+        {
+          "id": "etag-put-value",
+          "method": "PUT",
+          "path": "raw/round1/etag.json",
+          "status": 200,
+          "bodyText": "{\"x\":1}",
+          "etag": null
+        },
+        {
+          "id": "etag-get-value",
+          "method": "GET",
+          "path": "raw/round1/etag.json",
+          "status": 200,
+          "bodyText": "{\"x\":1}",
+          "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8="
+        },
+        {
+          "id": "etag-get-missing",
+          "method": "GET",
+          "path": "raw/round1/missing.json",
+          "status": 200,
+          "bodyText": "null",
+          "etag": "null_etag"
+        },
+        {
+          "id": "etag-put-if-match-wrong",
+          "method": "PUT",
+          "path": "raw/round1/etag/x.json",
+          "status": 412,
+          "bodyText": "1",
+          "etag": "YPVfR2bXt/lcDjiQZ8pOkAd3qkQ="
+        },
+        {
+          "id": "etag-put-if-match-null-etag",
+          "method": "PUT",
+          "path": "raw/round1/absent.json",
+          "status": 200,
+          "bodyText": "5",
+          "etag": null
+        },
+        {
+          "id": "etag-get-after-conditional-put",
+          "method": "GET",
+          "path": "raw/round1/absent.json",
+          "status": 200,
+          "bodyText": "5",
+          "etag": null
+        },
+        {
+          "id": "patch-put-initial",
+          "method": "PUT",
+          "path": "raw/round1/patch.json",
+          "status": 200,
+          "bodyText": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "etag": null
+        },
+        {
+          "id": "patch-update-nested-and-add",
+          "method": "PATCH",
+          "path": "raw/round1/patch.json",
+          "status": 200,
+          "bodyText": "{\"y\":{\"z\":\"t\"},\"w\":3}",
+          "etag": null
+        },
+        {
+          "id": "patch-get-after-update",
+          "method": "GET",
+          "path": "raw/round1/patch.json",
+          "status": 200,
+          "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+          "etag": null
+        },
+        {
+          "id": "patch-conflicting-keys",
+          "method": "PATCH",
+          "path": "raw/round1/patch.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "patch-get-after-conflicting-keys",
+          "method": "GET",
+          "path": "raw/round1/patch.json",
+          "status": 200,
+          "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+          "etag": null
+        },
+        {
+          "id": "array-put-native",
+          "method": "PUT",
+          "path": "raw/round1/array.json",
+          "status": 200,
+          "bodyText": "[\"a\",\"b\",null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-get-native",
+          "method": "GET",
+          "path": "raw/round1/array.json",
+          "status": 200,
+          "bodyText": "[\"a\",\"b\",null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-put-indexed-object",
+          "method": "PUT",
+          "path": "raw/round1/array2.json",
+          "status": 200,
+          "bodyText": "[\"a\",null,null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-get-indexed-object",
+          "method": "GET",
+          "path": "raw/round1/array2.json",
+          "status": 200,
+          "bodyText": "[\"a\",null,null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-get-indexed-object-export",
+          "method": "GET",
+          "path": "raw/round1/array2.json",
+          "status": 200,
+          "bodyText": "[\"a\",null,null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "query-put-mixed-children",
+          "method": "PUT",
+          "path": "raw/round1/query.json",
+          "status": 200,
+          "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-0",
+          "method": "GET",
+          "path": "raw/round1/query.json",
+          "status": 200,
+          "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-1",
+          "method": "GET",
+          "path": "raw/round1/query.json",
+          "status": 200,
+          "bodyText": "{\"c\":{\"h\":2},\"a\":{\"h\":3},\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-2",
+          "method": "GET",
+          "path": "raw/round1/query.json",
+          "status": 200,
+          "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-3",
+          "method": "GET",
+          "path": "raw/round1/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/{root}/raw/round1/query\\\", to the rules\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "query-get-4",
+          "method": "GET",
+          "path": "raw/round1/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"limitToFirst must be positive\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "query-get-5",
+          "method": "GET",
+          "path": "raw/round1/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Only one of limitToFirst and limitToLast may be specified\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "query-get-6",
+          "method": "GET",
+          "path": "raw/round1/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"orderBy must be a valid JSON encoded path\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-put-bad-key",
+          "method": "PUT",
+          "path": "raw/round1/bad-key.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse key beginning at 1:2. Key value can't be empty or contain $ # [ ] / or .\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-put-bad-json",
+          "method": "PUT",
+          "path": "raw/round1/bad-json.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-put-scalar-patch-target",
+          "method": "PUT",
+          "path": "raw/round1/bad-patch.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "validation-patch-array-body",
+          "method": "PATCH",
+          "path": "raw/round1/bad-patch.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-get-bad-patch",
+          "method": "GET",
+          "path": "raw/round1/bad-patch.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "rows": [
+        {
+          "id": "fresh-number-0-put",
+          "method": "PUT",
+          "path": "raw/round2/number0.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-0-get",
+          "method": "GET",
+          "path": "raw/round2/number0.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-1-put",
+          "method": "PUT",
+          "path": "raw/round2/number1.json",
+          "status": 200,
+          "bodyText": "1.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-1-get",
+          "method": "GET",
+          "path": "raw/round2/number1.json",
+          "status": 200,
+          "bodyText": "1.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-2-put",
+          "method": "PUT",
+          "path": "raw/round2/number2.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-2-get",
+          "method": "GET",
+          "path": "raw/round2/number2.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-3-put",
+          "method": "PUT",
+          "path": "raw/round2/number3.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-3-get",
+          "method": "GET",
+          "path": "raw/round2/number3.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-4-put",
+          "method": "PUT",
+          "path": "raw/round2/number4.json",
+          "status": 200,
+          "bodyText": "1.0E7",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-4-get",
+          "method": "GET",
+          "path": "raw/round2/number4.json",
+          "status": 200,
+          "bodyText": "1.0E7",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-5-put",
+          "method": "PUT",
+          "path": "raw/round2/number5.json",
+          "status": 200,
+          "bodyText": "9007199254740993",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-5-get",
+          "method": "GET",
+          "path": "raw/round2/number5.json",
+          "status": 200,
+          "bodyText": "9007199254740993",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-6-put",
+          "method": "PUT",
+          "path": "raw/round2/number6.json",
+          "status": 200,
+          "bodyText": "9223372036854775807",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-6-get",
+          "method": "GET",
+          "path": "raw/round2/number6.json",
+          "status": 200,
+          "bodyText": "9223372036854775807",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-7-put",
+          "method": "PUT",
+          "path": "raw/round2/number7.json",
+          "status": 200,
+          "bodyText": "9.223372036854776E18",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-7-get",
+          "method": "GET",
+          "path": "raw/round2/number7.json",
+          "status": 200,
+          "bodyText": "9.223372036854776E18",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-8-put",
+          "method": "PUT",
+          "path": "raw/round2/number8.json",
+          "status": 200,
+          "bodyText": "\"Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-8-get",
+          "method": "GET",
+          "path": "raw/round2/number8.json",
+          "status": 200,
+          "bodyText": "\"Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-9-put",
+          "method": "PUT",
+          "path": "raw/round2/number9.json",
+          "status": 200,
+          "bodyText": "\"-Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "fresh-number-9-get",
+          "method": "GET",
+          "path": "raw/round2/number9.json",
+          "status": 200,
+          "bodyText": "\"-Infinity\"",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-one",
+          "method": "PUT",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-one",
+          "method": "GET",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-one-point-zero",
+          "method": "PUT",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "1.0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-one-point-zero",
+          "method": "GET",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "1",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-negative-zero-point-zero",
+          "method": "PUT",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-negative-zero-point-zero",
+          "method": "GET",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-put-zero",
+          "method": "PUT",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "equal-value-get-zero",
+          "method": "GET",
+          "path": "raw/round2/equal-value.json",
+          "status": 200,
+          "bodyText": "-0.0",
+          "etag": null
+        },
+        {
+          "id": "priority-put-value",
+          "method": "PUT",
+          "path": "raw/round2/priority.json",
+          "status": 200,
+          "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+          "etag": null
+        },
+        {
+          "id": "priority-get-export-before",
+          "method": "GET",
+          "path": "raw/round2/priority.json",
+          "status": 200,
+          "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+          "etag": null
+        },
+        {
+          "id": "priority-get-priority",
+          "method": "GET",
+          "path": "raw/round2/priority/.priority.json",
+          "status": 200,
+          "bodyText": "2.0",
+          "etag": null
+        },
+        {
+          "id": "priority-put-priority",
+          "method": "PUT",
+          "path": "raw/round2/priority/.priority.json",
+          "status": 200,
+          "bodyText": "3.0",
+          "etag": null
+        },
+        {
+          "id": "priority-get-export-after",
+          "method": "GET",
+          "path": "raw/round2/priority.json",
+          "status": 200,
+          "bodyText": "{\".value\":1.0,\".priority\":3.0}",
+          "etag": null
+        },
+        {
+          "id": "etag-put-value",
+          "method": "PUT",
+          "path": "raw/round2/etag.json",
+          "status": 200,
+          "bodyText": "{\"x\":1}",
+          "etag": null
+        },
+        {
+          "id": "etag-get-value",
+          "method": "GET",
+          "path": "raw/round2/etag.json",
+          "status": 200,
+          "bodyText": "{\"x\":1}",
+          "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8="
+        },
+        {
+          "id": "etag-get-missing",
+          "method": "GET",
+          "path": "raw/round2/missing.json",
+          "status": 200,
+          "bodyText": "null",
+          "etag": "null_etag"
+        },
+        {
+          "id": "etag-put-if-match-wrong",
+          "method": "PUT",
+          "path": "raw/round2/etag/x.json",
+          "status": 412,
+          "bodyText": "1",
+          "etag": "YPVfR2bXt/lcDjiQZ8pOkAd3qkQ="
+        },
+        {
+          "id": "etag-put-if-match-null-etag",
+          "method": "PUT",
+          "path": "raw/round2/absent.json",
+          "status": 200,
+          "bodyText": "5",
+          "etag": null
+        },
+        {
+          "id": "etag-get-after-conditional-put",
+          "method": "GET",
+          "path": "raw/round2/absent.json",
+          "status": 200,
+          "bodyText": "5",
+          "etag": null
+        },
+        {
+          "id": "patch-put-initial",
+          "method": "PUT",
+          "path": "raw/round2/patch.json",
+          "status": 200,
+          "bodyText": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "etag": null
+        },
+        {
+          "id": "patch-update-nested-and-add",
+          "method": "PATCH",
+          "path": "raw/round2/patch.json",
+          "status": 200,
+          "bodyText": "{\"y\":{\"z\":\"t\"},\"w\":3}",
+          "etag": null
+        },
+        {
+          "id": "patch-get-after-update",
+          "method": "GET",
+          "path": "raw/round2/patch.json",
+          "status": 200,
+          "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+          "etag": null
+        },
+        {
+          "id": "patch-conflicting-keys",
+          "method": "PATCH",
+          "path": "raw/round2/patch.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "patch-get-after-conflicting-keys",
+          "method": "GET",
+          "path": "raw/round2/patch.json",
+          "status": 200,
+          "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+          "etag": null
+        },
+        {
+          "id": "array-put-native",
+          "method": "PUT",
+          "path": "raw/round2/array.json",
+          "status": 200,
+          "bodyText": "[\"a\",\"b\",null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-get-native",
+          "method": "GET",
+          "path": "raw/round2/array.json",
+          "status": 200,
+          "bodyText": "[\"a\",\"b\",null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-put-indexed-object",
+          "method": "PUT",
+          "path": "raw/round2/array2.json",
+          "status": 200,
+          "bodyText": "[\"a\",null,null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-get-indexed-object",
+          "method": "GET",
+          "path": "raw/round2/array2.json",
+          "status": 200,
+          "bodyText": "[\"a\",null,null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "array-get-indexed-object-export",
+          "method": "GET",
+          "path": "raw/round2/array2.json",
+          "status": 200,
+          "bodyText": "[\"a\",null,null,\"d\"]",
+          "etag": null
+        },
+        {
+          "id": "query-put-mixed-children",
+          "method": "PUT",
+          "path": "raw/round2/query.json",
+          "status": 200,
+          "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-0",
+          "method": "GET",
+          "path": "raw/round2/query.json",
+          "status": 200,
+          "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-1",
+          "method": "GET",
+          "path": "raw/round2/query.json",
+          "status": 200,
+          "bodyText": "{\"c\":{\"h\":2},\"a\":{\"h\":3},\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-2",
+          "method": "GET",
+          "path": "raw/round2/query.json",
+          "status": 200,
+          "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+          "etag": null
+        },
+        {
+          "id": "query-get-3",
+          "method": "GET",
+          "path": "raw/round2/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/{root}/raw/round2/query\\\", to the rules\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "query-get-4",
+          "method": "GET",
+          "path": "raw/round2/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"limitToFirst must be positive\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "query-get-5",
+          "method": "GET",
+          "path": "raw/round2/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Only one of limitToFirst and limitToLast may be specified\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "query-get-6",
+          "method": "GET",
+          "path": "raw/round2/query.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"orderBy must be a valid JSON encoded path\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-put-bad-key",
+          "method": "PUT",
+          "path": "raw/round2/bad-key.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse key beginning at 1:2. Key value can't be empty or contain $ # [ ] / or .\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-put-bad-json",
+          "method": "PUT",
+          "path": "raw/round2/bad-json.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-put-scalar-patch-target",
+          "method": "PUT",
+          "path": "raw/round2/bad-patch.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        },
+        {
+          "id": "validation-patch-array-body",
+          "method": "PATCH",
+          "path": "raw/round2/bad-patch.json",
+          "status": 400,
+          "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+          "etag": null
+        },
+        {
+          "id": "validation-get-bad-patch",
+          "method": "GET",
+          "path": "raw/round2/bad-patch.json",
+          "status": 200,
+          "bodyText": "0",
+          "etag": null
+        }
+      ]
+    }
+  ],
+  "m14": [
+    {
+      "round": 1,
+      "expressionIndex": 0,
+      "expression": "!('ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:116: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 0,
+      "expression": "!('ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:132: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 0,
+      "expression": "!('ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:151: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 1,
+      "expression": "' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:107: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 1,
+      "expression": "' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:123: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 1,
+      "expression": "' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:142: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 2,
+      "expression": "!(' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:109: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 2,
+      "expression": "!(' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:125: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 2,
+      "expression": "!(' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:144: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 3,
+      "expression": "'ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:114: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 3,
+      "expression": "'ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:130: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 3,
+      "expression": "'ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:149: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 4,
+      "expression": "'Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:118: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 4,
+      "expression": "'Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:134: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 4,
+      "expression": "'Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:153: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 5,
+      "expression": "!('Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:120: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 5,
+      "expression": "!('Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:136: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 5,
+      "expression": "!('Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:155: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 6,
+      "expression": "'ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:113: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 6,
+      "expression": "'ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:129: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 6,
+      "expression": "'ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:148: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 7,
+      "expression": "!('ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:115: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 7,
+      "expression": "!('ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:131: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 1,
+      "expressionIndex": 7,
+      "expression": "!('ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:150: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 0,
+      "expression": "!('ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:116: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 0,
+      "expression": "!('ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:132: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 0,
+      "expression": "!('ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:151: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 1,
+      "expression": "' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:107: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 1,
+      "expression": "' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:123: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 1,
+      "expression": "' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:142: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 2,
+      "expression": "!(' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:109: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 2,
+      "expression": "!(' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:125: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 2,
+      "expression": "!(' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:144: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 3,
+      "expression": "'ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:114: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 3,
+      "expression": "'ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:130: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 3,
+      "expression": "'ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:149: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 4,
+      "expression": "'Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:118: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 4,
+      "expression": "'Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:134: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 4,
+      "expression": "'Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:153: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 5,
+      "expression": "!('Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:120: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 5,
+      "expression": "!('Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:136: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 5,
+      "expression": "!('Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:155: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 6,
+      "expression": "'ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i)",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:113: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 6,
+      "expression": "'ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i)",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:129: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 6,
+      "expression": "'ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i)",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:148: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 7,
+      "expression": "!('ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i))",
+      "context": "read",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:115: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 7,
+      "expression": "!('ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i))",
+      "context": "write",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:131: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    },
+    {
+      "round": 2,
+      "expressionIndex": 7,
+      "expression": "!('ſsZ'.matches(/([^AZ\\\\a]{2}{2}\\{+*Z??|.[i- ]){2}{2}[~]\\D|IB|[a][\\]][y-s\\--I0-\\-]/i))",
+      "context": "validate",
+      "status": 400,
+      "bodyText": "{\n  \"error\" : \"1:150: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+    }
+  ]
+}

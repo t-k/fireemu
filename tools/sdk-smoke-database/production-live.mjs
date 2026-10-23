@@ -192,13 +192,19 @@ export async function runProductionLiveProbe({ playwright, config, bundlePaths, 
   const contexts = new Set();
   const sockets = new Set();
   const pending = new Set();
+  const closingSockets = new Set();
+  const cleanupFailures = [];
   let browser;
   let stoppedReason;
   let rejectStopped;
   const stopped = new Promise((_, reject) => { rejectStopped = reject; });
   stopped.catch(() => {});
   const track = promise => { pending.add(promise); promise.finally(() => pending.delete(promise)).catch(() => {}); return promise; };
-  const closeSocket = socket => { try { socket.close({ code: 1000, reason: 'probe stopped' }); } catch {} };
+  const closeSocket = socket => {
+    if (closingSockets.has(socket)) return;
+    closingSockets.add(socket);
+    try { track(Promise.resolve(socket.close({ code: 1000, reason: 'probe stopped' })).catch(error => { cleanupFailures.push(error); })); } catch (error) { cleanupFailures.push(error); }
+  };
   const unregister = budget.onStop(reason => {
     stoppedReason = reason;
     for (const socket of sockets) closeSocket(socket);
@@ -288,7 +294,8 @@ export async function runProductionLiveProbe({ playwright, config, bundlePaths, 
     const browserCleanup = browser ? await Promise.allSettled([browser.close()]) : [];
     while (pending.size) await Promise.allSettled([...pending]);
     budget.close();
-    const failures = [...cleanup, ...browserCleanup].filter(result => result.status === 'rejected');
-    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Probe cleanup failed');
+    const failures = [...cleanup, ...browserCleanup].filter(result => result.status === 'rejected').map(result => result.reason);
+    failures.push(...cleanupFailures);
+    if (failures.length) throw new AggregateError(failures, 'Probe cleanup failed');
   }
 }

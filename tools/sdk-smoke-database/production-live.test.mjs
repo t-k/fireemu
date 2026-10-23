@@ -33,9 +33,9 @@ test('unknown counters, recorder failure and deadline stop the budget', () => {
     assert.throws(() => b.reserve({ httpAttempts: 1 }), /stopped/);
     b.close();
   }
-  let now = 0;
+  let now = 2_700_000;
   const b = createBudget({ limits, deadlineMs: 10, now: () => now, record() {} });
-  now = 10;
+  now += 10;
   assert.throws(() => b.reserve({ httpAttempts: 1 }), /deadline/);
   b.close();
   const bad = createBudget({ limits, deadlineMs: 1000, record() { throw Error('disk'); } });
@@ -187,4 +187,21 @@ test('HTTP URL payload consumes outgoing budget before opening a request', async
   await assert.rejects(relayHttp({ url: 'https://test-db.firebaseio.com/.lp?ns=test-db&d=payload', method: 'GET', headers: {}, body: null }, { config: c, budget: b, request: fake.request }), /outboundBytes/);
   assert.equal(fake.sends, 0);
   b.close();
+});
+
+test('asynchronous socket closure settles before the helper returns', async () => {
+  const pair = socketPair();
+  let closed = 0;
+  for (const socket of [pair.client, pair.server]) socket.close = () => new Promise(resolve => setTimeout(() => { closed++; resolve(); }, 10));
+  const harness = browserHarness(page => page.handlers.ws(pair.client));
+  await runProductionLiveProbe({ playwright: harness.playwright, config: config(), bundlePaths: bundles, record() {} });
+  assert.equal(closed, 2);
+});
+
+test('socket closure failure prevents a successful receipt', async () => {
+  const pair = socketPair();
+  pair.server.close = async () => { throw Error('socket cleanup failure'); };
+  const harness = browserHarness(page => page.handlers.ws(pair.client));
+  await assert.rejects(runProductionLiveProbe({ playwright: harness.playwright, config: config(), bundlePaths: bundles, record() {} }), /Probe cleanup failed/);
+  assert.equal(harness.calls.at(-1), 'browser');
 });

@@ -174,23 +174,6 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
         let expr = entry["expr"].as_str().unwrap();
         assert!(Rules::compile(&read_rule_at_t(expr)).is_err(), "{entry}");
     }
-    // Patterns the official emulator refuses because it cannot determinize them, its own
-    // resource limit: they load here (ruling M14, a listed difference on the production
-    // observation list).
-    let (undeterminized, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
-        corpus.into_iter().partition(marked("determinize"));
-    assert_eq!(undeterminized.len(), 6);
-    for entry in &undeterminized {
-        let expr = entry["expr"].as_str().unwrap();
-        assert!(
-            entry["error"]
-                .as_str()
-                .unwrap()
-                .contains("could not determinize efficiently"),
-            "{entry}"
-        );
-        assert!(Rules::compile(&read_rule_at_t(expr)).is_ok(), "{entry}");
-    }
     let (denied, agreeing): (Vec<serde_json::Value>, Vec<serde_json::Value>) = corpus
         .into_iter()
         .partition(|entry| entry.get("fireemu").is_some());

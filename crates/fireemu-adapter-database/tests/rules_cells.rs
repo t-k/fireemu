@@ -239,15 +239,8 @@ fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() 
                     texts(&fireemu["error"]),
                     statuses(&fireemu["cells"]),
                 );
-                // A listed difference never lets through what the official emulator refuses,
-                // except a pattern it cannot determinize: its own resource limit, which loads
-                // here (ruling M14).
-                let determinize = jar
-                    .1
-                    .iter()
-                    .flatten()
-                    .any(|error| error.contains("could not determinize efficiently"));
-                for (i, cell) in CELLS.iter().enumerate().filter(|_| !determinize) {
+                // A listed difference never lets through what the official emulator refuses.
+                for (i, cell) in CELLS.iter().enumerate() {
                     let context = if i < READ_CELLS {
                         0
                     } else {

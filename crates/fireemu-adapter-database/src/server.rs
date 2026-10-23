@@ -33,7 +33,7 @@ use tokio_stream::StreamExt as _;
 
 use crate::realtime::{split_frames, Opened, Prepared, Received, Session};
 use crate::rest::{
-    parse_body, refusal_response, Database, Handled, HttpRequest, HttpResponse, SseEvent,
+    parse_body, refusal_response, Database, Handled, HttpRequest, HttpResponse, Peer, SseEvent,
 };
 use crate::target_escape::TargetEscaper;
 use crate::websocket::{
@@ -189,11 +189,13 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
     let wake = Arc::new(tokio::sync::Notify::new());
     {
         let wake = Arc::clone(&wake);
-        shared
+        let mut database = shared
             .database
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .set_waker(Arc::new(move || wake.notify_one()));
+            .unwrap_or_else(PoisonError::into_inner);
+        database.set_waker(Arc::new(move || wake.notify_one()));
+        // A reset or restore judges the open reads at the server time too (review r9 M27).
+        database.set_clock(Arc::clone(&shared.config.clock));
     }
     // The task ends with this server (the guard aborts it when `serve` is dropped).
     let _flusher = AbortOnDrop({
@@ -211,17 +213,18 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
         })
     });
     loop {
-        let Ok((socket, _)) = listener.accept().await else {
+        let Ok((socket, peer)) = listener.accept().await else {
             // Out of file descriptors and the like: back off instead of spinning.
             tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         };
         let shared = Arc::clone(&shared);
         let shared_header_timeout = shared.config.header_timeout;
+        let remote = !peer.ip().to_canonical().is_loopback();
         tokio::spawn(async move {
             let service = service_fn(move |request| {
                 let shared = Arc::clone(&shared);
-                async move { Ok::<_, Infallible>(answer(&shared, request).await) }
+                async move { Ok::<_, Infallible>(answer(&shared, request, remote).await) }
             });
             // A connection error concerns that client only.
             let _ = http1::Builder::new()
@@ -234,7 +237,7 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
     }
 }
 
-async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Body> {
+async fn answer(shared: &Arc<Shared>, request: Request<Incoming>, remote: bool) -> Response<Body> {
     if is_websocket_upgrade(&request) {
         return upgrade(shared, request);
     }
@@ -276,7 +279,8 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Bo
         .database
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    match database.handle_parsed(&request, parsed, now) {
+    let peer = if remote { Peer::Remote } else { Peer::Loopback };
+    match database.handle_from(&request, parsed, now, peer) {
         Handled::Response { response, events } => {
             deliver(shared, &mut database, events);
             full(response)
@@ -295,7 +299,8 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>) -> Response<Bo
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(id, sender.clone());
             drop(database);
-            spawn_keep_alive(Arc::clone(shared), id, sender);
+            // The map holds the only strong sender, so removing it ends the stream.
+            spawn_keep_alive(Arc::clone(shared), id, sender.downgrade());
             streaming(response, receiver)
         }
     }
@@ -308,10 +313,13 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     for (id, event) in events {
+        // A `cancel` event (the rules no longer allow the read) is the last: the stream ends
+        // after it, as the official emulator's does.
+        let last = event.is_cancel();
         let delivered = streams
             .get(&id)
             .is_some_and(|sender| sender.try_send(event).is_ok());
-        if !delivered {
+        if !delivered || last {
             streams.remove(&id);
             database.unsubscribe(id);
         }
@@ -338,12 +346,16 @@ fn deliver(shared: &Shared, database: &mut Database, events: Vec<(u64, SseEvent)
     }
 }
 
-fn spawn_keep_alive(shared: Arc<Shared>, id: u64, sender: mpsc::Sender<SseEvent>) {
+fn spawn_keep_alive(shared: Arc<Shared>, id: u64, sender: mpsc::WeakSender<SseEvent>) {
     tokio::spawn(async move {
         let mut ticks = tokio::time::interval(shared.config.keep_alive);
         ticks.tick().await;
         loop {
             ticks.tick().await;
+            // A stream that was ended (cancelled) needs no keep-alive.
+            let Some(sender) = sender.upgrade() else {
+                return;
+            };
             if sender.try_send(SseEvent::keep_alive()).is_err() {
                 let mut database = shared
                     .database
@@ -488,7 +500,7 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
             // The official emulator drops the connection after the shutdown message, without
             // a close frame.
             let _ = send_within(&mut socket, &frames, shared.config.realtime_idle).await;
-            let _ = tokio::time::timeout(shared.config.realtime_idle, socket.shutdown()).await;
+            linger(&mut socket).await;
             return;
         }
         Opened::Session(session, frames) => {
@@ -509,17 +521,37 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
         .unwrap_or_else(PoisonError::into_inner)
         .insert(client, Sink::Socket(queue));
     run_realtime(shared, &mut socket, session, &mut pushes, limit).await;
-    // The database lock first, in the order `deliver` takes them.
-    let mut database = shared
-        .database
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    shared
-        .listeners
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&client);
-    database.close_realtime(client, (shared.config.clock)());
+    {
+        // The database lock first, in the order `deliver` takes them.
+        let mut database = shared
+            .database
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        shared
+            .listeners
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&client);
+        database.close_realtime(client, (shared.config.clock)());
+    }
+    linger(&mut socket).await;
+}
+
+/// How long a closing connection may take to read what its client still sends.
+const LINGER: Duration = Duration::from_secs(2);
+
+/// Ends a connection gracefully: the write side is shut down, then whatever the client still
+/// sends is read and discarded until it closes or [`LINGER`] passes. A socket closed with
+/// unread input is reset, which discards the data not yet sent and the end of stream, and a
+/// lost reset leaves the client waiting on a half-open connection (the flake of
+/// `a_websocket_dropped_for_falling_behind_writes_what_it_registered_once`).
+async fn linger<S: AsyncRead + AsyncWrite + Unpin>(socket: &mut S) {
+    let _ = tokio::time::timeout(LINGER, socket.shutdown()).await;
+    let mut sink = [0u8; 4096];
+    let _ = tokio::time::timeout(LINGER, async {
+        while matches!(socket.read(&mut sink).await, Ok(n) if n > 0) {}
+    })
+    .await;
 }
 
 /// Answers one prepared message under the database lock. Pushes already queued for the

@@ -69,6 +69,51 @@ export type InvocationInfo = {
   sequence?: number;
 };
 
+export type CausalPhase = { phase: string; attempt: number; at: string | null };
+export type CausalEvent = {
+  eventId: string;
+  epoch: number;
+  source: string;
+  eventType: string;
+  function: string;
+  parent: string | null;
+  terminal: boolean;
+  phasesDropped: number;
+  phases: CausalPhase[];
+};
+export type FunctionsCausality = {
+  epoch: number;
+  retained: number;
+  retention: number;
+  evicted: number;
+  resetGaps: number;
+  truncated: boolean;
+  events: CausalEvent[];
+};
+export type FunctionCodebase = { codebase: string; functions: string[]; runnerAlive: boolean };
+export type FunctionLog = {
+  project: string;
+  codebase: string;
+  runner: string;
+  cursor: string;
+  line: string;
+  invocationId: string | null;
+  function: string | null;
+  truncated: boolean;
+};
+export type FunctionLogScope = {
+  codebase: string;
+  runner: string;
+  nextCursor: string;
+  truncated: boolean;
+  replaced: boolean;
+};
+export type FunctionsDiagnosticStatus = FunctionsStatus & {
+  epoch?: number;
+  causality?: FunctionsCausality;
+  codebases?: FunctionCodebase[];
+};
+
 export type FunctionsOverview = {
   configured: boolean;
   project?: string;
@@ -80,10 +125,12 @@ export type FunctionsOverview = {
   /** The Functions port address, or null when no codebase is loaded (no invocation). */
   functionsAddr?: string | null;
   functions: FunctionInfo[];
-  status?: FunctionsStatus;
+  status?: FunctionsDiagnosticStatus;
   history: InvocationInfo[];
   deadLetters: InvocationInfo[];
   logs?: string[];
+  logRecords?: FunctionLog[];
+  logScopes?: FunctionLogScope[];
 };
 
 export const functionsOverview = (): ResultAsync<FunctionsOverview, ApiError> =>
@@ -106,10 +153,24 @@ export const enqueueTask = (name: string, req: EnqueueRequest): ResultAsync<Json
  * missing fell out of the server's retention window, so a delta would leave a gap.
  */
 export type LogEvent =
-  | { kind: "snapshot"; generation: number; logs: string[]; invocations: InvocationInfo[] }
-  | { kind: "log"; line: string }
-  | { kind: "invocation"; record: InvocationInfo }
-  | { kind: "resync"; generation: number; invocations: InvocationInfo[] };
+  | {
+      kind: "snapshot";
+      project?: string | undefined;
+      generation: number;
+      logs: string[];
+      invocations: InvocationInfo[];
+      logRecords: FunctionLog[];
+      logScopes: FunctionLogScope[];
+    }
+  | { kind: "log"; project?: string | undefined; line: string; record?: FunctionLog | undefined }
+  | { kind: "logState"; project?: string | undefined; logScopes: FunctionLogScope[] }
+  | { kind: "invocation"; project?: string | undefined; record: InvocationInfo }
+  | {
+      kind: "resync";
+      project?: string | undefined;
+      generation: number;
+      invocations: InvocationInfo[];
+    };
 
 const parse = (event: SseEvent): LogEvent | null => {
   try {
@@ -117,20 +178,40 @@ const parse = (event: SseEvent): LogEvent | null => {
     if (event.event === "snapshot") {
       return {
         kind: "snapshot",
+        project: typeof data.project === "string" ? data.project : undefined,
+        logRecords: (data.logRecords as FunctionLog[]) ?? [],
+        logScopes: (data.logScopes as FunctionLogScope[]) ?? [],
         generation: Number(data.generation ?? 0),
         logs: (data.logs as string[]) ?? [],
         invocations: (data.invocations as InvocationInfo[]) ?? [],
       };
     }
     if (event.event === "log") {
-      return { kind: "log", line: String(data.line ?? "") };
+      return {
+        kind: "log",
+        project: data.project as string | undefined,
+        line: String(data.line ?? ""),
+        record: data.record as FunctionLog | undefined,
+      };
+    }
+    if (event.event === "log-state") {
+      return {
+        kind: "logState",
+        project: data.project as string | undefined,
+        logScopes: (data.logScopes as FunctionLogScope[]) ?? [],
+      };
     }
     if (event.event === "invocation") {
-      return { kind: "invocation", record: data as unknown as InvocationInfo };
+      return {
+        kind: "invocation",
+        project: data.project as string | undefined,
+        record: data as unknown as InvocationInfo,
+      };
     }
     if (event.event === "resync") {
       return {
         kind: "resync",
+        project: data.project as string | undefined,
         generation: Number(data.generation ?? 0),
         invocations: (data.invocations as InvocationInfo[]) ?? [],
       };

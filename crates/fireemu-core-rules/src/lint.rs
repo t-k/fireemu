@@ -147,6 +147,33 @@ impl Ctx<'_> {
 /// Lints a source text. Size diagnostics are produced even when the source does not parse.
 #[must_use]
 pub fn lint_source(src: &str, options: &LintOptions) -> LintReport {
+    let (ruleset, parse_error) = match parse_ruleset(src) {
+        Ok(r) => (Some(r), None),
+        Err(e) => (None, Some(e)),
+    };
+    let (diagnostics, source_size) = lint_optional_parsed(src, ruleset.as_ref(), options);
+    LintReport {
+        diagnostics,
+        source_size,
+        parse_error,
+        ruleset,
+    }
+}
+
+/// Lints an already parsed tree without cloning it or parsing its source again.
+pub(crate) fn lint_parsed(
+    src: &str,
+    ruleset: &Ruleset,
+    options: &LintOptions,
+) -> (Vec<Diagnostic>, RulesSourceSize) {
+    lint_optional_parsed(src, Some(ruleset), options)
+}
+
+fn lint_optional_parsed(
+    src: &str,
+    ruleset: Option<&Ruleset>,
+    options: &LintOptions,
+) -> (Vec<Diagnostic>, RulesSourceSize) {
     let mut ctx = Ctx {
         options,
         diagnostics: Vec::new(),
@@ -171,12 +198,8 @@ pub fn lint_source(src: &str, options: &LintOptions) -> LintReport {
         precision: EnforcementPrecision::BoundaryConformance,
     };
 
-    let (ruleset, parse_error) = match parse_ruleset(src) {
-        Ok(r) => (Some(r), None),
-        Err(e) => (None, Some(e)),
-    };
-    if let Some(r) = &ruleset {
-        lint_ruleset(r, &mut ctx);
+    if let Some(ruleset) = ruleset {
+        lint_ruleset(ruleset, &mut ctx);
     }
     let mut diagnostics = ctx.diagnostics;
     diagnostics.sort_by(|a, b| {
@@ -185,12 +208,7 @@ pub fn lint_source(src: &str, options: &LintOptions) -> LintReport {
             .then_with(|| a.limit_id.cmp(b.limit_id))
             .then_with(|| a.subject.cmp(&b.subject))
     });
-    LintReport {
-        diagnostics,
-        source_size,
-        parse_error,
-        ruleset,
-    }
+    (diagnostics, source_size)
 }
 
 /// Function declaration with its lexical scope path.
@@ -611,4 +629,24 @@ fn functions_in_cycles(edges: &[BTreeSet<usize>]) -> BTreeSet<usize> {
         }
     }
     s.cyclic
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_lint_preserves_source_report_diagnostics_and_size() {
+        for source in [
+            "service cloud.firestore { match /{id} { allow read: if true; } }",
+            "service cloud.firestore { function unused() { return '日本語'; } }",
+            "service cloud.firestore { function f() { return f(); } }",
+        ] {
+            let owned = lint_source(source, &LintOptions::default());
+            let tree = parse_ruleset(source).unwrap();
+            let (diagnostics, size) = lint_parsed(source, &tree, &LintOptions::default());
+            assert_eq!(diagnostics, owned.diagnostics);
+            assert_eq!(size, owned.source_size);
+        }
+    }
 }

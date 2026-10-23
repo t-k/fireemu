@@ -560,6 +560,7 @@ pub fn is_no_store_path(path: &str) -> bool {
         && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
             || is_resources_path(path)
             || is_rules_requests_path(path)
+            || is_rules_diagnostics_path(path)
             || is_missing_indexes_path(path))
         || path == MISSING_INDEXES_PATH
 }
@@ -574,6 +575,8 @@ fn diagnostics_guard(
 ) -> Option<JsonResponse> {
     let refusal = if is_resources_path(path) {
         "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method"
+    } else if is_rules_diagnostics_path(path) {
+        "CONTROL_TOKEN_REQUIRED : Security Rules collection diagnostics need Authorization: Bearer <control token> on every method"
     } else if is_rules_requests_path(path) {
         "CONTROL_TOKEN_REQUIRED : the Security Rules request trace needs Authorization: Bearer <control token> on every method"
     } else if is_missing_indexes_path(path) {
@@ -581,7 +584,9 @@ fn diagnostics_guard(
     } else {
         return None;
     };
-    headers.origin.as_ref()?;
+    if !is_rules_diagnostics_path(path) {
+        headers.origin.as_ref()?;
+    }
     let presented = headers
         .authorization
         .as_deref()
@@ -605,6 +610,12 @@ fn is_missing_indexes_path(path: &str) -> bool {
 /// Whether a query-stripped path is the Security Rules request trace route.
 fn is_rules_requests_path(path: &str) -> bool {
     path.starts_with("/v1/sessions/") && path.ends_with(RULES_REQUESTS_SUFFIX)
+}
+
+/// Fireemu-specific diagnostic collection controls, separate from standard coverage.
+fn is_rules_diagnostics_path(path: &str) -> bool {
+    path.starts_with("/v1/sessions/")
+        && (path.ends_with("/rules/diagnostics") || path.ends_with("/rules/diagnostics:clear"))
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -966,8 +977,78 @@ fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) ->
     ok(json!({
         "capacity": REQUEST_TRACE_CAPACITY,
         "loaded": rules.is_loaded(),
+        "source": rules.source,
+        "generation": rules.generation().to_string(),
         "requests": requests,
     }))
+}
+
+/// Completion-linearized collection intervals; this does not export or reload rules.
+fn rules_diagnostics_route(
+    state: &ControlState,
+    method: &str,
+    is_default: bool,
+    clear: bool,
+    body: &Value,
+) -> JsonResponse {
+    use fireemu_core_rules::runtime::RulesDiagnosticsError;
+    if method != if clear { "POST" } else { "GET" } {
+        return error(
+            400,
+            "INVALID_ARGUMENT : diagnostic inspection uses GET and explicit clear uses POST",
+        );
+    }
+    if !is_default {
+        return error(
+            400,
+            "FAILED_PRECONDITION : Firestore rule diagnostics belong to the default session",
+        );
+    }
+    let result = if clear {
+        let decimal = |key: &str| {
+            body[key]
+                .as_str()
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse::<u64>().ok())
+        };
+        let (Some(generation), Some(interval)) =
+            (decimal("expectedGeneration"), decimal("expectedInterval"))
+        else {
+            return error(400, "INVALID_ARGUMENT : expectedGeneration and expectedInterval must be decimal u64 strings");
+        };
+        state.rules.clear_diagnostics(generation, interval)
+    } else {
+        state.rules.diagnostics_snapshot()
+    };
+    match result {
+        Ok(snapshot) => ok(json!({
+            "service": "firestore", "loaded": snapshot.loaded,
+            "generation": snapshot.generation.to_string(), "interval": snapshot.interval_epoch.to_string(),
+            "expressionCount": snapshot.expression_count, "distinctValueCount": snapshot.distinct_value_count,
+            "observationCount": snapshot.observation_count, "estimatedCoverageBytes": snapshot.estimated_coverage_bytes,
+            "requestTraceCount": snapshot.request_trace_count, "requestTraceCapacity": snapshot.request_trace_capacity,
+        })),
+        Err(e) => {
+            let status = match e {
+                RulesDiagnosticsError::StaleGeneration { .. }
+                | RulesDiagnosticsError::StaleInterval { .. }
+                | RulesDiagnosticsError::IntervalExhausted => 409,
+                RulesDiagnosticsError::SlotPoisoned
+                | RulesDiagnosticsError::DiagnosticsPoisoned => 500,
+            };
+            error(
+                status,
+                &format!(
+                    "{} : {e}",
+                    if status == 409 {
+                        "FAILED_PRECONDITION"
+                    } else {
+                        "INTERNAL"
+                    }
+                ),
+            )
+        }
+    }
 }
 
 /// GET / PUT / DELETE on the Storage rules registry.
@@ -1283,6 +1364,15 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     }
     if action == "faultPlan" {
         return fault_plan_route(state, session, &project, method, body);
+    }
+    if action == "rules/diagnostics" || action == "rules/diagnostics:clear" {
+        return rules_diagnostics_route(
+            state,
+            method,
+            is_default,
+            action.ends_with(":clear"),
+            body,
+        );
     }
     if action == "rules/requests" {
         return rules_requests_route(state, method, is_default);
@@ -2756,6 +2846,7 @@ pub fn browser_guard(
     let privileged = (method != "GET" && !path.starts_with("/health/"))
         || is_resources_path(path)
         || is_rules_requests_path(path)
+        || is_rules_diagnostics_path(path)
         || is_missing_indexes_path(path);
     let presented = headers
         .authorization

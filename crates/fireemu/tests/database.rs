@@ -112,6 +112,21 @@ impl Daemon {
             .to_owned()
     }
 
+    /// The port of the Auth emulator's REST surface.
+    fn auth_port(&self) -> u16 {
+        let banner = self.banner.lock().unwrap().clone();
+        let line = banner
+            .lines()
+            .find(|line| line.trim_start().starts_with("auth (REST):"))
+            .unwrap_or_else(|| panic!("no auth line in {banner}"))
+            .to_owned();
+        line.split("127.0.0.1:")
+            .nth(1)
+            .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|digits| digits.parse().ok())
+            .unwrap_or_else(|| panic!("no auth port in {line:?}"))
+    }
+
     fn database_port(&self) -> u16 {
         let line = self.database_line();
         line.split("127.0.0.1:")
@@ -352,6 +367,7 @@ fn database_deploy_hooks_in_firebase_json_are_accepted_whatever_is_selected() {
         r#"{"database":{"rules":"database.rules.json","predeploy":["echo hi"],"postdeploy":"echo bye"}}"#,
     )
     .unwrap();
+    std::fs::write(dir.join("database.rules.json"), r#"{"rules":{}}"#).unwrap();
     for only in ["auth", "database"] {
         let daemon = Daemon::start(&[
             "--firebase-json",
@@ -371,11 +387,11 @@ fn database_deploy_hooks_in_firebase_json_are_accepted_whatever_is_selected() {
 }
 
 #[test]
-fn the_banner_says_rules_are_not_evaluated_and_what_access_is_in_effect() {
+fn the_banner_says_what_an_instance_without_rules_allows() {
     let dir = Scratch::new("database", "rules-banner");
     let open = Daemon::start(&["--only", "database", "--database-port", "0"]);
     let line = open.rules_line();
-    assert!(line.contains("not evaluated"), "{line}");
+    assert!(line.contains("none in firebase.json"), "{line}");
     assert!(line.contains("every request is allowed"), "{line}");
     assert!(
         line.contains("database.defaultAccess = open, default"),
@@ -415,8 +431,63 @@ fn the_banner_says_rules_are_not_evaluated_and_what_access_is_in_effect() {
 }
 
 #[test]
-fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_served() {
-    let dir = Scratch::new("database", "rules-warning");
+fn declared_rules_are_enforced_on_the_default_instance_and_reloaded_when_they_change() {
+    let dir = Scratch::new("database", "rules-file");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":{"rules":"database.rules.json"}}"#,
+    )
+    .unwrap();
+    let rules = dir.join("database.rules.json");
+    std::fs::write(&rules, r#"{"rules":{".read":false,".write":false}}"#).unwrap();
+    let daemon = Daemon::start(&[
+        "--firebase-json",
+        firebase_json.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let line = daemon.rules_line();
+    assert!(
+        line.contains("demo-rtdb-default-rtdb <- ") && line.contains("database.rules.json"),
+        "{line}"
+    );
+    assert!(
+        line.contains("another instance: every request is allowed"),
+        "{line}"
+    );
+    let port = daemon.database_port();
+    let read = |ns: &str| request(port, "GET", &format!("/.json?ns={ns}"), &[], "").0;
+    assert_eq!(read("demo-rtdb-default-rtdb"), 401);
+    // Only the default instance has the file's rules.
+    assert_eq!(read("other"), 200);
+    let eventually = |status: u16| {
+        (0..100).any(|_| {
+            if read("demo-rtdb-default-rtdb") == status {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            false
+        })
+    };
+    std::fs::write(&rules, r#"{"rules":{".read":true}}"#).unwrap();
+    assert!(eventually(200), "the changed rules were not loaded");
+    // A change that does not load keeps the rules in force.
+    std::fs::write(&rules, r#"{"rules":{".read":"auth.foo()"}}"#).unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(read("demo-rtdb-default-rtdb"), 200);
+    std::fs::write(&rules, r#"{"rules":{".read":false}}"#).unwrap();
+    assert!(
+        eventually(401),
+        "a good change after a bad one was not loaded"
+    );
+}
+
+#[test]
+fn a_rules_file_that_does_not_load_stops_the_start_only_when_the_database_is_served() {
+    let dir = Scratch::new("database", "rules-start");
     let firebase_json = dir.join("firebase.json");
     std::fs::write(
         &firebase_json,
@@ -424,32 +495,43 @@ fn declared_rules_that_are_not_enforced_are_a_warning_when_the_database_is_serve
     )
     .unwrap();
     let run = |only: &str| {
-        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args(["exec", "--no-config-discovery", "--project", PROJECT])
             .args(["--firebase-json", firebase_json.to_str().unwrap()])
             .args(["--only", only, "--database-port", "0", "--http-port", "0"])
             .args(["--hub-port", "0", "--log-verbosity", "quiet", "--", "true"])
             .stdin(Stdio::null())
             .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stderr).unwrap()
+            .unwrap()
     };
-    let stderr = run("database");
+    let missing = run("database");
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(!missing.status.success(), "{stderr}");
     assert!(
-        stderr.contains("warning: database: the rules in database.rules.json are not enforced"),
+        stderr.contains("Failed to load initial Realtime Database rules:")
+            && stderr.contains("database.rules.json:"),
         "{stderr}"
     );
+    std::fs::write(
+        dir.join("database.rules.json"),
+        r#"{"rules":{".read":"auth.foo()"}}"#,
+    )
+    .unwrap();
+    let invalid = run("database");
+    let stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(!invalid.status.success(), "{stderr}");
     assert!(
-        stderr.contains("database.defaultAccess = open, default"),
+        stderr.contains(
+            "database.rules.json:1:20: Type error: Function call on target that is not a function."
+        ),
         "{stderr}"
     );
-    let stderr = run("auth");
-    assert!(!stderr.contains("database.rules.json"), "{stderr}");
+    let unserved = run("auth");
+    assert!(
+        unserved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unserved.stderr)
+    );
 }
 
 /// Exports go under a parent only this user can write: fireemu refuses to publish an export
@@ -728,5 +810,316 @@ fn the_inspect_route_needs_the_owner_except_under_the_emulator_profile() {
         assert_eq!(status, 200, "{name}");
         // A refused request created no namespace.
         assert_eq!(body.contains(r#""probe""#), open, "{name}: {body}");
+    }
+}
+
+/// The unsigned ID token `@firebase/rules-unit-testing` mints for `uid` of the test project
+/// (the SDK's `mockUserToken` shape).
+fn mock_token(uid: &str) -> String {
+    mock_token_for(PROJECT, uid)
+}
+
+/// The SDK's mock token for `uid` of `project`.
+fn mock_token_for(project: &str, uid: &str) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = format!(
+        r#"{{"iss":"https://securetoken.google.com/{project}","aud":"{project}","iat":{now},"exp":{},"auth_time":{now},"sub":"{uid}","user_id":"{uid}","firebase":{{"sign_in_provider":"custom","identities":{{}}}}}}"#,
+        now + 3600
+    );
+    format!(
+        "{}.{}.",
+        segment(r#"{"alg":"none","type":"JWT"}"#).trim_end_matches('.'),
+        segment(&claims).trim_end_matches('.')
+    )
+}
+
+/// Signs a user up on the Auth emulator (in `tenant`, if any): the uid and the ID token.
+fn sign_up(daemon: &Daemon, email: &str, tenant: Option<&str>) -> (String, String) {
+    let tenant = tenant.map_or(String::new(), |t| format!(r#","tenantId":"{t}""#));
+    let (status, body) = request(
+        daemon.auth_port(),
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key",
+        &["Content-Type: application/json"],
+        &format!(r#"{{"email":"{email}","password":"hunter22","returnSecureToken":true{tenant}}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    (
+        body["localId"].as_str().unwrap().to_owned(),
+        body["idToken"].as_str().unwrap().to_owned(),
+    )
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one matrix: profile x token kind x instance kind
+fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
+    let dir = Scratch::new("database", "credentials");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":[
+            {"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"},
+            {"instance":"demo-rtdb-secondary","rules":"database.rules.json"},
+            {"instance":"other-default-rtdb","rules":"database.rules.json"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("database.rules.json"),
+        r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}},
+            "anon":{".read":"auth == null"}}}"#,
+    )
+    .unwrap();
+    let tenants = r#""auth":{"multiTenant":{"allowTenants":true},"tenants":[{"tenantId":"acme-x7k2q","displayName":"acme","allowPasswordSignup":true}]}"#;
+    let profiles = [
+        (
+            "emulator",
+            format!(r#"{{"schemaVersion":1,"profile":"emulator",{tenants}}}"#),
+        ),
+        (
+            "strict",
+            format!(r#"{{"schemaVersion":1,"profile":"strict",{tenants}}}"#),
+        ),
+        (
+            "exact",
+            format!(r#"{{"schemaVersion":1,"profile":"strict","productionExact":true,{tenants}}}"#),
+        ),
+    ];
+    for (name, config) in profiles {
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path, config).unwrap();
+        let daemon = Daemon::start(&[
+            "--firebase-json",
+            firebase_json.to_str().unwrap(),
+            "--config",
+            path.to_str().unwrap(),
+            "--only",
+            "database,auth",
+            "--database-port",
+            "0",
+        ]);
+        let port = daemon.database_port();
+        let read = |ns: &str, path: &str, query: &str, headers: &[&str]| {
+            let target = format!("{path}.json?ns={ns}{query}");
+            request(port, "GET", &target, headers, "").0
+        };
+        let (uid, signed) = sign_up(&daemon, "rtdb@example.com", None);
+        let (tenant_uid, tenant_token) = sign_up(&daemon, "t@example.com", Some("acme-x7k2q"));
+        let strict = name != "emulator";
+        let exact = name == "exact";
+        // A credential that names no one: anonymous under the emulator profile, 401 under strict.
+        let nobody = if strict { 401 } else { 200 };
+        let own = format!("/users/{uid}");
+        let default = "demo-rtdb-default-rtdb";
+        let named = "demo-rtdb-secondary";
+        let other = "other-default-rtdb";
+        let auth = |token: &str| format!("&auth={token}");
+        // A token fireemu's Auth issued for the project is its user on every instance of the
+        // project, and nobody on another project's instance; under the emulator profile its
+        // tokens are unsigned, and an unsigned token is its user anywhere, as on the official
+        // emulator.
+        assert_eq!(read(default, &own, &auth(&signed), &[]), 200, "{name}");
+        assert_eq!(read(named, &own, &auth(&signed), &[]), 200, "{name}");
+        let (elsewhere, anonymous) = if strict { (401, 401) } else { (200, 401) };
+        assert_eq!(read(other, &own, &auth(&signed), &[]), elsewhere, "{name}");
+        assert_eq!(
+            read(other, "/anon", &auth(&signed), &[]),
+            anonymous,
+            "{name}"
+        );
+        // So is a tenant's token.
+        let tenant_own = format!("/users/{tenant_uid}");
+        assert_eq!(
+            read(default, &tenant_own, &auth(&tenant_token), &[]),
+            200,
+            "{name}"
+        );
+        // The SDK's mock token is its user while unsigned tokens are admitted (not under
+        // productionExact): on its project's instances, and under the emulator profile on any
+        // instance whatever project it names, as on the official emulator; nobody elsewhere.
+        let mock = mock_token("u1");
+        let mock_status = if exact { 401 } else { 200 };
+        assert_eq!(
+            read(default, "/users/u1", &auth(&mock), &[]),
+            mock_status,
+            "{name}"
+        );
+        assert_eq!(
+            read(named, "/users/u1", &auth(&mock), &[]),
+            mock_status,
+            "{name}"
+        );
+        let anywhere = if strict { 401 } else { 200 };
+        assert_eq!(
+            read(other, "/users/u1", &auth(&mock), &[]),
+            anywhere,
+            "{name}"
+        );
+        let foreign = mock_token_for("someone-else", "u1");
+        assert_eq!(
+            read(default, "/users/u1", &auth(&foreign), &[]),
+            anywhere,
+            "{name}"
+        );
+        // Under strict it is refused there; under the emulator profile it is a user, not anonymous.
+        assert_eq!(read(other, "/anon", &auth(&mock), &[]), 401, "{name}");
+        // An unsigned token without `aud` (expired, even): the user its `sub` names under the
+        // emulator profile, as on the official emulator, which reads the claims unverified;
+        // without `sub` it names no one. Under strict it names no one either way.
+        let unsigned = |claims: &str| {
+            format!(
+                "{}.{}.",
+                segment(r#"{"alg":"none","typ":"JWT"}"#).trim_end_matches('.'),
+                segment(claims).trim_end_matches('.')
+            )
+        };
+        let no_aud = unsigned(r#"{"sub":"u1","iat":1,"exp":2}"#);
+        let user = if strict { 401 } else { 200 };
+        assert_eq!(
+            read(default, "/users/u1", &auth(&no_aud), &[]),
+            user,
+            "{name}"
+        );
+        assert_eq!(read(default, "/anon", &auth(&no_aud), &[]), 401, "{name}");
+        let no_sub = unsigned(r#"{"iat":1,"exp":9999999999}"#);
+        assert_eq!(
+            read(default, "/users/u1", &auth(&no_sub), &[]),
+            401,
+            "{name}"
+        );
+        assert_eq!(
+            read(default, "/anon", &auth(&no_sub), &[]),
+            nobody,
+            "{name}"
+        );
+        // Access tokens: any one is an administrator under the emulator profile, only `owner`
+        // under strict; `auth=owner` names no one.
+        let other_bearer = ["Authorization: Bearer ya29.other"];
+        let expected = if strict { 401 } else { 200 };
+        assert_eq!(
+            read(default, "/users/u2", "", &other_bearer),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            read(default, "/users/u2", "", &["Authorization: Bearer owner"]),
+            200,
+            "{name}"
+        );
+        assert_eq!(read(default, "/anon", "&auth=owner", &[]), nobody, "{name}");
+    }
+}
+
+#[test]
+fn a_deep_rule_from_any_access_token_never_stops_the_daemon() {
+    // Under the emulator profile any access token may load rules.
+    let dir = Scratch::new("database", "deep-rule");
+    let config = dir.join("emulator.json");
+    std::fs::write(&config, r#"{"schemaVersion":1,"profile":"emulator"}"#).unwrap();
+    let daemon = Daemon::start(&[
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    let deep_child = format!("root{}.val() == null", ".child('a')".repeat(10_000));
+    let deep_ternary = format!(
+        "{}true{}",
+        "true ? ".repeat(10_000),
+        " : false".repeat(10_000)
+    );
+    for rule in [deep_child, deep_ternary] {
+        let body = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+        let (status, text) = request(
+            port,
+            "PUT",
+            "/.settings/rules.json?ns=deep",
+            &["Authorization: Bearer anything"],
+            &body,
+        );
+        assert_eq!(status, 400, "{text}");
+        assert_eq!(request(port, "GET", "/.json?ns=deep", &[], "").0, 200);
+    }
+}
+
+/// `1 - (inner) - 0 - 0 …`: the inner expression lands `tail` levels below the outermost
+/// operator although it is read first.
+fn left_nested(inner: &str, tail: usize) -> String {
+    format!("1 - ({inner}){}", " - 0".repeat(tail))
+}
+
+#[test]
+fn a_deep_rule_built_from_shallow_pieces_never_stops_the_daemon() {
+    // Each piece nests 590 levels, which alone is within the bound; nested six times they
+    // are about 3,500 levels deep (review r3 M6c).
+    let dir = Scratch::new("database", "composed-rule");
+    let config = dir.join("emulator.json");
+    std::fs::write(&config, r#"{"schemaVersion":1,"profile":"emulator"}"#).unwrap();
+    let daemon = Daemon::start(&[
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    let mut sub = "1".to_owned();
+    for _ in 0..6 {
+        sub = left_nested(&sub, 590);
+    }
+    let mut parents = "root.child('a')".to_owned();
+    for _ in 0..6 {
+        parents = format!(
+            "root.child({parents}.val() + 'a'){}",
+            ".parent()".repeat(590)
+        );
+    }
+    let mut index = "auth".to_owned();
+    for _ in 0..6 {
+        index = format!("auth[{index} == null ? 'a' : 'b']{}", ".y".repeat(590));
+    }
+    for rule in [
+        format!("{sub} < 0"),
+        format!("{parents}.val() == null"),
+        format!("{index} == null"),
+        format!("({sub} < 0) ? true : false"),
+    ] {
+        let body = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+        let headers = ["Authorization: Bearer anything"];
+        let (status, _) = request(
+            port,
+            "PUT",
+            "/.settings/rules.json?ns=deep",
+            &headers,
+            &body,
+        );
+        // Whether it is refused or loaded, reading and replacing it leave the daemon running.
+        let _ = std::panic::catch_unwind(|| request(port, "GET", "/.json?ns=deep", &[], ""));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            TcpStream::connect(("127.0.0.1", port)).is_ok(),
+            "the daemon stopped on reading a rule it answered {status} to"
+        );
+        let (replaced, _) = request(
+            port,
+            "PUT",
+            "/.settings/rules.json?ns=deep",
+            &headers,
+            r#"{"rules":{}}"#,
+        );
+        assert_eq!(
+            replaced,
+            200,
+            "the daemon stopped after a rule ({status}) {}",
+            rule.len()
+        );
+        assert_eq!(request(port, "GET", "/.json?ns=other", &[], "").0, 200);
     }
 }

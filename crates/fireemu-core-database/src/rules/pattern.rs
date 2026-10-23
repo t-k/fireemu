@@ -1,0 +1,766 @@
+//! `matches()` patterns, compiled once when the rules load.
+
+use std::sync::Arc;
+
+use fireemu_core_rules::regex::Regex;
+
+/// A `/pattern/flags` literal and its compiled search.
+#[derive(Debug, Clone)]
+pub struct Pattern {
+    text: String,
+    flags: String,
+    /// `None` for a pattern this engine does not read as the official emulator does.
+    search: Option<Arc<Regex>>,
+}
+
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.flags == other.flags
+    }
+}
+
+impl Pattern {
+    /// Compiles `/text/flags` as a search: unanchored unless the pattern anchors itself (a
+    /// final `$` is the end anchor), `i` ignoring case.
+    ///
+    /// The official emulator reads its own dialect (an automaton grammar): `(?` opens a group
+    /// whose first character is a literal `?`, `[[:alpha:]]` is a class followed by a literal
+    /// `]`, an escaped letter or digit other than `\d` and `\w` is that character itself,
+    /// `\W` and `\D` are the complement of a language (`'abc'` matches `/\W/`), and `x**` is
+    /// allowed. Until that dialect is followed (RTDB-03c), a pattern with any of these, or one
+    /// this engine cannot compile, is not read at all: matching with it is an error, so the
+    /// rule is false whether or not it is negated, and never passes here where the official
+    /// emulator denies. `.` matches any character, a newline included, as there.
+    ///
+    /// `i` is read only for a pattern of ASCII characters, as the official emulator folds it:
+    /// see [`fold_case`]. The subject is never transformed.
+    pub fn new(text: String, flags: String) -> Self {
+        let dialect_only = opens_special_group(&text)
+            || text.contains("[[:")
+            || escapes_a_letter(&text)
+            || escapes_a_backslash_in_a_class(&text)
+            || super::parse::regex_shape(&text) != Ok(false);
+        let search = (!dialect_only)
+            .then(|| {
+                let source = if flags.contains('i') {
+                    fold_case(&text)?
+                } else {
+                    utf16_view(&text)
+                };
+                Regex::new(&search_source(&source)).ok()
+            })
+            .flatten()
+            .map(Arc::new);
+        Self {
+            text,
+            flags,
+            search,
+        }
+    }
+
+    /// Whether `subject` matches; `None` (an error) for a pattern not read, or when the
+    /// engine gives up on it.
+    pub fn matches(&self, subject: &str) -> Option<bool> {
+        self.search
+            .as_ref()?
+            .is_full_match(&utf16_view(subject))
+            .ok()
+    }
+}
+
+/// Text as a sequence of UTF-16 units, which is what the official emulator (Java) matches:
+/// a character outside the Basic Multilingual Plane becomes its two surrogates. Every unit
+/// from U+D800 up (the surrogates and U+E000–U+FFFF alike) is written as the private-use
+/// character U+F0000 plus its offset from U+D800, so each surrogate is a character of its own
+/// (`.` and a class take one, a literal both) and ranges keep Java's order: surrogates below
+/// U+E000, U+FFFF last. Nothing else in the text is that high once it is written so, so
+/// nothing collides.
+fn utf16_view(text: &str) -> String {
+    if text.chars().all(|c| u32::from(c) < 0xD800) {
+        return text.to_owned();
+    }
+    text.encode_utf16()
+        .map(|unit| {
+            let code = match unit {
+                0xD800.. => 0xF_0000 + u32::from(unit - 0xD800),
+                _ => u32::from(unit),
+            };
+            char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER)
+        })
+        .collect()
+}
+
+/// Whether an escape names a letter or digit other than the classes `\d` and `\w`, which
+/// both dialects read alike (`\D` and `\W` they do not).
+fn escapes_a_letter(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            if let Some(next) = chars.get(i + 1) {
+                if next.is_ascii_alphanumeric() && !matches!(next, 'd' | 'w') {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Whether a class holds `\\`. The official emulator reads `\\x` in a class as `x` (the
+/// second backslash escapes what follows), so `[\\a]` holds no backslash there.
+fn escapes_a_backslash_in_a_class(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut in_class = false;
+    let mut first = false;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' if in_class && chars.get(i + 1) == Some(&'\\') => return true,
+            '\\' => i += 1,
+            '[' if !in_class => {
+                in_class = true;
+                first = true;
+                if chars.get(i + 1) == Some(&'^') {
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            ']' if in_class && !first => in_class = false,
+            _ => {}
+        }
+        first = false;
+        i += 1;
+    }
+    false
+}
+
+/// Whether an unescaped `(` is followed by `?`.
+fn opens_special_group(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 1,
+            '(' if chars.get(i + 1) == Some(&'?') => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// The pattern as the official emulator reads it under `i`, written for a case-sensitive
+/// match; `None` (an error) for what is not read so.
+///
+/// There, a letter `c` of the pattern stands for `toLowerCase(c)` and `toUpperCase(c)`, and
+/// a range is split where letters begin or end: each run adds `[lo-end]` when it holds no
+/// letters and `[upper(lo)-upper(end)]` and `[lower(lo)-lower(end)]` when it does, `lo`
+/// staying the range's first character for every run. `\w`, `\d` and `.` are not folded,
+/// and the subject is left as it is. Only ASCII patterns are read: beyond ASCII, Java's case
+/// tables and this text's differ (KELVIN SIGN, dotless i, full-width letters), so a
+/// pattern with any other character is an error, as is a range a fold reverses, a class
+/// that opens with `]` and a `[` inside a class.
+fn fold_case(text: &str) -> Option<String> {
+    if !text.is_ascii() {
+        return None;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() * 2);
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                out.push('\\');
+                out.extend(chars.get(i + 1));
+                i += 2;
+            }
+            '[' => i = fold_class(&chars, i + 1, &mut out)?,
+            c if c.is_ascii_alphabetic() => {
+                let (lower, upper) = (c.to_ascii_lowercase(), c.to_ascii_uppercase());
+                push_class(&mut out, &[(lower, lower), (upper, upper)]);
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// One item of a class: a character, or the escape of a class (`\d`, `\w`).
+enum ClassItem {
+    Char(char),
+    Escape(char),
+}
+
+/// The item at `chars[i]` and the index after it.
+fn class_item(chars: &[char], i: usize) -> Option<(ClassItem, usize)> {
+    match chars.get(i)? {
+        '\\' => {
+            let escaped = *chars.get(i + 1)?;
+            let item = if escaped.is_ascii_alphanumeric() {
+                ClassItem::Escape(escaped)
+            } else {
+                ClassItem::Char(escaped)
+            };
+            Some((item, i + 2))
+        }
+        // `[` is a plain member there (`[[:` was refused before).
+        c => Some((ClassItem::Char(*c), i + 1)),
+    }
+}
+
+/// Folds the class whose body starts at `chars[start]` (after `[`) into `out`; the index
+/// after its `]`.
+fn fold_class(chars: &[char], start: usize, out: &mut String) -> Option<usize> {
+    let mut i = start;
+    let negated = chars.get(i) == Some(&'^');
+    if negated {
+        i += 1;
+    }
+    let mut ranges = Vec::new();
+    // The first member may be `]`, as there.
+    let mut first = true;
+    let mut escapes = String::new();
+    while first || chars.get(i)? != &']' {
+        first = false;
+        let (item, next) = class_item(chars, i)?;
+        i = next;
+        let in_range = chars.get(i) == Some(&'-') && chars.get(i + 1).is_some_and(|c| *c != ']');
+        match item {
+            ClassItem::Escape(name) if !in_range => {
+                escapes.push('\\');
+                escapes.push(name);
+            }
+            ClassItem::Escape(_) => return None,
+            ClassItem::Char(lo) if in_range => {
+                let (ClassItem::Char(hi), next) = class_item(chars, i + 1)? else {
+                    return None;
+                };
+                i = next;
+                ranges.extend(fold_range(lo, hi));
+            }
+            // A letter stands for both its cases; anything else is its own case.
+            ClassItem::Char(c) => {
+                ranges.push((c.to_ascii_lowercase(), c.to_ascii_lowercase()));
+                ranges.push((c.to_ascii_uppercase(), c.to_ascii_uppercase()));
+            }
+        }
+    }
+    out.push('[');
+    if negated {
+        out.push('^');
+    }
+    out.push_str(&escapes);
+    if ranges.is_empty() && escapes.is_empty() {
+        // A class whose members all stand for nothing: a character no subject holds (the
+        // UTF-16 view never writes U+10FFFF).
+        out.push('\u{10ffff}');
+    }
+    push_ranges(out, &ranges);
+    out.push(']');
+    Some(i + 1)
+}
+
+/// The ranges `[lo-hi]` stands for under `i`, as the official emulator's
+/// `makeCharRangeConsideringMode` builds them (read from its bytecode, pinned by recorded
+/// rows): it scans `lo..=hi` and closes a run where `isAlphabetic` changes or at `hi`, the run
+/// always starting at `lo`. A closed run of letters adds `[upper(lo)-upper(end)]` and
+/// `[lower(lo)-lower(end)]`, any other run `[lo-end]`. A run closed at `hi` ends at `hi` and
+/// takes the class of the run before it, so `[ -A]` is the plain `[ -A]`. A range that is
+/// reversed, before or after the fold, stands for nothing there (recorded rows: `[Z-y]`).
+fn fold_range(lo: char, hi: char) -> Vec<(char, char)> {
+    if lo > hi {
+        return Vec::new();
+    }
+    let mut ranges = Vec::new();
+    let mut letters = lo.is_ascii_alphabetic();
+    let mut c = lo;
+    loop {
+        if c.is_ascii_alphabetic() != letters || c == hi {
+            let end = if c == hi { c } else { previous_char(c) };
+            if letters {
+                ranges.push((lo.to_ascii_uppercase(), end.to_ascii_uppercase()));
+                ranges.push((lo.to_ascii_lowercase(), end.to_ascii_lowercase()));
+            } else {
+                ranges.push((lo, end));
+            }
+            letters = c.is_ascii_alphabetic();
+        }
+        if c == hi {
+            break;
+        }
+        c = next_char(c);
+    }
+    ranges.retain(|(a, b)| a <= b);
+    ranges
+}
+
+/// The ASCII character before `c` (`c` is above `lo`, so ASCII too).
+fn previous_char(c: char) -> char {
+    char::from_u32(u32::from(c).saturating_sub(1)).unwrap_or(c)
+}
+
+/// The ASCII character after `c` (`c` is below `hi`, so ASCII too).
+fn next_char(c: char) -> char {
+    char::from_u32(u32::from(c) + 1).unwrap_or(c)
+}
+
+fn push_class(out: &mut String, ranges: &[(char, char)]) {
+    out.push('[');
+    push_ranges(out, ranges);
+    out.push(']');
+}
+
+/// Each range as `a-b` (or `a`), punctuation escaped.
+fn push_ranges(out: &mut String, ranges: &[(char, char)]) {
+    let push = |out: &mut String, c: char| {
+        if !c.is_ascii_alphanumeric() {
+            out.push('\\');
+        }
+        out.push(c);
+    };
+    for &(a, b) in ranges {
+        push(out, a);
+        if a != b {
+            out.push('-');
+            push(out, b);
+        }
+    }
+}
+
+/// The search as the official emulator writes it: `.*` before a pattern that does not start
+/// with `^` and after one that does not end with `$`, joined as text, so the first and last
+/// alternatives take them (`/a|q/` is `.*a|q.*`) and a leading repetition repeats the `.*`.
+/// Its quantifiers then read as there (see [`nest_quantifiers`]).
+fn search_source(text: &str) -> String {
+    let mut body = String::new();
+    if !text.starts_with('^') {
+        body.push_str(ANY_RUN);
+    }
+    body.push_str(text);
+    if !text.ends_with('$') {
+        body.push_str(ANY_RUN);
+    }
+    // `.` matches any character, a newline included.
+    format!("(?s){}", nest_quantifiers(&body))
+}
+
+/// Any run of characters, newlines included.
+const ANY_RUN: &str = "(?s:.)*";
+
+/// The pattern with every quantifier that follows another one applied to the repetition before
+/// it, as the official emulator reads it: it has no lazy or possessive forms, so `a+?` is
+/// `(?:a+)?`, `a**` is `(?:a*)*` and `a{2}{2}` is `(?:a{2}){2}`. A `{` that does not open a
+/// count is a character. Groups this text opens itself (`(?:`, `(?s:`) are groups.
+fn nest_quantifiers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 8);
+    // Where each open group starts in `out`, and where the last atom starts.
+    let mut groups: Vec<usize> = Vec::new();
+    let mut atom: Option<usize> = None;
+    let mut quantified = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let quantifier_end = match chars[i] {
+            '*' | '+' | '?' => Some(i + 1),
+            '{' => count_end(&chars, i),
+            _ => None,
+        };
+        if let (Some(end), Some(start)) = (quantifier_end, atom) {
+            if quantified {
+                out.insert_str(start, "(?:");
+                out.push(')');
+            }
+            out.extend(&chars[i..end]);
+            quantified = true;
+            i = end;
+            continue;
+        }
+        quantified = false;
+        let start = out.len();
+        match chars[i] {
+            '\\' => {
+                out.extend(chars.get(i..(i + 2).min(chars.len())).into_iter().flatten());
+                i += 2;
+                atom = Some(start);
+            }
+            '[' => {
+                let end = class_end(&chars, i);
+                out.extend(&chars[i..end]);
+                i = end;
+                atom = Some(start);
+            }
+            '(' => {
+                // A `?` right after `(` (this text's own `(?:` and `(?s:`) has no atom
+                // before it, so it is copied as it is.
+                groups.push(start);
+                out.push('(');
+                i += 1;
+                atom = None;
+            }
+            ')' => {
+                out.push(')');
+                i += 1;
+                atom = groups.pop();
+            }
+            '|' => {
+                out.push('|');
+                i += 1;
+                atom = None;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+                atom = Some(start);
+            }
+        }
+    }
+    out
+}
+
+/// The end of the count `{n}`, `{n,}` or `{n,m}` that starts at `chars[i]`, if it is one.
+fn count_end(chars: &[char], i: usize) -> Option<usize> {
+    let digits = |from: usize| {
+        let mut to = from;
+        while chars.get(to).is_some_and(char::is_ascii_digit) {
+            to += 1;
+        }
+        to
+    };
+    let mut at = digits(i + 1);
+    if at == i + 1 {
+        return None;
+    }
+    if chars.get(at) == Some(&',') {
+        at = digits(at + 1);
+    }
+    (chars.get(at) == Some(&'}')).then_some(at + 1)
+}
+
+/// The end of the class that starts at `chars[i]` (`[`): its first member, `]` included, is
+/// always a member, and escapes are pairs.
+fn class_end(chars: &[char], i: usize) -> usize {
+    let mut at = i + 1;
+    if chars.get(at) == Some(&'^') {
+        at += 1;
+    }
+    let mut first = true;
+    while let Some(&c) = chars.get(at) {
+        match c {
+            '\\' => at += 2,
+            ']' if !first => return at + 1,
+            _ => at += 1,
+        }
+        first = false;
+    }
+    chars.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matches(text: &str, subject: &str) -> Option<bool> {
+        Pattern::new(text.to_owned(), String::new()).matches(subject)
+    }
+
+    #[test]
+    fn the_official_dialect_s_constructs_are_errors_and_escaped_parentheses_are_plain() {
+        for (text, subject) in [
+            ("(?:a)", "?:a"),
+            ("x(?i)a", "x?ia"),
+            ("[[:alpha:]]", "a]"),
+            (r"^\n$", "n"),
+            (r"^\n$", "\n"),
+            (r"^\1$", "1"),
+            (r"^\b$", "b"),
+        ] {
+            assert_eq!(matches(text, subject), None, "{text}");
+        }
+        assert_eq!(matches(r"^\d\w$", "1a"), Some(true));
+        // An escaped backslash is a backslash, also first: what follows it is plain.
+        assert_eq!(matches(r"\\n", r"\n"), Some(true));
+        assert_eq!(matches(r"x\\n", r"x\n"), Some(true));
+        assert_eq!(matches("^a.b$", "a\nb"), Some(true));
+        assert_eq!(matches(r"a\(?b", "ab"), Some(true));
+        assert_eq!(matches(r"a\(?b", "a(b"), Some(true));
+        assert_eq!(matches("a(b)?", "a"), Some(true));
+    }
+
+    fn matches_i(text: &str, subject: &str) -> Option<bool> {
+        Pattern::new(text.to_owned(), "i".to_owned()).matches(subject)
+    }
+
+    #[test]
+    fn complemented_classes_are_errors_wherever_they_appear() {
+        // The official emulator reads `\W` and `\D` as the complement of a language, not of a
+        // character set (`'abc'` matches `/\W/` there): not read here (RTDB-03c).
+        for text in [r"\W", r"\D", r"^a\W$", r"[\W]", r"[a\D]", r"[^\W]", r"\\\W"] {
+            assert_eq!(matches(text, "abc"), None, "{text}");
+            assert_eq!(matches_i(text, "abc"), None, "{text}");
+        }
+        assert_eq!(matches(r"^\d\w$", "1a"), Some(true));
+        assert_eq!(matches(r"^[\d\w]$", "_"), Some(true));
+        // An escaped backslash before W leaves a plain W.
+        assert_eq!(matches(r"^\\W$", r"\W"), Some(true));
+    }
+
+    #[test]
+    fn ignoring_case_folds_only_ascii_letters_of_the_pattern() {
+        // The subject is never transformed: a character that folds to an ASCII letter in
+        // Unicode does not match it.
+        assert_eq!(matches_i("^k$", "K"), Some(true));
+        assert_eq!(matches_i("^K$", "k"), Some(true));
+        assert_eq!(matches_i("^k$", "\u{212a}"), Some(false), "KELVIN SIGN");
+        assert_eq!(matches_i("^s$", "\u{17f}"), Some(false), "LONG S");
+        assert_eq!(matches_i("^[A-Z]$", "\u{131}"), Some(false), "dotless i");
+        assert_eq!(matches_i("^[a-z]$", "\u{130}"), Some(false), "dotted I");
+        assert_eq!(matches_i(r"^\w$", "\u{212a}"), Some(false));
+        assert_eq!(matches_i(r"^\w$", "\u{17f}"), Some(false));
+        assert_eq!(matches_i("^[^a-z]$", "\u{212a}"), Some(true));
+        assert_eq!(matches_i("^[^a-z]$", "K"), Some(false));
+        assert_eq!(matches_i("^[K]$", "k"), Some(true));
+        assert_eq!(matches_i("^[k-m]+$", "KlM"), Some(true));
+        assert_eq!(matches_i("^ab[c]d$", "ABCD"), Some(true));
+        // `\w`, `\d` and `.` are not folded, and escapes keep their character.
+        assert_eq!(matches_i(r"^\.\w\d.$", ".A1b"), Some(true));
+        assert_eq!(matches_i(r"^a\-b$", "A-B"), Some(true));
+        assert_eq!(matches_i(r"^[\]a]$", "A"), Some(true));
+        assert_eq!(matches_i(r"^[\]a]$", "]"), Some(true));
+        assert_eq!(matches_i(r"^[a\-c]$", "-"), Some(true));
+        assert_eq!(matches_i(r"^[a\-c]$", "B"), Some(false));
+        assert_eq!(matches_i("^[-a]$", "-"), Some(true));
+        assert_eq!(matches_i("^[a-]$", "A"), Some(true));
+        assert_eq!(matches_i("^a{2}$", "aA"), Some(true));
+    }
+
+    #[test]
+    fn a_folded_range_keeps_its_first_character_as_every_run_s_start() {
+        // The official emulator splits a range where letters begin or end and never advances
+        // the start: under `i`, `[!-Z]` is `[!-@]`, `[!-Z]` and `[!-z]`.
+        assert_eq!(matches_i("^[!-Z]$", "b"), Some(true));
+        assert_eq!(matches_i("^[!-Z]$", "`"), Some(true));
+        assert_eq!(matches_i("^[!-Z]$", "{"), Some(false));
+        assert_eq!(matches_i("^[0-9]$", "5"), Some(true));
+        assert_eq!(matches_i("^[0-9]$", "a"), Some(false));
+        assert_eq!(matches_i("^[a-z]$", "Q"), Some(true));
+        assert_eq!(matches_i("^[a-z]$", "["), Some(false));
+        assert_eq!(matches_i("^[A-z]$", "_"), Some(true));
+        // A run closed at the end of the range takes the class of the run before it:
+        // `[ -A]` is the plain `[ -A]`, and `[Z-a]` is `[Zz]` and `[Z-a]` (recorded rows).
+        assert_eq!(matches_i("^[ -A]$", "@"), Some(true));
+        assert_eq!(matches_i("^[ -A]$", "a"), Some(false));
+        assert_eq!(matches_i("^[ -A]$", "B"), Some(false));
+        assert_eq!(matches_i("^[Z-a]$", "Z"), Some(true));
+        assert_eq!(matches_i("^[Z-a]$", "_"), Some(true));
+        assert_eq!(matches_i("^[Z-a]$", "b"), Some(false));
+        assert_eq!(matches_i("^[_-a]$", "`"), Some(true));
+        assert_eq!(matches_i("^[_-a]$", "A"), Some(false));
+        // A run the fold reverses stands for nothing (`[Z-y]`: recorded rows).
+        for (subject, expected) in [
+            ("Z", true),
+            ("_", true),
+            ("z", true),
+            ("a", false),
+            ("y", false),
+        ] {
+            assert_eq!(matches_i("^[Z-y]$", subject), Some(expected), "{subject}");
+        }
+        // So does a range reversed before folding.
+        assert_eq!(matches_i("^[z-a]$", "b"), Some(false));
+        assert_eq!(matches_i("^[^z-a]$", "b"), Some(true));
+    }
+
+    #[test]
+    fn ignoring_case_with_anything_beyond_ascii_in_the_pattern_is_an_error() {
+        for text in [
+            "^\u{e9}$",
+            "^\u{212a}$",
+            "^\u{df}$",
+            "^[\u{ff41}-\u{ff3a}]$",
+            "^[\u{ff40}-\u{ff5f}]$",
+            "^[a-\u{e9}]$",
+            "^\u{1f600}$",
+            "^\u{1c5}$",
+        ] {
+            assert_eq!(matches_i(text, "a"), None, "{text}");
+        }
+        // Without `i` the same patterns are read.
+        assert_eq!(matches("^\u{e9}$", "\u{e9}"), Some(true));
+        // A class may start with `]` and hold `[`, as there.
+        assert_eq!(matches_i("^[]a]$", "A"), Some(true));
+        assert_eq!(matches_i("^[]a]$", "]"), Some(true));
+        assert_eq!(matches_i("^[a[]$", "["), Some(true));
+        assert_eq!(matches_i("^[@-[]$", "_"), Some(false));
+        assert_eq!(matches_i("^[@-[]$", "["), Some(true));
+    }
+
+    #[test]
+    fn an_escaped_backslash_in_a_class_is_an_error() {
+        // There `[\\a]` is `[a]`.
+        for text in [
+            r"^[\\a]$",
+            r"^[a\\b]$",
+            r"^[^\\a]$",
+            r"^[]\\a]$",
+            r"x[\\-a]",
+        ] {
+            assert_eq!(matches(text, "a"), None, "{text}");
+        }
+        // Outside a class both read it as a backslash.
+        assert_eq!(matches(r"^\\[a]$", r"\a"), Some(true));
+        assert_eq!(matches(r"^[a]\\$", r"a\"), Some(true));
+        assert_eq!(matches(r"^[\]]\\$", r"]\"), Some(true));
+    }
+
+    #[test]
+    fn an_operator_that_starts_an_alternative_is_an_error() {
+        // There it is a literal character: `(|a)` is `|a`, `(a|))` is `a` or `)`.
+        for text in [
+            "^(|a)$",
+            "^(a|))$",
+            "^(|)$",
+            "^|a$",
+            "^a||b$",
+            "^*$",
+            "^(a|*)$",
+            "^(a|{2})$",
+            "^)$",
+        ] {
+            assert_eq!(matches(text, "a"), None, "{text}");
+        }
+        // An empty group and an unanchored trailing `|` are read alike.
+        assert_eq!(matches("^x()$", "x"), Some(true));
+        assert_eq!(matches("a|", "zz"), Some(true));
+        assert_eq!(matches("^(a)*$", "aa"), Some(true));
+    }
+
+    #[test]
+    fn the_grammar_scan_reads_classes_escapes_and_alternatives_as_the_official_emulator() {
+        use crate::rules::parse::regex_shape;
+        // `]` right after `[^` is a member, so this class never closes.
+        assert_eq!(
+            regex_shape("^[^]$"),
+            Err("Illegal regular expression, expected ']' at position 3".to_owned())
+        );
+        assert_eq!(regex_shape("^[^]a]$"), Ok(false));
+        // A pattern whose body ends in an escape (the final `$` is the end anchor).
+        assert_eq!(
+            regex_shape("^a\\$"),
+            Err("Illegal regular expression, unexpected end-of-string".to_owned())
+        );
+        // A range up to an escaped backslash closes at the next `]`.
+        assert_eq!(regex_shape(r"^[a-\\]$"), Ok(false));
+        assert_eq!(regex_shape(r"^[\d-]$"), Ok(false));
+        assert_eq!(regex_shape("^(a|)b)$"), Ok(true));
+    }
+
+    #[test]
+    fn escapes_outside_a_class_do_not_open_one() {
+        assert_eq!(matches(r"^\[\\$", r"[\"), Some(true));
+        assert_eq!(matches(r"^[[]\\$", r"[\"), Some(true));
+        assert_eq!(matches(r"^[^]\\a]$", "b"), None);
+        assert_eq!(matches(r"^[^]a]\\$", r"b\"), Some(true));
+    }
+
+    #[test]
+    fn a_folded_negated_class_keeps_its_members() {
+        assert_eq!(matches_i("^[^a]$", "^"), Some(true));
+        assert_eq!(matches_i("^[^a]$", "A"), Some(false));
+        // A class escape as a range endpoint is not folded (the official emulator ends the
+        // member at the escape).
+        assert_eq!(matches_i(r"^[\d-z]$", "5"), None);
+    }
+
+    #[test]
+    fn a_quantifier_after_a_quantifier_applies_to_the_repetition() {
+        // The official emulator has no lazy quantifiers: `a+?` is `(a+)?`, and every further
+        // quantifier repeats what comes before it.
+        for (text, subject, expected) in [
+            ("^a+?$", "", true),
+            ("^a+?$", "aa", true),
+            ("^a*?$", "", true),
+            ("^a??$", "a", true),
+            ("^a??$", "aa", false),
+            ("^a{2}?$", "", true),
+            ("^a{2}?$", "a", false),
+            ("^(ab){2}?$", "", true),
+            ("^(ab){2}?$", "ab", false),
+            ("^a{1,2}?$", "", true),
+            ("^a+?b$", "b", true),
+            ("a+?b", "b", true),
+            ("^a**$", "aaa", true),
+            ("^a+*$", "", true),
+            ("^a{2}+$", "aaaa", true),
+            ("^a{2}+$", "aaa", false),
+            ("^a{2}{2}$", "aaaa", true),
+            ("^a{2}{2}$", "aa", false),
+            ("^x(ab)+?$", "x", true),
+        ] {
+            assert_eq!(matches(text, subject), Some(expected), "{text} {subject:?}");
+        }
+        assert_eq!(matches_i("^[A-z]+?$", ""), Some(true));
+    }
+
+    #[test]
+    fn the_search_wraps_the_outer_alternatives_only() {
+        // `.*` is written before and after the pattern, so `/a|q/` is `.*a|q.*` there.
+        for (text, subject, expected) in [
+            ("a|q", "ab", false),
+            ("a|q", "ba", true),
+            ("a|q", "qa", true),
+            ("a|q", "aq", false),
+            ("a|q$", "aq", false),
+            ("a|q$", "xa", true),
+            ("^a|q", "ax", false),
+            ("^a|q", "qx", true),
+            ("a|b|c", "xbx", false),
+            ("a|b|c", "xa", true),
+            ("a|b|c", "cx", true),
+            ("(x|y)a|c", "yax", false),
+            ("(a|b)|c", "xab", true),
+            ("^..|q", "*{z", false),
+            ("a|", "zz", true),
+            ("b", "abc", true),
+        ] {
+            assert_eq!(matches(text, subject), Some(expected), "{text} {subject:?}");
+        }
+        assert_eq!(matches_i("[a-]|[a-z]!", "aK"), Some(false));
+        // A pattern that starts with a repetition repeats that `.*`.
+        assert_eq!(matches("{2}", "a"), Some(true));
+        assert_eq!(matches("+a", "xa"), Some(true));
+        assert_eq!(matches("?a", "b"), Some(false));
+    }
+
+    #[test]
+    fn patterns_are_equal_by_text_and_flags() {
+        let pattern = |text: &str, flags: &str| Pattern::new(text.to_owned(), flags.to_owned());
+        assert_eq!(pattern("a", ""), pattern("a", ""));
+        assert_ne!(pattern("a", ""), pattern("a", "i"));
+        assert_ne!(pattern("a", ""), pattern("b", ""));
+    }
+
+    #[test]
+    fn patterns_search_unless_anchored() {
+        assert_eq!(matches("b", "abc"), Some(true));
+        assert_eq!(matches("^b", "abc"), Some(false));
+        assert_eq!(matches("b$", "abc"), Some(false));
+        assert_eq!(matches("c$", "abc"), Some(true));
+        assert_eq!(
+            Pattern::new("B".to_owned(), "i".to_owned()).matches("abc"),
+            Some(true)
+        );
+        assert_eq!(
+            matches("(", "("),
+            None,
+            "a pattern the engine cannot compile is an error"
+        );
+    }
+}

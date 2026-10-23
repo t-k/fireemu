@@ -41,7 +41,7 @@ use crate::decode::{parse_parent, Parent};
 use crate::encode::{decode_instant, decode_write, encode_document, encode_instant};
 use crate::gateway::Gateway;
 use crate::local::listen_tokens::{ListenResumeTokens, ResumeBoundary};
-use crate::local::{CommitNotification, LocalBackend};
+use crate::local::{CommitNotification, ListenSubscription, LocalBackend};
 use crate::rules::{write_guard, Principal, RulesEnforcer};
 
 /// The App Check credential a stream opened with (specification section 13.1).
@@ -400,6 +400,71 @@ enum Resume {
     Invalid,
 }
 
+/// An immutable snapshot row is encoded only after its outbound channel slot is reserved.
+/// This retains O(N) shared handles and the payloads they own, not O(page) snapshot memory.
+#[derive(Debug, Clone, PartialEq)]
+enum PendingListenResponse {
+    Wire(pb::ListenResponse),
+    Document {
+        document: Arc<Document>,
+        target_id: i32,
+        removed: bool,
+    },
+}
+
+impl From<pb::ListenResponse> for PendingListenResponse {
+    fn from(response: pb::ListenResponse) -> Self {
+        Self::Wire(response)
+    }
+}
+
+impl PendingListenResponse {
+    #[cfg(test)]
+    fn as_wire(&self) -> Option<&pb::ListenResponse> {
+        match self {
+            Self::Wire(response) => Some(response),
+            Self::Document { .. } => None,
+        }
+    }
+
+    /// The lifecycle observer only needs response kinds and target identities. Keep its complete batch framing without copying or encoding a document payload.
+    fn observer_metadata(&self) -> pb::ListenResponse {
+        match self {
+            Self::Wire(response) => response.clone(),
+            Self::Document {
+                target_id, removed, ..
+            } => pb::ListenResponse {
+                response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                    pb::DocumentChange {
+                        document: None,
+                        target_ids: if *removed { vec![] } else { vec![*target_id] },
+                        removed_target_ids: if *removed { vec![*target_id] } else { vec![] },
+                    },
+                )),
+            },
+        }
+    }
+
+    fn encode(self) -> pb::ListenResponse {
+        match self {
+            Self::Wire(response) => response,
+            Self::Document {
+                document,
+                target_id,
+                removed,
+            } => pb::ListenResponse {
+                response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                    pb::DocumentChange {
+                        document: Some(encode_listen_document(&document)),
+                        target_ids: if removed { vec![] } else { vec![target_id] },
+                        removed_target_ids: if removed { vec![target_id] } else { vec![] },
+                    },
+                )),
+            },
+        }
+    }
+}
+
 // The flags are independent facts of one target (once, server-assigned id, current).
 #[allow(clippy::struct_excessive_bools)]
 struct TargetState {
@@ -417,12 +482,20 @@ struct TargetState {
     /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
     /// Responses produced by the last refresh, drained by the caller.
-    pending: Vec<pb::ListenResponse>,
+    pending: Vec<PendingListenResponse>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FULL_TARGET_REFRESHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ENCODED_LISTEN_DOCUMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LISTEN_DOCUMENT_HANDLES: std::cell::RefCell<Vec<std::sync::Weak<Document>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[derive(Debug, Clone)]
 enum RefreshInput {
     Full,
+    AddedTarget,
     Delta {
         through: CommitVersion,
         paths: BTreeSet<DocumentPath>,
@@ -441,8 +514,34 @@ pub const MAX_LISTEN_TARGETS: usize = 1000;
 
 /// Optional observer used by transports that need lifecycle diagnostics at the exact point
 /// where one request has been applied and its response batch has been constructed.
+/// Document payloads are omitted: observers consume lifecycle kinds and target identities.
 pub(crate) trait ListenObserver: Send + Sync {
     fn exchange(&self, request: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]);
+}
+
+enum ListenEvents {
+    Global(tokio::sync::broadcast::Receiver<CommitNotification>),
+    Database(ListenSubscription),
+}
+
+impl ListenEvents {
+    async fn recv(
+        &mut self,
+    ) -> Result<CommitNotification, tokio::sync::broadcast::error::RecvError> {
+        match self {
+            Self::Global(receiver) => receiver.recv().await,
+            Self::Database(receiver) => receiver.recv().await,
+        }
+    }
+
+    fn try_recv(
+        &mut self,
+    ) -> Result<CommitNotification, tokio::sync::broadcast::error::TryRecvError> {
+        match self {
+            Self::Global(receiver) => receiver.try_recv(),
+            Self::Database(receiver) => receiver.try_recv(),
+        }
+    }
 }
 
 /// Runs the `Listen` stream.
@@ -486,7 +585,7 @@ pub(crate) async fn listen_stream_observed(
     let mut targets: BTreeMap<i32, TargetState> = BTreeMap::new();
     let mut database_hash_cache = None;
     let mut last_snapshot_version = None;
-    let mut events = ctx.local.subscribe();
+    let mut events = ListenEvents::Global(ctx.local.subscribe());
     let stream_deadline = ctx
         .rules
         .as_ref()
@@ -498,7 +597,7 @@ pub(crate) async fn listen_stream_observed(
         .filter(|_| transport == ListenTransport::Grpc)
         .and_then(|rules| rules.listen_expiry(&ctx.principal));
     loop {
-        let mut out: Vec<pb::ListenResponse> = Vec::new();
+        let mut out: Vec<PendingListenResponse> = Vec::new();
         let mut request = None;
         let until_deadline = until_stream_deadline(&ctx, stream_deadline);
         if until_deadline == Some(Duration::ZERO) {
@@ -530,6 +629,12 @@ pub(crate) async fn listen_stream_observed(
                 Some(Err(e)) => Err(e),
                 Some(Ok(_)) if deadline_reached(&ctx, stream_deadline) => Err(lifetime_reached()),
                 Some(Ok(req)) => {
+                    // Subscribe before the request can select its initial snapshot. Parsing here has no refusal side effects; the handler preserves error order.
+                    if parent.is_none() {
+                        if let Ok(database) = database_parent(&req.database) {
+                            events = ListenEvents::Database(ctx.local.subscribe_listen(&database));
+                        }
+                    }
                     let result = handle_listen_request(
                         &ctx,
                         &mut parent,
@@ -606,12 +711,18 @@ pub(crate) async fn listen_stream_observed(
             }},
         };
         if let Some(observer) = observer.as_ref() {
-            observer.exchange(request.as_ref(), &out);
+            let metadata = out
+                .iter()
+                .map(PendingListenResponse::observer_metadata)
+                .collect::<Vec<_>>();
+            observer.exchange(request.as_ref(), &metadata);
         }
-        for r in out {
-            if tx.send(Ok(r)).await.is_err() {
+        for response in out {
+            let Ok(permit) = tx.reserve().await else {
                 return;
-            }
+            };
+            let response = response.encode();
+            permit.send(Ok(response));
         }
         match outcome {
             Ok(true) => {}
@@ -696,7 +807,7 @@ fn merge_refresh_event(
         None => {
             *input = refresh_input_for_event(parent, Some(last), event);
         }
-        Some(RefreshInput::Full) => {}
+        Some(RefreshInput::Full | RefreshInput::AddedTarget) => {}
     }
 }
 
@@ -707,7 +818,7 @@ fn handle_listen_request(
     req: &pb::ListenRequest,
     database_hash_cache: &mut Option<DatabaseHashCache>,
     last_snapshot_version: &mut Option<CommitVersion>,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) -> Result<(), Status> {
     if parent.is_none() {
         if req.database.is_empty() {
@@ -804,7 +915,7 @@ fn handle_listen_request(
                 ctx,
                 Some(parent),
                 targets,
-                RefreshInput::Full,
+                RefreshInput::AddedTarget,
                 database_hash_cache,
                 last_snapshot_version,
                 out,
@@ -880,7 +991,7 @@ fn resume_of(target: &pb::Target, binding: &TokenBinding) -> Option<Resume> {
 /// The answer to a target that cannot be decoded. A refused index is acknowledged first and
 /// removed after, as production does (`native/target-protocol/missing-index`: ADD[1], then
 /// REMOVE[1] with code 9); any other refusal is a removal alone.
-fn decode_refusal(id: i32, error: &Status) -> Vec<pb::ListenResponse> {
+fn decode_refusal(id: i32, error: &Status) -> Vec<PendingListenResponse> {
     let mut out = Vec::new();
     if error.code() == tonic::Code::FailedPrecondition {
         out.push(target_change(
@@ -905,7 +1016,7 @@ fn malformed_token_refusal(
     target: &pb::Target,
     kind: &TargetKind,
     id: i32,
-) -> Option<pb::ListenResponse> {
+) -> Option<PendingListenResponse> {
     let binding = TokenBinding {
         epoch: ctx.local.epoch(),
         strict: ctx.gateway.production_refusals(),
@@ -1024,7 +1135,7 @@ fn refresh_all(
     mut input: RefreshInput,
     database_hash_cache: &mut Option<DatabaseHashCache>,
     last_snapshot_version: &mut Option<CommitVersion>,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) -> Result<(), Status> {
     let Some(parent) = parent else { return Ok(()) };
     // Authentication / reset failures end the stream (every target is removed with the
@@ -1091,10 +1202,16 @@ fn refresh_all(
                     resume_token(version, &binding)
                 };
                 let delta_paths = complete_delta_paths(&input, version);
+                // Authorization is still evaluated below. Only target addition at exactly the already-delivered snapshot may reuse an existing current target.
+                let reuse_current = matches!(input, RefreshInput::AddedTarget)
+                    && *last_snapshot_version == Some(version);
                 let mut removed = Vec::new();
                 for (id, state) in targets.iter_mut() {
                     let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
                         if state.current && state.resume.is_none() {
+                            if reuse_current {
+                                return Ok(());
+                            }
                             if let Some(paths) = delta_paths {
                                 if refresh_target_delta(db, *id, state, read_time, paths)?.is_some()
                                 {
@@ -1234,6 +1351,8 @@ fn refresh_target_full(
     snapshot_token: &[u8],
     history: &std::sync::Mutex<ListenResumeTokens>,
 ) -> Result<(), Status> {
+    #[cfg(test)]
+    FULL_TARGET_REFRESHES.with(|count| count.set(count.get() + 1));
     let original_boundary = match state.resume.as_ref() {
         Some(Resume::Boundary(point)) => Some(*point),
         _ => None,
@@ -1266,14 +1385,16 @@ fn refresh_target_full(
     } else {
         ResumeAnswer::Exact
     };
-    let current: Vec<Document> = match &state.kind {
+    let current: Vec<Arc<Document>> = match &state.kind {
         TargetKind::Documents(paths) => paths
             .iter()
-            .filter_map(|path| db.get(path).cloned())
+            .filter_map(|path| db.get_shared(path))
             .collect(),
-        TargetKind::Query(query) => db
-            .run_query(query, None)
-            .map_err(|error| crate::encode::status_from_error(&error))?,
+        TargetKind::Query(query) => {
+            db.run_query_shared_with_stats(query, None)
+                .map_err(|error| crate::encode::status_from_error(&error))?
+                .0
+        }
     };
     let mut next_known: BTreeMap<DocumentPath, CommitVersion> = BTreeMap::new();
     let mut changed = 0_usize;
@@ -1281,7 +1402,7 @@ fn refresh_target_full(
         next_known.insert(doc.path.clone(), doc.version);
         if state.known.get(&doc.path) != Some(&doc.version) {
             changed += 1;
-            out_change(doc, id, &mut state.pending);
+            out_change(Arc::clone(doc), id, &mut state.pending);
         }
     }
     let departed: Vec<&DocumentPath> = state
@@ -1383,7 +1504,7 @@ fn resume_answer_of(ctx: &StreamContext, target: &pb::Target, kind: &TargetKind)
 /// The recorded count-only existence filter: the target, the number of documents it matches and
 /// an empty bloom filter (hash count 0, no bitmap, no padding), as production sent it in the rows
 /// above.
-fn count_only_filter(id: i32, count: usize) -> pb::ListenResponse {
+fn count_only_filter(id: i32, count: usize) -> PendingListenResponse {
     existence_filter(
         id,
         count,
@@ -1401,7 +1522,7 @@ fn existence_filter(
     id: i32,
     count: usize,
     unchanged: Option<pb::BloomFilter>,
-) -> pb::ListenResponse {
+) -> PendingListenResponse {
     pb::ListenResponse {
         response_type: Some(pb::listen_response::ResponseType::Filter(
             pb::ExistenceFilter {
@@ -1411,6 +1532,7 @@ fn existence_filter(
             },
         )),
     }
+    .into()
 }
 
 /// Applies one complete changed-path set to a target. Returns `false` when the query shape
@@ -1427,10 +1549,10 @@ fn refresh_target_delta(
         TargetKind::Documents(paths) => {
             for path in paths.iter().filter(|path| changed_paths.contains(*path)) {
                 examined += 1;
-                match db.get(path) {
+                match db.get_shared(path) {
                     Some(document) => {
                         if state.known.get(path) != Some(&document.version) {
-                            out_change(document, id, &mut state.pending);
+                            out_change(Arc::clone(&document), id, &mut state.pending);
                             state.known.insert(path.clone(), document.version);
                         }
                     }
@@ -1458,10 +1580,10 @@ fn refresh_target_delta(
                 .iter()
                 .map(|document| document.path.clone())
                 .collect::<BTreeSet<_>>();
-            for document in &matched {
+            for document in matched {
                 if state.known.get(&document.path) != Some(&document.version) {
-                    out_change(document, id, &mut state.pending);
                     state.known.insert(document.path.clone(), document.version);
+                    out_change(Arc::new(document), id, &mut state.pending);
                 }
             }
             for path in changed_paths {
@@ -1480,7 +1602,7 @@ fn complete_delta_paths(
 ) -> Option<&BTreeSet<DocumentPath>> {
     match input {
         RefreshInput::Delta { through, paths } if *through == snapshot_version => Some(paths),
-        RefreshInput::Full | RefreshInput::Delta { .. } => None,
+        RefreshInput::Full | RefreshInput::AddedTarget | RefreshInput::Delta { .. } => None,
     }
 }
 
@@ -1493,24 +1615,28 @@ fn out_removal(
     path: &DocumentPath,
     id: i32,
     read_time: prost_types::Timestamp,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) {
-    let response_type = if let Some(document) = db.get(path) {
-        pb::listen_response::ResponseType::DocumentChange(pb::DocumentChange {
-            document: Some(encode_document(document)),
-            target_ids: vec![],
-            removed_target_ids: vec![id],
-        })
+    if let Some(document) = db.get_shared(path) {
+        out.push(PendingListenResponse::Document {
+            document,
+            target_id: id,
+            removed: true,
+        });
     } else {
-        pb::listen_response::ResponseType::DocumentDelete(pb::DocumentDelete {
-            document: path.resource_name(),
-            removed_target_ids: vec![id],
-            read_time: Some(read_time),
-        })
-    };
-    out.push(pb::ListenResponse {
-        response_type: Some(response_type),
-    });
+        out.push(
+            pb::ListenResponse {
+                response_type: Some(pb::listen_response::ResponseType::DocumentDelete(
+                    pb::DocumentDelete {
+                        document: path.resource_name(),
+                        removed_target_ids: vec![id],
+                        read_time: Some(read_time),
+                    },
+                )),
+            }
+            .into(),
+        );
+    }
 }
 
 /// Resume: the target's state at the token becomes the known state, so the diff carries
@@ -1608,7 +1734,7 @@ fn synchronize_database_generation(
     local: &LocalBackend,
     cache: &mut Option<DatabaseHashCache>,
     targets: &mut BTreeMap<i32, TargetState>,
-    out: &mut Vec<pb::ListenResponse>,
+    out: &mut Vec<PendingListenResponse>,
 ) -> u64 {
     let (hash, generation_changed) = cached_database_hash(parent, local, cache);
     if generation_changed {
@@ -1617,7 +1743,10 @@ fn synchronize_database_generation(
     hash
 }
 
-fn invalidate_targets(targets: &mut BTreeMap<i32, TargetState>, out: &mut Vec<pb::ListenResponse>) {
+fn invalidate_targets(
+    targets: &mut BTreeMap<i32, TargetState>,
+    out: &mut Vec<PendingListenResponse>,
+) {
     for (id, state) in targets {
         state.known.clear();
         state.resume = None;
@@ -1694,27 +1823,36 @@ fn known_at(
     kind: &TargetKind,
     version: CommitVersion,
 ) -> Result<BTreeMap<DocumentPath, CommitVersion>, Status> {
-    let docs: Vec<Document> = match kind {
+    let docs: Vec<Arc<Document>> = match kind {
         TargetKind::Documents(paths) => paths
             .iter()
-            .filter_map(|p| db.get_at(p, version).cloned())
+            .filter_map(|p| db.get_at_shared(p, version))
             .collect(),
-        TargetKind::Query(query) => db
-            .run_query(query, Some(version))
-            .map_err(|e| crate::encode::status_from_error(&e))?,
+        TargetKind::Query(query) => {
+            db.run_query_shared_with_stats(query, Some(version))
+                .map_err(|e| crate::encode::status_from_error(&e))?
+                .0
+        }
     };
-    Ok(docs.into_iter().map(|d| (d.path, d.version)).collect())
+    Ok(docs
+        .into_iter()
+        .map(|d| (d.path.clone(), d.version))
+        .collect())
 }
 
-fn out_change(doc: &Document, id: i32, out: &mut Vec<pb::ListenResponse>) {
-    out.push(pb::ListenResponse {
-        response_type: Some(pb::listen_response::ResponseType::DocumentChange(
-            pb::DocumentChange {
-                document: Some(encode_document(doc)),
-                target_ids: vec![id],
-                removed_target_ids: vec![],
-            },
-        )),
+fn encode_listen_document(document: &Document) -> pb::Document {
+    #[cfg(test)]
+    ENCODED_LISTEN_DOCUMENTS.with(|count| count.set(count.get() + 1));
+    encode_document(document)
+}
+
+fn out_change(doc: Arc<Document>, id: i32, out: &mut Vec<PendingListenResponse>) {
+    #[cfg(test)]
+    LISTEN_DOCUMENT_HANDLES.with(|handles| handles.borrow_mut().push(Arc::downgrade(&doc)));
+    out.push(PendingListenResponse::Document {
+        document: doc,
+        target_id: id,
+        removed: false,
     });
 }
 
@@ -1723,7 +1861,7 @@ fn target_change(
     target_ids: Vec<i32>,
     resume_token: Option<Vec<u8>>,
     read_time: Option<prost_types::Timestamp>,
-) -> pb::ListenResponse {
+) -> PendingListenResponse {
     pb::ListenResponse {
         response_type: Some(pb::listen_response::ResponseType::TargetChange(
             pb::TargetChange {
@@ -1735,9 +1873,10 @@ fn target_change(
             },
         )),
     }
+    .into()
 }
 
-fn removed_with_cause(id: i32, e: &Status) -> pb::ListenResponse {
+fn removed_with_cause(id: i32, e: &Status) -> PendingListenResponse {
     pb::ListenResponse {
         response_type: Some(pb::listen_response::ResponseType::TargetChange(
             pb::TargetChange {
@@ -1753,6 +1892,7 @@ fn removed_with_cause(id: i32, e: &Status) -> pb::ListenResponse {
             },
         )),
     }
+    .into()
 }
 
 /// Commit result in wire form (shared by the write stream).
@@ -1927,6 +2067,7 @@ mod refresh_tests {
 
     struct GenerationFixture {
         context: StreamContext,
+        clock: Arc<std::sync::Mutex<VirtualClock>>,
         scope: Scope,
         parent: Option<Parent>,
         cache: Option<DatabaseHashCache>,
@@ -1958,7 +2099,7 @@ mod refresh_tests {
         let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
             LogicalInstant::UNIX_EPOCH,
         )));
-        let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), Arc::clone(&clock), 7));
         let scope = Scope::Project("demo-app".to_owned());
         local
             .restore_scope(&scope, &restored_snapshot("before"))
@@ -1985,6 +2126,7 @@ mod refresh_tests {
             },
         )]);
         GenerationFixture {
+            clock,
             context: StreamContext {
                 local: local.clone(),
                 gateway: Arc::new(gateway),
@@ -2018,7 +2160,12 @@ mod refresh_tests {
         }
     }
 
-    fn assert_reset_replay(out: &[pb::ListenResponse], value: &str) {
+    fn assert_reset_replay(out: &[PendingListenResponse], value: &str) {
+        let out = out
+            .iter()
+            .cloned()
+            .map(PendingListenResponse::encode)
+            .collect::<Vec<_>>();
         assert!(out.iter().any(|response| matches!(
             &response.response_type,
             Some(pb::listen_response::ResponseType::TargetChange(change))
@@ -2045,6 +2192,1234 @@ mod refresh_tests {
             replay,
             Some(&pb::value::ValueType::StringValue(value.to_owned()))
         );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 32, failure_persistence: None, ..Default::default() })]
+        #[test]
+        fn target_add_reuse_matches_full_refresh_model(operations in proptest::collection::vec(0_u8..6, 1..24)) {
+            let mut optimized = generation_fixture();
+            let mut reference = generation_fixture();
+            for (step, operation) in operations.into_iter().enumerate() {
+                for fixture in [&mut optimized, &mut reference] {
+                    match operation {
+                        0 => {
+                            fixture.context.local.commit_writes(fixture.parent.as_ref().unwrap(), &[set("restored/a")], &|_, _, _| Ok(())).unwrap();
+                        }
+                        1 => fixture.context.local.restore_scope(&fixture.scope, &restored_snapshot("replacement")).unwrap(),
+                        2 => { if let Some(target) = fixture.targets.get_mut(&1) { target.current = false; } },
+                        3 => { if let Some(target) = fixture.targets.get_mut(&1) { target.resume = Some(Resume::Invalid); } },
+                        4 => { fixture.targets.remove(&1); },
+                        _ => {},
+                    }
+                }
+                let mut actual = Vec::new();
+                let mut expected = Vec::new();
+                reference.last_snapshot_version = None;
+                for (fixture, out) in [(&mut optimized, &mut actual), (&mut reference, &mut expected)] {
+                    handle_listen_request(&fixture.context, &mut fixture.parent, &mut fixture.targets,
+                        &query_request(i32::try_from(step).unwrap() + 2, "restored"),
+                        &mut fixture.cache, &mut fixture.last_snapshot_version, out).unwrap();
+                    for response in out {
+                        if let PendingListenResponse::Wire(pb::ListenResponse { response_type: Some(pb::listen_response::ResponseType::TargetChange(change)) }) = response {
+                            change.resume_token.clear();
+                        }
+                    }
+                }
+                proptest::prop_assert_eq!(actual, expected);
+                let known = |fixture: &GenerationFixture| fixture.targets.iter().map(|(id, target)| (*id, target.known.clone())).collect::<BTreeMap<_, _>>();
+                proptest::prop_assert_eq!(known(&optimized), known(&reference));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "bounded initial snapshot encoding measurement"]
+    fn measure_listen_initial_snapshot_encoding() {
+        use prost::Message as _;
+        use std::hash::Hasher as _;
+        let eager = std::env::var_os("FIREEMU_LISTEN_MEASURE_EAGER").is_some();
+        let count = std::env::var("FIREEMU_LISTEN_MEASURE_DOCUMENTS")
+            .ok()
+            .map_or(3000, |value| value.parse::<usize>().unwrap());
+        let mut fixture = generation_fixture();
+        for start in (0..count).step_by(500) {
+            let writes = (start..(start + 500).min(count))
+                .map(|index| {
+                    let mut write = set(&format!("restored/d{index:05}"));
+                    let WriteOp::Set { fields, .. } = &mut write.op else {
+                        unreachable!()
+                    };
+                    fields.insert("payload".to_owned(), Value::String("x".repeat(20 * 1024)));
+                    write
+                })
+                .collect::<Vec<_>>();
+            fixture
+                .context
+                .local
+                .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        ENCODED_LISTEN_DOCUMENTS.with(|counter| counter.set(0));
+        let start = std::time::Instant::now();
+        let mut plans = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut plans,
+        )
+        .unwrap();
+        let selection_micros = start.elapsed().as_micros();
+        assert_eq!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get), 0);
+        let selected_handles = plans
+            .iter()
+            .filter(|plan| matches!(plan, PendingListenResponse::Document { .. }))
+            .count();
+        let mut digest = std::hash::DefaultHasher::new();
+        let mut total_wire_bytes = 0;
+        let mut peak_generated_wire_bytes = 0;
+        let mut first_document_micros = None;
+        let mut encoded_before_first_document = 0;
+        let mut consume = |mut response: pb::ListenResponse| {
+            if first_document_micros.is_none()
+                && matches!(
+                    response.response_type,
+                    Some(pb::listen_response::ResponseType::DocumentChange(_))
+                )
+            {
+                first_document_micros = Some(start.elapsed().as_micros());
+                encoded_before_first_document = ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get);
+            }
+            if let Some(pb::listen_response::ResponseType::TargetChange(change)) =
+                response.response_type.as_mut()
+            {
+                change.resume_token.clear();
+            }
+            let bytes = response.encode_to_vec();
+            digest.write(&bytes);
+            total_wire_bytes += bytes.len();
+            peak_generated_wire_bytes = peak_generated_wire_bytes.max(bytes.len());
+        };
+        if eager {
+            let responses = plans
+                .into_iter()
+                .map(PendingListenResponse::encode)
+                .collect::<Vec<_>>();
+            for response in responses {
+                consume(response);
+            }
+            peak_generated_wire_bytes = total_wire_bytes;
+        } else {
+            for plan in plans {
+                consume(plan.encode());
+            }
+        }
+        assert_eq!(
+            ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get),
+            count + 1
+        );
+        eprintln!(
+            "listen_encoding_measure {}",
+            serde_json::json!({
+                "eager_encoding_reference": eager, "documents": count + 1, "payload_bytes": count * 20 * 1024,
+                "selected_handles": selected_handles, "selection_micros": selection_micros,
+                "first_encoded_document_micros": first_document_micros, "encoded_before_first_document": encoded_before_first_document,
+                "peak_generated_wire_bytes": peak_generated_wire_bytes, "total_wire_bytes": total_wire_bytes,
+                "normalized_wire_digest": digest.finish(), "retained_memory_bound": "O(N) handles and retained immutable payloads"
+            })
+        );
+    }
+
+    #[test]
+    #[ignore = "bounded performance measurement"]
+    fn measure_same_version_target_add_work() {
+        for target_count in [1, 10, 100] {
+            for pair in 0..5 {
+                for reference in [true, false] {
+                    let mut fixture = generation_fixture();
+                    for batch in 0..2 {
+                        let writes = (batch * 500..(batch + 1) * 500)
+                            .map(|index| set(&format!("restored/d{index:04}")))
+                            .collect::<Vec<_>>();
+                        fixture
+                            .context
+                            .local
+                            .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| {
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                    fixture.targets.clear();
+                    fixture.last_snapshot_version = None;
+                    FULL_TARGET_REFRESHES.with(|counter| counter.set(0));
+                    let start = std::time::Instant::now();
+                    for id in 1..=target_count {
+                        if reference {
+                            fixture.last_snapshot_version = None;
+                        }
+                        handle_listen_request(
+                            &fixture.context,
+                            &mut fixture.parent,
+                            &mut fixture.targets,
+                            &query_request(id, "restored"),
+                            &mut fixture.cache,
+                            &mut fixture.last_snapshot_version,
+                            &mut Vec::new(),
+                        )
+                        .unwrap();
+                    }
+                    eprintln!("target_add_work documents=1001 targets={target_count} reference={reference} pair={pair} full_queries={} micros={}", FULL_TARGET_REFRESHES.with(std::cell::Cell::get), start.elapsed().as_micros());
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 32, failure_persistence: None, ..Default::default() })]
+        #[test]
+        fn scoped_notifications_match_global_routing_model(operations in proptest::collection::vec(0_u8..4, 1..32)) {
+            let fixture = generation_fixture();
+            let mut snapshot = restored_snapshot("before");
+            snapshot.databases.insert(("demo-app".to_owned(), "busy".to_owned()), FirestoreState::new());
+            fixture.context.local.restore_scope(&fixture.scope, &snapshot).unwrap();
+            let parent = fixture.parent.as_ref().unwrap();
+            let busy = database_parent("projects/demo-app/databases/busy").unwrap();
+            let mut global = fixture.context.local.subscribe();
+            let mut scoped = fixture.context.local.subscribe_listen(parent);
+            for operation in operations {
+                match operation {
+                    0 => { fixture.context.local.commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(())).unwrap(); },
+                    1 => {
+                        let mut write = set("restored/a");
+                        let WriteOp::Set { path, .. } = &mut write.op else { unreachable!() };
+                        *path = crate::encode::decode_document_name("projects/demo-app/databases/busy/documents/items/a").unwrap();
+                        fixture.context.local.commit_writes(&busy, &[write], &|_, _, _| Ok(())).unwrap();
+                    },
+                    2 => fixture.context.local.restore_scope(&fixture.scope, &snapshot).unwrap(),
+                    _ => {
+                        drop(scoped);
+                        proptest::prop_assert_eq!(fixture.context.local.listen_ring_count(), 0);
+                        scoped = fixture.context.local.subscribe_listen(parent);
+                    },
+                }
+                let mut expected = Vec::new();
+                while let Ok(event) = global.try_recv() { if is_relevant(Some(parent), &event) { expected.push(event); } }
+                let mut actual = Vec::new();
+                while let Ok(event) = scoped.try_recv() { actual.push(event); }
+                proptest::prop_assert_eq!(actual, expected);
+            }
+            drop(scoped);
+            proptest::prop_assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn active_listen_uses_its_database_ring_after_backpressure() {
+        let fixture = generation_fixture();
+        let mut snapshot = restored_snapshot("before");
+        snapshot.databases.insert(
+            ("demo-app".to_owned(), "busy".to_owned()),
+            FirestoreState::new(),
+        );
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &snapshot)
+            .unwrap();
+        let local = Arc::clone(&fixture.context.local);
+        let parent = fixture.parent.as_ref().unwrap().clone();
+        let busy = database_parent("projects/demo-app/databases/busy").unwrap();
+        let (requests, inbound) = mpsc::channel(2);
+        let (responses, mut outbound) = mpsc::channel(1);
+        FULL_TARGET_REFRESHES.with(|counter| counter.set(0));
+        let stream = tokio::spawn(listen_stream(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+        ));
+        requests
+            .send(Ok(query_request(1, "restored")))
+            .await
+            .unwrap();
+        // Receiving ADD proves the initial snapshot is selected. With capacity one, the remaining initial rows hold the stream while both databases commit.
+        outbound.recv().await.unwrap().unwrap();
+        let busy_path = crate::encode::decode_document_name(
+            "projects/demo-app/databases/busy/documents/items/a",
+        )
+        .unwrap();
+        let mut write = set("restored/a");
+        let WriteOp::Set { path, .. } = &mut write.op else {
+            unreachable!()
+        };
+        *path = busy_path;
+        for _ in 0..4 * crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            local
+                .commit_writes(&busy, &[write.clone()], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        local
+            .commit_writes(&parent, &[set("unrelated/a")], &|_, _, _| Ok(()))
+            .unwrap();
+        let mut boundaries = 0;
+        while boundaries < 2 {
+            let response = tokio::time::timeout(Duration::from_secs(5), outbound.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            if matches!(response.response_type, Some(pb::listen_response::ResponseType::TargetChange(change))
+                if change.target_ids.is_empty() && !change.resume_token.is_empty())
+            {
+                boundaries += 1;
+            }
+        }
+        assert_eq!(FULL_TARGET_REFRESHES.with(std::cell::Cell::get), 1);
+        drop(outbound);
+        drop(requests);
+        stream.await.unwrap();
+        assert_eq!(local.listen_ring_count(), 0);
+    }
+
+    #[test]
+    fn concurrent_last_listen_subscribers_reclaim_the_ring() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        for _ in 0..64 {
+            let first = fixture.context.local.subscribe_listen(parent);
+            let second = fixture.context.local.subscribe_listen(parent);
+            std::thread::scope(|scope| {
+                let gate = Arc::new(std::sync::Barrier::new(2));
+                let other_gate = Arc::clone(&gate);
+                scope.spawn(move || {
+                    gate.wait();
+                    drop(first);
+                });
+                scope.spawn(move || {
+                    other_gate.wait();
+                    drop(second);
+                });
+            });
+            assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        }
+    }
+
+    #[test]
+    fn listen_ring_preserves_own_lag_reset_order_and_subscriber_cleanup() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        let mut first = fixture.context.local.subscribe_listen(parent);
+        let second = fixture.context.local.subscribe_listen(parent);
+        assert_eq!(fixture.context.local.listen_ring_count(), 1);
+        for _ in 0..=crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            fixture
+                .context
+                .local
+                .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        assert!(matches!(
+            first.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+        ));
+        let mut previous = 0;
+        while let Ok(event) = first.try_recv() {
+            assert!(event.version >= previous);
+            previous = event.version;
+        }
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &restored_snapshot("new-incarnation"))
+            .unwrap();
+        assert!(first.try_recv().unwrap().reset);
+        fixture
+            .context
+            .local
+            .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+            .unwrap();
+        let recreated = first.try_recv().unwrap();
+        assert!(!recreated.reset);
+        assert_eq!(recreated.version, 2);
+        drop(first);
+        assert_eq!(fixture.context.local.listen_ring_count(), 1);
+        drop(second);
+        assert_eq!(fixture.context.local.listen_ring_count(), 0);
+        for index in 0..64 {
+            let parent =
+                database_parent(&format!("projects/demo-app/databases/idle{index}")).unwrap();
+            drop(fixture.context.local.subscribe_listen(&parent));
+        }
+        assert_eq!(fixture.context.local.listen_ring_count(), 0);
+    }
+
+    #[test]
+    fn quiet_listen_ring_ignores_other_database_bursts() {
+        let fixture = generation_fixture();
+        let quiet_parent = database_parent("projects/demo-app/databases/quiet").unwrap();
+        let mut events = fixture.context.local.subscribe_listen(&quiet_parent);
+        let parent = fixture.parent.as_ref().unwrap();
+        for _ in 0..4 * crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            fixture
+                .context
+                .local
+                .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        assert!(
+            matches!(
+                events.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "quiet database must retain no unrelated events: {quiet_parent:?}"
+        );
+    }
+
+    #[test]
+    fn global_commit_ring_reproduces_unrelated_database_lag() {
+        let fixture = generation_fixture();
+        let mut events = fixture.context.local.subscribe();
+        let parent = fixture.parent.as_ref().unwrap();
+        for _ in 0..=crate::local::COMMIT_NOTIFICATION_CAPACITY {
+            fixture
+                .context
+                .local
+                .commit_writes(parent, &[set("restored/a")], &|_, _, _| Ok(()))
+                .unwrap();
+        }
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+        ));
+        // A quiet database cannot classify the lost events: the stream must request Full.
+        let quiet_parent = database_parent("projects/demo-app/databases/quiet").unwrap();
+        let next = events.try_recv().unwrap();
+        assert!(refresh_input_for_event(
+            Some(&quiet_parent),
+            Some(CommitVersion::from_value(1)),
+            &next
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn deferred_snapshot_rows_and_boundaries_survive_writes_deletes_and_restore() {
+        let mut fixture = generation_fixture();
+        let existing = fixture.targets.get_mut(&1).unwrap();
+        existing.known.clear();
+        existing.current = false;
+        fixture.last_snapshot_version = None;
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(2, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let original_boundary = global_boundary(&out).1;
+        let original_token = global_boundary(&out).0.to_vec();
+        let parent = fixture.parent.as_ref().unwrap();
+        fixture
+            .context
+            .local
+            .commit_writes(
+                parent,
+                &[Write {
+                    op: WriteOp::Delete {
+                        path: path("restored/a"),
+                    },
+                    precondition: None,
+                    transforms: Vec::new(),
+                }],
+                &|_, _, _| Ok(()),
+            )
+            .unwrap();
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &restored_snapshot("replacement"))
+            .unwrap();
+        let encoded = out
+            .into_iter()
+            .map(PendingListenResponse::encode)
+            .collect::<Vec<_>>();
+        let document = encoded
+            .iter()
+            .find_map(|response| match response.response_type.as_ref() {
+                Some(pb::listen_response::ResponseType::DocumentChange(change)) => {
+                    change.document.as_ref()
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            document.fields["v"].value_type,
+            Some(pb::value::ValueType::StringValue("before".to_owned()))
+        );
+        assert_eq!(document.update_time, original_boundary);
+        let current = encoded.iter().position(|response| matches!(response.response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Current as i32)).unwrap();
+        assert!(current > 1);
+        for id in [1, 2] {
+            let row = encoded.iter().position(|response| matches!(response.response_type.as_ref(), Some(pb::listen_response::ResponseType::DocumentChange(change)) if change.target_ids == [id])).unwrap();
+            let boundary = encoded.iter().position(|response| matches!(response.response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Current as i32 && change.target_ids == [id] && change.resume_token == original_token && change.read_time == original_boundary)).unwrap();
+            assert!(row < boundary);
+        }
+        assert!(
+            matches!(encoded.last().unwrap().response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_ids.is_empty() && change.read_time == original_boundary)
+        );
+    }
+
+    #[tokio::test]
+    async fn deferred_stream_keeps_snapshot_rows_before_current_during_writes() {
+        let fixture = generation_fixture();
+        let local = Arc::clone(&fixture.context.local);
+        let parent = fixture.parent.as_ref().unwrap().clone();
+        local
+            .commit_writes(&parent, &[set("restored/b")], &|_, _, _| Ok(()))
+            .unwrap();
+        let expected = local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .map(|document| encode_document(&document))
+            .collect::<Vec<_>>();
+        let (requests, inbound) = mpsc::channel(1);
+        let (responses, mut outbound) = mpsc::channel(1);
+        let stream = tokio::spawn(listen_stream(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+        ));
+        requests
+            .send(Ok(query_request(1, "restored")))
+            .await
+            .unwrap();
+        let add = outbound.recv().await.unwrap().unwrap();
+        assert!(
+            matches!(add.response_type, Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Add as i32)
+        );
+        let mut remove = set("restored/a");
+        remove.op = WriteOp::Delete {
+            path: path("restored/a"),
+        };
+        local
+            .commit_writes(
+                &parent,
+                &[remove, set("restored/b"), set("restored/c")],
+                &|_, _, _| Ok(()),
+            )
+            .unwrap();
+        let mut actual = Vec::new();
+        let mut current_token = None;
+        loop {
+            let response = tokio::time::timeout(Duration::from_secs(5), outbound.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            match response.response_type.unwrap() {
+                pb::listen_response::ResponseType::DocumentChange(change) => {
+                    assert!(
+                        current_token.is_none(),
+                        "CURRENT follows every row of this target"
+                    );
+                    actual.push(change.document.unwrap());
+                }
+                pb::listen_response::ResponseType::TargetChange(change)
+                    if change.target_change_type
+                        == pb::target_change::TargetChangeType::Current as i32 =>
+                {
+                    current_token = Some(change.resume_token);
+                }
+                pb::listen_response::ResponseType::TargetChange(change)
+                    if change.target_ids.is_empty() =>
+                {
+                    assert_eq!(current_token, Some(change.resume_token));
+                    break;
+                }
+                _ => panic!("unexpected initial snapshot response"),
+            }
+        }
+        assert_eq!(actual, expected);
+        drop(outbound);
+        drop(requests);
+        stream.await.unwrap();
+    }
+
+    struct MetadataOnlyObserver;
+
+    impl ListenObserver for MetadataOnlyObserver {
+        fn exchange(&self, _: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]) {
+            let documents = responses
+                .iter()
+                .filter_map(|response| match response.response_type.as_ref() {
+                    Some(pb::listen_response::ResponseType::DocumentChange(change)) => Some(change),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(documents.len(), 64);
+            assert!(documents
+                .iter()
+                .all(|change| change.document.is_none() && change.target_ids == [1]));
+            assert!(
+                matches!(responses.first().unwrap().response_type.as_ref(), Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Add as i32)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_receiver_bounds_encoding_and_releases_snapshot_handles_on_drop() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        let writes = (0..63)
+            .map(|index| {
+                let mut write = set(&format!("restored/d{index:03}"));
+                let WriteOp::Set { fields, .. } = &mut write.op else {
+                    unreachable!()
+                };
+                fields.insert("payload".to_owned(), Value::String("x".repeat(20 * 1024)));
+                write
+            })
+            .collect::<Vec<_>>();
+        fixture
+            .context
+            .local
+            .commit_writes(parent, &writes, &|_, _, _| Ok(()))
+            .unwrap();
+        let baseline = fixture
+            .context
+            .local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .map(|document| {
+                let count = Arc::strong_count(&document);
+                (document, count)
+            })
+            .collect::<Vec<_>>();
+        let local = Arc::clone(&fixture.context.local);
+        let (requests, inbound) = mpsc::channel(1);
+        let (responses, mut outbound) = mpsc::channel(1);
+        ENCODED_LISTEN_DOCUMENTS.with(|count| count.set(0));
+        LISTEN_DOCUMENT_HANDLES.with(|handles| handles.borrow_mut().clear());
+        let stream = tokio::spawn(listen_stream_observed(
+            fixture.context,
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            responses,
+            Some(Arc::new(MetadataOnlyObserver)),
+            ListenTransport::WebChannel,
+        ));
+        requests
+            .send(Ok(query_request(1, "restored")))
+            .await
+            .unwrap();
+        let add = outbound.recv().await.unwrap().unwrap();
+        assert!(
+            matches!(add.response_type, Some(pb::listen_response::ResponseType::TargetChange(change)) if change.target_change_type == pb::target_change::TargetChangeType::Add as i32)
+        );
+        tokio::task::yield_now().await;
+        assert!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get) <= 1);
+        drop(outbound);
+        drop(requests);
+        stream.await.unwrap();
+        assert!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get) <= 1);
+        LISTEN_DOCUMENT_HANDLES.with(|handles| {
+            assert_eq!(handles.borrow().len(), 64);
+            for weak in handles.borrow().iter() {
+                if let Some(document) = weak.upgrade() {
+                    let (original, count) = baseline
+                        .iter()
+                        .find(|(original, _)| Arc::ptr_eq(original, &document))
+                        .expect("only store-owned rows remain alive");
+                    assert_eq!(Arc::strong_count(original), count + 1);
+                }
+            }
+        });
+        assert_eq!(local.listen_ring_count(), 0);
+    }
+
+    #[test]
+    fn same_version_target_add_reauthorizes_existing_targets_after_rules_reload() {
+        const ALLOW: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{path=**} { allow read: if true; } } }";
+        const DENY: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{path=**} { allow read: if false; } } }";
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        let rules = Arc::new(fireemu_core_rules::runtime::RulesetSlot::new(
+            fireemu_core_rules::runtime::LoadedRules::from_source(ALLOW).unwrap(),
+        ));
+        let auth = Arc::new(std::sync::Mutex::new(
+            fireemu_core_auth::store::AuthStore::new(
+                "demo-app",
+                fireemu_core_types::determinism::SplitMix64::new(3),
+                fireemu_core_auth::mfa::TotpPolicy::default(),
+            ),
+        ));
+        fixture.context.rules = Some(Arc::new(RulesEnforcer::new(
+            Arc::clone(&rules),
+            auth,
+            Arc::new(std::sync::Mutex::new(VirtualClock::new(
+                LogicalInstant::UNIX_EPOCH,
+            ))),
+        )));
+        fixture.context.principal = Principal::Anonymous;
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert!(fixture.targets[&1].current);
+        rules.replace_source(DENY).unwrap();
+        out.clear();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(2, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert!(fixture.targets.is_empty());
+        let denied = out
+            .iter()
+            .filter_map(PendingListenResponse::as_wire)
+            .filter_map(|response| match response.response_type.as_ref() {
+                Some(pb::listen_response::ResponseType::TargetChange(change))
+                    if change.cause.as_ref().is_some_and(|cause| cause.code == 7) =>
+                {
+                    Some(change.target_ids.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(denied, vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn listen_document_target_selection_shares_store_document_identity() {
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        let stored = fixture
+            .context
+            .local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut request = query_request(1, "restored");
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+            request.target_change.as_mut()
+        else {
+            unreachable!()
+        };
+        target.target_type = Some(pb::target::TargetType::Documents(
+            pb::target::DocumentsTarget {
+                documents: vec![path("restored/a").resource_name()],
+            },
+        ));
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &request,
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let rows = out
+            .iter()
+            .filter_map(|plan| match plan {
+                PendingListenResponse::Document { document, .. } => Some(document),
+                PendingListenResponse::Wire(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert!(stored.iter().any(|document| Arc::ptr_eq(document, rows[0])));
+    }
+
+    #[test]
+    fn listen_snapshot_selection_shares_store_document_identity() {
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        let stored = fixture
+            .context
+            .local
+            .live_document_handles(&fixture.scope)
+            .into_values()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        let rows = out
+            .iter()
+            .filter_map(|plan| match plan {
+                PendingListenResponse::Document { document, .. } => Some(document),
+                PendingListenResponse::Wire(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert!(stored.iter().any(|document| Arc::ptr_eq(document, rows[0])));
+    }
+
+    #[test]
+    fn snapshot_selection_defers_document_encoding_until_delivery() {
+        let mut fixture = generation_fixture();
+        fixture.targets.clear();
+        fixture.last_snapshot_version = None;
+        ENCODED_LISTEN_DOCUMENTS.with(|count| count.set(0));
+        let mut out = Vec::new();
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(1, "restored"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get), 0);
+        assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn target_add_combined_interleavings_keep_a_common_snapshot_boundary() {
+        const ALLOW: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{path=**} { allow read: if true; } } }";
+        const REVOKE_RESTORED: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /restored/{document} { allow read: if false; } match /second/{document} { allow read: if true; } } }";
+
+        fn assert_boundary(
+            fixture: &GenerationFixture,
+            out: &[PendingListenResponse],
+            expected: &[(i32, &str)],
+        ) {
+            assert_eq!(
+                fixture.targets.keys().copied().collect::<Vec<_>>(),
+                expected.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+            );
+            let boundary_time = global_boundary(out).1.expect("boundary read time");
+            fixture
+                .context
+                .local
+                .with_listen_snapshot(
+                    fixture.parent.as_ref().unwrap(),
+                    |db, version, read_at, _, _| {
+                        assert_eq!(fixture.last_snapshot_version, Some(version));
+                        assert_eq!(boundary_time, encode_instant(read_at));
+                        for (id, collection) in expected {
+                            let query =
+                                Query::new(fireemu_core_firestore::query::QueryScope::collection(
+                                    None,
+                                    CollectionId::try_new(*collection).unwrap(),
+                                ));
+                            let known = db
+                                .run_query_shared_with_stats(&query, None)
+                                .unwrap()
+                                .0
+                                .into_iter()
+                                .map(|document| (document.path.clone(), document.version))
+                                .collect::<BTreeMap<_, _>>();
+                            assert!(fixture.targets[id].current, "target {id} is not current");
+                            assert_eq!(fixture.targets[id].known, known, "target {id}");
+                        }
+                    },
+                )
+                .unwrap();
+            for response in out {
+                if let Some(pb::listen_response::ResponseType::TargetChange(change)) = response
+                    .as_wire()
+                    .and_then(|wire| wire.response_type.as_ref())
+                {
+                    if change.target_change_type
+                        == pb::target_change::TargetChangeType::Current as i32
+                    {
+                        assert_eq!(change.read_time, Some(boundary_time));
+                    }
+                }
+            }
+        }
+
+        fn add(
+            fixture: &mut GenerationFixture,
+            request: &pb::ListenRequest,
+            expected: &[(i32, &str)],
+        ) -> Vec<PendingListenResponse> {
+            let mut out = Vec::new();
+            handle_listen_request(
+                &fixture.context,
+                &mut fixture.parent,
+                &mut fixture.targets,
+                request,
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                &mut out,
+            )
+            .unwrap();
+            assert_boundary(fixture, &out, expected);
+            out
+        }
+
+        fn commit_and_add(
+            fixture: &mut GenerationFixture,
+            request: &pb::ListenRequest,
+            deliver_commit_first: bool,
+            before: &[(i32, &str)],
+            after: &[(i32, &str)],
+        ) -> Vec<PendingListenResponse> {
+            let mut events = fixture
+                .context
+                .local
+                .subscribe_listen(fixture.parent.as_ref().unwrap());
+            fixture
+                .context
+                .local
+                .commit_writes(
+                    fixture.parent.as_ref().unwrap(),
+                    &[set("restored/b")],
+                    &|_, _, _| Ok(()),
+                )
+                .unwrap();
+            if deliver_commit_first {
+                let event = events.try_recv().unwrap();
+                let input = refresh_input_for_event(
+                    fixture.parent.as_ref(),
+                    fixture.last_snapshot_version,
+                    &event,
+                )
+                .expect("the existing targets have not seen this commit");
+                let mut out = Vec::new();
+                refresh_all(
+                    &fixture.context,
+                    fixture.parent.as_ref(),
+                    &mut fixture.targets,
+                    input,
+                    &mut fixture.cache,
+                    &mut fixture.last_snapshot_version,
+                    &mut out,
+                )
+                .unwrap();
+                assert_boundary(fixture, &out, before);
+            }
+            let out = add(fixture, request, after);
+            if !deliver_commit_first {
+                let event = events.try_recv().unwrap();
+                assert!(
+                    refresh_input_for_event(
+                        fixture.parent.as_ref(),
+                        fixture.last_snapshot_version,
+                        &event,
+                    )
+                    .is_none(),
+                    "the add already delivered this commit's snapshot"
+                );
+            }
+            out
+        }
+
+        for deliver_commit_first in [false, true] {
+            let mut fixture = generation_fixture();
+            fixture.targets.clear();
+            fixture.last_snapshot_version = None;
+            let rules = Arc::new(fireemu_core_rules::runtime::RulesetSlot::new(
+                fireemu_core_rules::runtime::LoadedRules::from_source(ALLOW).unwrap(),
+            ));
+            let auth = Arc::new(std::sync::Mutex::new(
+                fireemu_core_auth::store::AuthStore::new(
+                    "demo-app",
+                    fireemu_core_types::determinism::SplitMix64::new(3),
+                    fireemu_core_auth::mfa::TotpPolicy::default(),
+                ),
+            ));
+            fixture.context.rules = Some(Arc::new(RulesEnforcer::new(
+                Arc::clone(&rules),
+                auth,
+                Arc::clone(&fixture.clock),
+            )));
+            fixture.context.principal = Principal::Anonymous;
+            add(
+                &mut fixture,
+                &query_request(1, "restored"),
+                &[(1, "restored")],
+            );
+            add(
+                &mut fixture,
+                &query_request(2, "second"),
+                &[(1, "restored"), (2, "second")],
+            );
+            commit_and_add(
+                &mut fixture,
+                &query_request(3, "restored"),
+                deliver_commit_first,
+                &[(1, "restored"), (2, "second")],
+                &[(1, "restored"), (2, "second"), (3, "restored")],
+            );
+            fixture
+                .context
+                .local
+                .restore_scope(&fixture.scope, &restored_snapshot("replacement"))
+                .unwrap();
+            let restored = add(
+                &mut fixture,
+                &query_request(4, "restored"),
+                &[
+                    (1, "restored"),
+                    (2, "second"),
+                    (3, "restored"),
+                    (4, "restored"),
+                ],
+            );
+            assert_reset_replay(&restored, "replacement");
+            let replacement = fixture
+                .context
+                .local
+                .with_listen_snapshot(fixture.parent.as_ref().unwrap(), |db, _, _, _, _| {
+                    encode_document(&db.get_shared(&path("restored/a")).unwrap())
+                })
+                .unwrap();
+            let restored_wire = restored
+                .iter()
+                .cloned()
+                .map(PendingListenResponse::encode)
+                .collect::<Vec<_>>();
+            for target_id in [1, 3, 4] {
+                let replayed = restored_wire
+                    .iter()
+                    .filter_map(|response| match response.response_type.as_ref() {
+                        Some(pb::listen_response::ResponseType::DocumentChange(change))
+                            if change.target_ids == [target_id] =>
+                        {
+                            Some(change.document.as_ref())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    replayed,
+                    vec![Some(&replacement)],
+                    "target {target_id} replay"
+                );
+            }
+            let reset_ids = restored
+                .iter()
+                .filter_map(PendingListenResponse::as_wire)
+                .filter_map(|response| match response.response_type.as_ref() {
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.target_change_type
+                            == pb::target_change::TargetChangeType::Reset as i32 =>
+                    {
+                        Some(change.target_ids.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(reset_ids, vec![vec![1], vec![2], vec![3]]);
+            rules.replace_source(REVOKE_RESTORED).unwrap();
+            let denied = add(
+                &mut fixture,
+                &query_request(5, "second"),
+                &[(2, "second"), (5, "second")],
+            );
+            let denied_ids = denied
+                .iter()
+                .filter_map(PendingListenResponse::as_wire)
+                .filter_map(|response| match response.response_type.as_ref() {
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.cause.as_ref().is_some_and(|cause| cause.code == 7) =>
+                    {
+                        Some(change.target_ids.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(denied_ids, vec![vec![1], vec![3], vec![4]]);
+            rules.replace_source(ALLOW).unwrap();
+            add(
+                &mut fixture,
+                &query_request(1, "restored"),
+                &[(1, "restored"), (2, "second"), (5, "second")],
+            );
+            let remove = pb::ListenRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                target_change: Some(pb::listen_request::TargetChange::RemoveTarget(1)),
+                ..Default::default()
+            };
+            let mut removed = Vec::new();
+            handle_listen_request(
+                &fixture.context,
+                &mut fixture.parent,
+                &mut fixture.targets,
+                &remove,
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                &mut removed,
+            )
+            .unwrap();
+            assert!(!fixture.targets.contains_key(&1));
+            let boundary = add(
+                &mut fixture,
+                &query_request(1, "second"),
+                &[(1, "second"), (2, "second"), (5, "second")],
+            );
+            let (old_token, old_time) = global_boundary(&boundary);
+            let old_token = old_token.to_vec();
+            let old_time = old_time.expect("historical boundary read time");
+            fixture
+                .clock
+                .lock()
+                .unwrap()
+                .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+                .unwrap();
+            let mut resume = query_request(6, "restored");
+            let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+                resume.target_change.as_mut()
+            else {
+                unreachable!();
+            };
+            target.resume_type = Some(pb::target::ResumeType::ResumeToken(old_token.clone()));
+            let resumed = commit_and_add(
+                &mut fixture,
+                &resume,
+                deliver_commit_first,
+                &[(1, "second"), (2, "second"), (5, "second")],
+                &[(1, "second"), (2, "second"), (5, "second"), (6, "restored")],
+            );
+            let (current_token, current_time) = global_boundary(&resumed);
+            let current_token = current_token.to_vec();
+            let current_time = current_time.expect("current boundary read time");
+            assert_ne!(old_time, current_time);
+            let document = fixture
+                .context
+                .local
+                .with_listen_snapshot(fixture.parent.as_ref().unwrap(), |db, _, _, _, _| {
+                    encode_document(&db.get_shared(&path("restored/b")).unwrap())
+                })
+                .unwrap();
+            let expected = vec![
+                target_change(
+                    pb::target_change::TargetChangeType::Add,
+                    vec![6],
+                    None,
+                    None,
+                )
+                .encode(),
+                target_change(
+                    pb::target_change::TargetChangeType::NoChange,
+                    vec![],
+                    Some(old_token),
+                    Some(old_time),
+                )
+                .encode(),
+                pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                        pb::DocumentChange {
+                            document: Some(document),
+                            target_ids: vec![6],
+                            removed_target_ids: vec![],
+                        },
+                    )),
+                },
+                pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::Filter(
+                        pb::ExistenceFilter {
+                            target_id: 6,
+                            count: 2,
+                            unchanged_names: Some(pb::BloomFilter {
+                                bits: Some(pb::BitSequence {
+                                    bitmap: vec![],
+                                    padding: 0,
+                                }),
+                                hash_count: 0,
+                            }),
+                        },
+                    )),
+                },
+                target_change(
+                    pb::target_change::TargetChangeType::Current,
+                    vec![6],
+                    Some(current_token.clone()),
+                    Some(current_time),
+                )
+                .encode(),
+                target_change(
+                    pb::target_change::TargetChangeType::NoChange,
+                    vec![],
+                    Some(current_token),
+                    Some(current_time),
+                )
+                .encode(),
+            ];
+            let actual = resumed
+                .into_iter()
+                .map(PendingListenResponse::encode)
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn same_version_target_add_queries_each_target_only_once() {
+        for count in [1, 10, 100] {
+            let mut fixture = generation_fixture();
+            fixture.targets.clear();
+            fixture.last_snapshot_version = None;
+            FULL_TARGET_REFRESHES.with(|counter| counter.set(0));
+            for id in 1..=count {
+                let mut out = Vec::new();
+                handle_listen_request(
+                    &fixture.context,
+                    &mut fixture.parent,
+                    &mut fixture.targets,
+                    &query_request(id, "restored"),
+                    &mut fixture.cache,
+                    &mut fixture.last_snapshot_version,
+                    &mut out,
+                )
+                .unwrap();
+                assert_eq!(fixture.targets.len(), usize::try_from(id).unwrap());
+                assert!(out.iter().any(|response| matches!(
+                    response.as_wire().and_then(|wire| wire.response_type.as_ref()),
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                    if change.target_change_type == pb::target_change::TargetChangeType::Current as i32
+                        && change.target_ids == [id]
+                )));
+                assert!(global_boundary(&out).1.is_some());
+            }
+            assert_eq!(
+                FULL_TARGET_REFRESHES.with(std::cell::Cell::get),
+                usize::try_from(count).unwrap()
+            );
+        }
     }
 
     #[test]
@@ -2241,16 +3616,21 @@ mod refresh_tests {
         }
         assert_eq!(examined, 50);
     }
-    fn global_boundary(out: &[pb::ListenResponse]) -> (&[u8], Option<prost_types::Timestamp>) {
+    fn global_boundary(out: &[PendingListenResponse]) -> (&[u8], Option<prost_types::Timestamp>) {
         out.iter()
             .rev()
-            .find_map(|response| match response.response_type.as_ref() {
-                Some(pb::listen_response::ResponseType::TargetChange(change))
-                    if change.target_ids.is_empty() && !change.resume_token.is_empty() =>
+            .find_map(|response| {
+                match response
+                    .as_wire()
+                    .and_then(|wire| wire.response_type.as_ref())
                 {
-                    Some((change.resume_token.as_slice(), change.read_time))
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.target_ids.is_empty() && !change.resume_token.is_empty() =>
+                    {
+                        Some((change.resume_token.as_slice(), change.read_time))
+                    }
+                    _ => None,
                 }
-                _ => None,
             })
             .expect("global boundary")
     }
@@ -2300,13 +3680,18 @@ mod refresh_tests {
         .unwrap();
         let echoed = out
             .iter()
-            .find_map(|response| match response.response_type.as_ref() {
-                Some(pb::listen_response::ResponseType::TargetChange(change))
-                    if change.resume_token == token =>
+            .find_map(|response| {
+                match response
+                    .as_wire()
+                    .and_then(|wire| wire.response_type.as_ref())
                 {
-                    Some(change)
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.resume_token == token =>
+                    {
+                        Some(change)
+                    }
+                    _ => None,
                 }
-                _ => None,
             })
             .expect("captured issuance survives its eviction during this refresh");
         assert_eq!(echoed.read_time, Some(old_time));
@@ -2327,13 +3712,13 @@ mod refresh_tests {
             &mut out,
         )
         .unwrap();
-        assert!(out
-            .iter()
-            .any(|response| matches!(response.response_type.as_ref(),
+        assert!(out.iter().any(
+            |response| matches!(response.as_wire().and_then(|wire| wire.response_type.as_ref()),
             Some(pb::listen_response::ResponseType::TargetChange(change))
                 if change.target_change_type == pb::target_change::TargetChangeType::Reset as i32
-                    && change.target_ids == [3])));
-        assert!(!out.iter().any(|response| matches!(response.response_type.as_ref(),
+                    && change.target_ids == [3])
+        ));
+        assert!(!out.iter().any(|response| matches!(response.as_wire().and_then(|wire| wire.response_type.as_ref()),
             Some(pb::listen_response::ResponseType::TargetChange(change)) if change.resume_token == token)));
     }
 
@@ -2374,12 +3759,12 @@ mod refresh_tests {
             &mut new,
         )
         .unwrap();
-        assert!(new
-            .iter()
-            .any(|response| matches!(response.response_type.as_ref(),
+        assert!(new.iter().any(
+            |response| matches!(response.as_wire().and_then(|wire| wire.response_type.as_ref()),
             Some(pb::listen_response::ResponseType::TargetChange(change))
                 if change.target_change_type == pb::target_change::TargetChangeType::Reset as i32
-                    && change.target_ids == [2])));
+                    && change.target_ids == [2])
+        ));
     }
 }
 

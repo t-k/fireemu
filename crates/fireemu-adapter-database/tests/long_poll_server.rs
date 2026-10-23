@@ -722,8 +722,16 @@ async fn reaped_and_overflowing_long_polling_connections_write_what_they_registe
     let (mut lp, _) = Lp::start(&address, "lpr").await;
     lp.poll(&[&request(1, "o", r#"{"p":"/reaped","d":1}"#)])
         .await;
-    tokio::time::sleep(Duration::from_millis(900)).await;
-    assert_eq!(get(&address, "GET", "/reaped.json?ns=lpr", "").await.2, "1");
+    // The reaper runs every hold time; wait for its write rather than for a fixed time.
+    let mut reaped = String::new();
+    for _ in 0..100 {
+        reaped = get(&address, "GET", "/reaped.json?ns=lpr", "").await.2;
+        if reaped == "1" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(reaped, "1");
     // A full outbox.
     let (address, _) = start(ServerConfig {
         stream_queue_bytes: 10_000,

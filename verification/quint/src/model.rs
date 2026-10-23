@@ -584,6 +584,7 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-core-rules/src/eval.rs",
             "crates/fireemu-core-rules/src/parse.rs",
             "crates/fireemu-core-rules/src/regex.rs",
+            "crates/fireemu-core-rules/src/scope.rs",
             "crates/fireemu-core-rules/src/value.rs",
         ],
         bounds: &[BoundDescriptor {
@@ -625,6 +626,7 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-core-rules/src/ast.rs",
             "crates/fireemu-core-rules/src/eval.rs",
             "crates/fireemu-core-rules/src/parse.rs",
+            "crates/fireemu-core-rules/src/scope.rs",
         ],
         bounds: &[
             BoundDescriptor {

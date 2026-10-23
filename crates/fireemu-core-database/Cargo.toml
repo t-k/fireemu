@@ -9,6 +9,7 @@ publish.workspace = true
 description = "std-only Realtime Database core: JSON tree, paths, priorities, server values, queries"
 
 [dependencies]
+fireemu-core-rules = { path = "../fireemu-core-rules" }
 
 [dev-dependencies]
 proptest.workspace = true

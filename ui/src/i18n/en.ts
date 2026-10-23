@@ -560,6 +560,144 @@ export const en = {
   "functions.noMatchingLogs": "No log lines match the filter",
   "functions.noMatchingInvocations": "No invocations match the filter",
   "functions.logsFilteredCount": "{shown} of {total} lines",
+  "rules.currentSource": "Currently loaded source",
+  "rules.draftSource": "Unsaved draft source",
+  "rules.daemonShared":
+    "Rules editors change the daemon-shared ruleset, not a session-specific copy.",
+  "rules.refreshing": "Refreshing; showing the last successful snapshot.",
+  "rules.recordedSource": "Recorded source (read-only)",
+  "rules.sourceUnavailable":
+    "Recorded source identity is unavailable; source navigation is disabled.",
+  "rules.rangeUnavailable":
+    "The recorded byte range is invalid for this source; no location is highlighted.",
+  "rules.navigationHelp":
+    "Select an expression to highlight its recorded source. Use Tab and Enter, or Up/Down and Home/End in the expression list.",
+  "rules.evaluationError": "Evaluation error",
+  "rules.unreached": "not reached",
+  "rules.noReason": "No additional reason recorded",
+  "rules.traceIdentity": "{service} · recorded generation {generation} · request {sequence}",
+  "rules.coverageIdentity":
+    "Firestore coverage · embedded source {file}; independent of current editors and drafts",
+  "rules.coverageUnconfigured": "No rules source is configured in this coverage report.",
+
+  // Shared messages for the independently owned query and timeline interfaces.
+  "firestore.queryTitle": "Query collection",
+  "firestore.queryHint":
+    "Compose a server query for this collection. Conditions are sent to Firestore; results are not filtered locally.",
+  "firestore.queryField": "Field path",
+  "firestore.queryOperator": "Operator",
+  "firestore.queryValueType": "Value type",
+  "firestore.queryValue": "Typed value",
+  "firestore.queryAddFilter": "Add condition",
+  "firestore.queryRemoveFilter": "Remove condition {row}",
+  "firestore.queryFilterRow": "Condition {row}",
+  "firestore.queryGroup": "Combine conditions",
+  "firestore.queryAnd": "All conditions (AND)",
+  "firestore.queryOr": "Any condition (OR)",
+  "firestore.queryOrder": "Order by",
+  "firestore.queryDirection": "Direction",
+  "firestore.queryAscending": "Ascending",
+  "firestore.queryDescending": "Descending",
+  "firestore.queryAddOrder": "Add order",
+  "firestore.queryRemoveOrder": "Remove order {row}",
+  "firestore.queryOrderRow": "Order {row}",
+  "firestore.queryLimit": "Result limit",
+  "firestore.queryRun": "Run query",
+  "firestore.queryRunning": "Running query…",
+  "firestore.queryPreview": "Generated REST query",
+  "firestore.queryExecuted": "Executed query and scope",
+  "firestore.queryResult": "Query results",
+  "firestore.queryEmpty": "The query returned no documents.",
+  "firestore.queryBounded":
+    "Results are limited to 1–1000 documents. This query interface has no continuation token or Load more action.",
+  "firestore.queryStale":
+    "Conditions changed since these results were requested. Run the query to apply them.",
+  "firestore.queryCount": "{count} documents; {metadata} metadata-only rows",
+  "firestore.queryExact": "Exact typed REST response",
+  "firestore.queryShare": "Copy query link",
+  "firestore.querySharedInvalid": "The shared query is invalid or too large.",
+  "firestore.queryCopied": "Query link copied.",
+  "firestore.queryCopyFailed": "Could not copy the query link.",
+  "firestore.queryIndexes": "Missing-index diagnostics",
+  "firestore.queryLoadIndexes": "Load index reports",
+  "firestore.queryIndexHint":
+    "Reports are available only in strict report mode. Emulator mode assumes indexes; strict refuse mode rejects unsupported queries. An empty report does not prove production index completeness.",
+  "firestore.queryIndexEmpty": "No recorded reports for this database.",
+  "firestore.queryIndexUnavailable": "Index reports are unavailable: {message}",
+  "firestore.queryIndexTruncated": "Reports were truncated; {count} reports were dropped.",
+  "firestore.queryScope":
+    "Project {project} · Database {database} · Collection {collection} · Session {session}",
+  "firestore.queryValueHint":
+    "Arrays and maps use typed Firestore REST JSON. References may be relative document paths. Field paths retain Firestore quoting and nesting.",
+  "firestore.queryInvalid": "Invalid query: {message}",
+  "firestore.queryNoResults": "Run a query to see its results.",
+  "firestore.queryOpenDocument": "Open document {path}",
+  "firestore.queryTypeInteger": "integer",
+  "firestore.queryTypeDouble": "double",
+  "functions.timeline": "Event timeline",
+  "functions.timelineOwner": "Functions owner: {session} / {project}",
+  "functions.timelineStale": "Refresh failed. Showing the last successful Functions snapshot.",
+  "functions.timelineEmpty": "No retained events.",
+  "functions.timelineUnavailable":
+    "Causal phases are unavailable for this invocation. It may precede the retained window or use another invocation path.",
+  "functions.timelineMissingSelection":
+    "The selected event is outside the current retained window.",
+  "functions.timelineGaps":
+    "Partial history: {retained}/{retention} events retained; {evicted} evicted; {resets} resets.",
+  "functions.timelineProjection": "Only a projected window of retained events is shown.",
+  "functions.timelinePhaseGaps": "{count} additional phases were not retained.",
+  "functions.timelinePending":
+    "Registered work may be waiting for a runner, concurrency, a delay, or another runtime condition. No specific waiting reason was recorded.",
+  "functions.timelineSelect": "Select event {event} / {function}",
+  "functions.timelineSource": "Source",
+  "functions.timelineEventFilter": "Filter by event ID",
+  "functions.timelineSourceFilter": "Filter by event source",
+  "functions.timelineStatusFilter": "Filter by last recorded phase",
+  "functions.timelineAllSources": "All sources",
+  "functions.timelineAllStatuses": "All phases",
+  "functions.timelinePhases": "Recorded phases (virtual clock)",
+  "functions.timelinePhase": "Phase",
+  "functions.timelineTime": "Virtual time",
+  "functions.timelineUnknownTime": "Time unavailable",
+  "functions.timelineAttemptFilter": "Filter by attempt",
+  "functions.timelineAllAttempts": "All attempts",
+  "functions.timelineRelatedLogs": "Related logs",
+  "functions.timelineLogsPartial":
+    "Logs are a bounded diagnostic window. Missing logs do not prove that no output was emitted.",
+  "functions.timelineNoRelatedLogs": "No retained logs with a trusted matching invocation ID.",
+  "functions.timelineLogGaps":
+    "Some earlier logs were evicted, truncated, cleared, or lost when a runner was replaced.",
+  "functions.timelineCodebase": "Codebase / runner / cursor",
+  "functions.timelineParent": "Source operation",
+  "functions.timelineEventType": "Event type",
+  "functions.timelineSynthetic": "Synthetic diagnostic; no event correlation.",
+  "functions.timelineClearSelection": "Clear selection",
+  "functions.timelineEpoch": "Recorded epoch: {epoch}",
+  "functions.timelineUnknownEpoch":
+    "Epoch unavailable; stream generation is not the epoch of retained outcomes.",
+  "functions.timelineNoMatch": "No events match these filters.",
+  "functions.timelineUngroupedLogs":
+    "{count} retained log lines have no matching event in this window.",
+  "functions.timelineNoOutcomes":
+    "No retained outcome records for this event and attempt in the current stream window.",
+  "rules.diagnosticsTitle": "Firestore diagnostic collection",
+  "rules.diagnosticsBoundary":
+    "Intervals collect results when completed evaluations merge. An evaluation started before clearing may finish in the new interval.",
+  "rules.diagnosticsEstimate":
+    "Estimated coverage memory: {bytes} bytes. Excludes source, AST, trace payloads, allocator and map control overhead, mutex/Arc overhead, and process RSS.",
+  "rules.diagnosticsCounts":
+    "Generation {generation}, interval {interval}: {expressions} expressions, {values} distinct values, {observations} observations; {traces}/{capacity} retained request traces.",
+  "rules.diagnosticsClear": "Clear collected diagnostics",
+  "rules.diagnosticsWarning":
+    "Clearing discards coverage and retained request traces. Rules source and unsaved drafts are preserved.",
+  "rules.diagnosticsUnknown":
+    "The clear result is unknown or refused. Refresh this inspection before another clear; clearing is never retried automatically.",
+  "rules.diagnosticsUnsupported":
+    "Diagnostic collection controls are available only for Firestore in the default session.",
+  "rules.diagnosticsUnconfigured":
+    "No Firestore rules are loaded; there are no loaded-rule diagnostics to clear.",
+  "rules.diagnosticsPreviousInterval":
+    "Previous interval snapshot retained until a successful refresh; these records precede the diagnostic clear.",
 } as const;
 
 export type MessageKey = keyof typeof en;

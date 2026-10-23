@@ -4,6 +4,10 @@ name: paired-firestore-benchmark
 on:
   workflow_dispatch:
     inputs:
+      baseline_commit:
+        type: string
+        default: ''
+        description: Optional full lowercase 40-hex ancestor commit in this repository; empty compares with official
       tier:
         type: choice
         options: [smoke, standard, extended]
@@ -11,13 +15,23 @@ on:
         description: Dataset and number of paired repetitions
       profile:
         type: choice
-        options: [firebase, strict]
-        default: firebase
+        options: [emulator, strict]
+        default: emulator
         description: Never combine different compatibility profiles in one series
       startup_only:
         type: boolean
         default: false
         description: 12 measured startup pairs; no data workload
+
+      mixed_services:
+        type: boolean
+        default: false
+        description: Bounded isolated and mixed Storage, Auth, Hub and Firestore workloads
+      fixture_shape:
+        type: choice
+        options: [default, tiny, wide-map]
+        default: default
+        description: Deterministic fixture shape; never combine shapes in a comparison
 
 permissions:
   contents: read
@@ -27,6 +41,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  BASELINE_COMMIT: ${{ inputs.baseline_commit || '' }}
   NODE_VERSION: '24.16.0'
   PNPM_VERSION: '10.32.1'
 
@@ -35,13 +50,35 @@ jobs:
     if: github.repository == 't-k/fireemu'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        role: ${{ fromJSON(inputs.baseline_commit != '' && '["candidate","baseline"]' || '["candidate"]') }}
     env:
+      RUSTC_WRAPPER: ''
+      RUSTUP_TOOLCHAIN: '1.94.0'
       CARGO_TARGET_DIR: target/benchmark
       RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/src --remap-path-prefix=/home/runner/.cargo=/cargo -D warnings
       SOURCE_DATE_EPOCH: '0'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate baseline source pin
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ -z "$BASELINE_COMMIT" ]; then exit 0; fi
+          if [[ ! "$BASELINE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "baseline_commit must be a full lowercase 40-hex commit" >&2
+            exit 1
+          fi
+          test "$(git cat-file -t "$BASELINE_COMMIT")" = commit
+          git merge-base --is-ancestor "$BASELINE_COMMIT" "$GITHUB_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: matrix.role == 'baseline'
+        with:
+          ref: ${{ inputs.baseline_commit }}
           persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -54,6 +91,8 @@ jobs:
           toolchain: '1.94.0' # Keep in sync with rust-toolchain.toml.
           targets: x86_64-unknown-linux-musl
       - name: Build release-equivalent UI assets and optimized daemon (not timed)
+        env:
+          BUILD_COMMIT: ${{ matrix.role == 'baseline' && inputs.baseline_commit || github.sha }}
         run: |
           pnpm -C ui install --frozen-lockfile
           pnpm -C ui build
@@ -62,12 +101,16 @@ jobs:
           cargo build --release --locked -p fireemu --target x86_64-unknown-linux-musl
           mkdir -p bench-bin
           cp target/benchmark/x86_64-unknown-linux-musl/release/fireemu bench-bin/fireemu
-          sha256sum bench-bin/fireemu > bench-bin/SHA256SUMS
-          rustc --version --verbose > bench-bin/toolchain.txt
           git rev-parse HEAD > bench-bin/commit.txt
+          test "$(cat bench-bin/commit.txt)" = "$BUILD_COMMIT"
+          rustc --version --verbose > bench-bin/toolchain.txt
+          node --version >> bench-bin/toolchain.txt
+          pnpm --version >> bench-bin/toolchain.txt
+          printf '%s\n' "source_commit=$BUILD_COMMIT" "target=x86_64-unknown-linux-musl" "profile=release" > bench-bin/build.txt
+          (cd bench-bin && sha256sum fireemu commit.txt toolchain.txt build.txt > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: benchmark-binary
+          name: ${{ matrix.role == 'baseline' && 'benchmark-baseline-binary' || 'benchmark-binary' }}
           path: bench-bin/
           retention-days: 7
           if-no-files-found: error
@@ -84,6 +127,24 @@ jobs:
         with:
           name: benchmark-binary
           path: bench-bin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.baseline_commit != ''
+        with:
+          name: benchmark-baseline-binary
+          path: bench-baseline
+      - name: Verify source-bound benchmark binaries
+        run: |
+          verify_binary() {
+            local directory="$1" expected="$2"
+            (cd "$directory" && sha256sum -c SHA256SUMS)
+            test "$(cat "$directory/commit.txt")" = "$expected"
+            test "$(cat "$directory/build.txt")" = "$(printf '%s\n' "source_commit=$expected" "target=x86_64-unknown-linux-musl" "profile=release")"
+          }
+          verify_binary bench-bin "$GITHUB_SHA"
+          if [ -n "$BASELINE_COMMIT" ]; then
+            verify_binary bench-baseline "$BASELINE_COMMIT"
+            cmp bench-bin/toolchain.txt bench-baseline/toolchain.txt
+          fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -97,12 +158,16 @@ jobs:
           distribution: temurin
           java-version: '21.0.8+9.0.LTS' # Measurement baseline, not a claim this is the latest JDK.
       - name: Dependencies and emulator download (never timed)
+        env:
+          MIXED_SERVICES: ${{ inputs.mixed_services || 'false' }}
         run: |
           chmod +x bench-bin/fireemu
-          sha256sum -c bench-bin/SHA256SUMS
-          test "$(cat bench-bin/commit.txt)" = "$(git rev-parse HEAD)"
+          if [ -n "$BASELINE_COMMIT" ]; then chmod +x bench-baseline/fireemu; fi
           pnpm -C conformance install --frozen-lockfile
-          pnpm -C conformance exec firebase setup:emulators:firestore
+          if [ -z "$BASELINE_COMMIT" ]; then
+            pnpm -C conformance exec firebase setup:emulators:firestore
+            if [ "$MIXED_SERVICES" = true ]; then pnpm -C conformance exec firebase setup:emulators:storage; fi
+          fi
           bench-bin/fireemu doctor
           test -d /run/systemd/system
           test -f /sys/fs/cgroup/cgroup.controllers
@@ -116,9 +181,14 @@ jobs:
           TIER: ${{ inputs.tier || 'standard' }}
           PROFILE: ${{ inputs.profile || 'emulator' }}
           STARTUP_ONLY: ${{ inputs.startup_only || 'false' }}
+          MIXED_SERVICES: ${{ inputs.mixed_services || 'false' }}
+          FIXTURE_SHAPE: ${{ inputs.fixture_shape || 'default' }}
         run: |
           extra=()
+          if [ -n "$BASELINE_COMMIT" ]; then extra+=(--baseline-fireemu "$PWD/bench-baseline/fireemu"); fi
           if [ "$STARTUP_ONLY" = true ]; then extra+=(--startup-only); fi
+          if [ "$MIXED_SERVICES" = true ]; then extra+=(--mixed-services); fi
+          extra+=(--fixture-shape "$FIXTURE_SHAPE")
           python3 tools/bench/bench.py \
             --fireemu "$PWD/bench-bin/fireemu" \
             --sdk-root "$PWD/conformance" \
@@ -148,5 +218,12 @@ jobs:
             .bench-output/block-*/fireemu.json
             .bench-output/block-*/firestore.*
             bench-bin/toolchain.txt
+            bench-bin/commit.txt
+            bench-bin/build.txt
+            bench-bin/SHA256SUMS
+            bench-baseline/toolchain.txt
+            bench-baseline/commit.txt
+            bench-baseline/build.txt
+            bench-baseline/SHA256SUMS
           retention-days: 14
           if-no-files-found: warn

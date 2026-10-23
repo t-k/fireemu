@@ -735,14 +735,19 @@ async fn state_with_functions() -> (
     Arc<UiState>,
     Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
 ) {
+    state_with_functions_script(INLINE_RUNNER).await
+}
+
+async fn state_with_functions_script(
+    script: &str,
+) -> (
+    Arc<UiState>,
+    Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
+) {
     use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
     use fireemu_adapter_functions::runtime::FunctionsConfig;
     let spec = SpawnSpec {
-        command: vec![
-            "python3".to_owned(),
-            "-c".to_owned(),
-            INLINE_RUNNER.to_owned(),
-        ],
+        command: vec!["python3".to_owned(), "-c".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
         hello_timeout: std::time::Duration::from_secs(60),
@@ -1463,6 +1468,13 @@ async fn the_functions_overview_reports_the_clock_and_a_schedule_next_run() {
     assert_eq!(body["clock"], "2026-08-29T12:01:00Z");
     // The functions belong to the session whose project is the runtime's (here, "default").
     assert_eq!(body["session"], "default");
+    assert!(body["logRecords"].is_array());
+    let scopes = body["logScopes"]
+        .as_array()
+        .expect("each current runner has a cursor scope");
+    assert_eq!(scopes.len(), runtime.current_runners().len());
+    assert!(scopes[0]["runner"].is_string());
+    assert!(scopes[0]["nextCursor"].is_string());
     let tick = body["functions"]
         .as_array()
         .unwrap()
@@ -1471,6 +1483,155 @@ async fn the_functions_overview_reports_the_clock_and_a_schedule_next_run() {
         .expect("the tick schedule is listed");
     assert_eq!(tick["nextRun"], "2026-08-29T12:05:00Z");
     runtime.runner().shutdown().await;
+}
+
+fn attributed_runner_script() -> String {
+    let script = INLINE_RUNNER.replace(
+        "    send({\"type\": \"result\", \"invocationId\": msg[\"invocationId\"], \"ok\": True})",
+        r#"    send({"type":"log","level":"info","message":"trusted","invocationId":msg["invocationId"],"functionName":msg["function"],"user":True,"fields":{"invocationId":"forged"}})
+    send({"type":"result","invocationId":msg["invocationId"],"ok":True})"#,
+    );
+    assert_ne!(script, INLINE_RUNNER);
+    script
+}
+
+#[tokio::test]
+async fn function_log_metadata_preserves_trusted_ids_and_reconnect_cursor_identity() {
+    let script = attributed_runner_script();
+    let (state, runtime) = state_with_functions_script(&script).await;
+    runtime.run_schedule("tick").unwrap();
+    runtime
+        .await_idle(std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
+    let (_, overview) = call(&state, request("GET", "/ui/api/functions", &Value::Null)).await;
+    let records = overview["logRecords"].as_array().unwrap();
+    assert_eq!(records.len(), 1);
+    let record = records[0].clone();
+    assert_eq!(record["invocationId"], "1-1");
+    assert_eq!(record["function"], "tick");
+    assert_eq!(record["project"], runtime.project());
+    assert_eq!(record["cursor"], "0");
+    assert_ne!(record["invocationId"], "forged");
+    assert_eq!(overview["logs"][0], record["line"]);
+    for _ in 0..2 {
+        let mut stream = open_log_stream(&state).await;
+        let (kind, snapshot) = next_sse(&mut stream).await;
+        assert_eq!(kind, "snapshot");
+        assert_eq!(snapshot["logRecords"][0], record);
+    }
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn function_logs_cover_all_codebases_and_report_replacement_without_reusing_cursors() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile;
+    use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+    use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
+    use std::time::Duration;
+    let mut codebases = Vec::new();
+    for name in ["alpha", "beta"] {
+        let script = attributed_runner_script().replace("\"tick\"", &format!("\"{name}\""));
+        let spec = SpawnSpec {
+            command: vec!["python3".into(), "-c".into(), script],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        let manifest = fireemu_adapter_functions::manifest_json::parse_manifest(
+            runner.hello().manifest.as_ref().unwrap(),
+        )
+        .unwrap();
+        codebases.push(CodebaseSpec {
+            name: name.to_owned(),
+            manifest,
+            runner,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        });
+    }
+    let runtime = FunctionsRuntime::with_codebases(
+        codebases,
+        FunctionsConfig::for_tests(99, "s".into()),
+        Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        FunctionsHttpProfile::Emulator,
+    )
+    .unwrap();
+    tokio::spawn(runtime.clone().dispatch_loop());
+    let mut state = Arc::try_unwrap(state()).ok().unwrap();
+    state.functions = Some(runtime.clone());
+    let state = Arc::new(state);
+    for name in ["alpha", "beta"] {
+        runtime.run_schedule(name).unwrap();
+    }
+    runtime.await_idle(Duration::from_secs(10)).await.unwrap();
+    let (_, overview) = call(&state, request("GET", "/ui/api/functions", &Value::Null)).await;
+    let records = overview["logRecords"].as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["codebase"], "alpha");
+    assert_eq!(records[1]["codebase"], "beta");
+    assert_eq!(records[0]["cursor"], records[1]["cursor"]);
+    assert_ne!(records[0]["runner"], records[1]["runner"]);
+    let mut stream = open_log_stream(&state).await;
+    assert_eq!(next_sse(&mut stream).await.0, "snapshot");
+    let old_runner = runtime.runner().diagnostic_id();
+    runtime.reset();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while runtime.runner().diagnostic_id() == old_runner || !runtime.runner_alive() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut replacement = None;
+    for _ in 0..8 {
+        let (kind, data) = next_sse(&mut stream).await;
+        if kind == "log-state"
+            && data["logScopes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|scope| scope["replaced"] == true)
+        {
+            replacement = Some(data);
+            break;
+        }
+    }
+    runtime.shutdown().await;
+    let replacement = replacement.expect("replacement must publish an explicit log scope change");
+    assert_eq!(replacement["project"], runtime.project());
+    assert!(replacement["logScopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|scope| scope["nextCursor"] == "0"));
+}
+
+#[tokio::test]
+async fn retained_log_snapshots_explicitly_report_eviction() {
+    let script = attributed_runner_script().replace(
+        "    send({\"type\":\"log\"",
+        "    for i in range(1002): send({\"type\":\"log\"",
+    );
+    let (state, runtime) = state_with_functions_script(&script).await;
+    runtime.run_schedule("tick").unwrap();
+    runtime
+        .await_idle(std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
+    let mut stream = open_log_stream(&state).await;
+    let (_, data) = next_sse(&mut stream).await;
+    runtime.shutdown().await;
+    assert_eq!(data["logRecords"].as_array().unwrap().len(), 1000);
+    assert_eq!(data["logRecords"][0]["cursor"], "2");
+    assert_eq!(data["logScopes"][0]["truncated"], true);
+    assert_eq!(
+        data["logs"][0],
+        "[fireemu] earlier function logs were truncated"
+    );
 }
 
 /// The next server-sent event of a stream, keep-alive comments skipped.
@@ -1518,6 +1679,12 @@ async fn the_functions_log_stream_sends_deltas_and_resyncs_an_expired_cursor() {
     let (name, data) = next_sse(&mut first).await;
     assert_eq!(name, "snapshot");
     assert_eq!(data["invocations"].as_array().unwrap().len(), 1);
+    assert_eq!(data["project"], runtime.project());
+    assert!(data["logRecords"].is_array());
+    assert_eq!(
+        data["logScopes"].as_array().unwrap().len(),
+        runtime.current_runners().len()
+    );
     let generation = data["generation"].as_u64().unwrap();
 
     // A second record reaches the first client as a delta of exactly one invocation.

@@ -1655,7 +1655,7 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     use fireemu_core_rules::parse::parse_ruleset;
 
     let s = state(Arc::new(AtomicUsize::new(0)));
-    let source = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if id != 'secret'; } } }";
+    let source = "// 日😀\r\n rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if id != 'secret'; } } }";
     assert_eq!(
         handle(&s, "PUT", "/v1/rules", &json!({"source": source})).status,
         200
@@ -1666,6 +1666,11 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     assert_eq!(empty.status, 200, "{}", empty.body);
     assert_eq!(empty.body["requests"], json!([]));
     assert_eq!(empty.body["loaded"], true);
+    assert_eq!(empty.body["source"], source);
+    assert_eq!(
+        empty.body["generation"],
+        s.rules.snapshot().unwrap().generation().to_string()
+    );
     assert_eq!(
         handle(
             &s,
@@ -2737,4 +2742,323 @@ async fn await_idle_scope_keeps_default_and_wakes_on_future_retry_transition() {
     let response =
         fireemu_adapter_http::control::await_idle(&state, &json!({"timeoutSeconds": 0})).await;
     assert_eq!(response.status, 504);
+}
+
+#[test]
+fn request_trace_metadata_is_bound_to_the_snapshot_across_reload_and_clear() {
+    use fireemu_core_rules::coverage::RequestTrace;
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let read = || handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    let empty = read();
+    assert_eq!(empty.body["source"], serde_json::Value::Null);
+    assert!(empty.body["generation"].as_str().is_some());
+    let source = "service cloud.firestore { match /databases/{d}/documents { match /{p=**} { allow read: if true; } } }";
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source":source})).status,
+        200
+    );
+    let a = s.rules.snapshot().unwrap();
+    let first = read();
+    assert_eq!(first.body["source"], source);
+    assert_eq!(
+        handle(
+            &s,
+            "PUT",
+            "/v1/storage/rules",
+            &json!({"source": STORAGE_VALID})
+        )
+        .status,
+        200
+    );
+    let storage = handle(&s, "GET", "/v1/storage/rules", &json!({})).body;
+
+    assert_eq!(first.body["generation"], a.generation().to_string());
+    let trace = |sequence| RequestTrace {
+        sequence,
+        method: "get",
+        path: "notes/a".into(),
+        allowed: true,
+        reason: String::new(),
+        uid: None,
+        expressions: Vec::new(),
+    };
+    a.diagnostics
+        .lock()
+        .unwrap()
+        .push(&fireemu_core_rules::coverage::Coverage::default(), trace);
+    assert_eq!(read().body["requests"].as_array().unwrap().len(), 1);
+    // Identical bytes still publish a new generation and a fresh diagnostics ring.
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source":source})).status,
+        200
+    );
+    let b = read();
+    assert_eq!(b.body["source"], source);
+    assert_ne!(b.body["generation"], first.body["generation"]);
+    assert_eq!(b.body["requests"], json!([]));
+    assert_eq!(
+        handle(&s, "GET", "/v1/storage/rules", &json!({})).body,
+        storage
+    );
+    // A session data reset is distinct from publishing or restoring a ruleset.
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
+        200
+    );
+    assert_eq!(read().body, b.body);
+
+    // A late evaluation on the retained snapshot cannot populate the new ring.
+    a.diagnostics
+        .lock()
+        .unwrap()
+        .push(&fireemu_core_rules::coverage::Coverage::default(), trace);
+    assert_eq!(a.diagnostics.lock().unwrap().requests().len(), 2);
+    assert_eq!(read().body["requests"], json!([]));
+    // Failed compilation must not change either the source or its generation.
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source":"broken"})).status,
+        400
+    );
+    assert_eq!(read().body, b.body);
+    assert_eq!(handle(&s, "DELETE", "/v1/rules", &json!({})).status, 200);
+    let cleared = read();
+    assert_eq!(cleared.body["source"], serde_json::Value::Null);
+    assert_eq!(cleared.body["loaded"], false);
+    assert_ne!(cleared.body["generation"], b.body["generation"]);
+    assert_eq!(cleared.body["requests"], json!([]));
+    // Restoring captured loaded rules publishes a new generation, never the old diagnostics.
+    let restored_generation = s.rules.replace_loaded((*a.loaded()).clone()).unwrap();
+    let restored = read();
+    assert_eq!(restored.body["source"], source);
+    assert_eq!(restored.body["generation"], restored_generation.to_string());
+    assert_ne!(restored.body["generation"], first.body["generation"]);
+    assert_ne!(restored.body["generation"], cleared.body["generation"]);
+    assert_eq!(restored.body["requests"], json!([]));
+}
+
+#[test]
+fn diagnostics_intervals_are_privileged_uncached_and_generation_checked() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let inspect = "/v1/sessions/default/rules/diagnostics";
+    let clear = "/v1/sessions/default/rules/diagnostics:clear";
+    let authorized = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    for (method, path) in [("GET", inspect), ("POST", clear)] {
+        assert_eq!(
+            handle_with(&s, method, path, &RequestHeaders::default(), &json!({})).status,
+            403
+        );
+        assert!(fireemu_adapter_http::control::is_no_store_path(path));
+        assert!(fireemu_adapter_http::control::is_no_store_path(&format!(
+            "{path}?x=1"
+        )));
+    }
+    let initial = handle_with(&s, "GET", inspect, &authorized, &json!({}));
+    assert_eq!(initial.status, 200, "{}", initial.body);
+    assert_eq!(initial.body["loaded"], false);
+    assert_eq!(initial.body["service"], "firestore");
+    assert_eq!(initial.body["generation"], "0");
+    assert_eq!(initial.body["interval"], "0");
+    for payload in [
+        json!({}),
+        json!({"expectedGeneration": 0, "expectedInterval": "0"}),
+        json!({"expectedGeneration": "0", "expectedInterval": "-1"}),
+    ] {
+        assert_eq!(
+            handle_with(&s, "POST", clear, &authorized, &payload).status,
+            400
+        );
+    }
+    assert_eq!(
+        handle_with(&s, "POST", inspect, &authorized, &json!({})).status,
+        400
+    );
+    assert_eq!(
+        handle_with(&s, "GET", clear, &authorized, &json!({})).status,
+        400
+    );
+    let first = handle_with(
+        &s,
+        "POST",
+        clear,
+        &authorized,
+        &json!({"expectedGeneration":"0", "expectedInterval":"0"}),
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.body["interval"], "1");
+    assert_eq!(first.body["generation"], "0");
+    assert_eq!(first.body["loaded"], false);
+    assert_eq!(
+        handle_with(
+            &s,
+            "POST",
+            clear,
+            &authorized,
+            &json!({"expectedGeneration":"0", "expectedInterval":"0"})
+        )
+        .status,
+        409
+    );
+    s.rules.replace_source("service cloud.firestore { match /databases/{d}/documents { match /{doc=**} { allow read: if true; } } }").unwrap();
+    assert_eq!(
+        handle_with(
+            &s,
+            "POST",
+            clear,
+            &authorized,
+            &json!({"expectedGeneration":"0", "expectedInterval":"0"})
+        )
+        .status,
+        409
+    );
+    let after = handle_with(&s, "GET", inspect, &authorized, &json!({}));
+    assert_eq!(after.body["generation"], "1");
+    assert_eq!(after.body["interval"], "0");
+    assert_eq!(after.body["loaded"], true);
+}
+
+#[test]
+fn diagnostics_intervals_refuse_non_default_session_without_mutation() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let authorized = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project":"demo-b"})).status,
+        200
+    );
+    for (method, action) in [("GET", "diagnostics"), ("POST", "diagnostics:clear")] {
+        let response = handle_with(
+            &s,
+            method,
+            &format!("/v1/sessions/demo-b/rules/{action}"),
+            &authorized,
+            &json!({"expectedGeneration":"0","expectedInterval":"0"}),
+        );
+        assert_eq!(response.status, 400, "{}", response.body);
+        assert!(response.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("FAILED_PRECONDITION"));
+    }
+    assert_eq!(s.rules.snapshot().unwrap().generation(), 0);
+}
+
+#[test]
+fn diagnostics_clear_releases_coverage_and_ring_without_reloading_or_disabling_traces() {
+    use fireemu_core_rules::coverage::RequestTrace;
+    use fireemu_core_rules::eval::{evaluate_request_traced, Method, RequestContext, RulesService};
+    use fireemu_core_rules::parse::parse_ruleset;
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let authorized = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let source = "service cloud.firestore { match /databases/{d}/documents { match /{doc=**} { allow read: if true; } } }";
+    s.rules.replace_source(source).unwrap();
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({})).status,
+        200
+    );
+    let parsed = parse_ruleset(source).unwrap();
+    let ctx = RequestContext {
+        service: RulesService::Firestore,
+        method: Method::Get,
+        path: "/databases/(default)/documents/a/b".to_owned(),
+        auth: None,
+        resource: None,
+        request_resource: None,
+        time_unix_nanos: 0,
+        abstract_path: false,
+        request_query: None,
+    };
+    let (_, coverage) = evaluate_request_traced(&parsed, &ctx, None);
+    let record = || {
+        s.rules
+            .snapshot()
+            .unwrap()
+            .diagnostics
+            .lock()
+            .unwrap()
+            .push(&coverage, |sequence| RequestTrace {
+                sequence,
+                method: "get",
+                path: "a/b".to_owned(),
+                allowed: true,
+                reason: String::new(),
+                uid: None,
+                expressions: coverage.entries().into_iter().cloned().collect(),
+            });
+    };
+    record();
+    let path = "/v1/sessions/default/rules/diagnostics";
+    let before = handle_with(&s, "GET", path, &authorized, &json!({}));
+    assert_eq!(before.status, 200);
+    assert!(before.body["distinctValueCount"].as_u64().unwrap() > 0);
+    assert_eq!(before.body["requestTraceCount"], 1);
+    let after = handle_with(
+        &s,
+        "POST",
+        &format!("{path}:clear"),
+        &authorized,
+        &json!({"expectedGeneration":before.body["generation"], "expectedInterval":before.body["interval"]}),
+    );
+    assert_eq!(after.status, 200, "{}", after.body);
+    assert_eq!(after.body["distinctValueCount"], 0);
+    assert_eq!(after.body["observationCount"], 0);
+    assert_eq!(after.body["requestTraceCount"], 0);
+    assert_eq!(after.body["generation"], before.body["generation"]);
+    assert_eq!(s.rules.snapshot().unwrap().source.as_deref(), Some(source));
+    record();
+    let trace = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(trace.body["requests"].as_array().unwrap().len(), 1);
+    assert_eq!(trace.body["requests"][0]["sequence"], 2);
+}
+
+#[test]
+fn diagnostics_control_never_clears_the_storage_registry() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let authorized = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let source = "service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
+    assert_eq!(
+        handle(&s, "PUT", "/v1/storage/rules", &json!({"source":source})).status,
+        200
+    );
+    let before = handle(&s, "GET", "/v1/storage/rules", &json!({})).body;
+    assert_eq!(
+        handle_with(
+            &s,
+            "POST",
+            "/v1/sessions/default/rules/diagnostics:clear",
+            &authorized,
+            &json!({"expectedGeneration":"0","expectedInterval":"0"})
+        )
+        .status,
+        200
+    );
+    assert_eq!(
+        handle(&s, "GET", "/v1/storage/rules", &json!({})).body,
+        before
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "POST",
+            "/v1/sessions/default/storage/rules/diagnostics:clear",
+            &authorized,
+            &json!({"expectedGeneration":"0","expectedInterval":"1"})
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle(&s, "GET", "/v1/storage/rules", &json!({})).body,
+        before
+    );
 }

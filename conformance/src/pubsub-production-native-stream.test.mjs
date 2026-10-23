@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,7 +49,7 @@ async function server(handler) {
   );
   return { calls, target: `127.0.0.1:${port}`, close: () => instance.forceShutdown() };
 }
-function setup(t, target, max = 2) {
+function setup(t, target, max = 2, grpcImplementation = grpc) {
   const lines = [];
   const dir = mkdtempSync(join(tmpdir(), "pubsub-native-frames-"));
   const journal = createFileJournal(join(dir, "capture.jsonl"));
@@ -58,6 +59,7 @@ function setup(t, target, max = 2) {
   });
   const budget = createBudget(max);
   const transport = createGrpc({
+    grpc: grpcImplementation,
     target,
     secure: false,
     budget,
@@ -139,16 +141,160 @@ test("native stream captures INVALID_ARGUMENT without inventing a frame or succe
   );
 });
 
+function observeGrpc(implementation = grpc) {
+  let resolveClose;
+  const observed = {
+    attempts: 0,
+    frames: [],
+    ends: 0,
+    closes: 0,
+    closed: new Promise((resolve) => {
+      resolveClose = resolve;
+    }),
+  };
+  return {
+    observed,
+    grpc: {
+      ...implementation,
+      Client: class extends implementation.Client {
+        makeBidiStreamRequest(...args) {
+          observed.attempts += 1;
+          observed.deadline = args[4].deadline;
+          const rpc = super.makeBidiStreamRequest(...args);
+          rpc.on("close", () => {
+            observed.closes += 1;
+            resolveClose();
+          });
+          const write = rpc.write.bind(rpc),
+            end = rpc.end.bind(rpc);
+          rpc.write = (bytes, ...rest) => {
+            observed.frames.push(Buffer.from(bytes));
+            return write(bytes, ...rest);
+          };
+          rpc.end = (...rest) => {
+            observed.ends += 1;
+            return end(...rest);
+          };
+          return rpc;
+        }
+      },
+    },
+  };
+}
+async function assertDeadlineObservation(observed, reply, lines, budget) {
+  assert.equal(reply.unknown, true);
+  assert.ok(["CANCELLED", "DEADLINE_EXCEEDED"].includes(reply.code));
+  assert.equal(observed.attempts, 1);
+  assert.deepEqual(observed.frames, [encode(Request, frame)]);
+  assert.equal(observed.ends, 1);
+  assert.equal(budget.used(), 1);
+  assert.equal(lines.filter((line) => line.op === "streamingPull").length, 1);
+  let timer;
+  try {
+    await Promise.race([
+      observed.closed,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("terminal close was not observed")), 1000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.equal(observed.closes, 1);
+}
+function controlledDeadline() {
+  const rpc = new EventEmitter();
+  let cancels = 0;
+  rpc.write = () => true;
+  rpc.end = () => {};
+  rpc.cancel = () => {
+    cancels += 1;
+    queueMicrotask(() => rpc.emit("close"));
+  };
+  const implementation = {
+    ...grpc,
+    Client: class {
+      close() {}
+      makeBidiStreamRequest() {
+        return rpc;
+      }
+    },
+  };
+  return { rpc, observation: observeGrpc(implementation), cancels: () => cancels };
+}
+
+test("native deadline status before close needs no server admission", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+  const { rpc, observation, cancels } = controlledDeadline();
+  const { transport, lines, budget } = setup(t, "127.0.0.1:1", 1, observation.grpc);
+  const pending = call(transport, { timeoutMs: 80 });
+  let settled = false;
+  try {
+    assert.equal(observation.observed.attempts, 1);
+    assert.equal(observation.observed.deadline.getTime(), 1080);
+    rpc.emit("status", { code: grpc.status.DEADLINE_EXCEEDED, details: "controlled deadline" });
+    const reply = await pending;
+    settled = true;
+    assert.equal(observation.observed.closes, 0);
+    rpc.emit("close");
+    await assertDeadlineObservation(observation.observed, reply, lines, budget);
+    assert.equal(cancels(), 0);
+  } finally {
+    if (!settled) {
+      rpc.emit("status", { code: grpc.status.DEADLINE_EXCEEDED, details: "controlled teardown" });
+      rpc.emit("close");
+      await pending;
+    }
+  }
+});
+
 test("native stream deadline is unknown and closes the stream without retry", async (t) => {
   const s = await server(() => {});
   t.after(s.close);
-  const { transport, lines } = setup(t, s.target);
+  const observation = observeGrpc();
+  const { transport, lines, budget } = setup(t, s.target, 1, observation.grpc);
   assert.equal(typeof transport.stream, "function");
   const reply = await call(transport, { timeoutMs: 80 });
-  assert.equal(reply.unknown, true);
-  assert.ok(["CANCELLED", "DEADLINE_EXCEEDED"].includes(reply.code));
-  assert.equal(s.calls.length, 1);
-  assert.equal(lines.filter((line) => line.op === "streamingPull").length, 1);
+  await assertDeadlineObservation(observation.observed, reply, lines, budget);
+  t.diagnostic(
+    JSON.stringify({
+      attempts: observation.observed.attempts,
+      frames: observation.observed.frames.length,
+      ends: observation.observed.ends,
+      closes: observation.observed.closes,
+      captures: lines.filter((line) => line.op === "streamingPull").length,
+      budget: budget.used(),
+      remoteAdmissions: s.calls.length,
+      timeoutMs: 80,
+    }),
+  );
+});
+
+test("native deadline watchdog closes a stream with no native terminal event", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
+  const { observation, cancels } = controlledDeadline();
+  const { transport, lines, budget } = setup(t, "127.0.0.1:1", 1, observation.grpc);
+  const pending = call(transport, { timeoutMs: 80 });
+  let settled = false;
+  try {
+    assert.equal(observation.observed.deadline.getTime(), 1080);
+    assert.equal(observation.observed.closes, 0);
+    t.mock.timers.tick(179);
+    assert.equal(cancels(), 0);
+    t.mock.timers.tick(1);
+    const reply = await pending;
+    settled = true;
+    assert.equal(reply.reason, "watchdog-deadline");
+    assert.equal(cancels(), 1);
+    const complete = assertDeadlineObservation(observation.observed, reply, lines, budget);
+    t.mock.timers.tick(1000);
+    await complete;
+  } finally {
+    if (!settled) {
+      t.mock.timers.tick(180);
+      await pending;
+    }
+  }
 });
 
 test("native stream rejects frame counts, encoded bytes and time bounds before dispatch", async (t) => {

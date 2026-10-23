@@ -5526,6 +5526,7 @@ pub fn glob_scan(
         entries: Vec::new(),
         until: None,
     };
+    let mut matcher = query.glob.matcher();
     loop {
         let batch = {
             let store = state.store()?;
@@ -5555,7 +5556,7 @@ pub fn glob_scan(
             if !(query.in_offsets)(name) {
                 continue;
             }
-            match query.glob.matches_unless(name, &is_cancelled) {
+            match matcher.matches_unless(name, &is_cancelled) {
                 None => return gone(),
                 Some(false) => continue,
                 Some(true) => {}
@@ -5749,6 +5750,7 @@ fn versions_scan(
         None => None,
     };
     let mut entries: Vec<VersionsCursor> = Vec::new();
+    let mut matcher = query.glob.map(fireemu_core_storage::glob::Glob::matcher);
     loop {
         let batch = {
             let store = state.store()?;
@@ -5776,8 +5778,8 @@ fn versions_scan(
             if !(query.in_offsets)(name) {
                 continue;
             }
-            if let Some(glob) = query.glob {
-                match glob.matches_unless(name, &is_cancelled) {
+            if let Some(matcher) = &mut matcher {
+                match matcher.matches_unless(name, &is_cancelled) {
                     None => {
                         return Err(StorageResponse {
                             status: 499,

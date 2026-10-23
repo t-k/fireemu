@@ -222,7 +222,14 @@ export type RulesRequest = {
   expressions: RulesExpression[];
 };
 
-export type RulesRequests = { capacity: number; loaded: boolean; requests: RulesRequest[] };
+export type RulesRequests = {
+  capacity: number;
+  loaded: boolean;
+  /** Same-response snapshot metadata; absent on older daemons. Never join a later editor fetch. */
+  source?: string | null;
+  generation?: string;
+  requests: RulesRequest[];
+};
 
 export const rulesRequests = (session: string): ResultAsync<RulesRequests, ApiError> =>
   request<RulesRequests>("GET", `${base(session)}/rules/requests`);
@@ -261,3 +268,28 @@ export const ruleCoverage = (project: string): ResultAsync<RuleCoverage, ApiErro
     "GET",
     `firestore/emulator/v1/projects/${encodeURIComponent(project)}:ruleCoverage`,
   );
+
+/** Fireemu collection intervals are separated when completed evaluations merge. */
+export type RulesDiagnostics = {
+  service: "firestore";
+  loaded: boolean;
+  generation: string;
+  interval: string;
+  expressionCount: number;
+  distinctValueCount: number;
+  observationCount: number;
+  requestTraceCount: number;
+  requestTraceCapacity: number;
+  estimatedCoverageBytes: number;
+};
+export const rulesDiagnostics = (session: string): ResultAsync<RulesDiagnostics, ApiError> =>
+  request("GET", `${base(session)}/rules/diagnostics`);
+export const clearRulesDiagnostics = (
+  session: string,
+  generation: string,
+  interval: string,
+): ResultAsync<RulesDiagnostics, ApiError> =>
+  request("POST", `${base(session)}/rules/diagnostics:clear`, {
+    expectedGeneration: generation,
+    expectedInterval: interval,
+  });

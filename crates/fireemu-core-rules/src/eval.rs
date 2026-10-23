@@ -16,7 +16,8 @@
 //!   `duration`, `latlng`, `math` and `hashing` namespaces, `map.diff()`, and the
 //!   `firestore.get()` / `firestore.exists()` namespace of Storage rules.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ use crate::ast::{
     PathSegment, Ruleset, UnaryOp,
 };
 use crate::coverage::{Coverage, ExprValue, UndefinedCause};
+use crate::scope::{FunctionEnvironment, FunctionScopes, ServiceScopes};
 use crate::value::{AuthContext, MapDiff, RulesValue, ValueRange};
 
 /// Namespaces callable as `namespace.function(...)` unless shadowed by a binding.
@@ -328,19 +330,18 @@ impl Budget {
 
 struct Scope<'a> {
     functions: Vec<&'a FunctionDecl>,
-    /// Functions visible from each declaration's lexical scope. The active `functions` stack
-    /// tracks the call site, while this map restores the declaration environment for a call.
-    /// Environments are shared by declarations in the same lexical scope so the static table
-    /// does not retain a separate copy for every function.
-    function_scopes: BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
+    /// Source-owned lexical scope plan, resolved against the borrowed live AST. The active
+    /// `functions` stack tracks the call site; this restores the declaration scope for a call.
+    function_scopes: FunctionScopes<'a>,
     /// Value bindings captured at each declaration site. Match captures are dynamic values, so
     /// this is populated while walking the matching block and restored for every call. Functions
     /// declared in one block share the immutable request-local table.
     function_bindings: BTreeMap<usize, FunctionBindings>,
     bindings: Vec<Binding<'a>>,
+    empty_function_bindings: FunctionBindings,
     /// The lexical function environment of the function currently being evaluated. `None`
     /// means that resolution follows the active match/call-site stack in `functions`.
-    lexical_functions: Option<Arc<FunctionEnvironment<'a>>>,
+    lexical_functions: Option<FunctionEnvironment<'a>>,
 }
 
 type FunctionBindings = Arc<Vec<(String, RulesValue)>>;
@@ -354,9 +355,10 @@ type QueryNumericErrorFunctionCache = BTreeMap<usize, bool>;
 
 /// Immutable lexical function declarations for one scope. Parent environments are linked rather
 /// than flattened so nested scopes do not copy all ancestor declarations.
-struct FunctionEnvironment<'a> {
-    parent: Option<Arc<FunctionEnvironment<'a>>>,
-    own: Vec<&'a FunctionDecl>,
+#[cfg(test)]
+pub(crate) struct LegacyFunctionEnvironment<'a> {
+    pub(crate) parent: Option<Arc<LegacyFunctionEnvironment<'a>>>,
+    pub(crate) own: Vec<&'a FunctionDecl>,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -651,14 +653,19 @@ fn evaluate_prepared(
     let mut absent_resource_used = false;
     let mut regex_diagnostics = RegexEvaluationDiagnostics::default();
     let mut projected_member_reads = 0u64;
-    for service in &ruleset.services {
+    for (service_index, service) in ruleset.services.iter().enumerate() {
         if service.name != ctx.service.name() {
             continue;
         }
-        let mut function_scopes = BTreeMap::new();
-        collect_function_scopes(&service.items, None, &mut function_scopes);
-        let mut function_bindings = BTreeMap::new();
-        initialize_function_bindings(&service.items, &mut function_bindings);
+        let fallback;
+        let compiled = if let Some(compiled) = ruleset.function_scopes.get(service_index) {
+            compiled
+        } else {
+            fallback = ServiceScopes::compile(&service.items);
+            &fallback
+        };
+        let function_scopes = FunctionScopes::new(&service.items, compiled);
+        let function_bindings = BTreeMap::new();
         let functions = service
             .items
             .iter()
@@ -672,6 +679,7 @@ fn evaluate_prepared(
             function_scopes,
             function_bindings,
             bindings: Vec::new(),
+            empty_function_bindings: Arc::new(Vec::new()),
             lexical_functions: None,
         };
         let mut ev = Evaluator {
@@ -863,10 +871,11 @@ fn function_key(function: &FunctionDecl) -> usize {
     std::ptr::from_ref(function) as usize
 }
 
-fn collect_function_scopes<'a>(
+#[cfg(test)]
+pub(crate) fn collect_function_scopes<'a>(
     items: &'a [Item],
-    parent: Option<Arc<FunctionEnvironment<'a>>>,
-    scopes: &mut BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
+    parent: Option<Arc<LegacyFunctionEnvironment<'a>>>,
+    scopes: &mut BTreeMap<usize, Arc<LegacyFunctionEnvironment<'a>>>,
 ) {
     let own: Vec<&'a FunctionDecl> = items
         .iter()
@@ -875,7 +884,7 @@ fn collect_function_scopes<'a>(
             Item::Match(_) => None,
         })
         .collect();
-    let visible = Arc::new(FunctionEnvironment { parent, own });
+    let visible = Arc::new(LegacyFunctionEnvironment { parent, own });
     for function in &visible.own {
         scopes.insert(function_key(function), Arc::clone(&visible));
     }
@@ -1889,7 +1898,7 @@ impl<'a> Evaluator<'a> {
                 .get()
                 .saturating_add(1),
         );
-        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+        let Some(environment) = self.scope.function_scopes.get(function) else {
             return false;
         };
         visiting.push(key);
@@ -1901,7 +1910,7 @@ impl<'a> Evaluator<'a> {
             let canonical = self.expression_returns_canonical_numeric(
                 &binding.value,
                 &locals,
-                environment,
+                &environment,
                 visiting,
             );
             locals.insert(binding.name.as_str(), canonical);
@@ -1909,7 +1918,7 @@ impl<'a> Evaluator<'a> {
         let result = self.expression_returns_canonical_numeric(
             &function.body,
             &locals,
-            environment,
+            &environment,
             visiting,
         );
         visiting.pop();
@@ -1989,7 +1998,7 @@ impl<'a> Evaluator<'a> {
                 .get()
                 .saturating_add(1),
         );
-        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+        let Some(environment) = self.scope.function_scopes.get(function) else {
             return true;
         };
         visiting.push(key);
@@ -2004,7 +2013,7 @@ impl<'a> Evaluator<'a> {
             let source = self.function_expression_query_numeric_source_only(
                 &binding.value,
                 &numeric_locals,
-                environment,
+                &environment,
                 visiting,
             );
             numeric_locals.insert(binding.name.as_str(), source);
@@ -2012,7 +2021,7 @@ impl<'a> Evaluator<'a> {
         let result = self.function_expression_query_numeric_source_only(
             &function.body,
             &numeric_locals,
-            environment,
+            &environment,
             visiting,
         );
         visiting.pop();
@@ -2280,7 +2289,7 @@ impl<'a> Evaluator<'a> {
                 .get()
                 .saturating_add(1),
         );
-        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+        let Some(environment) = self.scope.function_scopes.get(function) else {
             return true;
         };
         visiting.push(key);
@@ -2302,20 +2311,20 @@ impl<'a> Evaluator<'a> {
             let derived = self.function_expression_query_derived(
                 &binding.value,
                 &query_locals,
-                environment,
+                &environment,
                 visiting,
             ) || self.function_expression_query_numeric_source(
                 &binding.value,
                 &query_locals,
                 &sensitive_locals,
-                environment,
+                &environment,
                 visiting,
             );
             let sensitive = self.function_expression_query_stringification_sensitive(
                 &binding.value,
                 &query_locals,
                 &sensitive_locals,
-                environment,
+                &environment,
                 visiting,
             );
             query_locals.insert(binding.name.as_str(), derived);
@@ -2325,7 +2334,7 @@ impl<'a> Evaluator<'a> {
             &function.body,
             &query_locals,
             &sensitive_locals,
-            environment,
+            &environment,
             visiting,
         );
         visiting.pop();
@@ -3215,7 +3224,7 @@ impl<'a> Evaluator<'a> {
         }
         self.query_float_zero_analysis_work
             .set(self.query_float_zero_analysis_work.get().saturating_add(1));
-        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+        let Some(environment) = self.scope.function_scopes.get(function) else {
             return false;
         };
         visiting.push(key);
@@ -3233,14 +3242,14 @@ impl<'a> Evaluator<'a> {
             let derived = self.function_expression_query_derived(
                 &binding.value,
                 &query_locals,
-                environment,
+                &environment,
                 visiting,
             );
             let ambiguous = self.function_expression_query_float_zero_ambiguous(
                 &binding.value,
                 &query_locals,
                 &float_locals,
-                environment,
+                &environment,
                 visiting,
             );
             query_locals.insert(binding.name.as_str(), derived);
@@ -3252,7 +3261,7 @@ impl<'a> Evaluator<'a> {
             &function.body,
             &query_locals,
             &float_locals,
-            environment,
+            &environment,
             visiting,
         );
         visiting.pop();
@@ -3571,7 +3580,7 @@ impl<'a> Evaluator<'a> {
         }
         self.query_derived_analysis_work
             .set(self.query_derived_analysis_work.get().saturating_add(1));
-        let Some(environment) = self.scope.function_scopes.get(&key).map(Arc::as_ref) else {
+        let Some(environment) = self.scope.function_scopes.get(function) else {
             return true;
         };
         visiting.push(key);
@@ -3583,13 +3592,13 @@ impl<'a> Evaluator<'a> {
             let derived = self.function_expression_query_derived(
                 &binding.value,
                 &locals,
-                environment,
+                &environment,
                 visiting,
             );
             locals.insert(binding.name.as_str(), derived);
         }
         let derived =
-            self.function_expression_query_derived(&function.body, &locals, environment, visiting);
+            self.function_expression_query_derived(&function.body, &locals, &environment, visiting);
         visiting.pop();
         self.query_derived_function_cache
             .borrow_mut()
@@ -5004,12 +5013,12 @@ impl<'a> Evaluator<'a> {
             )));
         }
         let definition_functions = required_function_scope(&self.scope.function_scopes, f)?;
-        let Some(definition_bindings) = self.scope.function_bindings.get(&function_key(f)).cloned()
-        else {
-            return Err(EvalError::Unsupported(
-                "function declaration bindings metadata missing".to_owned(),
-            ));
-        };
+        let definition_bindings = self
+            .scope
+            .function_bindings
+            .get(&function_key(f))
+            .unwrap_or(&self.scope.empty_function_bindings)
+            .clone();
         self.budget.enter_call()?;
         let caller_lexical_functions = self.scope.lexical_functions.take();
         self.scope.lexical_functions = Some(definition_functions);
@@ -5081,25 +5090,14 @@ fn function_in_environment<'a>(
     environment: &FunctionEnvironment<'a>,
     name: &str,
 ) -> Option<&'a FunctionDecl> {
-    environment
-        .own
-        .iter()
-        .rev()
-        .find(|function| function.name == name)
-        .copied()
-        .or_else(|| {
-            environment
-                .parent
-                .as_deref()
-                .and_then(|parent| function_in_environment(parent, name))
-        })
+    environment.function(name)
 }
 
 fn required_function_scope<'a>(
-    scopes: &BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
+    scopes: &FunctionScopes<'a>,
     function: &FunctionDecl,
-) -> Result<Arc<FunctionEnvironment<'a>>, EvalError> {
-    scopes.get(&function_key(function)).cloned().ok_or_else(|| {
+) -> Result<FunctionEnvironment<'a>, EvalError> {
+    scopes.get(function).ok_or_else(|| {
         EvalError::Unsupported("function declaration scope metadata missing".to_owned())
     })
 }
@@ -5116,32 +5114,15 @@ fn bind_function_captures(
     }
 }
 
-fn initialize_function_bindings(items: &[Item], bindings: &mut BTreeMap<usize, FunctionBindings>) {
-    let empty = Arc::new(Vec::new());
-    initialize_function_bindings_with_empty(items, bindings, &empty);
-}
-
-fn initialize_function_bindings_with_empty(
-    items: &[Item],
-    bindings: &mut BTreeMap<usize, FunctionBindings>,
-    empty: &FunctionBindings,
-) {
-    for item in items {
-        match item {
-            Item::Function(function) => {
-                bindings.insert(function_key(function), Arc::clone(empty));
-            }
-            Item::Match(block) => {
-                initialize_function_bindings_with_empty(&block.items, bindings, empty);
-            }
-        }
-    }
-}
-
 // Int / float equality follows the Rules language (numeric comparison), so the widening cast
 // and the exact float comparison are intentional.
+#[cfg(test)]
+std::thread_local! { static EQUALITY_WORK: core::cell::Cell<usize> = const { core::cell::Cell::new(0) }; static FORCE_SCALAR_COLLISION: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; }
+
 #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
 fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
+    #[cfg(test)]
+    EQUALITY_WORK.with(|work| work.set(work.get() + 1));
     debug_assert!(
         !undetermined(a) && !undetermined(b),
         "undetermined values never compare"
@@ -5612,13 +5593,7 @@ fn method_call(
             {
                 return Err(EvalError::Unknown);
             }
-            V::List(
-                items
-                    .iter()
-                    .filter(|i| !removed.iter().any(|r| values_equal(i, r)))
-                    .cloned()
-                    .collect(),
-            )
+            V::List(filter_members(items, &removed, false))
         }
         (V::List(items), "toSet") => {
             arity(0)?;
@@ -5645,20 +5620,8 @@ fn method_call(
             }
             match name {
                 "union" => make_set(items.iter().chain(other).cloned()),
-                "intersection" => make_set(
-                    items
-                        .iter()
-                        .filter(|v| other.iter().any(|x| values_equal(x, v)))
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                ),
-                _ => make_set(
-                    items
-                        .iter()
-                        .filter(|v| !other.iter().any(|x| values_equal(x, v)))
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                ),
+                "intersection" => make_set(filter_members(items, other, true)),
+                _ => make_set(filter_members(items, other, false)),
             }
         }
         (V::Set(items), "hasAll" | "hasAny" | "hasOnly") => {
@@ -6019,12 +5982,141 @@ fn list_to_set(items: &[RulesValue]) -> RulesValue {
 /// A set with each member kept once, in first-seen order.
 fn make_set(items: impl IntoIterator<Item = RulesValue>) -> RulesValue {
     let mut out: Vec<RulesValue> = Vec::new();
+    let mut index: Option<HashMap<u64, Vec<usize>>> = None;
+    let mut kind = None;
+    let mut indexable = true;
     for item in items {
-        if !out.iter().any(|x| values_equal(x, &item)) {
+        let item_kind = scalar_kind(&item);
+        if item_kind.is_none() || kind.is_some_and(|kind| Some(kind) != item_kind) {
+            indexable = false;
+            index = None;
+        }
+        kind = item_kind;
+        if indexable && index.is_none() && out.len() == 32 {
+            let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
+            for (position, value) in out.iter().enumerate() {
+                buckets
+                    .entry(scalar_fingerprint(value))
+                    .or_default()
+                    .push(position);
+            }
+            index = Some(buckets);
+        }
+        let hash = index.as_ref().map(|_| scalar_fingerprint(&item));
+        let exists = if let (Some(index), Some(hash)) = (&index, hash) {
+            index.get(&hash).is_some_and(|positions| {
+                positions
+                    .iter()
+                    .any(|&position| values_equal(&out[position], &item))
+            })
+        } else {
+            out.iter().any(|seen| values_equal(seen, &item))
+        };
+        if !exists {
+            if let (Some(index), Some(hash)) = (&mut index, hash) {
+                index.entry(hash).or_default().push(out.len());
+            }
             out.push(item);
         }
     }
     RulesValue::Set(out)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScalarKind {
+    Int,
+    String,
+}
+
+fn scalar_kind(value: &RulesValue) -> Option<ScalarKind> {
+    match value {
+        RulesValue::Int(_) => Some(ScalarKind::Int),
+        RulesValue::String(_) => Some(ScalarKind::String),
+        _ => None,
+    }
+}
+
+fn scalar_fingerprint(value: &RulesValue) -> u64 {
+    #[cfg(test)]
+    if FORCE_SCALAR_COLLISION.with(core::cell::Cell::get) {
+        return 0;
+    }
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    match value {
+        RulesValue::Int(value) => value.hash(&mut hash),
+        RulesValue::String(value) => value.hash(&mut hash),
+        _ => unreachable!("only a classified homogeneous scalar collection is indexed"),
+    }
+    hash.finish()
+}
+
+enum MembershipIndex<'a> {
+    Int(HashSet<i64>),
+    String(HashSet<&'a str>),
+}
+
+impl<'a> MembershipIndex<'a> {
+    fn for_operands(items: &'a [RulesValue], other: &[RulesValue]) -> Option<Self> {
+        if items.len() < 64 || other.len() < 8 {
+            return None;
+        }
+        let kind = scalar_kind(items.first()?)?;
+        if !items
+            .iter()
+            .chain(other)
+            .all(|value| scalar_kind(value) == Some(kind))
+        {
+            return None;
+        }
+        Some(match kind {
+            ScalarKind::Int => Self::Int(
+                items
+                    .iter()
+                    .filter_map(|value| {
+                        if let RulesValue::Int(value) = value {
+                            Some(*value)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            ),
+            ScalarKind::String => Self::String(
+                items
+                    .iter()
+                    .filter_map(|value| {
+                        if let RulesValue::String(value) = value {
+                            Some(value.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            ),
+        })
+    }
+
+    fn contains(&self, value: &RulesValue) -> bool {
+        match (self, value) {
+            (Self::Int(index), RulesValue::Int(value)) => index.contains(value),
+            (Self::String(index), RulesValue::String(value)) => index.contains(value.as_str()),
+            _ => unreachable!("both operands were classified before indexing"),
+        }
+    }
+}
+
+fn filter_members(items: &[RulesValue], other: &[RulesValue], keep: bool) -> Vec<RulesValue> {
+    let index = MembershipIndex::for_operands(other, items);
+    items
+        .iter()
+        .filter(|value| {
+            index.as_ref().map_or_else(
+                || other.iter().any(|seen| values_equal(seen, value)),
+                |index| index.contains(value),
+            ) == keep
+        })
+        .cloned()
+        .collect()
 }
 
 /// `string(float)`: a whole float still prints with no decimal part, as the runtime does
@@ -6143,6 +6235,9 @@ fn membership_any(
             Ok(false)
         };
     }
+    if let Some(index) = MembershipIndex::for_operands(items, wanted) {
+        return Ok(wanted.iter().any(|value| index.contains(value)));
+    }
     Ok(wanted
         .iter()
         .any(|item| items.iter().any(|candidate| values_equal(candidate, item))))
@@ -6153,6 +6248,11 @@ fn all_members_present(
     wanted: &[RulesValue],
     query_derived: bool,
 ) -> Result<bool, EvalError> {
+    if !query_derived {
+        if let Some(index) = MembershipIndex::for_operands(items, wanted) {
+            return Ok(wanted.iter().all(|value| index.contains(value)));
+        }
+    }
     let mut uncertain = false;
     for item in wanted {
         match membership_any(items, std::slice::from_ref(item), query_derived) {
@@ -6331,10 +6431,13 @@ mod tests {
         };
         let mut scopes = BTreeMap::new();
         collect_function_scopes(service.items.as_slice(), None, &mut scopes);
-        scopes.clear();
-
+        let foreign = crate::ast::FunctionDecl {
+            name: "foreign".into(),
+            ..function.clone()
+        };
+        let planned = super::FunctionScopes::new(&service.items, &ruleset.function_scopes[0]);
         assert!(matches!(
-            required_function_scope(&scopes, function),
+            required_function_scope(&planned, &foreign),
             Err(EvalError::Unsupported(message)) if message == "function declaration scope metadata missing"
         ));
     }
@@ -6503,6 +6606,271 @@ service cloud.firestore {
         );
         assert!(matches!(concrete_report.decision, Decision::Deny(_)));
     }
+    fn legacy_function<'a>(
+        environment: &super::LegacyFunctionEnvironment<'a>,
+        name: &str,
+    ) -> Option<&'a crate::ast::FunctionDecl> {
+        environment
+            .own
+            .iter()
+            .rev()
+            .find(|function| function.name == name)
+            .copied()
+            .or_else(|| {
+                environment
+                    .parent
+                    .as_deref()
+                    .and_then(|parent| legacy_function(parent, name))
+            })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+        #[test]
+        fn source_owned_scope_lookup_matches_legacy_reference(depth in 1usize..8, names in proptest::collection::vec(0usize..5, 8..24)) {
+            let mut source = String::from("rules_version = '2'; service cloud.firestore {");
+            for level in 0..depth {
+                for name in 0..=(level % 5) { let _ = write!(source, "function f{name}() {{ return {level}; }}"); }
+                let _ = write!(source, "match /s{level}/{{id{level}}} {{");
+            }
+            source.push_str(&"}".repeat(depth + 1));
+            let ruleset = parse_ruleset(&source).unwrap();
+            let service = &ruleset.services[0];
+            let mut reference = BTreeMap::new();
+            collect_function_scopes(&service.items, None, &mut reference);
+            let scopes = super::FunctionScopes::new(&service.items, &ruleset.function_scopes[0]);
+            for environment in reference.values() {
+                for function in &environment.own {
+                    let actual = scopes.get(function).unwrap();
+                    for name in &names {
+                        let name = format!("f{name}");
+                        let expected = legacy_function(environment, &name).map(std::ptr::from_ref);
+                        proptest::prop_assert_eq!(actual.function(&name).map(std::ptr::from_ref), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+        #[test]
+        fn lexical_evaluation_matches_preoptimization_reference_after_ast_mutations(variant in 0u8..7, id in proptest::bool::ANY, child in proptest::bool::ANY, query in proptest::bool::ANY, write in proptest::bool::ANY) {
+            let source = "rules_version = '2'; service cloud.firestore { function gate(v) { return v == 'yes'; } match /databases/{db}/documents/{id} { function captured() { return id; } function permitted(v) { let saved = captured(); return gate(saved) && v == 'yes'; } allow get: if permitted(id); match /{child} { function gate(v) { return false; } allow get, create: if permitted(child); } } }";
+            let mut tree = parse_ruleset(source).unwrap();
+            if variant == 5 {
+                let moved = tree.services[0].items.remove(0);
+                let crate::ast::Item::Match(block) = &mut tree.services[0].items[0] else { unreachable!() };
+                block.items.push(moved);
+            } else if variant == 6 {
+                let crate::ast::Item::Match(block) = &tree.services[0].items[1] else { unreachable!() };
+                let crate::ast::Item::Function(captured) = &block.items[0] else { unreachable!() };
+                let duplicate = captured.span.offset;
+                let crate::ast::Item::Function(function) = &mut tree.services[0].items[0] else { unreachable!() };
+                function.span.offset = duplicate;
+            } else {
+                let crate::ast::Item::Function(function) = &mut tree.services[0].items[0] else { unreachable!() };
+                match variant {
+                    1 => function.name = "renamed".into(),
+                    2 => function.params[0] = "renamed".into(),
+                    3 => function.body = crate::ast::Expr::new(crate::ast::ExprKind::Literal(crate::ast::Literal::Bool(false)), function.body.span, function.body.end),
+                    4 => function.span.offset = usize::MAX,
+                    _ => {},
+                }
+            }
+            let context = RequestContext { service: RulesService::Firestore, method: if write { Method::Create } else { Method::Get }, path: format!("/databases/(default)/documents/{}/{}", if id { "yes" } else { "no" }, if child { "yes" } else { "no" }), auth: None, resource: None, request_resource: None, time_unix_nanos: 0, abstract_path: query, request_query: None };
+            crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(true));
+            let expected = super::evaluate_request_traced(&tree, &context, None);
+            crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(false));
+            let actual = super::evaluate_request_traced(&tree, &context, None);
+            proptest::prop_assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+        }
+    }
+
+    #[test]
+    fn static_function_plans_do_not_rebuild_per_request_or_share_captures() {
+        let source = "rules_version = '2'; service cloud.firestore { match /databases/{db}/documents/{id} { function f() { return id == 'yes'; } allow get: if f(); } }";
+        let tree = parse_ruleset(source).unwrap();
+        let mut context = RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: String::new(),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        };
+        crate::scope::PLAN_BUILDS.with(|work| work.set(0));
+        for id in ["yes", "no", "yes", "no"] {
+            context.path = format!("/databases/(default)/documents/{id}");
+            assert_eq!(
+                matches!(evaluate_request(&tree, &context).decision, Decision::Allow),
+                id == "yes"
+            );
+        }
+        assert_eq!(crate::scope::PLAN_BUILDS.with(core::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn accelerated_collections_retain_mixed_nonreflexive_and_nested_fallback() {
+        let mut items: Vec<_> = (0..70).map(RulesValue::Int).collect();
+        items.extend([
+            RulesValue::Null,
+            RulesValue::Bool(true),
+            RulesValue::Float(1.0),
+            RulesValue::Int(9_007_199_254_740_993),
+            RulesValue::Float(9_007_199_254_740_992.0),
+            RulesValue::Float(-0.0),
+            RulesValue::Float(f64::NAN),
+            RulesValue::Float(f64::INFINITY),
+            RulesValue::List(vec![RulesValue::Int(1)]),
+            RulesValue::List(vec![RulesValue::Float(1.0)]),
+            RulesValue::Set(vec![RulesValue::Int(1), RulesValue::Int(2)]),
+            RulesValue::Set(vec![RulesValue::Int(2), RulesValue::Int(1)]),
+        ]);
+        items.extend(items.clone());
+        assert_eq!(
+            format!("{:?}", super::make_set(items.iter().cloned())),
+            format!("{:?}", linear_set(items.iter().cloned()))
+        );
+        for keep in [true, false] {
+            let expected: Vec<_> = items
+                .iter()
+                .filter(|value| items.iter().any(|seen| super::values_equal(seen, value)) == keep)
+                .cloned()
+                .collect();
+            assert_eq!(
+                format!("{:?}", super::filter_members(&items, &items, keep)),
+                format!("{expected:?}")
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "bounded release work/latency measurement"]
+    fn bounded_collection_and_scope_work_measurement() {
+        for size in [0usize, 32, 64, 256, 4096] {
+            for distinct_percent in [1usize, 50, 100] {
+                let distinct = (size * distinct_percent / 100).max(1);
+                let items: Vec<_> = (0..size)
+                    .map(|i| RulesValue::String(format!("key-{}", i % distinct)))
+                    .collect();
+                super::EQUALITY_WORK.with(|work| work.set(0));
+                let expected = linear_set(items.iter().cloned());
+                let reference_work = super::EQUALITY_WORK.with(core::cell::Cell::get);
+                super::EQUALITY_WORK.with(|work| work.set(0));
+                let actual = super::make_set(items.iter().cloned());
+                let actual_work = super::EQUALITY_WORK.with(core::cell::Cell::get);
+                assert_eq!(actual, expected);
+                let start = std::time::Instant::now();
+                for _ in 0..20 {
+                    std::hint::black_box(super::make_set(items.iter().cloned()));
+                }
+                println!("collection size={size} distinct_percent={distinct_percent} reference_equalities={reference_work} indexed_equalities={actual_work} iterations=20 elapsed={:?}", start.elapsed());
+            }
+        }
+        for functions in [1, 100, 1000] {
+            let mut source = String::from("service cloud.firestore {");
+            for n in 0..functions {
+                let _ = write!(source, "function f{n}() {{ return false; }}");
+            }
+            source.push_str("match /{id} { allow get: if true; }}");
+            let tree = parse_ruleset(&source).unwrap();
+            let context = RequestContext {
+                service: RulesService::Firestore,
+                method: Method::Get,
+                path: "/one".into(),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            };
+            crate::scope::PLAN_BUILDS.with(|work| work.set(0));
+            let start = std::time::Instant::now();
+            for _ in 0..1000 {
+                assert!(matches!(
+                    evaluate_request(&tree, &context).decision,
+                    Decision::Allow
+                ));
+            }
+            println!("scope functions={functions} iterations=1000 elapsed={:?} request_plan_builds={} reference_declaration_map_insertions={}", start.elapsed(), crate::scope::PLAN_BUILDS.with(core::cell::Cell::get), functions * 1000);
+        }
+    }
+
+    fn linear_set(items: impl IntoIterator<Item = RulesValue>) -> RulesValue {
+        let mut out = Vec::new();
+        for item in items {
+            if !out.iter().any(|seen| super::values_equal(seen, &item)) {
+                out.push(item);
+            }
+        }
+        RulesValue::Set(out)
+    }
+
+    #[test]
+    fn indexed_collection_digest_collisions_preserve_exact_values_and_order() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                super::FORCE_SCALAR_COLLISION.with(|enabled| enabled.set(false));
+            }
+        }
+        super::FORCE_SCALAR_COLLISION.with(|enabled| enabled.set(true));
+        let _reset = Reset;
+        assert_eq!(
+            super::scalar_fingerprint(&RulesValue::String("first".into())),
+            super::scalar_fingerprint(&RulesValue::String("second".into()))
+        );
+        let items: Vec<_> = (0..100)
+            .map(|n| RulesValue::String(format!("key-{n}")))
+            .collect();
+        let expected = linear_set(items.iter().chain(items.iter().rev()).cloned());
+        assert_eq!(
+            super::make_set(items.iter().chain(items.iter().rev()).cloned()),
+            expected
+        );
+        let ints: Vec<_> = (0..100).map(RulesValue::Int).collect();
+        assert_eq!(
+            super::make_set(ints.iter().chain(ints.iter().rev()).cloned()),
+            linear_set(ints)
+        );
+    }
+
+    #[test]
+    fn indexed_string_sets_and_membership_reduce_exact_comparisons() {
+        let items: Vec<_> = (0..1024)
+            .map(|i| RulesValue::String(format!("key-{i}")))
+            .collect();
+        super::EQUALITY_WORK.with(|work| work.set(0));
+        let actual = super::make_set(items.iter().chain(&items).cloned());
+        let work = super::EQUALITY_WORK.with(core::cell::Cell::get);
+        assert_eq!(actual, linear_set(items.iter().chain(&items).cloned()));
+        assert!(work < 4096, "dedup comparisons: {work}");
+        super::EQUALITY_WORK.with(|work| work.set(0));
+        assert!(super::all_members_present(&items, &items, false).unwrap());
+        assert!(super::EQUALITY_WORK.with(core::cell::Cell::get) < 4096);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+        #[test]
+        fn scalar_collection_operations_match_independent_reference(values in proptest::collection::vec(-128i64..128, 0..300), strings in proptest::bool::ANY) {
+            let items: Vec<_> = values.into_iter().map(|value| if strings { RulesValue::String(value.to_string()) } else { RulesValue::Int(value) }).collect();
+            let other: Vec<_> = items.iter().rev().skip(3).cloned().collect();
+            proptest::prop_assert_eq!(super::make_set(items.iter().cloned()), linear_set(items.iter().cloned()));
+            proptest::prop_assert_eq!(super::membership_any(&items, &other, false).unwrap(), other.iter().any(|value| items.iter().any(|seen| super::values_equal(seen, value))));
+            proptest::prop_assert_eq!(super::all_members_present(&items, &other, false).unwrap(), other.iter().all(|value| items.iter().any(|seen| super::values_equal(seen, value))));
+            for keep in [true, false] {
+                let expected: Vec<_> = items.iter().filter(|value| other.iter().any(|seen| super::values_equal(seen, value)) == keep).cloned().collect();
+                proptest::prop_assert_eq!(super::filter_members(&items, &other, keep), expected);
+            }
+        }
+    }
+
     #[test]
     fn list_to_set_preserves_integer_order_and_boundaries() {
         for count in [0, 1, 8, 31, 32, 33, 64, 129, 1024] {
@@ -6512,7 +6880,7 @@ service cloud.firestore {
             items.extend(items.clone());
             assert_eq!(
                 super::list_to_set(&items),
-                super::make_set(items.iter().cloned())
+                linear_set(items.iter().cloned())
             );
         }
         assert_eq!(super::list_to_set(&[]), RulesValue::Set(vec![]));
@@ -6536,13 +6904,13 @@ service cloud.firestore {
         items.extend(items.clone());
         assert_eq!(
             super::list_to_set(&items),
-            super::make_set(items.iter().cloned())
+            linear_set(items.iter().cloned())
         );
         items.extend([RulesValue::Float(f64::NAN), RulesValue::Float(f64::NAN)]);
         let RulesValue::Set(actual) = super::list_to_set(&items) else {
             panic!("expected set")
         };
-        let RulesValue::Set(expected) = super::make_set(items) else {
+        let RulesValue::Set(expected) = linear_set(items) else {
             panic!("expected set")
         };
         assert_eq!(actual.len(), expected.len());
@@ -6560,7 +6928,7 @@ service cloud.firestore {
         #[test]
         fn list_to_set_matches_linear_reference(values in proptest::collection::vec(proptest::prelude::any::<i64>(), 0..1024)) {
             let items: Vec<_> = values.into_iter().map(RulesValue::Int).collect();
-            proptest::prop_assert_eq!(super::list_to_set(&items), super::make_set(items.iter().cloned()));
+            proptest::prop_assert_eq!(super::list_to_set(&items), linear_set(items.iter().cloned()));
         }
 
         #[test]
@@ -6570,13 +6938,13 @@ service cloud.firestore {
                 (-1000.0f64..1000.0).prop_map(RulesValue::Float),
                 "[a-z]{0,4}".prop_map(RulesValue::String),
             ], 0..256)) {
-            proptest::prop_assert_eq!(super::list_to_set(&values), super::make_set(values.iter().cloned()));
+            proptest::prop_assert_eq!(super::list_to_set(&values), linear_set(values.iter().cloned()));
         }
 
         #[test]
         fn list_to_set_matches_duplicate_heavy_reference(values in proptest::collection::vec(-8i64..8, 0..2048)) {
             let items: Vec<_> = values.into_iter().map(RulesValue::Int).collect();
-            proptest::prop_assert_eq!(super::list_to_set(&items), super::make_set(items.iter().cloned()));
+            proptest::prop_assert_eq!(super::list_to_set(&items), linear_set(items.iter().cloned()));
         }
     }
 }

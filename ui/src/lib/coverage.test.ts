@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coverageRows, coverageSummary } from "./coverage";
+import { coverageRows, coverageSummary, sourceRange } from "./coverage";
 import type { RuleCoverage } from "../api/control";
 
 const sample: RuleCoverage = {
@@ -77,5 +77,51 @@ describe("value readings", () => {
       },
     ]);
     expect(rows[0]!.summary).toBe("true ×1, false ×3");
+  });
+});
+
+describe("recorded source byte ranges", () => {
+  it("retains offsets independently of presentation line and column", () => {
+    expect(coverageRows(sample.report)[0]).toMatchObject({ currentOffset: 100, endOffset: 130 });
+  });
+  it("maps every code point boundary and exclusive range, including CRLF, without normalization", () => {
+    const alphabet = ["a", "日", "😀", "\r", "\n", "e", "́"];
+    for (const a of alphabet)
+      for (const b of alphabet)
+        for (const c of alphabet) {
+          const text = a + b + c;
+          const boundaries = [0];
+          let bytes = 0;
+          let units = 0;
+          const expected = new Map([[0, 0]]);
+          for (const char of text) {
+            bytes += new TextEncoder().encode(char).length;
+            units += char.length;
+            boundaries.push(bytes);
+            expected.set(bytes, units);
+          }
+          for (const start of boundaries)
+            for (const end of boundaries) {
+              expect(sourceRange(text, start, end)).toEqual(
+                end < start ? null : { start: expected.get(start), end: expected.get(end) },
+              );
+            }
+        }
+  });
+  it("rejects invalid, reversed, inside-codepoint and out-of-bounds positions", () => {
+    for (const [start, end] of [
+      [-1, 0],
+      [0, 8],
+      [1, 2],
+      [0, 1],
+      [3, 2],
+      [0.5, 3],
+      [NaN, 3],
+      [0, Infinity],
+    ]) {
+      expect(sourceRange("日😀", start!, end!)).toBeNull();
+    }
+    expect(sourceRange("\ud800", 0, 0)).toBeNull();
+    expect(sourceRange("", 0, 0)).toEqual({ start: 0, end: 0 });
   });
 });

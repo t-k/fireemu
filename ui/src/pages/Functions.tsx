@@ -10,16 +10,11 @@ import {
   type Component,
 } from "solid-js";
 import { t } from "../i18n";
+import { FunctionsTimeline } from "../components/FunctionsTimeline";
+import type { FunctionLog, FunctionsOverview } from "../api/functions";
 import { appState } from "../state";
 import { AsyncButton, ErrorBanner, FetchState, Notice, Section } from "../components/common";
-import {
-  awaitIdle,
-  functionsStatus,
-  publishMessage,
-  runSchedule,
-  runTasks,
-  setClock,
-} from "../api/control";
+import { awaitIdle, publishMessage, runSchedule, runTasks, setClock } from "../api/control";
 import { errorOf, settle } from "../api/client";
 import {
   enqueueTask,
@@ -32,6 +27,7 @@ import {
   type TriggerInfo,
 } from "../api/functions";
 import { buildCallableInvoke, buildEnqueue, buildRequestInvoke } from "../lib/invoke";
+import { mergeFunctionLogs } from "../lib/functionsTimeline";
 import { matchesLog, type LevelFilter } from "../lib/logFilter";
 
 const LEVEL_OPTIONS: { value: LevelFilter; key: Parameters<typeof t>[0] }[] = [
@@ -656,16 +652,28 @@ export const FunctionRows: Component<{
 
 const Functions: Component = () => {
   const [overview, { refetch }] = createResource(() => settle(functionsOverview()));
-  const [status, { refetch: refetchStatus }] = createResource(() =>
-    settle(functionsStatus(appState.session())),
-  );
+  // This global overview belongs to the Functions owner, independently of the top bar.
+  const [lastOverview, setLastOverview] = createSignal<FunctionsOverview | null>(null);
+  createEffect(() => {
+    overview()?.match(
+      (value) => setLastOverview(value),
+      () => {},
+    );
+  });
+  const status = overview;
+  const refetchStatus = refetch;
+  const [logRecords, setLogRecords] = createSignal<FunctionLog[]>([]);
+  const [logGaps, setLogGaps] = createSignal(false);
+  const [streamProject, setStreamProject] = createSignal<string>();
+  const [streamRevision, setStreamRevision] = createSignal(0);
   const [lines, setLines] = createSignal<string[]>([]);
   const [invocations, setInvocations] = createSignal<InvocationInfo[]>([]);
   const [truncated, setTruncated] = createSignal(false);
   const [connected, setConnected] = createSignal(false);
+  const [connecting, setConnecting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
-  const configured = () => overview()?.unwrapOr(null)?.configured ?? false;
+  const configured = () => o()?.configured ?? false;
   const [logBox, setLogBox] = createSignal<HTMLPreElement>();
   // Follow the tail only while the reader is at the tail; otherwise count what arrived.
   const [following, setFollowing] = createSignal(true);
@@ -681,16 +689,20 @@ const Functions: Component = () => {
   const [logText, setLogText] = createSignal("");
   const [fnFilter, setFnFilter] = createSignal("");
 
-  const filteredLines = (): string[] =>
-    lines().filter((line) => matchesLog(line, { level: logLevel(), text: logText() }));
+  const filteredLines = createMemo(() =>
+    lines().filter((line) => matchesLog(line, { level: logLevel(), text: logText() })),
+  );
+  const filteredLogOutput = createMemo(() => filteredLines().join("\n"));
   const filteredInvocations = (): InvocationInfo[] => {
     const name = fnFilter();
-    return name === "" ? invocations() : invocations().filter((r) => r.function === name);
+    return name === ""
+      ? scopedInvocations()
+      : scopedInvocations().filter((r) => r.function === name);
   };
   /** Function names to offer in the filter: the registered ones plus any seen in invocations. */
   const functionNames = (): string[] => {
     const names = new Set<string>((o()?.functions ?? []).map((f) => f.name));
-    for (const r of invocations()) {
+    for (const r of scopedInvocations()) {
       names.add(r.function);
     }
     return [...names].toSorted();
@@ -708,13 +720,48 @@ const Functions: Component = () => {
     if (box && following()) box.scrollTop = box.scrollHeight;
   });
 
-  onMount(() => {
+  const ownerProject = createMemo(() =>
+    lastOverview()?.configured ? lastOverview()?.project : undefined,
+  );
+  let subscribedProject: string | undefined;
+  createEffect(() => {
+    const project = ownerProject();
+    void streamRevision();
+    if (!project) return;
+    if (project !== subscribedProject) {
+      setLines([]);
+      setInvocations([]);
+      setLogRecords([]);
+      setLogGaps(false);
+    }
+    subscribedProject = project;
+    setConnected(false);
+    setConnecting(true);
+    let disposed = false;
     const stop = subscribeLogs(
       (e) => {
+        if (disposed || (e.project && o()?.project && e.project !== o()?.project)) return;
         if (e.kind === "snapshot") {
+          setStreamProject(e.project);
+          setLogRecords((records) => mergeFunctionLogs(records, e.logRecords, MAX_LINES));
+          setLogGaps(
+            (gaps) =>
+              gaps ||
+              e.logRecords.length > MAX_LINES ||
+              e.logScopes.some((scope) => scope.truncated || scope.replaced),
+          );
           setLines(e.logs.slice(-MAX_LINES));
           setInvocations(keepRecent(e.invocations));
+        } else if (e.kind === "logState") {
+          if (e.logScopes.some((scope) => scope.truncated || scope.replaced)) setLogGaps(true);
         } else if (e.kind === "log") {
+          if (e.record) {
+            setLogRecords((records) => {
+              if (records.length >= MAX_LINES) setLogGaps(true);
+              return mergeFunctionLogs(records, [e.record!], MAX_LINES);
+            });
+            if (e.record.truncated) setLogGaps(true);
+          }
           setLines((l) => [...l, e.line].slice(-MAX_LINES));
           if (!following()) setUnseen((n) => n + 1);
         } else if (e.kind === "resync") {
@@ -727,18 +774,32 @@ const Functions: Component = () => {
           void refetchStatus();
         }
         setConnected(true);
+        setConnecting(false);
       },
-      () => setConnected(false),
+      () => {
+        if (!disposed) {
+          setConnected(false);
+          setConnecting(false);
+          setLogGaps(true);
+        }
+      },
     );
-    const timer = window.setInterval(() => void refetchStatus(), 3000);
     onCleanup(() => {
+      disposed = true;
       stop();
-      window.clearInterval(timer);
     });
   });
+  onMount(() => {
+    const timer = window.setInterval(() => void refetchStatus(), 3000);
+    onCleanup(() => window.clearInterval(timer));
+  });
 
-  const s = () => status()?.unwrapOr(null) ?? null;
-  const o = () => overview()?.unwrapOr(null) ?? null;
+  const o = () => lastOverview();
+  const s = () => o()?.status ?? null;
+  const scopedRecords = () =>
+    !streamProject() || streamProject() === o()?.project ? logRecords() : [];
+  const scopedInvocations = () =>
+    !streamProject() || streamProject() === o()?.project ? invocations() : [];
   // The functions belong to one project's session. Actions are enabled only when the selected
   // session still exists and its project is the functions' project. Matching the real selected
   // session (not `appState.project()`, which falls back to the default project when the
@@ -755,11 +816,11 @@ const Functions: Component = () => {
   return (
     <div>
       <h1 class="mb-4 text-xl font-bold">{t("functions.title")}</h1>
-      <ErrorBanner message={error()} />
+      <ErrorBanner message={error() ?? (o() ? errorOf(overview()) : null)} />
       <Notice message={notice()} />
       <FetchState
-        loading={overview.loading && !overview()}
-        error={errorOf(overview())}
+        loading={overview.loading && !o()}
+        error={o() ? null : errorOf(overview())}
         onRetry={async () => {
           await refetch();
         }}
@@ -823,6 +884,16 @@ const Functions: Component = () => {
               </tbody>
             </table>
           </Section>
+          <FunctionsTimeline
+            project={o()?.project ?? ""}
+            session={o()?.session ?? ""}
+            causality={s()?.causality}
+            codebases={s()?.codebases ?? []}
+            invocations={scopedInvocations()}
+            logs={scopedRecords()}
+            logGaps={logGaps()}
+            stale={!!errorOf(overview())}
+          />
           <div class="grid gap-4 xl:grid-cols-2">
             <Section
               title={t("functions.status")}
@@ -831,7 +902,10 @@ const Functions: Component = () => {
                   class="btn"
                   testId="await-idle"
                   onClick={async () => {
-                    const r = await awaitIdle(appState.session(), 30);
+                    const owner = o();
+                    if (!owner?.session) return;
+                    const r = await awaitIdle(owner.session, 30);
+                    if (o()?.project !== owner.project || o()?.session !== owner.session) return;
                     r.match(
                       (res) => setNotice(res.idle ? t("functions.idle") : t("functions.notIdle")),
                       (e) => setError(e.message),
@@ -844,8 +918,8 @@ const Functions: Component = () => {
               }
             >
               <FetchState
-                loading={status.loading && !status()}
-                error={errorOf(status())}
+                loading={status.loading && !s()}
+                error={s() ? null : errorOf(status())}
                 onRetry={async () => {
                   await refetchStatus();
                 }}
@@ -969,7 +1043,25 @@ const Functions: Component = () => {
                 >
                   {connected() ? t("firestore.live") : t("firestore.liveOff")}
                 </span>
-                <button type="button" class="btn" onClick={() => setLines([])}>
+                <Show when={!connected() && !connecting()}>
+                  <button
+                    type="button"
+                    class="btn"
+                    data-testid="logs-reconnect"
+                    onClick={() => setStreamRevision((revision) => revision + 1)}
+                  >
+                    {t("app.retry")}
+                  </button>
+                </Show>
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={() => {
+                    setLines([]);
+                    setLogRecords([]);
+                    setLogGaps(true);
+                  }}
+                >
                   {t("functions.clearLogs")}
                 </button>
               </>
@@ -1015,7 +1107,7 @@ const Functions: Component = () => {
                   lines().length > 0 ? t("functions.noMatchingLogs") : t("functions.noLogs")
                 }
               >
-                {filteredLines().join("\n")}
+                {filteredLogOutput()}
               </Show>
             </pre>
           </Section>

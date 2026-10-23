@@ -1428,15 +1428,20 @@ enum RepeatTask {
     },
 }
 
+/// The ends one more iteration of `node` can reach from `pos`. An empty iteration is a
+/// candidate only while the count is below the minimum (`allow_empty`), as in RE2 and
+/// ECMAScript: `(.*){2}` matches one character. Above the minimum it adds nothing, and
+/// leaving it out keeps the loop finite.
 fn repeat_candidates(
     node: &Node,
     ctx: &MatchContext<'_>,
     pos: usize,
+    allow_empty: bool,
 ) -> Result<Vec<(usize, Captures)>, RegexRuntimeError> {
     let original_captures = clone_current_captures(ctx);
     let mut candidates = Vec::new();
     let result = match_node(node, ctx, pos, &mut |end| {
-        if end > pos {
+        if end > pos || allow_empty {
             candidates.push((end, capture_snapshot(ctx)?));
         }
         Ok(false)
@@ -1511,7 +1516,7 @@ fn match_backtracking_repeat(
                     continue;
                 }
 
-                let candidates = match repeat_candidates(node, ctx, pos) {
+                let candidates = match repeat_candidates(node, ctx, pos, count < min) {
                     Ok(candidates) => candidates,
                     Err(error) => {
                         *ctx.caps.borrow_mut() = original_captures;
@@ -1564,6 +1569,11 @@ fn match_deterministic_repeat(
                 break;
             };
             if next <= end {
+                // An empty iteration repeats as often as the minimum still needs.
+                if current_count < min {
+                    current_count = min;
+                    continue;
+                }
                 break;
             }
             end = next;
@@ -1574,18 +1584,23 @@ fn match_deterministic_repeat(
     }
 
     let mut candidates = vec![(pos, clone_captures(ctx, &original_captures))];
+    // Whether the last candidate ends in an empty iteration, which repeats as often as the
+    // minimum still needs.
+    let mut empty_tail = false;
     while max.is_none_or(|maximum| count + candidates.len() - 1 < maximum) {
         let current = candidates.last().map_or(pos, |(end, _)| *end);
         let Some(end) = deterministic_end(node, ctx, current)? else {
             break;
         };
         if end <= current {
+            empty_tail = true;
             break;
         }
         candidates.push((end, capture_snapshot(ctx)?));
     }
+    let last = candidates.len() - 1;
     for (added, (end, captures)) in candidates.into_iter().enumerate().rev() {
-        if count + added < min {
+        if count + added < min && !(empty_tail && added == last) {
             continue;
         }
         *ctx.caps.borrow_mut() = captures;

@@ -2,6 +2,28 @@
 
 Test clocks and worlds are explicit local testing extensions. Normal daemon configurations keep native application dates, JavaScript timers and Cloud Tasks time. A session inside one daemon still shares the daemon's clock, Rules and Functions; create separate worlds for parallel tests that change any of them.
 
+## TypeScript consumers
+
+The ESM subpaths `fireemu/testing` and `fireemu/control` include declarations for strict NodeNext and bundler resolution. Import the package subpaths directly; no path aliases or separate type package are needed.
+
+```typescript
+import { withTestWorld, type TestWorldOptions } from 'fireemu/testing';
+import { createControlClient } from 'fireemu/control';
+
+const options = { services: ['auth', 'firestore'] as const } satisfies TestWorldOptions;
+const projectId: string = await withTestWorld(options, world => world.projectId);
+
+const client = createControlClient({ origin: 'http://127.0.0.1:9000', token: 'your-control-token' });
+const response: unknown = await client.request('GET', 'sessions/default');
+if (typeof response === 'object' && response !== null && 'session' in response && typeof response.session === 'string') {
+  console.log(response.session);
+}
+```
+
+World and client properties are readonly. `reset()` resolves to the same world, `uiUrl` is `string | undefined`, and service endpoints are optional. `withTestWorld` infers the awaited result of either a synchronous or asynchronous callback. Generic control requests return `unknown`; callers must validate their response before accessing fields. Clock helpers describe the known session and clock responses, while `runDue()` reports timers nested under each codebase. Its timer fields describe the bundled compatible Node runner protocol, not arbitrary custom runners.
+
+The runtime validates service codebase suffixes (`[A-Za-z0-9_-]+`), URL and token syntax, RFC3339 instants, numeric ranges and lifecycle state. Types do not prove those constraints: for example, `runDue` requires an integer budget from 1 through 10000, and generation-scoped getters can throw after disposal. Explicit `origin` and `apiBaseUrl` are mutually exclusive and require an explicit token even when the supplied environment contains one. The `config` object remains extensible; backend configuration validation is authoritative.
+
 ## Configure application time
 
 ```json

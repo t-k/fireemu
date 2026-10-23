@@ -14,6 +14,7 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { t } from "../i18n";
 import { appState } from "../state";
 import { AsyncButton, ConfirmButton, ErrorBanner, FetchState, Notice } from "../components/common";
+import FirestoreQuery from "../components/FirestoreQuery";
 import { decodeSplat, firestoreHref } from "../lib/hrefs";
 import { createPagedList } from "../lib/pagedList";
 import { selectReloadDocument } from "../lib/reloadedDocument";
@@ -886,6 +887,8 @@ const CollectionView: Component<{
       </Show>
       <ErrorBanner message={error()} />
       <Notice message={notice()} />
+      <FirestoreQuery root={props.root} collection={props.path} db={props.db} />
+      <h3 class="mb-3 text-base font-semibold">{t("firestore.documents")}</h3>
       <Show when={adding()}>
         <NewDocumentForm
           root={props.root}

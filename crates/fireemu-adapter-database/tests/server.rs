@@ -71,6 +71,57 @@ async fn plain_requests_round_trip() {
 }
 
 #[tokio::test]
+async fn repeated_authorization_headers_are_refused_over_http_in_every_profile() {
+    use fireemu_adapter_database::rest::{Credentials, RulesMode};
+    let mut failures = Vec::new();
+    for (profile, strict, rules) in [
+        ("emulator", false, RulesMode::AllowAll),
+        ("strict", true, RulesMode::AllowAll),
+        ("productionExact", true, RulesMode::DenyAll),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let database = Arc::new(Mutex::new(Database::new(
+            RestOptions {
+                credentials: Credentials {
+                    strict,
+                    id_tokens: None,
+                },
+                rules,
+                ..RestOptions::default()
+            },
+            3,
+        )));
+        let server = tokio::spawn(serve(listener, database, ServerConfig::default()));
+        for credentials in [
+            "Authorization: Bearer owner\r\nAuthorization: Bearer other",
+            "authorization: Bearer other\r\nAUTHORIZATION: Bearer owner",
+            "Authorization: Bearer owner\r\nauthorization: Bearer owner",
+        ] {
+            for method in ["GET", "PUT"] {
+                let mut stream = TcpStream::connect(&address).await.unwrap();
+                let request = format!(
+                    "{method} /a.json?ns=dupauth HTTP/1.1\r\nHost: {address}\r\n{credentials}\r\nContent-Length: 1\r\nConnection: close\r\n\r\n1"
+                );
+                stream.write_all(request.as_bytes()).await.unwrap();
+                let mut response = String::new();
+                tokio::time::timeout(Duration::from_secs(5), stream.read_to_string(&mut response))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if !response.starts_with("HTTP/1.1 400") || !response.contains("Ambiguous request")
+                {
+                    failures.push(format!("{profile} {method} {credentials:?}: {response}"));
+                }
+            }
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
 async fn raw_quotes_and_braces_in_the_query_are_accepted() {
     // curl and the Firebase documentation send `orderBy="$key"` unencoded; the official
     // emulator accepts it, so the server must not refuse the request line.
@@ -241,8 +292,17 @@ impl Client {
         self.next_within(Duration::from_secs(5)).await
     }
 
-    /// The next frame, waiting at most `limit`.
+    /// The next frame, waiting at most `limit`. A reset reads as the end too.
     async fn next_within(&mut self, limit: Duration) -> (u8, Vec<u8>) {
+        match self.next_or_end_within(limit).await {
+            (RESET, payload) => (0xFF, payload),
+            frame => frame,
+        }
+    }
+
+    /// The next frame, waiting at most `limit`: opcode 0xFF for the end of the stream and
+    /// [`RESET`] for a reset connection.
+    async fn next_or_end_within(&mut self, limit: Duration) -> (u8, Vec<u8>) {
         tokio::time::timeout(limit, async {
             loop {
                 if self.buffer.len() >= 2 {
@@ -262,8 +322,9 @@ impl Client {
                     }
                 }
                 let mut chunk = [0u8; 4096];
-                // A reset connection (Linux answers unread data with RST) ends it like EOF.
-                let n = self.stream.read(&mut chunk).await.unwrap_or(0);
+                let Ok(n) = self.stream.read(&mut chunk).await else {
+                    return (RESET, Vec::new());
+                };
                 if n == 0 {
                     return (0xFF, Vec::new());
                 }
@@ -279,6 +340,55 @@ impl Client {
         assert_eq!(opcode, 0x1, "{payload:?}");
         String::from_utf8(payload).unwrap()
     }
+}
+
+/// What [`Client::next_or_end_within`] answers for a reset connection.
+const RESET: u8 = 0xFE;
+
+#[tokio::test]
+async fn a_closed_websocket_ends_with_its_data_even_when_the_client_sent_more() {
+    // The flake report of 2026-10-21: a socket closed while the client's frames sit unread is
+    // reset, and the reset loses the server's last data and its FIN (macOS may even drop the
+    // reset, leaving the client half-open). The server reads and discards what is left first.
+    let (address, _database) = start(Duration::from_secs(30)).await;
+    for _ in 0..20 {
+        let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=wl").await;
+        client.next_text().await;
+        client.send(0x8, &[0x03, 0xE8]).await;
+        for _ in 0..64 {
+            client.text(&"x".repeat(1_000)).await;
+        }
+        let (opcode, _) = client.next_or_end_within(Duration::from_secs(10)).await;
+        assert_eq!(opcode, 0x8, "the close echo");
+        let (end, _) = client.next_or_end_within(Duration::from_secs(10)).await;
+        assert_eq!(end, 0xFF, "a clean end of stream, not a reset");
+    }
+}
+
+#[tokio::test]
+async fn a_closing_websocket_reads_what_follows_for_a_bounded_time_only() {
+    // Review r10 S27: a client that keeps sending after its close frame cannot hold the
+    // connection open; the server stops reading after its linger time (2 s) and closes, so the
+    // client's writes start failing.
+    let (address, _database) = start(Duration::from_secs(30)).await;
+    let (mut client, _) = Client::connect(&address, "/.ws?v=5&ns=wb").await;
+    client.next_text().await;
+    client.send(0x8, &[0x03, 0xE8]).await;
+    let started = tokio::time::Instant::now();
+    let mut ended = false;
+    while started.elapsed() < Duration::from_secs(8) {
+        if !client.try_text(&"x".repeat(1_000)).await {
+            ended = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(ended, "the server still read after {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "closed after {:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]
@@ -900,17 +1010,213 @@ async fn a_websocket_dropped_for_falling_behind_writes_what_it_registered_once()
     }
     assert_eq!(database.lock().unwrap().listen_count(), 0, "never dropped");
     eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
-    // What the dropped socket still sends is not applied after it.
+    // What the dropped socket still sends does not land after the onDisconnect write. This
+    // shows the outcome only: whether the server read the frame and refused it, or never
+    // read it, is pinned by server::tests::a_connection_dropped_for_falling_behind_answers_nothing_more.
     reader
         .text(r#"{"t":"d","d":{"r":3,"a":"p","b":{"p":"/presence","d":"online"}}}"#)
         .await;
-    // Reading again lets the server finish the pushes it was writing and read that frame. The
-    // backlog is megabytes of large frames, which a loaded machine can take a while to drain.
-    loop {
-        let (opcode, _) = reader.next_within(Duration::from_secs(60)).await;
-        if opcode == 0x8 || opcode == 0xFF {
-            break;
+    // Reading again lets the server finish the pushes it was writing. The backlog is megabytes
+    // of large frames, which a loaded machine can take a while to drain; the connection then
+    // ends with a clean end of stream, never a reset (the server reads what is left first).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut drained = 0;
+    let end = loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let (opcode, payload) = reader.next_or_end_within(left).await;
+        drained += payload.len();
+        if matches!(opcode, 0x8 | 0xFF | RESET) {
+            break opcode;
         }
-    }
+    };
+    assert_ne!(end, RESET, "reset after draining {drained} bytes");
     eventually(&address, "/presence.json?ns=w22", r#""offline""#).await;
+}
+
+#[tokio::test]
+async fn a_stream_the_rules_no_longer_allow_ends_after_its_cancel_event() {
+    let (address, database) = start(Duration::from_secs(60)).await;
+    let rules = |body: &'static str| {
+        let address = address.clone();
+        async move {
+            let mut stream = TcpStream::connect(&address).await.unwrap();
+            let request = format!(
+                "PUT /.settings/rules.json?ns=rc HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer owner\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            response
+        }
+    };
+    assert!(rules(r#"{"rules":{".read":true}}"#)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    let request = format!(
+        "GET /s.json?ns=rc HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    read_until(&mut stream, "data: {\"path\":\"/\",\"data\":null}\n\n").await;
+    assert!(rules(r#"{"rules":{".read":false}}"#)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    // The chunked body ends right after the event.
+    let tail = read_until(&mut stream, "0\r\n\r\n").await;
+    assert!(
+        tail.ends_with("event: cancel\ndata: Permission denied\n\n\r\n0\r\n\r\n"),
+        "{tail:?}"
+    );
+    assert_eq!(database.lock().unwrap().subscription_count(), 0);
+}
+
+/// This host's own non-loopback address, which the kernel delivers as the peer of a
+/// connection to it; `None` on a host without one (a sandbox without a network).
+fn own_non_loopback_address() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+/// One request with the owner's credential; `None` when `host` cannot be reached in time
+/// (a host firewall, a sandbox).
+async fn owner_call(host: &str, method: &str, target: &str, body: &str) -> Option<String> {
+    let limit = Duration::from_secs(5);
+    let mut stream = tokio::time::timeout(limit, TcpStream::connect(host))
+        .await
+        .ok()?
+        .ok()?;
+    let request = format!(
+        "{method} {target} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer owner\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.ok()?;
+    let mut response = String::new();
+    tokio::time::timeout(limit, stream.read_to_string(&mut response))
+        .await
+        .ok()?
+        .ok()?;
+    Some(response)
+}
+
+async fn assert_owner_answer(
+    host: &str,
+    cell: (&str, &str),
+    request: (&str, &str, &str),
+    expected: u16,
+) {
+    let (profile, peer) = cell;
+    let (method, target, body) = request;
+    let answer = owner_call(host, method, target, body).await.unwrap();
+    assert!(
+        answer.starts_with(&format!("HTTP/1.1 {expected}")),
+        "{profile} {peer} {method} {target}: {answer}"
+    );
+    if peer == "remote" && expected == 403 {
+        assert!(
+            answer.contains("this route answers loopback peers only"),
+            "{answer}"
+        );
+    }
+    eprintln!("executed rules peer={peer} profile={profile} method={method} target={target} status={expected}");
+}
+
+#[tokio::test]
+async fn the_rules_route_answers_loopback_peers_only_however_its_path_is_written() {
+    // Ruling 17 and review r11 M34/S30: a peer on another host is refused the rules route,
+    // under every profile and with the owner's credential, for every spelling of the path the
+    // router reads as the rules route; data stays served to it, and loopback peers keep the
+    // route.
+    use fireemu_adapter_database::rest::{Credentials, RulesMode};
+    let strict = || Credentials {
+        strict: true,
+        id_tokens: None,
+    };
+    let profiles = [
+        ("emulator", Credentials::default(), RulesMode::AllowAll),
+        ("strict", strict(), RulesMode::AllowAll),
+        ("productionExact", strict(), RulesMode::DenyAll),
+    ];
+    let rules_routes = [
+        ("/.settings/rules.json?ns=r", 200, 403),
+        ("//.settings/rules.json?ns=r", 200, 403),
+        ("///.settings/rules.json?ns=r", 200, 403),
+        ("/%2Esettings/rules.json?ns=r", 403, 403),
+        ("/%2esettings/rules.json?ns=r", 403, 403),
+        ("/%2F.settings/rules.json?ns=r", 403, 403),
+        ("/.settings%2Frules.json?ns=r", 403, 403),
+        ("/./.settings/rules.json?ns=r", 400, 400),
+        ("/../.settings/rules.json?ns=r", 400, 400),
+        ("/x/../.settings/rules.json?ns=r", 400, 400),
+        ("/%2E/.settings/rules.json?ns=r", 400, 400),
+    ];
+    let total_cells = rules_routes.len() * 2;
+    let require_remote = std::env::var_os("FIREEMU_REQUIRE_NON_LOOPBACK_TEST").is_some();
+    let remote_ip = own_non_loopback_address();
+    for (profile, credentials, rules) in profiles {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let database = Arc::new(Mutex::new(Database::new(
+            RestOptions {
+                credentials,
+                rules,
+                ..RestOptions::default()
+            },
+            3,
+        )));
+        let server = tokio::spawn(serve(
+            listener,
+            Arc::clone(&database),
+            ServerConfig::default(),
+        ));
+        let loopback = format!("127.0.0.1:{port}");
+        for (target, local_status, _) in rules_routes {
+            for request in [
+                ("GET", target, ""),
+                ("PUT", target, r#"{"rules":{".read":true}}"#),
+            ] {
+                assert_owner_answer(&loopback, (profile, "loopback"), request, local_status).await;
+            }
+        }
+        let Some(ip) = remote_ip else {
+            eprintln!("skipped the off-loopback half: this host has no non-loopback address");
+            eprintln!("rules peer summary profile={profile} loopback_cells={total_cells} remote_cells=0 skipped=true");
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(
+                !require_remote,
+                "the required non-loopback peer is unavailable for {profile}"
+            );
+            continue;
+        };
+        let remote = std::net::SocketAddr::new(ip, port).to_string();
+        let Some(answer) = owner_call(&remote, "GET", "/.json?ns=r", "").await else {
+            eprintln!("skipped the off-loopback half: {remote} does not reach the server");
+            eprintln!("rules peer summary profile={profile} loopback_cells={total_cells} remote_cells=0 skipped=true");
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(
+                !require_remote,
+                "the required non-loopback peer cannot reach the server for {profile}"
+            );
+            continue;
+        };
+        assert!(
+            answer.starts_with("HTTP/1.1 200"),
+            "{profile} data from {remote}: {answer}"
+        );
+        for (target, _, remote_status) in rules_routes {
+            for request in [
+                ("GET", target, ""),
+                ("PUT", target, r#"{"rules":{".read":true}}"#),
+            ] {
+                assert_owner_answer(&remote, (profile, "remote"), request, remote_status).await;
+            }
+        }
+        eprintln!("rules peer summary profile={profile} loopback_cells={total_cells} remote_cells={total_cells} skipped=false");
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
 }

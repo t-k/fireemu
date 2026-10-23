@@ -198,3 +198,75 @@ class OutputTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+class BinaryComparisonTests(unittest.TestCase):
+    def test_baseline_candidate_roles_and_labels(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            manifest=root/'manifest.json';meta=json.loads(manifest.read_text())
+            meta['comparison']={'baseline':'baseline-fireemu','candidate':'candidate-fireemu'}
+            meta['binaries']={role:{'sha256':letter*64,'version':'fireemu 1','path':'/'+role}
+                              for role,letter in [('baseline-fireemu','a'),('candidate-fireemu','b')]}
+            manifest.write_text(json.dumps(meta))
+            for path in root.glob('block-*/trial.json'):
+                trial=json.loads(path.read_text());old=trial['engine']
+                trial['engine']='baseline-fireemu' if old=='official' else 'candidate-fireemu'
+                trial['binary_sha256']=meta['binaries'][trial['engine']]['sha256']
+                path.write_text(json.dumps(trial))
+            self.assertTrue(render(root))
+            result=json.loads((root/'summary.json').read_text())
+            self.assertEqual(result['schema_version'],3)
+            self.assertEqual(result['comparison'],meta['comparison'])
+            self.assertIn('baseline-fireemu',(root/'summary.md').read_text())
+            self.assertNotIn('Official',(root/'summary.md').read_text())
+            self.assertIn('baseline_median',result['rows'][0])
+            self.assertNotIn('official_median',result['rows'][0])
+            path=next(root.glob('block-*/trial.json'));trial=json.loads(path.read_text())
+            trial['binary_sha256']='c'*64;path.write_text(json.dumps(trial))
+            self.assertFalse(render(root))
+    def test_unknown_comparison_cannot_relabel_official_results(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            path=root/'manifest.json';meta=json.loads(path.read_text())
+            meta['comparison']={'baseline':'mystery','candidate':'fireemu'}
+            path.write_text(json.dumps(meta))
+            with self.assertRaises(ValueError):render(root)
+
+class CleanupEvidenceTests(unittest.TestCase):
+    def test_dirty_cleanup_invalidates_even_when_ok_field_claims_success(self):
+        for evidence in [{'cleanup':{'forced_kill':True}}, {'cleanup':{'remaining_pids':[123]}},
+                         {'client_cleanup':{'exit_code':1}}, {'client_cleanup':{'forced_kill':True}}]:
+            with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as d:
+                root=Path(d);fixture(root)
+                path=next(root.glob('block-*/trial.json'));trial=json.loads(path.read_text())
+                trial.update(evidence);path.write_text(json.dumps(trial))
+                self.assertFalse(render(root))
+
+class MixedReportContextTests(unittest.TestCase):
+    def test_mixed_http_workloads_have_service_neutral_titles_and_transport_definitions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);fixture(root)
+            manifest=root/'manifest.json';meta=json.loads(manifest.read_text())
+            meta['mixed_services']=True;manifest.write_text(json.dumps(meta))
+            for path in root.glob('block-*/trial.json'):
+                trial=json.loads(path.read_text())
+                probe=json.loads(json.dumps(trial['cases'][0]));probe['spec']['id']='mixed-storage'
+                trial['cases'].append(probe);path.write_text(json.dumps(trial))
+            self.assertTrue(render(root))
+            report=(root/'summary.md').read_text()
+            self.assertIn('Workload latency — ms',report)
+            self.assertIn('Workload throughput — req/s',report)
+            self.assertIn('mixed-storage',report)
+            self.assertIn('Storage, Auth and Hub probes use HTTP',report)
+            self.assertIn('Firestore probes use Admin gRPC',report)
+            self.assertNotIn('Firestore latency — ms',report)
+            self.assertNotIn('OS file cache uncontrolled. Admin gRPC unless',report)
+
+    def test_default_firestore_report_preserves_legacy_titles_and_transport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);fixture(root);self.assertTrue(render(root))
+            report=(root/'summary.md').read_text()
+            self.assertIn('Firestore latency — ms',report)
+            self.assertIn('Firestore throughput — req/s',report)
+            self.assertIn('OS file cache uncontrolled. Admin gRPC unless a case is rules-*.',report)
+            self.assertNotIn('Storage, Auth and Hub probes use HTTP',report)

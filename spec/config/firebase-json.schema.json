@@ -20,7 +20,7 @@
       ]
     },
     "database": {
-      "description": "Realtime Database rules: one entry for every instance, or an array of entries naming their instance or deploy target. fireemu checks the shape but does not evaluate the rules yet (it says so at startup); requests are answered as without rules.",
+      "description": "Realtime Database rules, loaded as firebase-tools 15.28.2 loads them: one entry for the project's default instance (<project>-default-rtdb; its instance and target are ignored, and without rules it names none), or an array of entries for their deploy target's instances (from .firebaserc) or their instance. A file that does not load stops the start; a change is loaded again, and a change that does not load keeps the rules in force.",
       "oneOf": [
         { "$ref": "#/$defs/databaseEntry" },
         {
@@ -28,10 +28,10 @@
           "items": {
             "allOf": [
               { "$ref": "#/$defs/databaseEntry" },
+              { "required": ["rules"] },
               { "anyOf": [{ "required": ["instance"] }, { "required": ["target"] }] }
             ]
-          },
-          "minItems": 1
+          }
         }
       ]
     },
@@ -95,7 +95,6 @@
     "databaseEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["rules"],
       "properties": {
         "rules": { "type": "string" },
         "instance": { "type": "string" },

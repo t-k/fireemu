@@ -16,12 +16,17 @@ use fireemu_core_database::key::validate_key;
 use fireemu_core_database::node::VALUE_KEY;
 use fireemu_core_database::path::PRIORITY_KEY;
 use fireemu_core_database::push_id::PushIdGenerator;
-use fireemu_core_database::server_value::{resolve, stored_priority, SERVER_VALUE_KEY};
+use fireemu_core_database::rules::ReadKind;
+use fireemu_core_database::server_value::{
+    has_server_value, resolve, stored_priority, SERVER_VALUE_KEY,
+};
 use fireemu_core_database::{
     Content, DatabaseError, ErrorKind, Format, Json, Limits, Node, Path, Priority, QueryParams,
     ServerValueContext, Tree,
 };
 
+use crate::access::{Access, LoadedRules, WriteOp};
+pub use crate::access::{Credentials, IdTokenVerifier};
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{
     output_json, parse, priority_at, render, value_at, written_priority_at, ParseError, Style,
@@ -30,6 +35,19 @@ use crate::listen::Listen;
 use crate::namespace::route;
 use crate::on_disconnect::Pending;
 use crate::request::{self, Location, Output, Refusal};
+
+/// Where a request comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peer {
+    /// A loopback address.
+    Loopback,
+    /// Any other host.
+    Remote,
+}
+
+/// The refusal of a loopback-only route to another host, the same as Fireemu's Firestore and
+/// Storage rules routes give.
+pub const REMOTE_REFUSAL: &str = "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not the control API, rule loading, data clearing or App Check debug-token management";
 
 /// An HTTP request as the REST layer sees it.
 #[derive(Debug, Clone, Default)]
@@ -82,6 +100,19 @@ impl SseEvent {
         }
     }
 
+    /// The `cancel` event that ends a stream the rules no longer allow to read.
+    pub fn cancel() -> Self {
+        Self {
+            event: "cancel".to_owned(),
+            data: "Permission denied".to_owned(),
+        }
+    }
+
+    /// Whether this is the `cancel` event, after which the stream ends.
+    pub fn is_cancel(&self) -> bool {
+        self.event == "cancel"
+    }
+
     /// The event as stream text.
     pub fn to_text(&self) -> String {
         format!("event: {}\ndata: {}\n\n", self.event, self.data)
@@ -119,6 +150,9 @@ pub enum RulesMode {
     DenyAll,
 }
 
+/// The limits the served database writes with and imports are checked against.
+pub const WRITE_LIMITS: Limits = Limits::PRODUCTION;
+
 /// Options of the REST layer.
 #[derive(Debug, Clone)]
 pub struct RestOptions {
@@ -130,6 +164,8 @@ pub struct RestOptions {
     pub limits: Limits,
     /// The longest realtime message, split frames joined (the SDKs' 16 MB write limit).
     pub realtime_message_bytes: usize,
+    /// How credentials are read (the profile's administrators and ID-token checks).
+    pub credentials: Credentials,
     /// Whether `/.inspect/databases.json` answers only the owner credential (strict and a
     /// locked database); the official emulator answers anyone.
     pub inspect_needs_owner: bool,
@@ -140,15 +176,13 @@ impl Default for RestOptions {
         Self {
             default_namespace: "fake-server".to_owned(),
             rules: RulesMode::AllowAll,
-            limits: Limits::default(),
+            limits: WRITE_LIMITS,
             realtime_message_bytes: 16 * 1024 * 1024,
+            credentials: Credentials::default(),
             inspect_needs_owner: false,
         }
     }
 }
-
-/// The credential of the local administrator (firebase-tools sends `Bearer owner`).
-const OWNER: &str = "owner";
 
 const PARSE_ERROR: &str = "Invalid data; couldn't parse JSON object, array, or value.";
 const PATCH_ERROR: &str =
@@ -166,6 +200,8 @@ struct Subscription {
     namespace: String,
     path: Path,
     query: Option<QueryParams>,
+    /// Who opened it, for the rules when they change.
+    access: Access,
     format: Format,
     /// The view last sent.
     last: Json,
@@ -179,6 +215,7 @@ struct Call<'a> {
     want_etag: bool,
     condition: Option<Condition<'a>>,
     context: ServerValueContext,
+    access: Access,
 }
 
 /// A conditional request header.
@@ -284,13 +321,44 @@ pub struct Database {
     events: Vec<(u64, SseEvent)>,
     /// Called when pushes or events wait outside a request, so the server delivers them.
     waker: Waker,
+    clock: ServerClock,
     /// The writes each realtime connection registered for its end, with its namespace.
     on_disconnect: BTreeMap<u64, (String, Pending)>,
+    /// The rules loaded per namespace.
+    rules: BTreeMap<String, LoadedRules>,
+    /// Who each realtime connection is (anonymous until it authenticates).
+    client_access: BTreeMap<u64, Access>,
 }
 
 /// The server's callback for messages that wait outside a request.
 #[derive(Clone, Default)]
 struct Waker(Option<std::sync::Arc<dyn Fn() + Send + Sync>>);
+
+/// The server time for changes made outside a request (a session reset or restore): the
+/// server's clock once it serves, the system clock before.
+#[derive(Clone, Default)]
+struct ServerClock(Option<std::sync::Arc<dyn Fn() -> i64 + Send + Sync>>);
+
+impl ServerClock {
+    fn now(&self) -> i64 {
+        match &self.0 {
+            Some(clock) => clock(),
+            None => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX)),
+        }
+    }
+}
+
+impl std::fmt::Debug for ServerClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "ServerClock(set)"
+        } else {
+            "ServerClock(system)"
+        })
+    }
+}
 
 impl std::fmt::Debug for Waker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -321,7 +389,10 @@ impl Database {
             session_rng: seed ^ 0x5EED_5E55_1011_D5ED,
             events: Vec::new(),
             waker: Waker::default(),
+            clock: ServerClock::default(),
             on_disconnect: BTreeMap::new(),
+            rules: BTreeMap::new(),
+            client_access: BTreeMap::new(),
         }
     }
 
@@ -346,6 +417,128 @@ impl Database {
         self.subscriptions.remove(&id);
     }
 
+    /// `/.settings/rules.json`: an administrator reads or loads the rules of the namespace.
+    /// Who a request is. The strict profile refuses a credential that names no one, as a
+    /// denial.
+    fn access(
+        &self,
+        request: &HttpRequest,
+        params: &BTreeMap<String, String>,
+        namespace: &str,
+        streaming: bool,
+        now_millis: i64,
+    ) -> Result<Access, Refusal> {
+        Access::from_rest(
+            request.header("Authorization"),
+            params,
+            &self.options.credentials,
+            namespace,
+            now_millis,
+        )
+        .map_err(|_| read_refused(streaming))
+    }
+
+    fn settings(
+        &mut self,
+        raw_path: &str,
+        method: &str,
+        namespace: &str,
+        access: &Access,
+        request: &HttpRequest,
+        now_millis: i64,
+    ) -> Result<Handled, Refusal> {
+        let administrator = match access {
+            Access::Owner => true,
+            Access::Admin => self.options.rules == RulesMode::AllowAll,
+            _ => false,
+        };
+        if !administrator || raw_path.trim_matches('/') != ".settings/rules.json" {
+            return Err(Refusal::new(403, "Permission denied."));
+        }
+        match method {
+            "GET" => Ok(respond(HttpResponse {
+                status: 200,
+                headers: json_headers(),
+                body: self.rules_text(namespace).into_bytes(),
+            })),
+            "PUT" => {
+                let text = String::from_utf8_lossy(&request.body).into_owned();
+                match self.set_rules(namespace, &text, now_millis) {
+                    Ok(events) => Ok(Handled::Response {
+                        response: HttpResponse {
+                            status: 200,
+                            headers: json_headers(),
+                            body: br#"{"status":"ok"}"#.to_vec(),
+                        },
+                        events,
+                    }),
+                    Err(error) => Err(Refusal::bad(format!("{error}\n"))),
+                }
+            }
+            _ => Err(Refusal::new(405, "Unsupported request type")),
+        }
+    }
+
+    pub(crate) fn loaded_rules(&self, namespace: &str) -> Option<&LoadedRules> {
+        self.rules.get(namespace)
+    }
+
+    pub(crate) fn store_rules(&mut self, namespace: &str, loaded: LoadedRules) {
+        self.rules.insert(namespace.to_owned(), loaded);
+    }
+
+    pub(crate) fn store_client_access(&mut self, client: u64, access: Access) {
+        self.client_access.insert(client, access);
+    }
+
+    /// Who a realtime connection is.
+    pub(crate) fn client_access(&self, client: u64) -> Access {
+        self.client_access
+            .get(&client)
+            .cloned()
+            .unwrap_or(Access::Anonymous)
+    }
+
+    /// The realtime listens of `namespace`: id, connection, location and query.
+    pub(crate) fn listen_entries(
+        &self,
+        namespace: &str,
+    ) -> Vec<(u64, u64, Path, Option<QueryParams>)> {
+        self.listens
+            .iter()
+            .filter(|(_, l)| l.namespace == namespace)
+            .map(|(id, l)| (*id, l.client, l.path.clone(), l.query.clone()))
+            .collect()
+    }
+
+    pub(crate) fn drop_listen(&mut self, id: u64) {
+        self.listens.remove(&id);
+    }
+
+    /// Queues a data message for a realtime connection.
+    pub(crate) fn push_raw(&mut self, client: u64, frame: String) {
+        self.pushes.push((client, frame));
+    }
+
+    /// The event streams of `namespace`: id, location, query and who opened them.
+    pub(crate) fn subscription_entries(
+        &self,
+        namespace: &str,
+    ) -> Vec<(u64, Path, Option<QueryParams>, Access)> {
+        self.subscriptions
+            .iter()
+            .filter(|(_, s)| s.namespace == namespace)
+            .map(|(id, s)| (*id, s.path.clone(), s.query.clone(), s.access.clone()))
+            .collect()
+    }
+
+    /// Asks the server to deliver what waits outside a request.
+    pub(crate) fn wake(&self) {
+        if let Some(waker) = &self.waker.0 {
+            waker();
+        }
+    }
+
     /// The number of open event streams.
     pub fn subscription_count(&self) -> usize {
         self.subscriptions.len()
@@ -365,6 +558,27 @@ impl Database {
         parsed: Option<ParsedBody>,
         now_millis: i64,
     ) -> Handled {
+        self.handle_from(request, parsed, now_millis, Peer::Loopback)
+    }
+
+    /// [`Database::handle_parsed`] for a request from `peer`: the rules route answers
+    /// loopback peers only (ruling 17).
+    pub fn handle_from(
+        &mut self,
+        request: &HttpRequest,
+        parsed: Option<ParsedBody>,
+        now_millis: i64,
+        peer: Peer,
+    ) -> Handled {
+        let refused = (peer == Peer::Remote)
+            .then(|| request::split_target(&request.target).0)
+            .filter(|path| request::names_settings(path));
+        if refused.is_some() {
+            return Handled::Response {
+                response: refusal_response(&Refusal::new(403, REMOTE_REFUSAL)),
+                events: Vec::new(),
+            };
+        }
         match self.dispatch(request, parsed, now_millis) {
             Ok(handled) => handled,
             Err(refusal) => Handled::Response {
@@ -374,6 +588,8 @@ impl Database {
         }
     }
 
+    // One request's path through the checks, in the official emulator's order.
+    #[allow(clippy::too_many_lines)]
     fn dispatch(
         &mut self,
         request: &HttpRequest,
@@ -381,6 +597,12 @@ impl Database {
         now_millis: i64,
     ) -> Result<Handled, Refusal> {
         request::check_escapes(&request.target)?;
+        let authorization_count = request
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("Authorization"))
+            .count();
+        request::check_ambiguity(&request.target, authorization_count)?;
         let method = request
             .header("X-HTTP-Method-Override")
             .unwrap_or(&request.method)
@@ -399,13 +621,16 @@ impl Database {
             return Err(Refusal::new(405, "Unsupported request type"));
         }
         let writing = method != "GET";
+        let streaming = request
+            .header("Accept")
+            .is_some_and(|v| v.contains("text/event-stream"));
+        let access = self.access(request, &params, &namespace, streaming, now_millis)?;
         let path = match request::location(raw_path, writing, &self.options.limits)? {
             Location::Data(path) => path,
-            Location::Settings => return Err(Refusal::new(403, "Permission denied.")),
-            Location::Inspect(name) => {
-                let owner = credential(request, &params) == Some(OWNER);
-                return self.inspect(&method, &name, &namespace, owner);
+            Location::Settings => {
+                return self.settings(raw_path, &method, &namespace, &access, request, now_millis);
             }
+            Location::Inspect(name) => return self.inspect(&method, &name, &namespace, &access),
         };
         request::check_disable_triggers(&params, writing, request.header("Authorization"))?;
         let condition = condition(request, &method)?;
@@ -426,20 +651,22 @@ impl Database {
         } else {
             request::query(&params, output.shallow)?
         };
+        // An event stream whose query only orders loads all the data, and the official
+        // emulator follows it as a plain stream: judged without the query, needing no index.
+        let query = query.filter(|q| !(streaming && loads_all_data(q)));
+        // The rules come before the index (the official emulator's order, review S6).
+        let (kind, judged) = read_kind(streaming, output.shallow, query.as_ref());
+        if !writing && !self.may_read(&namespace, &path, judged, kind, &access, now_millis) {
+            return Err(read_refused(streaming));
+        }
         if let Some(query) = &query {
             self.check_index(&namespace, &path, query)?;
-        }
-        if self.options.rules == RulesMode::DenyAll && credential(request, &params) != Some(OWNER) {
-            return Err(Refusal::new(401, "Permission denied"));
         }
         let want_etag = request
             .header("X-Firebase-ETag")
             .is_some_and(|v| v.eq_ignore_ascii_case("true"));
-        let streaming = request
-            .header("Accept")
-            .is_some_and(|v| v.contains("text/event-stream"));
         if method == "GET" && streaming {
-            return Ok(self.subscribe(namespace, path, query, &output));
+            return Ok(self.subscribe(namespace, path, query, &output, access));
         }
         let call = Call {
             namespace,
@@ -448,6 +675,7 @@ impl Database {
             want_etag,
             condition,
             context: ServerValueContext { now_millis },
+            access,
         };
         match method.as_str() {
             "GET" => {
@@ -483,6 +711,28 @@ impl Database {
     fn put(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
         let written_paths = [call.path.clone()];
         let before = self.before_write(&call.namespace, &written_paths);
+        // A conditional write answers with the value it compares, so it needs the read as
+        // well as the write, both checked before the comparison, as the official emulator
+        // does (review M1).
+        if call.condition.is_some() {
+            let now = call.context.now_millis;
+            let writable = body.json.as_ref().map_or(true, |value| {
+                let op = WriteOp::Set(&call.path, value);
+                self.may_write(&call.namespace, &op, &call.access, now)
+            });
+            if !writable
+                || !self.may_read(
+                    &call.namespace,
+                    &call.path,
+                    None,
+                    ReadKind::Check,
+                    &call.access,
+                    now,
+                )
+            {
+                return Err(Refusal::new(401, "Permission denied"));
+            }
+        }
         let tree = &mut self.namespace(&call.namespace).tree;
         let current = tree.get(&call.path);
         let current_tag = tag_at(tree, &call.path);
@@ -496,6 +746,11 @@ impl Database {
             _ => {}
         }
         let value = body.json.map_err(|_| Refusal::bad(PARSE_ERROR))?;
+        let op = WriteOp::Set(&call.path, &value);
+        if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
+        let tree = &mut self.namespace(&call.namespace).tree;
         let node = tree
             .set(&call.path, &value, call.context)
             .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
@@ -509,7 +764,12 @@ impl Database {
         );
         let [path] = written_paths;
         let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
-        Ok(self.after_write(&call.namespace, response, &Change::Put { path, effective }))
+        Ok(self.after_write(
+            &call.namespace,
+            response,
+            &Change::Put { path, effective },
+            call.context.now_millis,
+        ))
     }
 
     fn post(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
@@ -518,6 +778,10 @@ impl Database {
             .push_ids
             .next(u64::try_from(call.context.now_millis).unwrap_or(0));
         let child = call.path.child(&id);
+        let op = WriteOp::Set(&child, &value);
+        if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
         self.namespace(&call.namespace)
             .tree
             .set(&child, &value, call.context)
@@ -529,7 +793,7 @@ impl Database {
             path: child,
             effective: true,
         };
-        Ok(self.after_write(&call.namespace, response, &change))
+        Ok(self.after_write(&call.namespace, response, &change, call.context.now_millis))
     }
 
     fn patch(&mut self, call: &Call<'_>, body: Body<'_>) -> Result<Handled, Refusal> {
@@ -540,6 +804,10 @@ impl Database {
             .iter()
             .map(|entry| (entry.key.clone(), entry.value.clone()))
             .collect();
+        let op = WriteOp::Update(&call.path, &wire);
+        if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
+            return Err(Refusal::new(401, "Permission denied"));
+        }
         let tree = &mut self.namespace(&call.namespace).tree;
         // The answer echoes the request with its placeholders resolved, read before the
         // update changes what they resolve against.
@@ -560,7 +828,7 @@ impl Database {
             base: call.path.clone(),
             entries,
         };
-        Ok(self.after_write(&call.namespace, response, &change))
+        Ok(self.after_write(&call.namespace, response, &change, call.context.now_millis))
     }
 
     fn namespace(&mut self, name: &str) -> &mut Namespace {
@@ -581,11 +849,15 @@ impl Database {
         let Some(spec) = request::required_index(&query.order_by) else {
             return Ok(());
         };
-        let declared = self
-            .indexes
-            .get(namespace)
-            .and_then(|by_path| by_path.get(path))
-            .is_some_and(|specs| specs.contains(&spec));
+        // Loaded rules declare the indexes; without them, what tests declared directly.
+        let declared = match self.rules.get(namespace) {
+            Some(loaded) => loaded.rules.index_on(path).contains(&spec),
+            None => self
+                .indexes
+                .get(namespace)
+                .and_then(|by_path| by_path.get(path))
+                .is_some_and(|specs| specs.contains(&spec)),
+        };
         if declared {
             return Ok(());
         }
@@ -600,6 +872,7 @@ impl Database {
         path: Path,
         query: Option<QueryParams>,
         output: &Output,
+        access: Access,
     ) -> Handled {
         let format = if output.export {
             Format::Export
@@ -617,6 +890,7 @@ impl Database {
                 namespace,
                 path,
                 query,
+                access,
                 format,
                 last: view,
             },
@@ -637,9 +911,33 @@ impl Database {
         }
     }
 
-    fn after_write(&mut self, namespace: &str, response: HttpResponse, change: &Change) -> Handled {
-        let events = self.notify(namespace, change);
+    fn after_write(
+        &mut self,
+        namespace: &str,
+        response: HttpResponse,
+        change: &Change,
+        now: i64,
+    ) -> Handled {
+        let events = self.notify(namespace, change, now);
         Handled::Response { response, events }
+    }
+
+    /// The events a committed change in `namespace` causes: first the listens and event
+    /// streams whose read the rules no longer allow are cancelled (the official emulator
+    /// sends the cancellation instead of the change, review M2), then the others hear it.
+    pub(crate) fn notify(
+        &mut self,
+        namespace: &str,
+        change: &Change,
+        now: i64,
+    ) -> Vec<(u64, SseEvent)> {
+        let mut events = if self.loaded_rules(namespace).is_some() {
+            self.revoke(namespace, None, now)
+        } else {
+            Vec::new()
+        };
+        events.extend(self.notify_views(namespace, change));
+        events
     }
 
     /// `/.inspect/<name>`: `databases.json` lists every namespace a request reached, the one
@@ -651,7 +949,7 @@ impl Database {
         method: &str,
         name: &str,
         namespace: &str,
-        owner: bool,
+        access: &Access,
     ) -> Result<Handled, Refusal> {
         if method != "GET" {
             return Err(Refusal::new(405, "Unsupported request type"));
@@ -659,7 +957,7 @@ impl Database {
         if name != "databases.json" {
             return Err(Refusal::new(404, "404 Not Found"));
         }
-        if self.options.inspect_needs_owner && !owner {
+        if self.options.inspect_needs_owner && *access != Access::Owner {
             return Err(Refusal::new(401, "Permission denied"));
         }
         self.namespace(namespace);
@@ -694,13 +992,16 @@ impl Database {
     /// Imports `text` into `namespace` as firebase-tools does: `PUT /.json` as the owner with
     /// `disableTriggers=true&writeSizeLimit=unlimited`. The error is the request's.
     pub fn import_text(&mut self, namespace: &str, text: &str, now: i64) -> Result<(), String> {
-        // A valid name needs no escaping in the query.
-        route(Some(namespace), None, namespace)
+        // A valid name needs no escaping in the query; the server keeps it lowercased.
+        let namespace = &route(Some(namespace), None, namespace)
             .map_err(|_| "Invalid Firebase database name".to_owned())?;
         let request = HttpRequest {
             method: "PUT".to_owned(),
             target: format!("/.json?ns={namespace}&disableTriggers=true&writeSizeLimit=unlimited"),
-            headers: vec![("Authorization".to_owned(), format!("Bearer {OWNER}"))],
+            headers: vec![(
+                "Authorization".to_owned(),
+                format!("Bearer {}", crate::access::OWNER),
+            )],
             body: text.as_bytes().to_vec(),
         };
         let response = match self.handle(&request, now) {
@@ -721,8 +1022,33 @@ impl Database {
         })
     }
 
+    /// Installs an import [`prepare_import`] checked, as [`Database::import_text`] would
+    /// write its text: the tree replaces the namespace's data (an equal value keeps the
+    /// stored form), listeners hear the change, and the namespace counts as imported. A file
+    /// with server values is written now, so they resolve against this time and the data.
+    pub fn install_import(&mut self, import: PreparedImport, now: i64) -> Result<(), String> {
+        let (root, limits) = match import.content {
+            ImportContent::Deferred(text) => {
+                return self.import_text(&import.namespace, &text, now)
+            }
+            ImportContent::Built { root, limits } => (root, limits),
+        };
+        if limits != self.options.limits {
+            return Err("the import was checked against other write limits".to_owned());
+        }
+        let paths = [Path::root()];
+        let before = self.before_write(&import.namespace, &paths);
+        self.namespace(&import.namespace).tree.replace_root(root);
+        let effective = self.effective(&import.namespace, &paths, before)[0];
+        let [path] = paths;
+        // The import request's own stream events: `import_text` leaves them unread too.
+        let _ = self.notify(&import.namespace, &Change::Put { path, effective }, now);
+        self.imported.insert(import.namespace);
+        Ok(())
+    }
+
     /// The events a change in `namespace` causes on the open streams.
-    pub(crate) fn notify(&mut self, namespace: &str, change: &Change) -> Vec<(u64, SseEvent)> {
+    fn notify_views(&mut self, namespace: &str, change: &Change) -> Vec<(u64, SseEvent)> {
         let Some(ns) = self.namespaces.get(namespace) else {
             return Vec::new();
         };
@@ -843,6 +1169,11 @@ impl Database {
         self.waker = Waker(Some(waker));
     }
 
+    /// Sets the server time used for changes made outside a request.
+    pub fn set_clock(&mut self, clock: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>) {
+        self.clock = ServerClock(Some(clock));
+    }
+
     /// Empties every namespace `cleared` accepts, as a session reset does: their streams and
     /// listens see the data go, through the waker, and the onDisconnect writes registered for
     /// them are dropped, so a connection from before the reset never writes into the new
@@ -861,6 +1192,7 @@ impl Database {
         if names.is_empty() {
             return;
         }
+        let now = self.clock.now();
         for name in names {
             let limits = self.options.limits;
             self.namespace(&name).tree = Tree::new(limits);
@@ -868,12 +1200,19 @@ impl Database {
                 path: Path::root(),
                 effective: true,
             };
-            let events = self.notify(&name, &change);
+            // As a write would: the reads the rules no longer allow are cancelled first
+            // (review r9 M27).
+            let events = self.notify(&name, &change, now);
             self.events.extend(events);
         }
         if let Some(waker) = &self.waker.0 {
             waker();
         }
+    }
+
+    pub(crate) fn queue_events(&mut self, events: Vec<(u64, SseEvent)>) {
+        self.events.extend(events);
+        self.wake();
     }
 
     /// Copies the namespaces `owned` accepts that hold data or were imported, for a session
@@ -916,6 +1255,7 @@ impl Database {
             .cloned()
             .collect();
         names.extend(snapshot.trees.keys().filter(|name| owned(name)).cloned());
+        let now = self.clock.now();
         for name in names {
             let limits = self.options.limits;
             self.namespace(&name).tree = snapshot
@@ -927,7 +1267,9 @@ impl Database {
                 path: Path::root(),
                 effective: true,
             };
-            let events = self.notify(&name, &change);
+            // As a write would: the reads the rules no longer allow are cancelled before the
+            // restored data reaches the others (review r9 M27).
+            let events = self.notify(&name, &change, now);
             self.events.extend(events);
         }
         if let Some(waker) = &self.waker.0 {
@@ -962,10 +1304,15 @@ impl Database {
     pub fn close_realtime(&mut self, client: u64, now_millis: i64) {
         self.listens.retain(|_, listen| listen.client != client);
         self.pushes.retain(|(to, _)| *to != client);
+        // The writes are made as the connection was at its end, under the rules then.
+        let access = self
+            .client_access
+            .remove(&client)
+            .unwrap_or(Access::Anonymous);
         let Some((namespace, pending)) = self.on_disconnect.remove(&client) else {
             return;
         };
-        let entries = pending.entries();
+        let entries = self.on_disconnect_writes(&namespace, pending.entries(), &access, now_millis);
         if entries.is_empty() {
             return;
         }
@@ -1014,7 +1361,7 @@ impl Database {
                     .collect(),
             }
         };
-        let events = self.notify(&namespace, &change);
+        let events = self.notify(&namespace, &change, now_millis);
         self.events.extend(events);
         if let Some(waker) = &self.waker.0 {
             waker();
@@ -1133,22 +1480,6 @@ fn condition<'a>(request: &'a HttpRequest, method: &str) -> Result<Option<Condit
     })
 }
 
-/// The token of a request: `auth`, `access_token` or an `Authorization: Bearer` header.
-fn credential<'a>(
-    request: &'a HttpRequest,
-    params: &'a BTreeMap<String, String>,
-) -> Option<&'a str> {
-    params
-        .get("auth")
-        .or_else(|| params.get("access_token"))
-        .map(String::as_str)
-        .or_else(|| {
-            request
-                .header("Authorization")
-                .and_then(|v| v.strip_prefix("Bearer "))
-        })
-}
-
 /// A request body parsed ahead of the database lock.
 #[derive(Debug)]
 pub struct ParsedBody {
@@ -1187,6 +1518,100 @@ fn parse_ordered(text: &str) -> ParsedBody {
             order: Vec::new(),
         },
     }
+}
+
+/// The kind of a REST read and the query its rules see, as the official emulator judges it
+/// (review r11 M37, M38): an event stream is a stream with the query it follows (none when
+/// its query only orders); a `shallow` GET has no ordering; any other GET is a GET with its
+/// query.
+fn read_kind(
+    streaming: bool,
+    shallow: bool,
+    query: Option<&QueryParams>,
+) -> (ReadKind, Option<&QueryParams>) {
+    if streaming {
+        (ReadKind::Stream, query)
+    } else if shallow {
+        (ReadKind::Check, query)
+    } else {
+        (ReadKind::Get, query)
+    }
+}
+
+/// Whether a query selects every child: no bound and no limit.
+fn loads_all_data(query: &QueryParams) -> bool {
+    query.start.is_none() && query.end.is_none() && query.limit.is_none()
+}
+
+/// A database file checked for import by [`prepare_import`], ready for
+/// [`Database::install_import`].
+#[derive(Debug)]
+pub struct PreparedImport {
+    /// The namespace, lowercased as the server keeps it.
+    namespace: String,
+    content: ImportContent,
+}
+
+#[derive(Debug)]
+enum ImportContent {
+    /// The data the file describes, built against `limits`.
+    Built { root: Option<Node>, limits: Limits },
+    /// A file with server values, written again when installed: they resolve against the
+    /// time and the stored data then.
+    Deferred(String),
+}
+
+impl PreparedImport {
+    /// The namespace the import fills.
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    /// An estimate of the heap bytes held until it is installed (see
+    /// [`Node::retained_bytes`]), or the text's length for a file with server values.
+    pub fn retained_bytes(&self) -> u64 {
+        match &self.content {
+            ImportContent::Built { root, .. } => root.as_ref().map_or(0, Node::retained_bytes),
+            ImportContent::Deferred(text) => text.len() as u64,
+        }
+    }
+}
+
+/// Checks the file `text` for `namespace` as `PUT /.json` as the owner checks it, with the
+/// same refusals as [`Database::import_text`], and builds its data once: the parsed value is
+/// consumed as the tree is built, so the file is never held three times.
+pub fn prepare_import(
+    namespace: &str,
+    text: String,
+    limits: &Limits,
+) -> Result<PreparedImport, String> {
+    let namespace = route(Some(namespace), None, namespace)
+        .map_err(|_| "Invalid Firebase database name".to_owned())?;
+    if text.is_empty() {
+        return Err("No data supplied.".to_owned());
+    }
+    let json = parse(&text).map_err(|_| PARSE_ERROR.to_owned())?;
+    if has_server_value(&json) {
+        drop(json);
+        let options = RestOptions {
+            limits: *limits,
+            ..RestOptions::default()
+        };
+        Database::new(options, 0).import_text(&namespace, &text, 0)?;
+        return Ok(PreparedImport {
+            namespace,
+            content: ImportContent::Deferred(text),
+        });
+    }
+    let root = Node::from_json_owned(json, &Path::root(), limits)
+        .map_err(|err| write_refusal(&err, || data_refusal(&text)).message)?;
+    Ok(PreparedImport {
+        namespace,
+        content: ImportContent::Built {
+            root,
+            limits: *limits,
+        },
+    })
 }
 
 /// A write body: its text, for refusal positions, and its parsed value.
@@ -1633,6 +2058,19 @@ fn stream_event(
             put_event(&Path::root(), fresh)
         }
         _ => put_event(&Path::root(), fresh),
+    }
+}
+
+/// A refused read: an event stream is answered in plain text, as the official emulator does.
+fn read_refused(streaming: bool) -> Refusal {
+    if streaming {
+        Refusal {
+            status: 401,
+            message: "Permission denied".to_owned(),
+            plain: true,
+        }
+    } else {
+        Refusal::new(401, "Permission denied")
     }
 }
 

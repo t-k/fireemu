@@ -646,3 +646,33 @@ fn deterministic_groups_and_lazy_repeats_avoid_recursive_or_eager_work() {
         expected
     );
 }
+
+#[test]
+fn a_repetition_below_its_minimum_may_take_an_empty_iteration() {
+    // RE2, ECMAScript and the Realtime Database emulator's automaton agree: an iteration that
+    // matches nothing still counts toward the minimum, so `(.*){2}` matches one character.
+    assert!(full("^(.*){2}$", "y"));
+    assert!(full("^(.*|-b*a){2}$", "y"));
+    assert!(full("^(a*)+$", ""));
+    assert!(full("^(a|)+$", ""));
+    assert!(full("^(a*){3}b$", "ab"));
+    assert!(full("^(a*){2,3}$", ""));
+    assert!(!full("^(a*){2}$", "b"));
+    // Fixed-width iterations that are empty count too.
+    assert!(full("^(){2}$", ""));
+    assert!(full("^a(){2}$", "a"));
+    assert!(full("^($)+$", ""));
+    assert!(full("^(^)+a$", "a"));
+    // Lazy repetitions alike.
+    assert!(full("^(){2}?$", ""));
+    assert!(full("^(.*){2}?$", "y"));
+    assert!(full("^(a*)+?$", ""));
+    assert!(full("^($){2,}?$", ""));
+    // An empty iteration can be needed where a non-empty one is also possible.
+    assert!(full("^(a|){3}a$", "aa"));
+    assert!(!full("^(a|){3}a$", "aaaaa"));
+    // Above the minimum an empty iteration adds nothing and is not taken.
+    assert!(full("^(a*)*$", ""));
+    assert!(full("^(a*)*$", "aaa"));
+    assert!(!full("^(a*)*$", "aab"));
+}

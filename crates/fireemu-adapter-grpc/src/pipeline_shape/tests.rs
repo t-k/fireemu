@@ -26,24 +26,73 @@ const DB: &str = "projects/demo-app/databases/(default)";
 
 #[test]
 fn every_recorded_refusal_has_a_shape() {
-    let (requests, _) = json_syntax::parse_with_key_order(REQUESTS.as_bytes()).unwrap();
+    let (requests, order) = json_syntax::parse_with_key_order(REQUESTS.as_bytes()).unwrap();
     let production: Value = serde_json::from_str(PRODUCTION).unwrap();
-    let refused = requests["programs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|p| {
-            let id = p["id"].as_str().unwrap().to_owned();
-            let production = &production;
-            p["steps"].as_array().unwrap().iter().filter(move |s| {
-                s["rpc"] == "executePipeline"
-                    && production["programs"][&id]["steps"][s["id"].as_str().unwrap()]["status"]
-                        == 400
-            })
-        })
-        .count();
-    assert_eq!(refused, 98);
     let table = recorded();
+    let mut original = 0;
+    let mut o5 = 0;
+    let mut eligible = 0;
+    let mut excluded_500 = 0;
+    for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
+        let id = program["id"].as_str().unwrap();
+        for (s, step) in program["steps"].as_array().unwrap().iter().enumerate() {
+            if step["rpc"] != "executePipeline" {
+                continue;
+            }
+            let step_id = step["id"].as_str().unwrap();
+            let row = format!("{id}#{step_id}");
+            let answer = &production["programs"][id]["steps"][step_id];
+            if answer["status"] == 500 {
+                excluded_500 += 1;
+                assert_eq!(
+                    row,
+                    "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"
+                );
+                assert_eq!(answer["body"][0]["error"]["status"], "INTERNAL", "{row}");
+                let message = answer["body"][0]["error"]["message"].as_str().unwrap();
+                assert!(
+                    !table
+                        .values()
+                        .any(|texts| texts.contains(&normalized_text(message))),
+                    "HTTP500 entered refusal table: {row}"
+                );
+                continue;
+            }
+            if answer["status"] != 400 {
+                continue;
+            }
+            if id.starts_with("fs-ent-pipeline/o5/") {
+                o5 += 1;
+            } else {
+                original += 1;
+            }
+            let element = answer["body"]
+                .as_array()
+                .and_then(|a| a.first())
+                .unwrap_or(&answer["body"]);
+            if element["error"]["status"] != "INVALID_ARGUMENT" {
+                continue;
+            }
+            let Some(message) = element["error"]["message"].as_str() else {
+                continue;
+            };
+            eligible += 1;
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{s}/body"), "");
+            let shape = shape_of_json(&step["body"], &body_order)
+                .unwrap_or_else(|| panic!("recorded refusal has no shape: {row}"));
+            assert!(
+                table
+                    .get(&shape)
+                    .is_some_and(|texts| texts.contains(&normalized_text(message))),
+                "recorded shape/text missing: {row}"
+            );
+        }
+    }
+    assert_eq!((original, o5), (98, 291));
+    let refused = original + o5;
+    assert_eq!(refused, 389);
+    assert_eq!(eligible, 389);
+    assert_eq!(excluded_500, 1);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.
     assert!(texts <= refused && texts > 80, "{texts}");
@@ -345,11 +394,15 @@ fn a_map_that_lost_an_entry_has_no_shape() {
 fn only_invalid_argument_rows_enter_the_table() {
     let requests = r#"{"programs": [{"id": "p", "steps": [
         {"id": "a", "rpc": "executePipeline", "body": {"structuredPipeline": {"pipeline": {"stages": [{"name": "limit", "args": [{"stringValue": "x"}]}]}}}},
-        {"id": "b", "rpc": "executePipeline", "body": {"structuredPipeline": {"pipeline": {"stages": [{"name": "offset", "args": [{"stringValue": "x"}]}]}}}}
+        {"id": "b", "rpc": "executePipeline", "body": {"structuredPipeline": {"pipeline": {"stages": [{"name": "offset", "args": [{"stringValue": "x"}]}]}}}},
+        {"id": "c", "rpc": "executePipeline", "body": {"structuredPipeline": {"pipeline": {"stages": [{"name": "limit", "args": [{"stringValue": "x"}]}]}}}},
+        {"id": "d", "rpc": "executePipeline", "body": {"structuredPipeline": {"pipeline": {"stages": [{"name": "offset", "args": [{"stringValue": "x"}]}]}}}}
     ]}]}"#;
     let production = r#"{"programs": {"p": {"steps": {
         "a": {"status": 400, "body": [{"error": {"code": 400, "message": "A", "status": "INVALID_ARGUMENT"}}]},
-        "b": {"status": 400, "body": [{"error": {"code": 400, "message": "B", "status": "FAILED_PRECONDITION"}}]}
+        "b": {"status": 400, "body": [{"error": {"code": 400, "message": "B", "status": "FAILED_PRECONDITION"}}]},
+        "c": {"status": 500, "body": [{"error": {"code": 500, "message": "HTTP500 is not refusal evidence", "status": "INVALID_ARGUMENT"}}]},
+        "d": {"status": 500, "body": [{"error": {"code": 500, "message": "An internal error occurred.", "status": "INTERNAL"}}]}
     }}}}"#;
     let table = recorded_refusals(requests, production);
     assert_eq!(table.len(), 1);
@@ -386,11 +439,15 @@ fn an_unknown_member_changes_the_shape() {
 #[test]
 fn normalized_text_puts_aside_the_project_database_and_index() {
     assert_eq!(
-        normalized_text("Document parent name \"projects/demo-x/databases/entpipe1/documents/c\" lacks \"/\" at index 60."),
+        normalized_text(
+            "Document parent name \"projects/demo-x/databases/entpipe1/documents/c\" lacks \"/\" at index 60."
+        ),
         "Document parent name \"projects/~/databases/~/documents/c\" lacks \"/\" at index ~."
     );
     assert_eq!(
-        normalized_text("Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 55."),
+        normalized_text(
+            "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 55."
+        ),
         "Document parent name \"projects/~/databases/~/documents/c\" lacks \"/\" at index ~."
     );
     assert_eq!(normalized_text("plain text"), "plain text");

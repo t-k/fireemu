@@ -15,17 +15,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_database::hash::node_hash;
+use fireemu_core_database::rules::ReadKind;
 use fireemu_core_database::server_value::resolve;
 use fireemu_core_database::{
     Bound, BoundKey, ErrorKind, Json, Limit, Node, OrderBy, Path, QueryParams, ServerValueContext,
 };
 
+use crate::access::{auth_from_claims, Access, WriteOp};
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{priority_at, render, wire_json, Style};
 use crate::listen::Listen;
 use crate::namespace::route;
 use crate::request::{self, Refusal};
-use crate::rest::{Change, Database, Patched, RulesMode, SseEvent};
+use crate::rest::{Change, Database, Patched, SseEvent};
 use crate::websocket::CloseCode;
 
 /// The protocol version this server speaks.
@@ -35,7 +37,6 @@ pub const MAX_FRAME_CHARS: usize = 16_384;
 
 const VERSION_ERROR: &str =
     "Version error. Please make sure you are using the latest Firebase library";
-const OWNER: &str = "owner";
 
 /// The result of opening a realtime connection.
 #[derive(Debug)]
@@ -46,23 +47,13 @@ pub enum Opened {
     Shutdown(Vec<String>),
 }
 
-/// Who a session is authenticated as.
-#[derive(Debug, Clone, PartialEq)]
-enum Identity {
-    /// No credential.
-    Anonymous,
-    /// The local administrator (`gauth` with `owner`).
-    Owner,
-    /// A signed-in user or a service credential.
-    Credential,
-}
-
 /// One realtime connection.
 #[derive(Debug)]
 pub struct Session {
     namespace: String,
     client: u64,
-    identity: Identity,
+    /// Who the connection is.
+    access: Access,
     /// Frames still expected for a split message, and what arrived so far.
     pending: Option<(usize, String)>,
     /// The longest message, split frames joined.
@@ -142,7 +133,7 @@ impl Database {
         let session = Session {
             namespace,
             client,
-            identity: Identity::Anonymous,
+            access: Access::Anonymous,
             pending: None,
             limit: self.options().realtime_message_bytes,
             merge_order: Vec::new(),
@@ -426,14 +417,37 @@ impl Session {
                 Some(other) => Json::String(render(other, Style::Compact)),
                 None => Json::Null,
             }),
-            "auth" => self.authenticate(arguments),
+            "auth" => match authenticate(arguments, db, &self.namespace, context.now_millis) {
+                Ok((answer, access)) => {
+                    self.become_(db, access, context.now_millis);
+                    Ok(answer)
+                }
+                Err(refusal) => {
+                    // A refused token leaves the connection signed out under strict (review
+                    // S1); the official emulator, and so the emulator profile, keeps the user
+                    // it had (reauth-probe).
+                    if db.options().credentials.strict {
+                        self.become_(db, Access::Anonymous, context.now_millis);
+                    }
+                    Err(refusal)
+                }
+            },
             "gauth" => {
-                self.identity = match arguments.get("cred") {
+                let access = match arguments.get("cred") {
                     // The official emulator does not answer a gauth without a credential.
                     None => return Err(Failure::Silent),
-                    Some(Json::String(cred)) if cred == OWNER => Identity::Owner,
-                    Some(_) => Identity::Credential,
+                    Some(Json::String(cred)) => {
+                        Access::administrator(cred, &db.options().credentials)
+                    }
+                    Some(_) => Access::administrator("", &db.options().credentials),
                 };
+                // Provisional: the strict profile refuses another credential as a bad token,
+                // and the connection is signed out, as after a refused `auth` (review S1b).
+                let Ok(access) = access else {
+                    self.become_(db, Access::Anonymous, context.now_millis);
+                    return Err(unparsable_token());
+                };
+                self.become_(db, access, context.now_millis);
                 let expires = context.now_millis / 1000 + 3600;
                 Ok(Json::object([
                     ("auth", Json::Null),
@@ -441,32 +455,19 @@ impl Session {
                 ]))
             }
             "unauth" => {
-                self.identity = Identity::Anonymous;
+                self.become_(db, Access::Anonymous, context.now_millis);
                 Ok(Json::string("unauthenticated"))
             }
             "appcheck" => app_check(arguments),
-            "g" => {
-                self.authorize(db)?;
-                self.get(db, arguments)
-            }
-            "p" => {
-                self.authorize(db)?;
-                self.put(db, arguments, context, events)
-            }
-            "m" => {
-                self.authorize(db)?;
-                self.merge(db, arguments, context, events)
-            }
-            "q" => {
-                self.authorize(db)?;
-                self.listen(db, arguments)
-            }
+            "g" => self.get(db, arguments, context.now_millis),
+            "p" => self.put(db, arguments, context, events),
+            "m" => self.merge(db, arguments, context, events),
+            "q" => self.listen(db, arguments, context.now_millis),
             "o" | "om" | "oc" => {
                 // Without a path the official emulator answers nothing and registers nothing.
                 if !arguments.contains_key("p") {
                     return Err(Failure::Silent);
                 }
-                self.authorize(db)?;
                 self.on_disconnect(db, action, arguments, context)
             }
             "n" => {
@@ -520,77 +521,54 @@ impl Session {
         for (path, value) in &writes {
             check_registered(path, value, &limits, context)?;
         }
+        // The official emulator checks the rules when a write is registered as well as when it
+        // is made (RTDB-03 Q-R1); a merge is checked as its entries, each a set on the current
+        // tree, and fails if any fails (review r11 M39).
+        let allowed = writes.iter().all(|(path, value)| {
+            db.may_write(
+                &self.namespace,
+                &WriteOp::Set(path, value),
+                &self.access,
+                context.now_millis,
+            )
+        });
+        if !allowed {
+            return Err(Self::denied());
+        }
         for (path, value) in writes {
             db.remember_on_disconnect(self.client, &self.namespace, &path, value);
         }
         Ok(Json::string(""))
     }
 
-    /// `auth` with a JWT reads its claims (the official emulator does not verify the
-    /// signature); anything else is refused.
-    fn authenticate(&mut self, arguments: &BTreeMap<String, Json>) -> Answer {
-        let Some(Json::String(cred)) = arguments.get("cred") else {
-            return Err(Failure::Status(
-                "invalid_token",
-                "Could not parse auth token.".to_owned(),
-            ));
-        };
-        let Some(Json::Object(claims)) = jwt_claims(cred) else {
-            return Err(Failure::Status(
-                "invalid_token",
-                "Could not parse auth token.".to_owned(),
-            ));
-        };
-        // The official emulator needs a string `sub` and a numeric `iat`; it does not check
-        // `exp` or the signature.
-        let missing = |name: &str| {
-            Failure::Status(
-                "invalid_token",
-                format!("Missing claim '{name}' in auth token."),
-            )
-        };
-        let Some(Json::String(subject)) = claims.get("sub") else {
-            return Err(missing("sub"));
-        };
-        if !matches!(claims.get("iat"), Some(Json::Number(_))) {
-            return Err(missing("iat"));
-        }
-        self.identity = Identity::Credential;
-        let provider = match claims.get("firebase") {
-            Some(Json::Object(firebase)) => firebase.get("sign_in_provider").cloned(),
-            _ => None,
-        };
-        let mut auth = BTreeMap::from([
-            ("uid".to_owned(), Json::String(subject.clone())),
-            ("token".to_owned(), Json::Object(claims.clone())),
-            (
-                "provider".to_owned(),
-                provider.unwrap_or_else(|| Json::string("anonymous")),
-            ),
-        ]);
-        if let Some(user_id) = claims.get("user_id") {
-            auth.insert("user_id".to_owned(), user_id.clone());
-        }
-        let auth = Json::Object(auth);
-        Ok(Json::object([("auth", auth), ("expires", Json::Null)]))
+    /// Records the access of this connection and cancels the listens it no longer allows.
+    fn become_(&mut self, db: &mut Database, access: Access, now: i64) {
+        self.access = access.clone();
+        db.set_client_access(self.client, &self.namespace, access, now);
     }
 
-    fn authorize(&self, db: &Database) -> Result<(), Failure> {
-        if db.options().rules == RulesMode::DenyAll && self.identity != Identity::Owner {
-            return Err(Failure::Status(
-                "permission_denied",
-                "Permission denied".to_owned(),
-            ));
-        }
-        Ok(())
+    fn denied() -> Failure {
+        Failure::Status("permission_denied", "Permission denied".to_owned())
     }
 
-    fn get(&mut self, db: &mut Database, arguments: &BTreeMap<String, Json>) -> Answer {
+    fn get(&mut self, db: &mut Database, arguments: &BTreeMap<String, Json>, now: i64) -> Answer {
         let path = location(arguments, false, db)?;
         let query = match arguments.get("q") {
             Some(Json::Object(q)) => wire_query(q)?,
             _ => None,
         };
+        // The rules come before the index, so a caller who may not read learns nothing
+        // about it (the official emulator's order, review S6).
+        if !db.may_read(
+            &self.namespace,
+            &path,
+            query.as_ref(),
+            ReadKind::Stream,
+            &self.access,
+            now,
+        ) {
+            return Err(Self::denied());
+        }
         if let Some(query) = &query {
             if let Some(message) = db.index_refusal(&self.namespace, &path, query) {
                 return Err(Failure::Status("no_index", message));
@@ -623,13 +601,29 @@ impl Session {
 
     /// `q`: a plain listen, or a tagged query listen following its window. A query whose
     /// order needs an undeclared index is followed whole, untagged, with a warning.
-    fn listen(&mut self, db: &mut Database, arguments: &BTreeMap<String, Json>) -> Answer {
+    fn listen(
+        &mut self,
+        db: &mut Database,
+        arguments: &BTreeMap<String, Json>,
+        now: i64,
+    ) -> Answer {
         let path = location(arguments, false, db)?;
         let tag = listen_tag(arguments)?;
         let query = match arguments.get("q") {
             Some(Json::Object(q)) => wire_query(q)?,
             _ => None,
         };
+        if !db.may_read(
+            &self.namespace,
+            &path,
+            query.as_ref(),
+            ReadKind::Stream,
+            &self.access,
+            now,
+        ) {
+            return Err(Self::denied());
+        }
+        let followed = query.clone();
         let mut warnings = Vec::new();
         let window = match (query, tag) {
             (Some(query), Some(tag)) => {
@@ -653,6 +647,7 @@ impl Session {
             path,
             tag,
             window,
+            query: followed,
             last: Json::Null,
         };
         db.add_listen(listen, &hash);
@@ -672,6 +667,28 @@ impl Session {
     ) -> Answer {
         let path = location(arguments, true, db)?;
         let value = arguments.get("d").cloned().unwrap_or(Json::Null);
+        if !db.may_write(
+            &self.namespace,
+            &WriteOp::Set(&path, &value),
+            &self.access,
+            context.now_millis,
+        ) {
+            return Err(Self::denied());
+        }
+        // A transaction (a put with a hash) answers with the value it compares, so it needs
+        // the read too (review M1).
+        if arguments.contains_key("h")
+            && !db.may_read(
+                &self.namespace,
+                &path,
+                None,
+                ReadKind::Check,
+                &self.access,
+                context.now_millis,
+            )
+        {
+            return Err(Self::denied());
+        }
         let paths = [path];
         let before = db.before_write(&self.namespace, &paths);
         let [path] = paths;
@@ -698,7 +715,11 @@ impl Session {
             Json::string("")
         };
         let effective = db.effective(&self.namespace, std::slice::from_ref(&path), before)[0];
-        events.extend(db.notify(&self.namespace, &Change::Put { path, effective }));
+        events.extend(db.notify(
+            &self.namespace,
+            &Change::Put { path, effective },
+            context.now_millis,
+        ));
         Ok(data)
     }
 
@@ -736,6 +757,14 @@ impl Session {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        if !db.may_write(
+            &self.namespace,
+            &WriteOp::Update(&path, &wire),
+            &self.access,
+            context.now_millis,
+        ) {
+            return Err(Self::denied());
+        }
         let absolute: Vec<Path> = relative.iter().map(|(_, p)| path.join(p)).collect();
         let before = db.before_write(&self.namespace, &absolute);
         db.tree_mut(&self.namespace)
@@ -751,7 +780,7 @@ impl Session {
             base: path,
             entries,
         };
-        events.extend(db.notify(&self.namespace, &change));
+        events.extend(db.notify(&self.namespace, &change, context.now_millis));
         Ok(Json::string(""))
     }
 }
@@ -906,8 +935,22 @@ fn write_failure(err: &fireemu_core_database::DatabaseError) -> Failure {
 /// start, `ep`/`en`/`ein` end, `l` limit and `vf` its side. `[MIN_NAME]` and `[MAX_NAME]`
 /// are the SDK's key sentinels.
 fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure> {
+    const FIELDS: [&str; 9] = ["i", "sp", "sn", "sin", "ep", "en", "ein", "l", "vf"];
     if q.is_empty() {
         return Ok(None);
+    }
+    // The official emulator refuses a query with a field it does not know (`FIELDS`), or an inclusive flag that is no boolean (review r11 M42); a limit needs its side. The wire types of the side and key names are checked even without a limit or bound.
+    if q.keys().any(|key| !FIELDS.contains(&key.as_str()))
+        || ["sin", "ein"]
+            .iter()
+            .any(|flag| q.get(*flag).is_some_and(|v| !matches!(v, Json::Bool(_))))
+        || q.get("vf").is_some_and(|v| !matches!(v, Json::String(_)))
+        || ["sn", "en"].iter().any(|name| {
+            q.get(*name)
+                .is_some_and(|v| !matches!(v, Json::String(_) | Json::Null))
+        })
+    {
+        return Err(Failure::Malformed);
     }
     let order_by = match q.get("i") {
         None => OrderBy::Priority,
@@ -937,9 +980,13 @@ fn wire_query(q: &BTreeMap<String, Json>) -> Result<Option<QueryParams>, Failure
             .ok()
             .filter(|l| *l > 0)
             .ok_or_else(|| invalid("Invalid query limit"))?;
+        // Without `vf` or with another side, the official emulator's rules see neither
+        // `limitToFirst` nor `limitToLast`; that is not reproduced, so the query is refused
+        // (ruling 18, a listed difference). The SDKs always send the side.
         query.limit = Some(match q.get("vf") {
             Some(Json::String(side)) if side == "r" => Limit::Last(limit),
-            _ => Limit::First(limit),
+            Some(Json::String(side)) if side == "l" => Limit::First(limit),
+            _ => return Err(Failure::Malformed),
         });
     }
     Ok(Some(query))
@@ -960,14 +1007,12 @@ fn wire_bound(
         Some(Json::String(name)) if name == "[MIN_NAME]" => BoundKey::Min,
         Some(Json::String(name)) if name == "[MAX_NAME]" => BoundKey::Max,
         Some(Json::String(name)) => BoundKey::Name(name.clone()),
-        Some(_) => return Err(Failure::Malformed),
-        // Without a key name a start bound begins before every key of its value and an end
-        // bound ends after all of them; exclusive bounds (startAfter, endBefore on the key
-        // index) pass the other side.
-        None => match (start, inclusive) {
+        // Without a key name a start bound begins before every key of its value and an end bound ends after all of them; exclusive bounds (startAfter, endBefore on the key index) pass the other side. An explicit null name is absent too.
+        Some(Json::Null) | None => match (start, inclusive) {
             (true, true) | (false, false) => BoundKey::Min,
             (true, false) | (false, true) => BoundKey::Max,
         },
+        Some(_) => return Err(Failure::Malformed),
     };
     Ok(Some(Bound {
         value: value.clone(),
@@ -976,9 +1021,47 @@ fn wire_bound(
     }))
 }
 
+/// `auth` with a JWT reads its claims (the official emulator does not verify the
+/// signature, check `exp`, or accept anything else) and becomes that user.
+fn authenticate(
+    arguments: &BTreeMap<String, Json>,
+    db: &Database,
+    namespace: &str,
+    now: i64,
+) -> Result<(Json, Access), Failure> {
+    let Some(Json::String(cred)) = arguments.get("cred") else {
+        return Err(unparsable_token());
+    };
+    let credentials = &db.options().credentials;
+    // A verifier decides alone; without one the claims are read as the official emulator
+    // reads them, and a missing claim is named.
+    if credentials.id_tokens.is_some() {
+        let auth = credentials
+            .user(cred, namespace, now)
+            .ok_or_else(unparsable_token)?;
+        let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
+        return Ok((answer, Access::User(auth)));
+    }
+    let Some(Json::Object(claims)) = jwt_claims(cred) else {
+        return Err(unparsable_token());
+    };
+    let auth = auth_from_claims(&claims).map_err(|name| {
+        Failure::Status(
+            "invalid_token",
+            format!("Missing claim '{name}' in auth token."),
+        )
+    })?;
+    let answer = Json::object([("auth", auth.clone()), ("expires", Json::Null)]);
+    Ok((answer, Access::User(auth)))
+}
+
+fn unparsable_token() -> Failure {
+    Failure::Status("invalid_token", "Could not parse auth token.".to_owned())
+}
+
 /// The claims of a token shaped as a JWT (three base64url parts, the second a JSON
 /// object), unverified.
-fn jwt_claims(token: &str) -> Option<Json> {
+pub(crate) fn jwt_claims(token: &str) -> Option<Json> {
     match jwt_part(token, 1)? {
         claims @ Json::Object(_) => Some(claims),
         _ => None,

@@ -121,6 +121,23 @@ fn lines(child: &mut Child) -> mpsc::Receiver<Line> {
     rx
 }
 
+/// Stop the daemon and drain both pipes before checking the total number of notes.
+/// The stdout startup banner can arrive before the stderr reader forwards earlier notes.
+fn finish_search_notes(child: Running, rx: &mpsc::Receiver<Line>, notes: &mut Vec<String>) {
+    drop(child);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Line::Err(line)) if line.contains("searchConfig") => notes.push(line),
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("the daemon output readers did not finish; notes so far: {notes:?}")
+            }
+        }
+    }
+}
+
 #[test]
 fn a_search_index_file_starts_under_both_profiles_with_one_note() {
     for profile in ["strict", "emulator"] {
@@ -143,6 +160,7 @@ fn a_search_index_file_starts_under_both_profiles_with_one_note() {
                 }
             }
         }
+        finish_search_notes(child, &rx, &mut notes);
         assert_eq!(notes.len(), 1, "{profile}: {notes:?}");
         assert!(
             notes[0].starts_with("note: ")
@@ -287,6 +305,7 @@ fn staging_query(name: &str, indexes: &str) -> (Vec<String>, u16, serde_json::Va
         &format!("/v1/projects/{PROJECT}/databases/staging/documents:runQuery"),
         &query.to_string(),
     );
+    finish_search_notes(child, &rx, &mut notes);
     (notes, status, body)
 }
 

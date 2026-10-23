@@ -85,9 +85,39 @@ impl Glob {
     /// long (a long pattern against a long name) after one more step, not after the name.
     #[must_use]
     pub fn matches_unless(&self, name: &str, stop: &dyn Fn() -> bool) -> Option<bool> {
-        let mut current = Threads::new(self.program.len());
-        let mut next = Threads::new(self.program.len());
-        current.add(&self.program, 0);
+        self.matcher().matches_unless(name, stop)
+    }
+
+    /// Creates a request-local matcher whose buffers are reused for every name.
+    #[must_use]
+    pub fn matcher(&self) -> Matcher<'_> {
+        Matcher {
+            glob: self,
+            current: Threads::new(self.program.len()),
+            next: Threads::new(self.program.len()),
+        }
+    }
+}
+
+/// A matcher bound to one compiled glob. No state is shared between requests.
+pub struct Matcher<'a> {
+    glob: &'a Glob,
+    current: Threads,
+    next: Threads,
+}
+
+impl Matcher<'_> {
+    /// Matches one complete name, clearing any prior match or cancellation state.
+    #[must_use]
+    pub fn matches_unless(&mut self, name: &str, stop: &dyn Fn() -> bool) -> Option<bool> {
+        let Self {
+            glob,
+            current,
+            next,
+        } = self;
+        current.clear();
+        next.clear();
+        current.add(&glob.program, 0);
         for c in name.chars() {
             if stop() {
                 return None;
@@ -96,7 +126,7 @@ impl Glob {
                 return Some(false);
             }
             for &pc in &current.list {
-                let steps = match &self.program[pc] {
+                let steps = match &glob.program[pc] {
                     Inst::Literal(expected) => *expected == c,
                     Inst::One => c != '/',
                     Inst::Class(ranges, negated) => {
@@ -107,17 +137,17 @@ impl Glob {
                     Inst::Split(..) | Inst::Jump(_) | Inst::Match => false,
                 };
                 if steps {
-                    next.add(&self.program, pc + 1);
+                    next.add(&glob.program, pc + 1);
                 }
             }
-            std::mem::swap(&mut current, &mut next);
+            std::mem::swap(current, next);
             next.clear();
         }
         Some(
             current
                 .list
                 .iter()
-                .any(|&pc| self.program[pc] == Inst::Match),
+                .any(|&pc| glob.program[pc] == Inst::Match),
         )
     }
 }
@@ -127,36 +157,42 @@ struct Threads {
     list: Vec<usize>,
     seen: Vec<u32>,
     generation: u32,
+    pending: Vec<usize>,
 }
 
 impl Threads {
     fn new(size: usize) -> Self {
         Self {
-            list: Vec::new(),
+            list: Vec::with_capacity(size),
             seen: vec![0; size],
             generation: 1,
+            pending: Vec::with_capacity(size.saturating_mul(2)),
         }
     }
 
     fn clear(&mut self) {
         self.list.clear();
-        self.generation += 1;
+        self.generation = self.generation.checked_add(1).unwrap_or_else(|| {
+            self.seen.fill(0);
+            1
+        });
     }
 
     /// Adds `pc` and every instruction reachable from it without consuming a character.
     fn add(&mut self, program: &[Inst], pc: usize) {
-        let mut pending = vec![pc];
-        while let Some(pc) = pending.pop() {
+        self.pending.clear();
+        self.pending.push(pc);
+        while let Some(pc) = self.pending.pop() {
             if self.seen[pc] == self.generation {
                 continue;
             }
             self.seen[pc] = self.generation;
             self.list.push(pc);
             match &program[pc] {
-                Inst::Jump(target) => pending.push(*target),
+                Inst::Jump(target) => self.pending.push(*target),
                 Inst::Split(first, second) => {
-                    pending.push(*second);
-                    pending.push(*first);
+                    self.pending.push(*second);
+                    self.pending.push(*first);
                 }
                 _ => {}
             }
@@ -386,4 +422,58 @@ fn compile(raw: &[Raw]) -> Vec<Inst> {
     }
     program.push(Inst::Match);
     program
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reused_matcher_keeps_its_buffers_after_every_exit() {
+        let glob = Glob::new("{hello,**/🌸,[!a-z]*}?");
+        let mut matcher = glob.matcher();
+        let capacities = |m: &Matcher<'_>| {
+            [
+                m.current.list.capacity(),
+                m.current.seen.capacity(),
+                m.current.pending.capacity(),
+                m.next.list.capacity(),
+                m.next.seen.capacity(),
+                m.next.pending.capacity(),
+            ]
+        };
+        let initial = capacities(&matcher);
+        for _ in 0..100 {
+            for name in ["", "hello!", "🌸", "a/🌸x", "no", "hello/a"] {
+                assert_eq!(
+                    matcher.matches_unless(name, &|| false),
+                    Some(glob.matches(name))
+                );
+                assert_eq!(capacities(&matcher), initial);
+                let calls = std::cell::Cell::new(0);
+                let _ = matcher.matches_unless(name, &|| {
+                    calls.set(calls.get() + 1);
+                    calls.get() > 1
+                });
+                assert_eq!(
+                    matcher.matches_unless(name, &|| false),
+                    Some(glob.matches(name))
+                );
+                assert_eq!(capacities(&matcher), initial);
+            }
+        }
+        matcher.current.generation = u32::MAX;
+        matcher.next.generation = u32::MAX;
+        assert_eq!(matcher.matches_unless("hello!", &|| false), Some(true));
+    }
+
+    #[test]
+    fn thread_generation_wrap_clears_old_marks() {
+        let mut threads = Threads::new(1);
+        threads.generation = u32::MAX;
+        threads.seen[0] = 1;
+        threads.clear();
+        threads.add(&[Inst::Match], 0);
+        assert_eq!(threads.list, vec![0]);
+    }
 }

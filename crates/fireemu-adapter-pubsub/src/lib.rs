@@ -30,6 +30,7 @@ mod rest_json;
 mod subscriber;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub use fireemu_core_pubsub::pagination::PagingPolicy;
@@ -417,6 +418,17 @@ pub struct PubSubHandle {
     paging_policy: PagingPolicy,
     local_bearer_token: Option<String>,
     state: Arc<Mutex<PubSubState>>,
+    delivery_notify: Arc<Notify>,
+    delivery_revision: Arc<AtomicU64>,
+    #[cfg(test)]
+    stream_pull_checks: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    stream_output_budget_limit: usize,
+    #[cfg(test)]
+    stream_output_budgets: Arc<Mutex<BTreeMap<String, std::sync::Weak<subscriber::OutputBudget>>>>,
+    delivery_observer: Arc<dyn Fn() + Send + Sync>,
+    #[allow(dead_code)] // Keeps the clock's weak observer registered for the handle lifetime.
+    clock_observer: Arc<fireemu_core_session::clock::ClockObserver>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
     publication_gate: Arc<Mutex<()>>,
@@ -438,10 +450,39 @@ impl PubSubHandle {
         clock: Arc<Mutex<VirtualClock>>,
         bridge: Option<Arc<dyn TopicDelivery>>,
     ) -> Self {
+        let delivery_notify = Arc::new(Notify::new());
+        let delivery_revision = Arc::new(AtomicU64::new(0));
+        let signal = delivery_notify.clone();
+        let revision = delivery_revision.clone();
+        let delivery_observer: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            revision.fetch_add(1, Ordering::Release);
+            signal.notify_waiters();
+        });
+        state
+            .lock()
+            .expect("pubsub state lock")
+            .observe_delivery(&delivery_observer);
+        let signal = delivery_notify.clone();
+        let revision = delivery_revision.clone();
+        let clock_observer: Arc<fireemu_core_session::clock::ClockObserver> = Arc::new(move |_| {
+            revision.fetch_add(1, Ordering::Release);
+            signal.notify_waiters();
+        });
+        clock.lock().expect("clock lock").observe(&clock_observer);
         Self {
             paging_policy: PagingPolicy::Emulator,
             local_bearer_token: None,
             state,
+            delivery_notify,
+            delivery_revision,
+            #[cfg(test)]
+            stream_pull_checks: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            stream_output_budget_limit: 16 * 1024 * 1024,
+            #[cfg(test)]
+            stream_output_budgets: Arc::new(Mutex::new(BTreeMap::new())),
+            delivery_observer,
+            clock_observer,
             clock,
             bridge,
             publication_gate: Arc::new(Mutex::new(())),
@@ -516,6 +557,7 @@ impl PubSubHandle {
     /// Wakes push workers after the shared virtual clock advances. The core state must be expired
     /// before this is called so a deadline-based redelivery is visible to the next pull.
     pub fn on_clock_changed(&self) {
+        (self.delivery_observer)();
         self.push_clock_notify.notify_waiters();
         self.push_ready_notify.notify_one();
     }
@@ -704,6 +746,64 @@ impl PubSubHandle {
         };
         self.commit_dead_letters_locked(&outcome.dead_lettered);
         Ok(outcome.received)
+    }
+
+    /// Atomically admits adapter output storage between broker selection and delivery leases.
+    fn pull_admitted(
+        &self,
+        subscription: &SubscriptionName,
+        max: usize,
+        admit: impl FnOnce(&[&StoredMessage]) -> bool,
+    ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        #[cfg(test)]
+        self.stream_pull_checks.fetch_add(1, Ordering::Relaxed);
+        let _dead_letter = self.lock_dead_letter();
+        let now = self.now();
+        let outcome = self.state().pull_with_dead_letters_admitted(
+            subscription,
+            max,
+            now,
+            OrderedPullBatching::Mixed,
+            admit,
+        )?;
+        self.commit_dead_letters_locked(&outcome.dead_lettered);
+        Ok(outcome.received)
+    }
+
+    /// Notifications drive delivery. A bounded safety recheck also handles a raw registry/clock
+    /// replacement, which can discard observers. Wall time never advances the logical clock.
+    fn pull_recheck_at(
+        &self,
+        subscription: &SubscriptionName,
+        scheduled: &mut Option<(LogicalInstant, Option<LogicalInstant>, tokio::time::Instant)>,
+    ) -> tokio::time::Instant {
+        let now = self.now();
+        let deadline = self
+            .state()
+            .next_pull_deadline(subscription, now)
+            .ok()
+            .flatten();
+        let wall = tokio::time::Instant::now();
+        let fallback = std::time::Duration::from_secs(1);
+        if let Some((seen_now, seen_deadline, wake)) = scheduled {
+            if *seen_now == now && *seen_deadline == deadline {
+                // A pinned virtual clock must not repeatedly fire a wall timer at an unchanged
+                // near-future logical deadline. After checking it once, use the safety cadence.
+                if *wake <= wall {
+                    *wake = wall + fallback;
+                }
+                return *wake;
+            }
+        }
+        let delay = deadline
+            .and_then(|deadline| deadline.as_nanos().checked_sub(now.as_nanos()))
+            .and_then(|nanos| u64::try_from(nanos).ok())
+            .map_or(fallback, |nanos| {
+                fallback.min(std::time::Duration::from_nanos(nanos))
+            });
+        let wake = wall + delay;
+        *scheduled = Some((now, deadline, wake));
+        wake
     }
 
     /// Waits within this request for strict unary delivery, without retaining a broker lock.

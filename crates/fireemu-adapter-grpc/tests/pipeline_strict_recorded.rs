@@ -321,8 +321,8 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                 ),
                 empty(),
             ],
-            // A refusal after an aggregate stage is outside the recorded composition.
-            strict: None,
+            // O5 records this exact count composition followed by the empty select.
+            strict: Some((400, EMPTY_SELECT)),
             emulator: (400, EMPTY_SELECT),
         },
         Case {
@@ -460,7 +460,7 @@ fn strict_answers_only_the_argument_types_production_recorded() {
             "The function parent(...) requires `Reference` but got `DOUBLE`.",
         ),
     });
-    // map() keys: LONG and BOOLEAN recorded (O-3, O-4).
+    // These exact map-key shapes are recorded across O3, O4 and O5.
     for (label, key, strict) in [
         ("map(1, i)", int(1), Some("LONG")),
         (
@@ -468,12 +468,12 @@ fn strict_answers_only_the_argument_types_production_recorded() {
             json!({ "booleanValue": true }),
             Some("BOOLEAN"),
         ),
-        ("map(1.5, i)", json!({ "doubleValue": 1.5 }), None),
-        ("map(null, i)", json!({ "nullValue": null }), None),
+        ("map(1.5, i)", json!({ "doubleValue": 1.5 }), Some("DOUBLE")),
+        ("map(null, i)", json!({ "nullValue": null }), Some("NULL")),
         (
             "map(ts, i)",
             json!({ "timestampValue": "2020-01-01T00:00:00Z" }),
-            None,
+            Some("TIMESTAMP"),
         ),
     ] {
         let given = match &key {
@@ -996,7 +996,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: None,
+            strict: Some((400, "map key must be of type STRING, given type is DOUBLE")),
             // A literal key's type is checked before any row, and before the empty map
             // (the official emulator 1.22.0).
             emulator: (400, "map key must be of type STRING, given type is DOUBLE"),
@@ -1446,13 +1446,13 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "select {\"\": nope_fn()}",
             stages: vec![stage("select", vec![map(vec![("", func("nope_fn", vec![]))])])],
-            strict: None,
+            strict: Some((400, "Invalid empty property path string.")),
             emulator: (400, "Invalid empty property path string."),
         },
         Case {
             label: "select {\"\": {__name__: 1}}",
             stages: vec![stage("select", vec![map(vec![("", map(vec![("__name__", int(1))]))])])],
-            strict: None,
+            strict: Some((400, "Invalid empty property path string.")),
             emulator: (400, "Invalid empty property path string."),
         },
         // Reference literals that name no document.
@@ -1506,7 +1506,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "add_fields {} then limit(-1)",
             stages: vec![stage("add_fields", vec![map(vec![])]), stage("limit", vec![int(-1)])],
-            strict: None,
+            strict: Some((400, "The 'add_fields(...)' stage requires at least one field.")),
             // The official emulator answers the empty map before a negative count.
             emulator: (400, "The 'add_fields(...)' stage requires at least one field."),
         },
@@ -1662,7 +1662,7 @@ fn strict_answers_a_refusal_only_in_the_stage_production_recorded_it() {
                 "where",
                 vec![func("equal", vec![field("i"), list(vec![field("i")])])],
             )],
-            strict: None,
+            strict: Some((400, "Value type is not supported: FIELD_REFERENCE_VALUE")),
             emulator: (400, "Value type is not supported: FIELD_REFERENCE_VALUE"),
         },
         Case {
@@ -1737,7 +1737,7 @@ fn strict_answers_a_refusal_only_in_the_stage_production_recorded_it() {
 /// A `map(...)` key of a literal that is not a string is refused before any row is read, as the
 /// official emulator refuses it on an empty collection (`PX1d` r5 review M3): `map(1, i)`,
 /// `map(true, i)`, `map(1, 2)`. Strict answers the shapes production refused (O-3
-/// `functions#map-integer-key`, O-4 `#map-key-boolean`, both of a field value) and nothing else.
+/// `functions#map-integer-key`, O-4 `#map-key-boolean`, O5 DOUBLE/NULL field values) and nothing else.
 #[test]
 fn a_map_key_type_is_refused_before_any_row() {
     let long = "map key must be of type STRING, given type is LONG";
@@ -1753,13 +1753,13 @@ fn a_map_key_type_is_refused_before_any_row() {
                 json!({ "doubleValue": 1.5 }),
                 field("i"),
                 "map key must be of type STRING, given type is DOUBLE",
-                false,
+                true,
             ),
             (
                 json!({ "nullValue": null }),
                 field("i"),
                 "map key must be of type STRING, given type is NULL",
-                false,
+                true,
             ),
         ] {
             let got = answer(

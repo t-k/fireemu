@@ -803,3 +803,184 @@ fn a_sweep_already_running_against_a_database_is_not_started_a_second_time() {
         assert!(!exists(&backend, &format!("sessions/s{i}")));
     }
 }
+
+#[test]
+fn skipped_candidates_across_pages_refill_the_delete_budget_without_admitting_new_paths() {
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let budget = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN;
+    let skipped = 70;
+    for i in 0..=budget + skipped {
+        write_document(
+            &backend,
+            &format!("sessions/s{i:05}"),
+            Some(timestamp(1_100)),
+        );
+    }
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .unwrap();
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    let deleted = sweep_with_write_between(&backend, due, || {
+        for i in 0..skipped {
+            write_document(
+                &backend,
+                &format!("sessions/s{i:05}"),
+                Some(timestamp(200_000)),
+            );
+        }
+        write_document(&backend, "sessions/new-after-scan", Some(timestamp(1_100)));
+    });
+    assert_eq!(deleted, budget);
+    assert!(exists(&backend, "sessions/new-after-scan"));
+    assert!(exists(
+        &backend,
+        &format!("sessions/s{:05}", budget + skipped)
+    ));
+    assert!(!exists(&backend, &format!("sessions/s{skipped:05}")));
+    // An unprocessed captured candidate means the sweep stays due immediately.
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 2);
+    for i in 0..skipped {
+        assert!(exists(&backend, &format!("sessions/s{i:05}")));
+    }
+}
+
+#[test]
+fn an_exact_budget_final_candidate_marks_the_sweep_complete() {
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let budget = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN;
+    for i in 0..budget {
+        write_document(
+            &backend,
+            &format!("sessions/s{i:05}"),
+            Some(timestamp(1_100)),
+        );
+    }
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .unwrap();
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    assert_eq!(
+        backend.sweep_expired_documents_now(&everything(), due),
+        budget
+    );
+    write_document(
+        &backend,
+        "sessions/new-after-completion",
+        Some(timestamp(1_100)),
+    );
+    // Completion records the interval even when the final deletion exactly spends budget.
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 0);
+    assert!(exists(&backend, "sessions/new-after-completion"));
+    assert_eq!(backend.sweep_expired_documents_now(&everything(), due), 1);
+}
+
+#[test]
+fn a_recreated_path_that_is_currently_expired_is_rechecked_and_deleted() {
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/a", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .unwrap();
+    let deleted =
+        sweep_with_write_between(&backend, LogicalInstant::from_unix_seconds(100_000), || {
+            delete_document(&backend, "sessions/a");
+            write_document(&backend, "sessions/a", Some(timestamp(1_200)));
+        });
+    assert_eq!(deleted, 1);
+    assert!(!exists(&backend, "sessions/a"));
+}
+
+#[test]
+fn multiple_ttl_policies_preserve_frozen_membership_and_finish_finite_backlogs() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let budget = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN;
+    let skipped = 70;
+    let early_ready = 2;
+    for i in 0..skipped + early_ready {
+        write_document(&backend, &format!("alpha/p{i:05}"), Some(timestamp(1_100)));
+    }
+    for i in 0..=budget {
+        write_document(&backend, &format!("omega/p{i:05}"), Some(timestamp(1_100)));
+    }
+    write_document(
+        &backend,
+        "omega/a-before-later-scan",
+        Some(timestamp(200_000)),
+    );
+    // Registration order differs from the catalog's collection-group order.
+    for name in ["omega", "alpha"] {
+        backend
+            .enable_ttl(PROJECT, DATABASE, group(name), field("expiresAt"))
+            .unwrap();
+    }
+
+    let scans = AtomicUsize::new(0);
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    let deleted = backend.sweep_expired_documents_now_with_hook(&everything(), due, &|| {
+        match scans.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                // The first snapshot is frozen, but reads and writes can run at this seam.
+                assert!(exists(&backend, "alpha/p00000"));
+                for i in 0..skipped {
+                    write_document(
+                        &backend,
+                        &format!("alpha/p{i:05}"),
+                        Some(timestamp(200_000)),
+                    );
+                }
+                write_document(&backend, "alpha/a-after-scan", Some(timestamp(1_100)));
+                // The later policy has not captured its own membership yet.
+                write_document(
+                    &backend,
+                    "omega/a-before-later-scan",
+                    Some(timestamp(1_100)),
+                );
+            }
+            1 => {
+                for i in skipped..skipped + early_ready {
+                    assert!(!exists(&backend, &format!("alpha/p{i:05}")));
+                }
+                assert!(exists(&backend, "alpha/a-after-scan"));
+                write_document(&backend, "omega/b-after-scan", Some(timestamp(1_100)));
+            }
+            _ => panic!("exactly two policies should be scanned"),
+        }
+    });
+    assert_eq!(scans.load(Ordering::SeqCst), 2);
+    assert_eq!(deleted, budget);
+    assert!(exists(&backend, "alpha/a-after-scan"));
+    assert!(!exists(&backend, "omega/a-before-later-scan"));
+    assert!(exists(&backend, "omega/b-after-scan"));
+    for i in 0..skipped {
+        assert!(exists(&backend, &format!("alpha/p{i:05}")));
+    }
+    // The later policy spends the remaining budget in captured path order.
+    let later_seeded_deleted = budget - early_ready - 1;
+    for i in 0..=budget {
+        assert_eq!(
+            exists(&backend, &format!("omega/p{i:05}")),
+            i >= later_seeded_deleted,
+            "later-policy path {i} has the wrong first-batch outcome",
+        );
+    }
+
+    // One new early path, four captured later survivors, and one new later path remain.
+    assert_eq!(
+        backend.sweep_expired_documents(&everything(), due),
+        early_ready + 4
+    );
+    assert!(!exists(&backend, "alpha/a-after-scan"));
+    assert!(!exists(&backend, "omega/b-after-scan"));
+    for i in 0..=budget {
+        assert!(!exists(&backend, &format!("omega/p{i:05}")));
+    }
+    for i in 0..skipped {
+        assert!(exists(&backend, &format!("alpha/p{i:05}")));
+    }
+    write_document(&backend, "omega/after-completion", Some(timestamp(1_100)));
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 0);
+    assert!(exists(&backend, "omega/after-completion"));
+    assert_eq!(backend.sweep_expired_documents_now(&everything(), due), 1);
+}

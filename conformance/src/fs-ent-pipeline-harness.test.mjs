@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
@@ -141,7 +142,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 384);
+  assert.equal(requests, 694);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get"]);
   // The only writes are single-document commits into the program's own collection: the order
@@ -200,7 +201,7 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
       await import("node:fs/promises")
     ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
-  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[234]\//.test(p.id));
+  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[2345]\//.test(p.id));
   assert.equal(o1.length, 6);
   for (const program of o1) {
     assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
@@ -385,7 +386,7 @@ test("O-3 records only its four new programs, within its request cap: 2 x (80 + 
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS) {
+  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o5/"))) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
   for (const program of o3) {
@@ -496,7 +497,7 @@ test("O-4 records only its seven new programs, comparisons last, within its requ
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  for (const program of PROGRAMS) {
+  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o5/"))) {
     assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
   }
   // O-4 recorded under the request layer that recorded O-1 (2026-10-20).
@@ -544,7 +545,7 @@ test("the committed REST request export is the corpus's", async () => {
   const { readFile } = await import("node:fs/promises");
   assert.equal(await readFile(EXPORT, "utf8"), exportText());
   const exported = JSON.parse(exportText());
-  // Only the programs the fixture records (O-3 and O-4 since their recordings).
+  // Every recorded program contributes its exact exported REST requests.
   const recordedIds = Object.keys(
     JSON.parse(
       await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
@@ -552,7 +553,9 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 20);
+  assert.equal(recordedPrograms.length, 28);
+  assert.deepEqual(recordedIds.toSorted(), PROGRAMS.map((p) => p.id).toSorted());
+  assert.deepEqual(exported.programs.map((p) => p.id).toSorted(), recordedIds.toSorted());
   const rest = recordedPrograms
     .flatMap((p) => p.steps)
     .filter((s) => (s.transport ?? "rest") === "rest");
@@ -800,4 +803,205 @@ test("a seed commit is a reviewed single-document write into the named database"
   // An empty segment, with an even segment count that the length check alone would pass.
   assert.throws(() => seedCommit("seed-x", "a//b/c", fields), /document path/);
   assert.throws(() => seedCommit("seed-x", "a/b/c/", fields), /document path/);
+});
+
+test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", async () => {
+  const { ceilings, programDigest, selectPrograms } = await import("./fs-query-index/run.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const {
+    O5_FUNCTION_NAMES,
+    O5_FUNCTION_ORDER,
+    O5_LITERAL_KEYS,
+    O5_NAMES,
+    O5_STAGE_ORDER,
+    O5_VALUE_SHAPES,
+    seedHoldsVector,
+  } = await import("./fs-ent-pipeline/corpus.mjs");
+  // This historical subset is fixed; the dedicated coverage suite checks the full selector.
+  const originalIds = new Set([
+    "fs-ent-pipeline/o5/names",
+    "fs-ent-pipeline/o5/literal-keys",
+    "fs-ent-pipeline/o5/function-order",
+    "fs-ent-pipeline/o5/stage-order",
+    "fs-ent-pipeline/o5/value-shapes",
+    "fs-ent-pipeline/o5/function-names",
+  ]);
+  const o5 = selectPrograms(PROGRAMS, "fs-ent-pipeline/o5/").filter((program) =>
+    originalIds.has(program.id),
+  );
+  assert.deepEqual(
+    o5.map((p) => p.id),
+    [
+      "fs-ent-pipeline/o5/names",
+      "fs-ent-pipeline/o5/literal-keys",
+      "fs-ent-pipeline/o5/function-order",
+      "fs-ent-pipeline/o5/stage-order",
+      "fs-ent-pipeline/o5/value-shapes",
+      "fs-ent-pipeline/o5/function-names",
+    ],
+  );
+  assert.deepEqual(
+    o5.map((p) => p.steps.length),
+    [
+      O5_NAMES.length,
+      O5_LITERAL_KEYS.length,
+      O5_FUNCTION_ORDER.length,
+      O5_STAGE_ORDER.length,
+      O5_VALUE_SHAPES.length,
+      O5_FUNCTION_NAMES.length,
+    ],
+  );
+  // The PX1d review round 2 shapes strict refuses (stage order, limit and offset; value types,
+  // vectors, literal keys and the argument checks of the functions fireemu runs).
+  assert.deepEqual(
+    [
+      O5_NAMES.length,
+      O5_LITERAL_KEYS.length,
+      O5_FUNCTION_ORDER.length,
+      O5_STAGE_ORDER.length,
+      O5_VALUE_SHAPES.length,
+    ],
+    [5, 6, 13, 14, 23],
+  );
+  // Reads only: every step is a REST executePipeline in the program's own collection, and each
+  // program seeds one document without a vector through the harness.
+  for (const program of o5) {
+    assert.equal(program.seed.length, 1, program.id);
+    assert.equal(seedHoldsVector(program), false, program.id);
+    const own = program.seed[0][0].split("/")[0];
+    for (const s of program.steps) {
+      assert.equal(s.rpc, "executePipeline", `${program.id}#${s.id}`);
+      assert.equal(s.transport, undefined, `${program.id}#${s.id}`);
+      const [first] = s.body.structuredPipeline.pipeline.stages;
+      assert.deepEqual(first, { name: "collection", args: [{ referenceValue: `/${own}` }] });
+    }
+  }
+  assert.deepEqual(ceilings(o5), { maxRequests: 240, maxHarnessRequests: 80 });
+  const worst = 1 + 2 + 2 * (240 + 80) + 2;
+  assert.equal(worst, 645);
+  // Bind the populated O5 capture while preserving the historical six-program cap above.
+  const recorded = JSON.parse(
+    await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  ).programs;
+  assert.deepEqual(Object.keys(recorded).toSorted(), PROGRAMS.map((p) => p.id).toSorted());
+  const allO5 = PROGRAMS.filter((p) => p.id.startsWith("fs-ent-pipeline/o5/"));
+  assert.equal(allO5.length, 8);
+  assert.equal(
+    allO5.reduce((n, p) => n + p.steps.length, 0),
+    310,
+  );
+  const harness = createHash("sha256")
+    .update(await readFile(new URL("./fs-ent-pipeline/harness.mjs", import.meta.url), "utf8"))
+    .update("\n")
+    .update(await readFile(new URL("./fs-ent-pipeline/session.mjs", import.meta.url), "utf8"))
+    .update("\n")
+    .digest("hex");
+  for (const program of allO5) {
+    assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
+    assert.equal(recorded[program.id]?.harnessDigest, harness, program.id);
+    assert.deepEqual(
+      Object.keys(recorded[program.id].steps).toSorted(),
+      program.steps.map((s) => s.id).toSorted(),
+      program.id,
+    );
+  }
+  const earlier = Object.fromEntries(
+    Object.entries(recorded)
+      .filter(([id]) => !id.startsWith("fs-ent-pipeline/o5/"))
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  assert.equal(Object.keys(earlier).length, 20);
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(earlier)).digest("hex"),
+    "a9e2320e7eb12cf32fc9085730692640fd9170bdcf8c88a9a1754977ba389307",
+  );
+  for (const program of PROGRAMS.filter((p) => !p.id.startsWith("fs-ent-pipeline/o5/"))) {
+    assert.equal(recorded[program.id]?.corpusDigest, programDigest(program), program.id);
+  }
+});
+
+test("the O-5 name sweep calls every registry and SDK name once, each under its own step", async () => {
+  const { O5_FUNCTION_NAMES, functionNameStep } = await import("./fs-ent-pipeline/corpus.mjs");
+  const sweep = PROGRAMS.find((p) => p.id === "fs-ent-pipeline/o5/function-names");
+  assert.equal(new Set(O5_FUNCTION_NAMES).size, O5_FUNCTION_NAMES.length);
+  assert.equal(O5_FUNCTION_NAMES.length, 179);
+  // The registry's operator spellings, the names the official emulator does not know and the
+  // names only the SDK sends are all in the sweep; so are the names fireemu runs.
+  for (const name of [
+    "+",
+    "==",
+    "AND",
+    "<<",
+    "switch",
+    "score",
+    "geo_distance",
+    "count",
+    "logical_or",
+    "between",
+    "eq_any",
+    "is_nan",
+    "is_null",
+    "equal",
+    "document_id",
+    "map",
+    "array",
+  ]) {
+    assert.ok(O5_FUNCTION_NAMES.includes(name), name);
+  }
+  // Step ids are unique, plain, and map back to their name.
+  const ids = O5_FUNCTION_NAMES.map(functionNameStep);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const id of ids) assert.match(id, /^fn-[a-z0-9_-]+$/);
+  assert.equal(functionNameStep(""), "fn-empty");
+  assert.equal(functionNameStep("add"), "fn-add");
+  assert.equal(functionNameStep("<="), "fn-u3c-3d");
+  assert.equal(functionNameStep("AND"), "fn-u41-4e-44");
+  assert.deepEqual(
+    sweep.steps.map((s) => s.id),
+    ids,
+  );
+  // Each step selects one call of its name: no argument, except the random names (one) and the
+  // three array functions the official emulator answers 500 without arguments.
+  const field = { fieldReferenceValue: "i" };
+  const expected = {
+    rand: 1,
+    autogen_document_id: 1,
+    current_timestamp: 1,
+    array_transform: 4,
+    array_reverse: 1,
+    array_slice: 2,
+  };
+  for (const [index, s] of sweep.steps.entries()) {
+    const [, selectStage] = s.body.structuredPipeline.pipeline.stages;
+    const call = selectStage.args[0].mapValue.fields.v.functionValue;
+    assert.equal(call.name, O5_FUNCTION_NAMES[index]);
+    assert.deepEqual(call.args, Array(expected[call.name] ?? 0).fill(field), call.name);
+  }
+});
+
+test("the O5 captured INTERNAL response remains an explicit unknown", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { isUnknownRow } = await import("./fs-query-index/unknown-rows.mjs");
+  const recorded = JSON.parse(
+    await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
+  ).programs;
+  const rows = Object.entries(recorded)
+    .filter(([id]) => id.startsWith("fs-ent-pipeline/o5/"))
+    .flatMap(([id, p]) =>
+      Object.entries(p.steps)
+        .filter(([, value]) => value.status === 500)
+        .map(([step, value]) => ({ row: `${id}#${step}`, value })),
+    );
+  assert.deepEqual(rows, [
+    {
+      row: "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path",
+      value: {
+        status: 500,
+        body: [
+          { error: { code: 500, message: "An internal error occurred.", status: "INTERNAL" } },
+        ],
+      },
+    },
+  ]);
+  assert.equal(isUnknownRow(`${rows[0].row} ${rows[0].value.status}`), true);
 });

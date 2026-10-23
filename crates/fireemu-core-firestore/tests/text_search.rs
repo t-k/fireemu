@@ -1,10 +1,10 @@
 //! Lexical-v1 contract and bounded property tests.
-use fireemu_adapter_support::lexical::tokenize;
+use fireemu_adapter_support::lexical::{tokenize_index as tokenize, tokenize_query};
 #[test]
 fn unicode_normalization_and_casefold() {
     assert_eq!(
         tokenize("Ｓtraße CAFÉ cafe\u{301} 東京"),
-        ["strasse", "café", "café", "東", "京"]
+        ["strasse", "cafe", "cafe", "東", "京"]
     );
 }
 use fireemu_core_firestore::{
@@ -53,7 +53,7 @@ fn document(id: &str, title: &str, body: &str, time: i128) -> SearchDocument {
 fn names(index: &SearchIndex, query: &str) -> Vec<String> {
     index
         .search(
-            &SearchQuery::parse(query, tokenize).unwrap(),
+            &SearchQuery::parse(query, tokenize_query).unwrap(),
             &SearchOptions::default(),
         )
         .unwrap()
@@ -75,7 +75,7 @@ fn positional_phrases_do_not_cross_fields_and_exclusions_apply() {
     assert!(names(&index, "title:red body:fox").is_empty());
     assert!(index
         .search(
-            &SearchQuery::parse("missing:\"red\"", tokenize).unwrap(),
+            &SearchQuery::parse("missing:\"red\"", tokenize_query).unwrap(),
             &SearchOptions::default()
         )
         .is_err());
@@ -85,10 +85,13 @@ fn positional_phrases_do_not_cross_fields_and_exclusions_apply() {
 #[test]
 fn malformed_and_unsupported_queries_are_errors() {
     for query in ["red|fox", "(red)", "red*", "red\"fox\"", "title:\"red\"fox"] {
-        assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
+        assert!(
+            SearchQuery::parse(query, tokenize_query).is_err(),
+            "{query}"
+        );
     }
-    assert!(SearchQuery::parse(&"x ".repeat(65), tokenize).is_err());
-    assert!(SearchQuery::parse(&"x".repeat(MAX_QUERY_BYTES + 1), tokenize).is_err());
+    assert!(SearchQuery::parse(&"x ".repeat(65), tokenize_query).is_err());
+    assert!(SearchQuery::parse(&"x".repeat(MAX_QUERY_BYTES + 1), tokenize_query).is_err());
 }
 #[test]
 fn rebuild_reconciles_updates_and_deletes() {
@@ -112,7 +115,7 @@ fn retrieval_depth_precedes_score_ranking_and_pagination() {
         document("c", "fox", "", 2),
     ];
     let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
-    let query = SearchQuery::parse("fox", tokenize).unwrap();
+    let query = SearchQuery::parse("fox", tokenize_query).unwrap();
     let options = SearchOptions {
         order: SearchOrder::ScoreDescending,
         retrieval_depth: Some(2),
@@ -145,7 +148,7 @@ proptest::proptest! {
   for hit in names(&index,&format!("\"{a} {b}\"")) {let contains=names(&index,&format!("{a} {b}")).contains(&hit);proptest::prop_assert!(contains);}
  }
  #[test]
- fn arbitrary_unicode_never_panics(input in ".*") {let _=SearchQuery::parse(&input, tokenize);let _=tokenize(&input);}
+ fn arbitrary_unicode_never_panics(input in ".*") {let _=SearchQuery::parse(&input, tokenize_query);let _=tokenize(&input);}
 }
 
 #[test]
@@ -195,12 +198,12 @@ fn incremental_batches_equal_full_build_and_rejections_are_atomic() {
     assert_eq!(
         batches
             .search(
-                &SearchQuery::parse("red fox", tokenize).unwrap(),
+                &SearchQuery::parse("red fox", tokenize_query).unwrap(),
                 &SearchOptions::default()
             )
             .unwrap(),
         full.search(
-            &SearchQuery::parse("red fox", tokenize).unwrap(),
+            &SearchQuery::parse("red fox", tokenize_query).unwrap(),
             &SearchOptions::default()
         )
         .unwrap()
@@ -262,16 +265,25 @@ fn match_none_preserves_query_bounds_and_rejects_structured_tokenless_clauses() 
     )
     .unwrap();
     for query in ["title:\"!!!\"", "\"!!!\"", "-", "()", "*"] {
-        assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
+        assert!(
+            SearchQuery::parse(query, tokenize_query).is_err(),
+            "{query}"
+        );
     }
     assert!(names(&index, &"!".repeat(MAX_QUERY_BYTES)).is_empty());
-    assert!(SearchQuery::parse(&"!".repeat(MAX_QUERY_BYTES + 1), tokenize).is_err());
+    assert!(SearchQuery::parse(&"!".repeat(MAX_QUERY_BYTES + 1), tokenize_query).is_err());
     assert!(names(&index, &vec!["!!!"; MAX_QUERY_CLAUSES].join(" ")).is_empty());
-    assert!(SearchQuery::parse(&vec!["!!!"; MAX_QUERY_CLAUSES + 1].join(" "), tokenize).is_err());
+    assert!(SearchQuery::parse(
+        &vec!["!!!"; MAX_QUERY_CLAUSES + 1].join(" "),
+        tokenize_query
+    )
+    .is_err());
     assert!(names(&index, &vec!["-nebula"; MAX_QUERY_CLAUSES].join(" ")).is_empty());
-    assert!(
-        SearchQuery::parse(&vec!["-nebula"; MAX_QUERY_CLAUSES + 1].join(" "), tokenize).is_err()
-    );
+    assert!(SearchQuery::parse(
+        &vec!["-nebula"; MAX_QUERY_CLAUSES + 1].join(" "),
+        tokenize_query
+    )
+    .is_err());
 }
 
 proptest::proptest! {
@@ -303,7 +315,7 @@ fn unquoted_colons_delimit_conjunctive_terms_without_field_scoping() {
     }
     assert_eq!(names(&index, "body:nebula"), ["docs/ash"]);
     assert!(names(&index, "unknown:nebula").is_empty());
-    assert!(SearchQuery::parse("unknown:nebula", tokenize)
+    assert!(SearchQuery::parse("unknown:nebula", tokenize_query)
         .unwrap()
         .is_covered_by(&definition()));
 }
@@ -331,7 +343,10 @@ fn a_leading_unmatched_quote_is_a_conjunction_not_an_eof_phrase() {
         "-\"cedar amber",
         "\"\"",
     ] {
-        assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
+        assert!(
+            SearchQuery::parse(query, tokenize_query).is_err(),
+            "{query}"
+        );
     }
 }
 
@@ -365,7 +380,10 @@ fn contextual_or_is_conjunctive_while_standalone_or_is_searchable() {
         "cedar !!! OR amber",
         "cedar OR OR amber",
     ] {
-        assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
+        assert!(
+            SearchQuery::parse(query, tokenize_query).is_err(),
+            "{query}"
+        );
     }
 }
 
@@ -383,9 +401,9 @@ fn plain_tokenless_fragments_are_ignored_but_still_count_toward_bounds() {
     assert!(names(&index, "-cedar !!!").is_empty());
     let at_limit = format!("{} cedar", vec!["!!!"; MAX_QUERY_CLAUSES - 1].join(" "));
     assert_eq!(names(&index, &at_limit), names(&index, "cedar"));
-    assert!(SearchQuery::parse(&format!("!!! {at_limit}"), tokenize).is_err());
-    assert!(SearchQuery::parse(&vec!["cedar"; 32].join(" OR "), tokenize).is_ok());
-    assert!(SearchQuery::parse(&vec!["cedar"; 33].join(" OR "), tokenize).is_err());
+    assert!(SearchQuery::parse(&format!("!!! {at_limit}"), tokenize_query).is_err());
+    assert!(SearchQuery::parse(&vec!["cedar"; 32].join(" OR "), tokenize_query).is_ok());
+    assert!(SearchQuery::parse(&vec!["cedar"; 33].join(" OR "), tokenize_query).is_err());
 }
 
 proptest::proptest! {
@@ -402,5 +420,34 @@ proptest::proptest! {
         proptest::prop_assert_eq!(names(&index, "cedar !!!"), names(&index, "cedar"));
         let expected_or: Vec<_> = rows.iter().enumerate().rev().filter(|(_, (_, _, literal_or))| *literal_or).map(|(i, _)| format!("docs/synthetic{i}")).collect();
         proptest::prop_assert_eq!(names(&index, "OR"), expected_or);
+    }
+}
+
+#[test]
+fn latin_purpose_search_keeps_direction_greek_and_phrase_positions() {
+    let docs = [
+        document("copper", "İris", "", 1),
+        document("silver", "Crème brûlée", "", 2),
+        document("jade", "ά", "", 3),
+        document("opal", "α", "", 4),
+    ];
+    let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+    assert_eq!(names(&index, "iris"), ["docs/copper"]);
+    assert!(names(&index, "İris").is_empty());
+    assert_eq!(names(&index, "\"creme brulee\""), ["docs/silver"]);
+    assert_eq!(names(&index, "ά"), ["docs/jade"]);
+    assert_eq!(names(&index, "α"), ["docs/opal"]);
+}
+
+proptest::proptest! {
+    #[test]
+    fn latin_purpose_membership_ignores_document_names_and_field_placement(
+        first in "[a-z]{1,8}", second in "[a-z]{1,8}", in_body in proptest::bool::ANY
+    ) {
+        proptest::prop_assume!(first != second);
+        let docs = [document(&first, if in_body { "" } else { "İris" }, if in_body { "İris" } else { "" }, 1), document(&second, "unrelated", "", 2)];
+        let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+        proptest::prop_assert_eq!(names(&index, "iris"), vec![format!("docs/{first}")]);
+        proptest::prop_assert!(names(&index, "İris").is_empty());
     }
 }

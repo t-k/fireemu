@@ -2064,7 +2064,7 @@ fn text_index_route(
                         batch,
                         reason,
                         documents,
-                        fireemu_adapter_support::lexical::tokenize,
+                        fireemu_adapter_support::lexical::tokenize_index,
                     ) {
                         Ok(()) => match catalog.get(project, database, id) {
                             Some(def) => ok(encode(&catalog, project, database, def)),

@@ -401,7 +401,7 @@
         "FS-CLAIM-TEXT-INDEX"
       ],
       "limitations": [
-        "Local lexical-v1 analysis and approximate BM25 are not production-equivalent; productionExact refuses search until production comparison is recorded. Transactions, geo search, language morphology, enhancement and general search expression trees remain unsupported."
+        "Local lexical-v1 analysis and approximate BM25 are not production-equivalent; productionExact refuses search until production comparison is recorded. Transactions, geo search, language morphology, enhancement and general search expression trees remain unsupported. Purpose-specific scalar-local Latin diacritic folding is a bounded development approximation, not a recovered native analyzer; CJK segmentation, ranking and broader Unicode analysis remain unverified."
       ]
     },
     {

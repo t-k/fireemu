@@ -88,7 +88,7 @@ pub fn decode(stage: &pb::pipeline::Stage) -> Result<SearchPlan, Status> {
     let Some(pb::value::ValueType::StringValue(text)) = &function.args[0].value_type else {
         return Err(invalid("document_matches requires a string"));
     };
-    let query = SearchQuery::parse(text, fireemu_adapter_support::lexical::tokenize)
+    let query = SearchQuery::parse(text, fireemu_adapter_support::lexical::tokenize_query)
         .map_err(|e| invalid(&e.to_string()))?;
     let mut options = SearchOptions {
         offset: count(stage, "offset")?.unwrap_or(0),
@@ -363,7 +363,7 @@ fn search_snapshot(
         let index = SearchIndex::build(
             &definition,
             &documents,
-            fireemu_adapter_support::lexical::tokenize,
+            fireemu_adapter_support::lexical::tokenize_index,
         )
         .map_err(|error| invalid(&error.to_string()))?;
         match index.search(&plan.query, &plan.options) {

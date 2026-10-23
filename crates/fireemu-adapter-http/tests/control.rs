@@ -3239,3 +3239,61 @@ fn diagnostics_control_never_clears_the_storage_registry() {
         before
     );
 }
+
+#[test]
+fn latin_purpose_control_backfill_uses_index_analysis_for_real_source_postings() {
+    use fireemu_adapter_support::lexical::tokenize_query;
+    use fireemu_core_firestore::text_search::{SearchOptions, SearchQuery};
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.edition = FirestoreEdition::Enterprise;
+    let docs = Arc::new(Mutex::new(vec![
+        text_build_document("copper", "İris"),
+        text_build_document("silver", "Crème"),
+    ]));
+    s.project_hooks = Some(Arc::new(TextBuildSource(docs)));
+    let base = "/v1/sessions/default/firestore/text-indexes";
+    let definition = json!({"index": {
+        "name": "projects/demo-app/databases/(default)/collectionGroups/products/indexes/latin-purpose",
+        "queryScope": "COLLECTION", "apiScope": "ANY_API",
+        "fields": [{"fieldPath": "title", "searchConfig": {"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}],
+        "searchIndexOptions": {"textLanguage": "en", "textLanguageOverrideFieldPath": ""}
+    }, "xFirebaseTestd": {"state": "CREATING", "buildPolicy": "synchronous"}});
+    let added = handle(&s, "POST", base, &definition);
+    assert_eq!(added.status, 200, "{}", added.body);
+    let search = |query: &str| {
+        s.text_indexes
+            .lock()
+            .unwrap()
+            .build("demo-app", "(default)", "latin-purpose")
+            .unwrap()
+            .index()
+            .unwrap()
+            .search(
+                &SearchQuery::parse(query, tokenize_query).unwrap(),
+                &SearchOptions::default(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.path.relative())
+            .collect::<Vec<_>>()
+    };
+    let advance = handle(
+        &s,
+        "POST",
+        &format!("{base}/latin-purpose:advanceBackfill"),
+        &json!({"batchSize":1}),
+    );
+    assert_eq!(advance.status, 200, "{}", advance.body);
+    assert_eq!(search("iris"), ["products/copper"]);
+    assert!(search("İris").is_empty());
+    let complete = handle(
+        &s,
+        "POST",
+        &format!("{base}/latin-purpose:completeBackfill"),
+        &json!({}),
+    );
+    assert_eq!(complete.status, 200, "{}", complete.body);
+    assert_eq!(search("iris"), ["products/copper"]);
+    assert_eq!(search("creme"), ["products/silver"]);
+    assert!(search("İris").is_empty());
+}

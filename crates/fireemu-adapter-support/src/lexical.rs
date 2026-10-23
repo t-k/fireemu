@@ -1,12 +1,19 @@
 //! Deterministic language-neutral lexical-v1 Unicode analysis. No morphology or production-equivalence claims.
 use unicode_casefold::UnicodeCaseFold;
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::{
+    char::{decompose_canonical, is_combining_mark},
+    UnicodeNormalization,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
-/// Normalize NFKC, full default case fold, NFKC again, then UAX29 words with individual CJK ideographs.
+/// Legacy symmetric lexical-v1 compatibility analysis: NFKC, full case fold, NFKC, and unchanged word/CJK segmentation. Runtime search uses the purpose-specific entrypoints.
 #[must_use]
 pub fn tokenize(input: &str) -> Vec<String> {
     let normalized: String = input.nfkc().case_fold().nfkc().collect();
+    segment(&normalized)
+}
+
+fn segment(normalized: &str) -> Vec<String> {
     let mut result = Vec::new();
     for word in normalized.unicode_words() {
         let mut buffer = String::new();
@@ -26,4 +33,140 @@ pub fn tokenize(input: &str) -> Vec<String> {
         }
     }
     result
+}
+
+/// Analyze indexed text using the bounded development index profile.
+#[must_use]
+pub fn tokenize_index(input: &str) -> Vec<String> {
+    let normalized: String = input
+        .nfkc()
+        .map(fold_precomposed_latin)
+        .case_fold()
+        .nfkc()
+        .collect();
+    segment(&normalized)
+}
+
+/// Analyze query text using the bounded development query profile.
+#[must_use]
+pub fn tokenize_query(input: &str) -> Vec<String> {
+    let normalized: String = input
+        .nfkc()
+        .case_fold()
+        .map(fold_precomposed_latin)
+        .nfkc()
+        .collect();
+    segment(&normalized)
+}
+
+// Fold only a scalar's Latin-base decomposition, never marks supplied as separate scalars.
+fn fold_precomposed_latin(c: char) -> char {
+    if c.is_ascii() {
+        return c;
+    }
+    let mut first = true;
+    let mut base = None;
+    let mut valid = true;
+    decompose_canonical(c, |part| {
+        if first {
+            first = false;
+            if part.is_ascii_alphabetic() {
+                base = Some(part);
+            } else {
+                valid = false;
+            }
+        } else {
+            valid &= is_combining_mark(part);
+        }
+    });
+    if valid {
+        base.unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latin_purposes_fold_composed_decomposed_width_and_other_latin_bases() {
+        for input in ["CAFÉ", "cafe\u{301}", "ｃａｆｅ"] {
+            assert_eq!(tokenize_index(input), ["cafe"]);
+            assert_eq!(tokenize_query(input), ["cafe"]);
+        }
+        for (input, expected) in [
+            ("naïve", "naive"),
+            ("résumé", "resume"),
+            ("crème", "creme"),
+            ("ÑANDÚ", "nandu"),
+        ] {
+            assert_eq!(tokenize_index(input), [expected]);
+            assert_eq!(tokenize_query(input), [expected]);
+        }
+    }
+
+    #[test]
+    fn dotted_capital_latin_base_is_directional_and_query_keeps_its_mark() {
+        assert_eq!(tokenize_index("İris İSTANBUL"), ["iris", "istanbul"]);
+        assert_eq!(
+            tokenize_query("İris İSTANBUL"),
+            ["i\u{307}ris", "i\u{307}stanbul"]
+        );
+        assert_eq!(tokenize_query("iris istanbul"), ["iris", "istanbul"]);
+    }
+
+    #[test]
+    fn greek_other_scripts_and_noncomposing_marks_keep_their_distinctions() {
+        for input in [
+            "ά α",
+            "が ガ",
+            "क़",
+            "שָׁלוֹם",
+            "q\u{301} q\u{308}",
+            "i\u{307}ris",
+            "東京都の猫",
+            "Σ σ ς",
+            "Straße",
+        ] {
+            assert_eq!(tokenize_index(input), tokenize(input), "index {input}");
+            assert_eq!(tokenize_query(input), tokenize(input), "query {input}");
+        }
+        assert_eq!(tokenize_index("ά α"), ["ά", "α"]);
+        assert_eq!(tokenize_query("ά α"), ["ά", "α"]);
+    }
+
+    #[test]
+    fn legacy_entrypoint_keeps_original_symmetric_lexical_v1_analysis() {
+        assert_eq!(
+            tokenize("CAFÉ cafe\u{301} Straße 東京"),
+            ["café", "café", "strasse", "東", "京"]
+        );
+        assert_eq!(tokenize("İris"), ["i\u{307}ris"]);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn ascii_purposes_retain_legacy_tokens(input in "[ -~]{0,80}") {
+            proptest::prop_assert_eq!(tokenize_index(&input), tokenize(&input));
+            proptest::prop_assert_eq!(tokenize_query(&input), tokenize(&input));
+        }
+        #[test]
+        fn arbitrary_unicode_has_no_empty_tokens_or_panics(input in ".{0,100}") {
+            for tokens in [tokenize(&input), tokenize_index(&input), tokenize_query(&input)] {
+                proptest::prop_assert!(tokens.iter().all(|token| !token.is_empty()));
+            }
+        }
+        #[test]
+        fn generic_precomposed_latin_variants_share_ascii_terms(
+            prefix in "[a-z]{0,8}", suffix in "[a-z]{0,8}",
+            pair in proptest::sample::select(vec![("é", "e"), ("å", "a"), ("ç", "c"), ("ñ", "n"), ("ü", "u")])
+        ) {
+            let accented = format!("{prefix}{}{suffix}", pair.0);
+            let plain = format!("{prefix}{}{suffix}", pair.1);
+            proptest::prop_assert_eq!(tokenize_index(&accented), tokenize_query(&plain));
+            proptest::prop_assert_eq!(tokenize_query(&accented), tokenize_index(&plain));
+        }
+    }
 }

@@ -142,7 +142,7 @@ impl SearchQuery {
         })
     }
 
-    /// The caller must use the same analyzer for queries and corpus batches.
+    /// Query and corpus analyzers may differ by purpose but must share compatible term and position encoding.
     /// Plain tokenless fragments are ignored; no positive searchable clauses means no matches. Quoted, restricted, and excluded tokenless fragments remain invalid.
     /// Unquoted colons delimit conjunctive terms. A leading unmatched quote leaves an ordinary conjunction; balanced phrases remain positional.
     /// OR is a conjunctive connector between positive operands and a searchable term alone. Legacy `field:"phrase"` restrictions are development approximations; grouping, escapes, and wildcards remain unsupported.

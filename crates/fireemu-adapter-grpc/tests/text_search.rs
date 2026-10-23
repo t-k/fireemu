@@ -213,7 +213,8 @@ fn score_projection_paging_and_downstream_select_keep_unprojected_search_fields(
             .unwrap()
             > 0.0
     );
-    let mut query = search_query("body:waffles");
+    // Preserve the unverified legacy field restriction while checking downstream projection.
+    let mut query = search_query("body:\"waffles\"");
     query["structuredPipeline"]["pipeline"]["stages"].as_array_mut().unwrap().push(json!({"name":"select","args":[{"mapValue":{"fields":{"label":{"fieldReferenceValue":"title"}}}}]}));
     let projected = request(
         &state,
@@ -244,7 +245,7 @@ fn unavailable_builds_and_production_exact_never_return_approximate_search_resul
             100,
             None,
             Vec::new(),
-            fireemu_adapter_support::lexical::tokenize,
+            fireemu_adapter_support::lexical::tokenize_index,
         )
         .unwrap();
     let failed = request(
@@ -267,7 +268,7 @@ fn unavailable_builds_and_production_exact_never_return_approximate_search_resul
             100,
             None,
             Vec::new(),
-            fireemu_adapter_support::lexical::tokenize,
+            fireemu_adapter_support::lexical::tokenize_index,
         )
         .unwrap();
     assert_eq!(
@@ -376,6 +377,7 @@ async fn grpc_and_rest_share_the_same_index_snapshot_search_and_result_order() {
 
 #[test]
 fn noncovering_invalid_indexes_do_not_mask_a_valid_covering_index() {
+    // Qualified phrases exercise the unverified legacy development coverage gate.
     use fireemu_core_firestore::{field_path::FieldPath, text_index::LanguageOverridePolicy};
     for policy in [
         LanguageOverridePolicy::BackendDefaultUnresolved,
@@ -400,10 +402,34 @@ fn noncovering_invalid_indexes_do_not_mask_a_valid_covering_index() {
         }
         put(&state, "a", "bad tag!", "fox");
         let path = format!("{DB}/documents:executePipeline");
-        let found = request(&state, "POST", &path, search_query("body:fox"));
+        let found = request(&state, "POST", &path, search_query("body:\"fox\""));
         assert_eq!(found.status, 200, "{}", found.body);
         assert_eq!(ids(&found.body), ["a"]);
-        let invalid = request(&state, "POST", &path, search_query("title:bad"));
+        let invalid = request(&state, "POST", &path, search_query("title:\"bad\""));
         assert_eq!(invalid.status, 400, "{}", invalid.body);
+    }
+}
+
+#[test]
+fn latin_purpose_adapter_queries_use_query_analysis_and_rebuild_with_index_analysis() {
+    let state = fixture();
+    let _catalog = install(&state, false);
+    put(&state, "copper", "İris", "marker");
+    put(&state, "silver", "Crème brûlée", "marker");
+    put(&state, "jade", "ά", "marker");
+    put(&state, "opal", "α", "marker");
+    put(&state, "talc", "Straße", "marker");
+    let path = format!("{DB}/documents:executePipeline");
+    for (query, expected) in [
+        ("iris", vec!["copper"]),
+        ("İris", vec![]),
+        ("\"creme brulee\"", vec!["silver"]),
+        ("ά", vec!["jade"]),
+        ("α", vec!["opal"]),
+        ("strasse", vec!["talc"]),
+    ] {
+        let response = request(&state, "POST", &path, search_query(query));
+        assert_eq!(response.status, 200, "{query}: {}", response.body);
+        assert_eq!(ids(&response.body), expected, "{query}");
     }
 }

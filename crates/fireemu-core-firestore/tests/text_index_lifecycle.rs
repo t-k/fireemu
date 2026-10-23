@@ -1,5 +1,5 @@
 //! Local index lifecycle, real posting data, and scope-preserving snapshot properties.
-use fireemu_adapter_support::lexical::tokenize;
+use fireemu_adapter_support::lexical::{tokenize_index as tokenize, tokenize_query};
 use fireemu_core_firestore::{
     field_path::FieldPath,
     index::IndexQueryScope,
@@ -52,7 +52,7 @@ fn hits(catalog: &TextIndexCatalog, query: &str) -> Vec<String> {
         .index()
         .unwrap()
         .search(
-            &SearchQuery::parse(query, tokenize).unwrap(),
+            &SearchQuery::parse(query, tokenize_query).unwrap(),
             &SearchOptions::default(),
         )
         .unwrap()
@@ -281,4 +281,46 @@ fn backfill_rejects_documents_outside_its_catalog_scope_atomically() {
         ));
         assert_eq!(catalog, before);
     }
+}
+
+#[test]
+fn latin_purpose_lifecycle_keeps_index_analysis_across_batches_and_completion() {
+    let mut catalog = TextIndexCatalog::default();
+    catalog
+        .add("demo-app", "(default)", definition("text"))
+        .unwrap();
+    let docs = vec![document("copper", "İris"), document("silver", "Crème")];
+    for _ in 0..2 {
+        catalog
+            .lifecycle(
+                "demo-app",
+                "(default)",
+                "text",
+                "advanceBackfill",
+                None,
+                1,
+                None,
+                docs.clone(),
+                tokenize,
+            )
+            .unwrap();
+    }
+    assert_eq!(hits(&catalog, "iris"), ["products/copper"]);
+    assert_eq!(hits(&catalog, "creme"), ["products/silver"]);
+    assert!(hits(&catalog, "İris").is_empty());
+    catalog
+        .lifecycle(
+            "demo-app",
+            "(default)",
+            "text",
+            "completeBackfill",
+            None,
+            100,
+            None,
+            docs,
+            tokenize,
+        )
+        .unwrap();
+    assert_eq!(hits(&catalog, "iris"), ["products/copper"]);
+    assert!(hits(&catalog, "İris").is_empty());
 }

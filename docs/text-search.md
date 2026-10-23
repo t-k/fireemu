@@ -64,13 +64,13 @@ Manual lifecycle operations are available on `/v1/sessions/default/firestore/tex
 
 ## Query behavior
 
-Local search selects the first READY definition in catalog load order that covers every explicit field restriction. It searches only that definition's fields. Use one definition containing all intended fields, or explicit field restrictions, when a collection has several text indexes. This is a local planning policy, not a claim about production index selection.
+Local search selects the first READY definition in catalog load order that covers every field restriction created by the retained legacy qualified-quoted form, such as `body:"fox"`. It searches only that definition's fields. This qualified-quoted form is an unobserved native behavior retained as a development approximation. Unquoted colon forms are ordinary conjunctive terms and do not restrict fields. Use one definition containing all intended fields when a collection has several text indexes. This is a local planning policy, not a claim about production index selection.
 
 Backfill advances only through explicit control calls; advancing the virtual clock alone does not schedule background builds.
 
-A query is limited to 8,192 UTF-8 bytes and 64 clauses. The current query language supports AND terms, quoted phrases that must occur in the same field, and exclusions using `-term` or `-phrase`, including queries made only of exclusions. Canonical field restrictions apply.
+A query is limited to 8,192 UTF-8 bytes and 64 clauses. The current query language supports AND terms, quoted phrases that must occur in the same field, and exclusions using `-term` or `-phrase`. Queries with no positive searchable terms, including exclusions-only queries, match no documents. The retained legacy qualified-quoted development form applies field restrictions; unquoted colons delimit ordinary conjunctive terms.
 
-Only string values are indexed. Analysis applies NFKC normalization, full default case folding, and UAX #29 token boundaries, including individual CJK ideographs. Language codes and tags receive syntactic validation, but analysis remains language-neutral. The score is an approximate BM25 score. Results use creation time descending and document path ascending to break ties. `retrievalDepth` chooses the newest matching documents before ranking; offset and limit apply afterward.
+Only string values are indexed. Development analysis applies NFKC normalization and retains full default case folding. A scalar whose canonical decomposition consists of one ASCII Latin base followed only by combining marks folds to that base, before case folding for indexed text and after case folding for queries. Standalone marks and non-Latin bases are retained. This purpose-dependent rule is a bounded approximation, not a reconstruction of the native analyzer. The existing UAX #29 token boundaries and individual CJK ideographs remain unchanged; native CJK segmentation is still unverified. Language codes and tags receive syntactic validation, but analysis remains language-neutral. The score is an approximate BM25 score. Results use creation time descending and document path ascending to break ties. `retrievalDepth` chooses the newest matching documents before ranking; offset and limit apply afterward.
 
 REST and gRPC capture the immutable source and catalog together. A later search rebuilds from a new snapshot and sees committed writes. This behavior makes no incremental-index performance claim.
 
@@ -86,3 +86,5 @@ For the managed service's text-search concepts and query syntax, see [Cloud Fire
 ## Verify SDK interoperability locally
 
 After installing the pinned conformance dependencies and building fireemu, run `FIREEMU_BINARY=/absolute/path/to/fireemu pnpm -C conformance text-search:local`. The check creates a disposable Enterprise world, compares Admin gRPC and Web Lite searches, exercises backfill failure and repair, and verifies updates and deletes. It refuses non-loopback endpoints and never selects a production project. This is a local interoperability check, not a production-equivalence observation.
+
+The adapter helper `tokenize` retains the legacy symmetric lexical-v1 behavior for compatibility. Runtime query and index paths use `tokenize_query` and `tokenize_index`; their term and position encodings must remain compatible even though normalization purpose differs.

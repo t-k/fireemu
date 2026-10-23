@@ -74,7 +74,7 @@
       "id": "GAP-FS-002",
       "feature": "FS-TEXT",
       "kind": "unimplemented",
-      "scope": "Production-equivalent Enterprise full-text analysis, scoring, error semantics and advanced search remain unimplemented. Finite local lexical-v1 postings/search and explicit build controls are implemented separately without a parity claim. Empty/whole plain tokenless and exclusions-only queries match no documents. Bounded parser corrections cover unquoted colon delimiters, unmatched leading quotes, contextual OR and tokenless fragments alongside positive terms; these do not attest analysis, scoring or wider syntax equivalence.",
+      "scope": "Production-equivalent Enterprise full-text analysis, scoring, error semantics and advanced search remain unimplemented. Finite local lexical-v1 postings/search and explicit build controls are implemented separately without a parity claim. Empty/whole plain tokenless and exclusions-only queries match no documents. Bounded parser corrections cover unquoted colon delimiters, unmatched leading quotes, contextual OR and tokenless fragments alongside positive terms; these do not attest analysis, scoring or wider syntax equivalence. Purpose-specific scalar-local Latin folding is a development approximation; Greek distinctions and separate combining marks are retained, while native CJK segmentation, scoring and broader analysis remain unverified.",
       "implementationStatus": "unimplemented",
       "localTestStatus": "passing",
       "productionObservationStatus": "none",

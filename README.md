@@ -63,7 +63,7 @@ Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), C
 
 | Product | Key unsupported features and limitations |
 |---|---|
-| Cloud Firestore | The Enterprise Pipeline API supports a limited subset of read operations. Full-text search supports index definition validation, but local search execution is not supported.   |
+| Cloud Firestore | The Enterprise Pipeline API supports a limited subset of read operations. Enterprise text search has explicit local index-build controls and a finite deterministic lexical engine with approximate ranking; productionExact refuses unobserved search semantics. See [local text search](docs/text-search.md).   |
 | Firebase Authentication (Identity Platform) | Authentication flows that communicate with external identity providers, authorization-code exchange, and SAML XML signature verification are outside the supported scope. These are separate from local authentication behavior and provider configuration.  |
 | Cloud Storage for Firebase | Signed-URL and POST-policy signatures are not verified (their expiry and conditions are), object ACLs other than `allUsers` read are not enforced, and IAM and bucket-level public access are not modeled. Object composition (`compose`) and notification configuration are not supported.  |
 | Cloud Functions for Firebase | Triggers that depend on products Fireemu does not deliver events for, such as Realtime Database (an open gap), Remote Config, and Data Connect (deferred), cannot run. Storage archive events occur only for a bucket whose versioning was enabled, and their shape is unrecorded.  |

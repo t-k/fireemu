@@ -26,7 +26,8 @@
     "fs-data-write:check": "node src/fs-data-write-local-check.mjs",
     "auth-probe": "node src/auth-probe/run.mjs record",
     "auth-probe:check": "node src/auth-probe/run.mjs check",
-    "auth-probe:production": "node src/auth-probe/run.mjs record-production"
+    "auth-probe:production": "node src/auth-probe/run.mjs record-production",
+    "text-search:local": "node text-search/run.mjs"
   },
   "dependencies": {
     "@google-cloud/firestore": "8.7.1",

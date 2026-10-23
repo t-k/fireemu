@@ -13,6 +13,7 @@ fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-limits = { path = "../fireemu-core-limits" }
 
 [dev-dependencies]
+fireemu-adapter-support = { path = "../fireemu-adapter-support" }
 proptest.workspace = true
 
 [lints]

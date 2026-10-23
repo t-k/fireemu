@@ -24,3 +24,5 @@ pub mod serve;
 pub mod service;
 pub mod streams;
 pub mod webchannel;
+
+mod text_search;

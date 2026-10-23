@@ -235,6 +235,23 @@ const REGISTRY: &[RegistryEntry] = &[
     ("collection_group", StageRole::Input, 1, Some(1), &[]),
     ("database", StageRole::Input, 0, Some(0), &[]),
     ("documents", StageRole::Input, 1, None, &[]),
+    (
+        "search",
+        StageRole::Transform,
+        0,
+        Some(0),
+        &[
+            "query",
+            "offset",
+            "limit",
+            "retrieval_depth",
+            "sort",
+            "add_fields",
+            "language_code",
+            "query_enhancement",
+            "select",
+        ],
+    ),
     ("select", StageRole::Transform, 1, Some(1), &[]),
     ("add_fields", StageRole::Transform, 1, Some(1), &[]),
     ("remove_fields", StageRole::Transform, 1, None, &[]),
@@ -443,9 +460,14 @@ fn check_options(
             return Err(option("no such option"));
         }
         let ok = match (name, key.as_str(), value) {
-            ("find_nearest", "limit", Arg::Integer(n)) => *n >= 1,
-            ("find_nearest", "distance_field" | "index_field", Arg::Field(_) | Arg::String(_))
+            ("search", "query", expression) => expression.is_expression(),
+            ("search", "offset" | "limit" | "retrieval_depth", Arg::Integer(n)) => *n >= 0,
+            ("search", "sort", Arg::Array(_))
+            | ("search", "add_fields" | "select", Arg::Map(_))
+            | ("search", "language_code" | "query_enhancement", Arg::String(_))
+            | ("find_nearest", "distance_field" | "index_field", Arg::Field(_) | Arg::String(_))
             | ("unnest", "index_field", Arg::Field(_) | Arg::String(_)) => true,
+            ("find_nearest", "limit", Arg::Integer(n)) => *n >= 1,
             ("sample", "mode", Arg::String(m)) => m == "documents" || m == "percent",
             _ => false,
         };

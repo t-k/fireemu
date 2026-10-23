@@ -171,6 +171,7 @@ pub fn validate_pipeline(
                 if !matches!(
                     stage.as_str(),
                     "collection"
+                        | "search"
                         | "where"
                         | "select"
                         | "limit"
@@ -484,6 +485,8 @@ pub struct CompiledExecution {
     pub input: pb::RunQueryRequest,
     /// The stages the executor runs over the input rows.
     pub stages: Vec<Stage>,
+    /// A local lexical search before the existing streaming suffix.
+    pub search: Option<crate::text_search::SearchPlan>,
 }
 
 /// Compiles the finite local Enterprise subset for the core executor: collection input,
@@ -530,6 +533,7 @@ pub fn compile_pipeline_in_order(
     }
     let _wire = WireOrderScope::enter(order);
     let mut stages = Vec::new();
+    let mut search = None;
     let mut last_rank = 0u8;
     let (mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
         (false, false, false, false);
@@ -550,6 +554,14 @@ pub fn compile_pipeline_in_order(
             }
             last_rank = rank;
             match stage.name.as_str() {
+                "search" => {
+                    if position != 1 || search.is_some() {
+                        return Err(Status::unimplemented(
+                            "search must occur once immediately after collection",
+                        ));
+                    }
+                    search = Some(crate::text_search::decode(stage)?);
+                }
                 "where" => {
                     if seen_where || seen_select || seen_limit {
                         return Err(Status::unimplemented("duplicate or misplaced where stage"));
@@ -658,9 +670,14 @@ pub fn compile_pipeline_in_order(
                 })
                 .collect(),
         });
+    if search.is_some() {
+        pushdown = None;
+    }
+    let projection = if search.is_some() { None } else { projection };
     Ok(CompiledExecution {
         input: collection_query(query_parent, collection_id, pushdown, projection, 0, None),
         stages,
+        search,
     })
 }
 
@@ -1822,6 +1839,7 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
 /// at the first such stage, and a second `limit` is refused as repeated).
 fn stage_rank(name: &str) -> u8 {
     match name {
+        "search" => 0,
         "where" | "select" => 1,
         "offset" => 2,
         _ => 3,

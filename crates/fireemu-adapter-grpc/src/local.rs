@@ -313,6 +313,7 @@ pub struct FieldOperation {
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
+    text_search: Mutex<Option<crate::text_search::Configuration>>,
     /// Reloadable index catalog used for every new query plan.
     indexes: RwLock<BTreeMap<(Option<String>, String), fireemu_core_firestore::index::IndexSet>>,
     /// Time-to-live field configuration per database, keyed like [`LocalBackend::indexes`]:
@@ -2622,6 +2623,7 @@ impl LocalBackend {
             virtual_contention: false,
             lock_lease: DEFAULT_LOCK_LEASE,
             gateway,
+            text_search: Mutex::new(None),
             indexes,
             ttl: RwLock::new(BTreeMap::new()),
             ttl_sweeps: Mutex::new(TtlSweepState::default()),
@@ -2856,6 +2858,35 @@ impl LocalBackend {
         } else {
             ledger.replace_committed(key, &HistoryCharge { owner, usage });
         }
+    }
+
+    /// Attach the startup-bound text catalog used by both Pipeline transports.
+    pub fn set_text_indexes(
+        &self,
+        catalog: Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+        production_exact: bool,
+    ) -> Result<(), Status> {
+        let mut slot = self.text_search.lock().map_err(|_| lock_poisoned())?;
+        if slot.is_some() {
+            return Err(Status::failed_precondition(
+                "text catalog is already attached",
+            ));
+        }
+        *slot = Some(crate::text_search::Configuration {
+            catalog,
+            production_exact,
+            warned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn text_search_configuration(
+        &self,
+    ) -> Result<Option<crate::text_search::Configuration>, Status> {
+        self.text_search
+            .lock()
+            .map(|config| config.clone())
+            .map_err(|_| lock_poisoned())
     }
 
     /// The session's admission barrier (share it with every other mutable surface).

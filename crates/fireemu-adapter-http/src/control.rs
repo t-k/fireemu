@@ -204,6 +204,17 @@ pub trait ProjectHooks: Send + Sync {
     fn clock_settled(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
         0
     }
+    /// Captures the live documents of one database for an explicit local text-index build.
+    /// The control route already owns session admission and the catalog lock; implementations
+    /// must not reacquire admission or call back into the text catalog.
+    fn text_index_documents(
+        &self,
+        _project: &str,
+        _database: &str,
+    ) -> Result<Vec<fireemu_core_firestore::store::Document>, String> {
+        Err("a Firestore document source is not attached".to_owned())
+    }
+
     /// Runs one Firestore time-to-live sweep over `scope` whether or not the interval has
     /// elapsed, and returns how many documents it deleted.
     fn sweep_expired_documents_now(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
@@ -388,7 +399,7 @@ pub struct ControlState {
     /// The sessions' fault plans (spec 18), one state per session, shared with every
     /// adapter.
     pub faults: Option<fireemu_core_session::fault::SharedFaultRegistry>,
-    /// Text Index definitions (`FS-TEXT-VAL-1`, strict validation only), by database.
+    /// Text index definitions and explicit build state, by database.
     pub text_indexes: Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
     /// The default session's project.
     pub default_project: String,
@@ -1741,9 +1752,14 @@ pub fn parse_text_index(
         match local.get("buildPolicy") {
             None => {}
             Some(Value::String(p)) if p == "synchronous" || p == "validation-only" => {}
+            Some(Value::String(p)) if p == "manual" => {
+                if local.get("state").is_none() {
+                    state = TextIndexState::Creating;
+                }
+            }
             Some(other) => {
                 return Err(format!(
-                    "buildPolicy {other} must be synchronous or validation-only"
+                    "buildPolicy {other} must be synchronous, manual or validation-only"
                 ))
             }
         }
@@ -1791,15 +1807,14 @@ fn text_index_json(
             LanguageOverridePolicy::BackendDefaultUnresolved => json!("unresolved"),
         },
         "state": d.state.as_str(),
-        "fidelity": "strict-validation-only",
+        "fidelity": "fireemu-lexical-v1",
     })
 }
 
 /// `firestore/text-indexes` (`:load` a canonical file body, POST one definition, GET
 /// lists), `firestore/text-indexes/{id}` (GET, DELETE; `body.project` / `body.database`
-/// pick one when the ID exists in several databases) and the 1.x lifecycle actions
-/// (`UNIMPLEMENTED`, no state change). A session sees only the databases of the projects
-/// it owns. Text indexes are an Enterprise feature.
+/// select the target scope) and explicit local backfill, failure, and repair actions.
+/// A session sees only the databases of the projects it owns. Text indexes are an Enterprise feature.
 #[allow(clippy::too_many_lines)]
 fn text_index_route(
     state: &ControlState,
@@ -1809,7 +1824,8 @@ fn text_index_route(
     rest: &str,
     body: &Value,
 ) -> JsonResponse {
-    use fireemu_core_firestore::text_index::TextIndexCatalog;
+    use fireemu_core_firestore::text_index::{TextIndexBuildError, TextIndexCatalog};
+    let _admitted = state.barrier.as_ref().map(|barrier| barrier.admit());
     if state.edition != FirestoreEdition::Enterprise {
         return error(
             400,
@@ -1830,6 +1846,22 @@ fn text_index_route(
         let id = def.id.clone();
         let warnings = catalog.add(&p, &d, def).map_err(|e| e.to_string())?;
         Ok(json!({"id": id, "project": p, "database": d, "warnings": warnings}))
+    };
+    let encode = |catalog: &TextIndexCatalog,
+                  p: &str,
+                  d: &str,
+                  def: &fireemu_core_firestore::text_index::TextIndexDefinition| {
+        let mut value = text_index_json(p, d, def);
+        if let Some(build) = catalog.build(p, d, &def.id) {
+            value["build"] = json!({
+                "generation": build.generation,
+                "processedDocuments": build.processed,
+                "indexedDocuments": build.indexed_documents(),
+                "totalDocuments": build.total,
+                "failure": build.failure,
+            });
+        }
+        value
     };
     let owned_total = |catalog: &TextIndexCatalog| {
         catalog
@@ -1866,7 +1898,7 @@ fn text_index_route(
             "indexes": catalog
                 .entries()
                 .filter(|(p, _, _)| scope.owns_project(p))
-                .map(|(p, d, def)| text_index_json(p, d, def))
+                .map(|(p, d, def)| encode(&catalog, p, d, def))
                 .collect::<Vec<_>>(),
         })),
         (verb, rest) => {
@@ -1876,47 +1908,183 @@ fn text_index_route(
             let (id, action) = rest
                 .split_once(':')
                 .map_or((rest, None), |(i, a)| (i, Some(a)));
-            let candidates: Vec<(String, String)> = catalog
-                .entries()
-                .filter(|(p, _, def)| scope.owns_project(p) && def.id == id)
-                .map(|(p, d, _)| (p.to_owned(), d.to_owned()))
-                .collect();
             let wanted = (
                 body.get("project").and_then(Value::as_str),
                 body.get("database").and_then(Value::as_str),
             );
+            let candidates: Vec<(String, String)> = catalog
+                .entries()
+                .filter(|(p, d, def)| {
+                    scope.owns_project(p)
+                        && def.id == id
+                        && wanted.0.is_none_or(|wanted| wanted == *p)
+                        && wanted.1.is_none_or(|wanted| wanted == *d)
+                })
+                .map(|(p, d, _)| (p.to_owned(), d.to_owned()))
+                .collect();
             let target = match candidates.as_slice() {
                 [] => return error(404, &format!("NOT_FOUND : no text index {id:?}")),
                 [one] => one.clone(),
-                many => match many.iter().find(|(p, d)| {
-                    wanted.0.is_none_or(|w| w == p) && wanted.1.is_none_or(|w| w == d)
-                }) {
-                    Some(one) if wanted.0.is_some() || wanted.1.is_some() => one.clone(),
-                    _ => {
-                        return error(
-                            409,
-                            &format!("ALREADY_EXISTS : text index {id:?} exists in several databases; pass body.project and body.database"),
-                        )
-                    }
-                },
+                _ => return error(409, &format!("ALREADY_EXISTS : text index {id:?} exists in several databases; pass body.project and body.database")),
             };
             let (project, database) = (target.0.as_str(), target.1.as_str());
             match (verb, action) {
                 ("GET", None) => match catalog.get(project, database, id) {
-                    Some(def) => ok(text_index_json(project, database, def)),
+                    Some(def) => ok(encode(&catalog, project, database, def)),
                     None => error(404, &format!("NOT_FOUND : no text index {id:?}")),
                 },
                 ("DELETE", None) => {
                     if catalog.remove(project, database, id) {
-                        ok(json!({"id": id, "project": project, "database": database, "deleted": true}))
+                        ok(
+                            json!({"id": id, "project": project, "database": database, "deleted": true}),
+                        )
                     } else {
                         error(404, &format!("NOT_FOUND : no text index {id:?}"))
                     }
                 }
                 (
                     "POST",
-                    Some(lifecycle @ ("advanceBackfill" | "completeBackfill" | "failBuild" | "repair")),
-                ) => error(501, &format!("UNIMPLEMENTED : {lifecycle} needs the backfill engine (FS-TEXT-IDX-1, 1.x); the index state is unchanged")),
+                    Some(
+                        lifecycle @ ("advanceBackfill" | "completeBackfill" | "failBuild"
+                        | "repair"),
+                    ),
+                ) => {
+                    let Some(object) = body.as_object() else {
+                        return error(400, "INVALID_ARGUMENT : lifecycle body must be an object");
+                    };
+                    if let Some(key) = object.keys().find(|key| {
+                        !(matches!(key.as_str(), "project" | "database" | "generation")
+                            || (lifecycle == "advanceBackfill" && key.as_str() == "batchSize")
+                            || (lifecycle == "failBuild" && key.as_str() == "reason"))
+                    }) {
+                        return error(
+                            400,
+                            &format!("INVALID_ARGUMENT : unknown lifecycle option {key:?}"),
+                        );
+                    }
+                    if ["project", "database"]
+                        .iter()
+                        .any(|key| body.get(key).is_some_and(|v| !v.is_string()))
+                    {
+                        return error(
+                            400,
+                            "INVALID_ARGUMENT : project and database must be strings",
+                        );
+                    }
+                    let generation = match body.get("generation") {
+                        None => None,
+                        Some(value) => match value.as_u64().filter(|v| *v > 0) {
+                            Some(value) => Some(value),
+                            None => {
+                                return error(
+                                    400,
+                                    "INVALID_ARGUMENT : generation must be a positive integer",
+                                )
+                            }
+                        },
+                    };
+                    let batch = match body.get("batchSize") {
+                        None => 100,
+                        Some(value) => match value.as_u64().filter(|v| (1..=10_000).contains(v)) {
+                            Some(value) => usize::try_from(value).unwrap_or(100),
+                            None => return error(400, "INVALID_ARGUMENT : batchSize must be an integer between 1 and 10000"),
+                        },
+                    };
+                    let reason = match body.get("reason") {
+                        None => None,
+                        Some(Value::String(value)) if !value.is_empty() && value.len() <= 1024 => Some(value.as_str()),
+                        Some(_) => return error(400, "INVALID_ARGUMENT : reason must be a nonempty string of at most 1024 bytes"),
+                    };
+                    // Reject stale/state-invalid work before capturing a potentially large source.
+                    let Some(definition) = catalog.get(project, database, id).cloned() else {
+                        return error(404, "NOT_FOUND");
+                    };
+                    if generation.is_some_and(|value| {
+                        catalog
+                            .build(project, database, id)
+                            .is_none_or(|b| b.generation != value)
+                    }) {
+                        return error(409, "ABORTED : text index generation has changed");
+                    }
+                    if matches!(lifecycle, "advanceBackfill" | "completeBackfill")
+                        && definition.state
+                            != fireemu_core_firestore::text_index::TextIndexState::Creating
+                    {
+                        return error(
+                            409,
+                            "FAILED_PRECONDITION : only CREATING indexes can backfill",
+                        );
+                    }
+                    let observed_generation = catalog
+                        .build(project, database, id)
+                        .map(|build| build.generation);
+                    // Database reads precede catalog acquisition everywhere. Drop the catalog
+                    // while capturing source and reject a concurrent replacement on re-entry.
+                    drop(catalog);
+                    let documents = if matches!(lifecycle, "advanceBackfill" | "completeBackfill") {
+                        let Some(hooks) = &state.project_hooks else {
+                            return error(
+                                501,
+                                "UNIMPLEMENTED : a Firestore document source is not attached",
+                            );
+                        };
+                        match hooks.text_index_documents(project, database) {
+                            Ok(documents) => documents
+                                .into_iter()
+                                .filter(|document| {
+                                    document.path.collection_id() == &definition.collection_id
+                                })
+                                .collect(),
+                            Err(message) => return error(500, &format!("INTERNAL : {message}")),
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    catalog = match state.text_indexes.lock() {
+                        Ok(catalog) => catalog,
+                        Err(_) => return error(500, "INTERNAL : text catalog is poisoned"),
+                    };
+                    if catalog.get(project, database, id) != Some(&definition)
+                        || catalog
+                            .build(project, database, id)
+                            .map(|build| build.generation)
+                            != observed_generation
+                    {
+                        return error(
+                            409,
+                            "ABORTED : text index changed while capturing build source",
+                        );
+                    }
+                    match catalog.lifecycle(
+                        project,
+                        database,
+                        id,
+                        lifecycle,
+                        generation,
+                        batch,
+                        reason,
+                        documents,
+                        fireemu_adapter_support::lexical::tokenize,
+                    ) {
+                        Ok(()) => match catalog.get(project, database, id) {
+                            Some(def) => ok(encode(&catalog, project, database, def)),
+                            None => {
+                                error(500, "INTERNAL : index vanished during a build operation")
+                            }
+                        },
+                        Err(error_kind) => {
+                            let status = match error_kind {
+                                TextIndexBuildError::NotFound => 404,
+                                TextIndexBuildError::InvalidBatch
+                                | TextIndexBuildError::InvalidSource(_) => 400,
+                                TextIndexBuildError::GenerationExhausted => 429,
+                                TextIndexBuildError::InvalidState
+                                | TextIndexBuildError::StaleGeneration => 409,
+                            };
+                            error(status, &error_kind.to_string())
+                        }
+                    }
+                }
                 _ => error(404, "NOT_FOUND"),
             }
         }

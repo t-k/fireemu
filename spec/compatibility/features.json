@@ -385,9 +385,9 @@
     },
     {
       "id": "FS-TEXT",
-      "title": "Text index definition validation",
+      "title": "Text index lifecycle and finite local lexical search",
       "goal": "FS-ENT-NATIVE",
-      "appliesTo": "Enterprise / Native; local text-index definition/control configuration",
+      "appliesTo": "Enterprise / Native; local text catalog, explicit build controls and collection/search latest reads",
       "sources": [
         "FS-EDITIONS",
         "FS-INDEXES"
@@ -401,7 +401,7 @@
         "FS-CLAIM-TEXT-INDEX"
       ],
       "limitations": [
-        "Backfill, posting data, search scoring and local search execution are not established by definition validation."
+        "Local lexical-v1 analysis and approximate BM25 are not production-equivalent; productionExact refuses search until production comparison is recorded. Transactions, geo search, language morphology, enhancement and general search expression trees remain unsupported."
       ]
     },
     {

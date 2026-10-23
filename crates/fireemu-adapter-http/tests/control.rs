@@ -546,8 +546,171 @@ fn pubsub_publish_routes_check_the_project_and_the_message_shape() {
     assert_eq!(calls[2].1[0]["data"], "eyJhIjoxfQ==");
 }
 
+struct TextBuildSource(Arc<Mutex<Vec<fireemu_core_firestore::store::Document>>>);
+
+impl fireemu_adapter_http::control::ProjectHooks for TextBuildSource {
+    fn create(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn reset_scope(&self, _: &Scope) -> Result<(), TransitionFailure> {
+        Ok(())
+    }
+    fn remove(&self, _: &str) -> Result<(), TransitionFailure> {
+        Ok(())
+    }
+    fn text_index_documents(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<fireemu_core_firestore::store::Document>, String> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+fn text_build_document(id: &str, title: &str) -> fireemu_core_firestore::store::Document {
+    fireemu_core_firestore::store::Document {
+        path: fireemu_core_firestore::path::DocumentPath::parse(
+            &fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap(),
+            &fireemu_core_types::ids::DatabaseId::try_new("(default)").unwrap(),
+            &format!("products/{id}"),
+        )
+        .unwrap(),
+        fields: std::collections::BTreeMap::from([(
+            "title".to_owned(),
+            fireemu_core_firestore::value::Value::String(title.to_owned()),
+        )]),
+        create_time: LogicalInstant::from_unix_seconds(1),
+        update_time: LogicalInstant::from_unix_seconds(1),
+        version: fireemu_core_firestore::store::CommitVersion::from_value(1),
+    }
+}
+
 #[test]
-fn text_index_definitions_are_loaded_listed_and_lifecycle_actions_are_unimplemented() {
+fn text_index_backfill_uses_real_bounded_batches_and_reconciles_latest_source() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.edition = FirestoreEdition::Enterprise;
+    let documents = Arc::new(Mutex::new(vec![
+        text_build_document("a", "old"),
+        text_build_document("b", "removed"),
+    ]));
+    s.project_hooks = Some(Arc::new(TextBuildSource(documents.clone())));
+    let base = "/v1/sessions/default/firestore/text-indexes";
+    let definition = json!({"index": {
+        "name": "projects/demo-app/databases/(default)/collectionGroups/products/indexes/backfill",
+        "queryScope": "COLLECTION", "apiScope": "ANY_API",
+        "fields": [{"fieldPath": "title", "searchConfig": {"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}],
+        "searchIndexOptions": {"textLanguage": "en", "textLanguageOverrideFieldPath": ""}
+    }, "xFirebaseTestd": {"state": "CREATING", "buildPolicy": "synchronous"}});
+    assert_eq!(handle(&s, "POST", base, &definition).status, 200);
+    let step = handle(
+        &s,
+        "POST",
+        &format!("{base}/backfill:advanceBackfill"),
+        &json!({"batchSize":1}),
+    );
+    assert_eq!(step.status, 200, "{}", step.body);
+    assert_eq!(step.body["state"], "CREATING");
+    assert_eq!(step.body["build"]["processedDocuments"], 1);
+    assert_eq!(step.body["build"]["totalDocuments"], 2);
+    assert_eq!(step.body["build"]["indexedDocuments"], 1);
+    *documents.lock().unwrap() = vec![
+        text_build_document("a", "updated"),
+        text_build_document("c", "inserted"),
+    ];
+    let complete = handle(
+        &s,
+        "POST",
+        &format!("{base}/backfill:completeBackfill"),
+        &json!({}),
+    );
+    assert_eq!(complete.status, 200, "{}", complete.body);
+    assert_eq!(complete.body["state"], "READY");
+    assert_eq!(complete.body["build"]["indexedDocuments"], 2);
+    let frozen = complete.body.clone();
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            &format!("{base}/backfill:completeBackfill"),
+            &json!({})
+        )
+        .status,
+        409
+    );
+    assert_eq!(
+        handle(&s, "GET", &format!("{base}/backfill"), &json!({})).body,
+        frozen
+    );
+}
+
+#[test]
+fn text_index_failure_repair_and_stale_generation_are_atomic() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.edition = FirestoreEdition::Enterprise;
+    let base = "/v1/sessions/default/firestore/text-indexes";
+    let definition = json!({"index": {
+        "name": "projects/demo-app/databases/(default)/collectionGroups/products/indexes/lifecycle",
+        "queryScope": "COLLECTION", "apiScope": "ANY_API",
+        "fields": [{"fieldPath": "title", "searchConfig": {"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}],
+        "searchIndexOptions": {"textLanguage": "en"}
+    }});
+    let created = handle(&s, "POST", base, &definition);
+    assert_eq!(created.status, 200, "{}", created.body);
+    for selector in [
+        json!({"project": "demo-other"}),
+        json!({"database": "named"}),
+    ] {
+        let before = s.text_indexes.lock().unwrap().clone();
+        let refused = handle(
+            &s,
+            "POST",
+            &format!("{base}/lifecycle:failBuild"),
+            &selector,
+        );
+        assert_eq!(refused.status, 404, "{}", refused.body);
+        assert_eq!(*s.text_indexes.lock().unwrap(), before);
+    }
+    let failed = handle(
+        &s,
+        "POST",
+        &format!("{base}/lifecycle:failBuild"),
+        &json!({"reason": "injected failure"}),
+    );
+    assert_eq!(failed.status, 200, "{}", failed.body);
+    assert_eq!(failed.body["state"], "NEEDS_REPAIR");
+    assert_eq!(failed.body["build"]["failure"], "injected failure");
+    let generation = failed.body["build"]["generation"].as_u64().unwrap();
+    let repaired = handle(
+        &s,
+        "POST",
+        &format!("{base}/lifecycle:repair"),
+        &json!({"generation": generation}),
+    );
+    assert_eq!(repaired.status, 200, "{}", repaired.body);
+    assert_eq!(repaired.body["state"], "CREATING");
+    assert!(repaired.body["build"]["generation"].as_u64().unwrap() > generation);
+    let before = handle(&s, "GET", &format!("{base}/lifecycle"), &json!({}));
+    for body in [
+        json!({"generation": generation}),
+        json!({"batchSize": 0}),
+        json!({"unknown": 1}),
+    ] {
+        let refused = handle(
+            &s,
+            "POST",
+            &format!("{base}/lifecycle:advanceBackfill"),
+            &body,
+        );
+        assert!(matches!(refused.status, 400 | 409), "{}", refused.body);
+        assert_eq!(
+            handle(&s, "GET", &format!("{base}/lifecycle"), &json!({})).body,
+            before.body
+        );
+    }
+}
+
+#[test]
+fn text_index_definitions_are_loaded_listed_and_lifecycle_actions_are_explicit() {
     let mut s = state(Arc::new(AtomicUsize::new(0)));
     let entry = |id: &str, field: &str, language: &str| {
         json!({
@@ -615,14 +778,28 @@ fn text_index_definitions_are_loaded_listed_and_lifecycle_actions_are_unimplemen
     assert_eq!(one.status, 200);
     assert_eq!(one.body["textLanguage"], "en-US");
     assert_eq!(one.body["languageOverride"]["field"], "language");
-    assert_eq!(one.body["fidelity"], "strict-validation-only");
-    for action in ["advanceBackfill", "completeBackfill", "failBuild", "repair"] {
+    assert_eq!(one.body["fidelity"], "fireemu-lexical-v1");
+    assert_eq!(one.body["state"], "READY");
+    for action in ["advanceBackfill", "completeBackfill", "repair"] {
         let r = handle(&s, "POST", &format!("{base}/t2:{action}"), &json!({}));
-        assert_eq!(r.status, 501, "{action}");
+        assert_eq!(r.status, 409, "{action}: {}", r.body);
+    }
+    for action in ["failBuild", "repair"] {
+        assert_eq!(
+            handle(&s, "POST", &format!("{base}/t2:{action}"), &json!({})).status,
+            200
+        );
+    }
+    // An embedder without Firestore cannot pretend that real backfill work ran.
+    for action in ["advanceBackfill", "completeBackfill"] {
+        assert_eq!(
+            handle(&s, "POST", &format!("{base}/t2:{action}"), &json!({})).status,
+            501
+        );
     }
     assert_eq!(
         handle(&s, "GET", &format!("{base}/t2"), &json!({})).body["state"],
-        "READY"
+        "CREATING"
     );
     assert_eq!(
         handle(&s, "DELETE", &format!("{base}/t2"), &json!({})).status,

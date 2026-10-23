@@ -1100,33 +1100,39 @@
         },
         {
           "id": "FS-CLAIM-TEXT-INDEX",
-          "statement": "Firestore Enterprise text index definitions are validated at start and through the control API; the backfill lifecycle and local search are not served.",
+          "statement": "Firestore Enterprise validates text index definitions, serves explicit local build/failure/repair controls and finite deterministic lexical collection search; productionExact refuses unobserved search semantics.",
           "capabilities": [
             {
               "id": "FS-TEXT-VAL-1",
-              "status": "implemented"
+              "status": "partial"
             }
           ],
           "evidence": {
             "tests": [
-              "text_index_definitions_are_validated_and_deduplicated"
+              "text_index_definitions_are_validated_and_deduplicated",
+              "completion_reconciles_writes_instead_of_publishing_stale_backfill_postings",
+              "lifecycle_matches_a_three_state_model_and_refusals_are_atomic",
+              "grpc_and_rest_share_the_same_index_snapshot_search_and_result_order"
             ],
             "integration": [
               "crates/fireemu-core-firestore/tests/validation_only.rs",
-              "crates/fireemu-adapter-http/tests/control.rs"
+              "crates/fireemu-adapter-http/tests/control.rs",
+              "crates/fireemu-core-firestore/tests/text_search.rs",
+              "crates/fireemu-core-firestore/tests/text_index_lifecycle.rs",
+              "crates/fireemu-adapter-grpc/tests/text_search.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [],
           "fireemuOnly": [
             {
-              "behaviour": "duplicate index shapes are warned and unknown or output-only fields refused",
-              "precision": "strict-validation-only"
+              "behaviour": "Deterministic lexical-v1 positional search and approximate BM25; explicit generation-scoped lifecycle; current immutable query-snapshot reconstruction with update/delete reflection",
+              "precision": "finite-local-lexical-v1"
             }
           ],
           "productionOnly": [],
           "preview": [
-            "Firestore Enterprise edition and its text search surface are preview; the pinned official emulator ships no equivalent, so this claim is scoped to definition validation only"
+            "The local lexical implementation has no accepted production text-search comparison; it must not be treated as production-equivalent analysis or ranking."
           ]
         },
         {

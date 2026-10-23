@@ -15,3 +15,5 @@ pub mod store;
 pub mod text_index;
 pub mod ttl;
 pub mod value;
+
+pub mod text_search;

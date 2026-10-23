@@ -2018,6 +2018,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         }
         // Text Index definitions (FS-TEXT-VAL-1): validated at start, never executed.
         let text_indexes = Arc::new(Mutex::new(control::load_text_indexes(&cfg)?));
+        backend.set_text_indexes(text_indexes.clone(), cfg.production_exact).map_err(|error| error.to_string())?;
         // The sessions' fault plans (spec 18), shared by every adapter; empty until PUT.
         let faults: fireemu_core_session::fault::SharedFaultRegistry =
             Arc::new(fireemu_core_session::fault::FaultRegistry::new());

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { assertEndpoint, createBudget, relayHttp, runProductionLiveProbe, selectRelayResponseHeaders } from './production-live.mjs';
+import { assertEndpoint, createBudget, relayHttp, runProductionLiveProbe, selectRelayResponseHeaders, validateConfig } from './production-live.mjs';
 
 const limits = { httpAttempts: 8, wsConnections: 4, clientMessages: 10, serverMessages: 10, outboundBytes: 1000, inboundBytes: 1000, responseBytes: 100 };
 const config = () => ({ projectId: 'test-project', databaseURL: 'https://test-db.firebaseio.com', namespace: 'test-db', allowedOrigins: ['https://test-db.firebaseio.com', 'wss://test-db.firebaseio.com'], prefixes: ['owned/sdk/round1/ws', 'owned/sdk/round1/lp', 'owned/sdk/round2/ws', 'owned/sdk/round2/lp'], deadlineMs: 1000, limits: { ...limits } });
@@ -355,4 +355,49 @@ test('HTTP relay returns raw pairs for the browser selector before fulfillment',
     assert.deepEqual(response.rawHeaders, rawHeaders);
     assert.throws(() => selectRelayResponseHeaders(response.headers, response.rawHeaders), /multiplicity/);
   } finally { budget.close(); }
+});
+
+
+function routingConfig() {
+  const c = config();
+  c.routingOrigins = ['https://s-gke-us-test-1.firebaseio.com', 'wss://s-gke-us-test-1.firebaseio.com'];
+  c.allowedOrigins = [...c.allowedOrigins, ...c.routingOrigins];
+  return c;
+}
+
+test('pure config validation accepts base origins and one explicit exact routing pair', () => {
+  assert.doesNotThrow(() => validateConfig(config()));
+  assert.doesNotThrow(() => validateConfig(routingConfig()));
+  const c = routingConfig();
+  c.routingOrigins.reverse();
+  c.allowedOrigins.reverse();
+  assert.doesNotThrow(() => validateConfig(c));
+});
+
+test('pure config validation rejects incomplete, malformed, duplicate or extra routing authority', () => {
+  const pairs = [null, [], ['https://s-gke-us-test-1.firebaseio.com'], ['https://s-gke-us-test-1.firebaseio.com', 'https://s-gke-us-test-1.firebaseio.com'], ['https://s-gke-us-test-1.firebaseio.com', 'wss://s-gke-other.firebaseio.com'], ['http://s-gke-us-test-1.firebaseio.com', 'ws://s-gke-us-test-1.firebaseio.com']];
+  for (const host of ['other.firebaseio.com', 's-gke-us-test-1.firebaseio.com.evil.invalid', 's-gke-us-test-1.firebaseio.com:443', 's-gke-us-test-1.firebaseio.com:8443', 's-gke-us-test-1.firebasedatabase.app', '*.firebaseio.com']) pairs.push([`https://${host}`, `wss://${host}`]);
+  for (const suffix of ['/', '/.lp', '?ns=test-db', '#fragment']) pairs.push([`https://s-gke-us-test-1.firebaseio.com${suffix}`, 'wss://s-gke-us-test-1.firebaseio.com']);
+  pairs.push(['https://user:pass@s-gke-us-test-1.firebaseio.com', 'wss://s-gke-us-test-1.firebaseio.com']);
+  for (const routingOrigins of pairs) {
+    const c = config();
+    c.routingOrigins = routingOrigins;
+    if (Array.isArray(routingOrigins)) c.allowedOrigins.push(...routingOrigins);
+    assert.throws(() => validateConfig(c));
+  }
+  for (const mutate of [c => c.allowedOrigins.pop(), c => c.allowedOrigins.push('https://extra.firebaseio.com'), c => c.allowedOrigins.push(c.allowedOrigins[0]), c => { delete c.routingOrigins; }, c => { c.routingOrigins.push('https://s-gke-other.firebaseio.com', 'wss://s-gke-other.firebaseio.com'); c.allowedOrigins.push(...c.routingOrigins.slice(2)); }]) {
+    const c = routingConfig();
+    mutate(c);
+    assert.throws(() => validateConfig(c));
+  }
+});
+
+test('explicit routing endpoints still require one exact namespace on LP and WS', () => {
+  const c = routingConfig();
+  for (const [scheme, path, kind] of [['https', '/.lp', 'http'], ['wss', '/.ws', 'ws']]) {
+    const endpoint = `${scheme}://s-gke-us-test-1.firebaseio.com${path}`;
+    assert.equal(assertEndpoint(`${endpoint}?ns=test-db`, kind, c).origin, `${scheme}://s-gke-us-test-1.firebaseio.com`);
+    for (const query of ['', '?ns=other', '?ns=test-db&ns=test-db']) assert.throws(() => assertEndpoint(endpoint + query, kind, c));
+    assert.throws(() => assertEndpoint(`${scheme}://s-gke-other.firebaseio.com${path}?ns=test-db`, kind, c));
+  }
 });

@@ -163,11 +163,22 @@ export async function relayHttp(input, { config, budget, request = httpsRequest 
   }
 }
 
-function validateConfig(config) {
+export function validateConfig(config) {
   if (!config || !/^[a-z][a-z0-9-]*$/.test(config.projectId) || !/^[a-z0-9-]+$/.test(config.namespace)) throw Error('Invalid project or namespace');
   const db = new URL(config.databaseURL);
   if (db.protocol !== 'https:' || db.pathname !== '/' || db.search || db.hash || db.username || db.password) throw Error('Invalid databaseURL');
-  if (!Array.isArray(config.allowedOrigins) || config.allowedOrigins.length !== 2 || !config.allowedOrigins.includes(db.origin) || !config.allowedOrigins.includes(db.origin.replace('https:', 'wss:'))) throw Error('Expected exact database HTTP/WS origins');
+  const expectedOrigins = [db.origin, db.origin.replace('https:', 'wss:')];
+  if (config.routingOrigins !== undefined) {
+    if (!Array.isArray(config.routingOrigins) || config.routingOrigins.length !== 2) throw Error('Expected one explicit routing HTTP/WS pair');
+    const routing = config.routingOrigins.map(origin => {
+      const url = new URL(origin);
+      if (origin !== url.origin || !/^s-gke-[a-z0-9-]+\.firebaseio\.com$/.test(url.hostname) || url.port || url.username || url.password || !['https:', 'wss:'].includes(url.protocol)) throw Error('Invalid routing origin');
+      return url;
+    });
+    if (routing[0].hostname !== routing[1].hostname || new Set(routing.map(url => url.protocol)).size !== 2) throw Error('Expected matching routing HTTP/WS origins');
+    expectedOrigins.push(...config.routingOrigins);
+  }
+  if (!Array.isArray(config.allowedOrigins) || config.allowedOrigins.length !== expectedOrigins.length || new Set(config.allowedOrigins).size !== expectedOrigins.length || expectedOrigins.some(origin => !config.allowedOrigins.includes(origin))) throw Error('Expected exact database and explicit routing origins');
   if (!Array.isArray(config.prefixes) || config.prefixes.length !== 4 || new Set(config.prefixes).size !== 4 || config.prefixes.some((prefix, i) => typeof prefix !== 'string' || !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)+$/.test(prefix) || !prefix.endsWith(`/round${Math.floor(i / 2) + 1}/${i % 2 ? 'lp' : 'ws'}`)) || new Set(config.prefixes.map(p => p.replace(/\/round[12]\/(?:ws|lp)$/, ''))).size !== 1) throw Error('Expected four unique scoped round/transport prefixes');
 }
 

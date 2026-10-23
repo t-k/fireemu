@@ -55,7 +55,7 @@ const Editor: Component<{ scope: DatabaseScope; path: string }> = (props) => {
     const atRevision = which === "rules" ? rulesRevision : revision;
     setError(null);
     setNotice(null);
-    if (operation !== "DELETE") {
+    if (which === "data" && operation !== "DELETE") {
       try {
         JSON.parse(submitted);
       } catch {

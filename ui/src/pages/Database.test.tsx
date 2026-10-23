@@ -197,3 +197,37 @@ it("never sends invalid JSON or clears the Rules draft on refresh failure", asyn
   await h.findByText("rules refresh failed");
   expect((editor as HTMLTextAreaElement).value).toBe('{"rules":{ ".read":true }}');
 });
+
+it("sends commented Rules with trailing commas unchanged to the native parser", async () => {
+  const h = mount();
+  const editor = await h.findByLabelText("Rules JSON source");
+  const source = '// native Rules source\r\n{"rules":{".read":true,},}\r\n';
+  fireEvent.input(editor, { target: { value: source } });
+  fireEvent.click(h.getByTestId("database-rules-save"));
+  // A textarea normalizes CRLF on input; neither transport nor JSON parsing may rewrite it again.
+  expect(api.databaseSaveRules).toHaveBeenCalledWith(
+    expect.objectContaining({ project: "demo-a" }),
+    source.replaceAll("\r\n", "\n"),
+  );
+  await h.findByText("Database Rules saved");
+});
+
+it("preserves a newer Rules draft after native save completion", async () => {
+  let complete!: (value: TextReply) => void;
+  vi.mocked(api.databaseSaveRules).mockImplementation(() =>
+    ResultAsync.fromSafePromise(
+      new Promise<TextReply>((resolve) => {
+        complete = resolve;
+      }),
+    ),
+  );
+  const h = mount();
+  const editor = await h.findByLabelText("Rules JSON source");
+  fireEvent.input(editor, { target: { value: '{"rules":{".read":true}}' } });
+  fireEvent.click(h.getByTestId("database-rules-save"));
+  await waitFor(() => expect(api.databaseSaveRules).toHaveBeenCalled());
+  fireEvent.input(editor, { target: { value: '// newer\n{"rules":{".read":false}}' } });
+  complete(reply('{"status":"ok"}'));
+  await h.findByText("Database Rules saved");
+  expect((editor as HTMLTextAreaElement).value).toBe('// newer\n{"rules":{".read":false}}');
+});

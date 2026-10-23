@@ -133,6 +133,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: generated protobuf code matches vendored protos
         run: |
+          sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           cargo run -p proto-gen -- check
         env:

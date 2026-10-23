@@ -187,7 +187,9 @@ The official emulator reads `matches()` patterns in a dialect of its own, an aut
 | A backslash before a line break | `/a\` followed by a new line and `b/` |
 | An escaped letter with a format character such as U+200B after the backslash | `/\` U+200B `u0061/` |
 
-The recorded syntactic-refusal cases, including `\s`, an unclosed class or group, or an unescaped `^` in the middle, are refused here with the same message as the official emulator. This comparison does not cover resource-limit refusals.
+The recorded syntactic-refusal cases, including `\s`, an unclosed class or group, or an unescaped `^` in the middle, are refused here with the same message as the official emulator. The separate recorded determinization-resource cases are described below.
+
+The eight recorded patterns refused by the official emulator's determinization resource limit are also rejected when fireemu loads rules, including in unevaluated expression branches. This does not establish complete regular-expression or production equivalence. These include determinization refusals ("could not determinize efficiently", a resource limit of the official emulator's automaton library). The recorded patterns include several counted repetitions of groups of alternatives in one pattern. Production's limit is not known; no production behavior is inferred from these comparisons.
 
 ### Other differences
 
@@ -203,7 +205,6 @@ The recorded syntactic-refusal cases, including `\s`, an unclosed class or group
 - Malformed realtime wire queries receive a connection-error control message, without automatically dropping the connection or sending a close frame. These include unknown fields, a non-string index (`i`), non-boolean inclusive flags (`sin`, `ein`), a non-string limit side (`vf`), bound names (`sn`, `en`) other than strings or null, and a limit written as a floating-point number (even `2.0`). Type checks still apply to flags, side and names when their corresponding bound or limit is absent. A null bound name means no name; otherwise-valid inclusive flags and names without a bound, and a side without a limit, have no effect. A supplied integer limit must be positive and fit in 32 unsigned bits. Nonnumeric limits and integer limits outside that range receive `invalid_parameters` instead. A supplied limit also requires side `l` or `r`; Fireemu refuses a missing or other side where the official emulator can read it as neither side. These are realtime protocol responses, not HTTP 400 responses.
 - `query.orderBy`, `query.endBefore`, `query.isOrderByChild()`, the `OrderByKey`, `OrderByValue` and `OrderByPriority` names and `http.encodeURL()` are refused when the rules load; the official emulator loads them.
 - A few rules both refuse are refused with another message or at another column.
-- Some patterns refused by the official emulator at rule load because of resource limits can load and evaluate here, including cases that permit requests. Resource-limit admission is not equivalent and remains unresolved. These include determinization refusals ("could not determinize efficiently", a resource limit of the official emulator's automaton library). The recorded patterns include several counted repetitions of groups of alternatives in one pattern. Production's limit is not known; no production behavior is inferred from these comparisons.
 
 ## Export, import and snapshots
 

@@ -18,10 +18,16 @@ function assertPhase(phase, expectedCount, expectedFields) {
   for (const [path, fields] of phase.seed) {
     assert.match(path, /^textobs1\/c-[a-z0-9-]+$/);
     for (const [name, value] of Object.entries(fields)) {
-      assert.ok(["stringValue", "integerValue", "nullValue"].some((key) => key in value), name);
+      assert.ok(
+        ["stringValue", "integerValue", "nullValue"].some((key) => key in value),
+        name,
+      );
     }
   }
-  assert.deepEqual(phase.queries.map(({ id }) => id), QUERY_IDS);
+  assert.deepEqual(
+    phase.queries.map(({ id }) => id),
+    QUERY_IDS,
+  );
   for (const query of phase.queries) {
     assert.equal(typeof query.text, "string");
     const score = { functionValue: { name: "score", args: [] } };
@@ -57,13 +63,16 @@ function frequencies(seed, field, token) {
 }
 
 test("calibration phases have exact field sets, document counts, and scoped identities", () => {
-  assert.deepEqual(CALIBRATION_PHASES.map(({ id }) => id), [
-    "one-field",
-    "two-fields",
-    "document-frequency-control",
-    "padded-corpus-control",
-    "denominator-control",
-  ]);
+  assert.deepEqual(
+    CALIBRATION_PHASES.map(({ id }) => id),
+    [
+      "one-field",
+      "two-fields",
+      "document-frequency-control",
+      "padded-corpus-control",
+      "denominator-control",
+    ],
+  );
   assertPhase(CALIBRATION_PHASES[0], 16, ["title"]);
   for (const phase of CALIBRATION_PHASES.slice(1, 4)) {
     assertPhase(phase, phase.id === "padded-corpus-control" ? 24 : 16, ["title", "body"]);
@@ -77,7 +86,10 @@ test("calibration phases have exact field sets, document counts, and scoped iden
 test("the first two phases share the 16-document seed with typed values", () => {
   const [oneField, twoFields] = CALIBRATION_PHASES;
   assert.deepEqual(oneField.seed, twoFields.seed);
-  assert.deepEqual(twoFields.seed.map(([path]) => path), BASE_PATHS);
+  assert.deepEqual(
+    twoFields.seed.map(([path]) => path),
+    BASE_PATHS,
+  );
 
   const byPath = new Map(twoFields.seed);
   assert.deepEqual(byPath.get("textobs1/c-n"), {
@@ -119,7 +131,10 @@ test("document-frequency control swaps title terms without changing field length
     frequencies(baseline, "title", "quick").find(([path]) => path === "textobs1/c-m")[1] + 1,
   );
   for (const id of BASE_IDS.filter((id) => !["f", "m"].includes(id))) {
-    assert.deepEqual(controlledByPath.get(`textobs1/c-${id}`), baselineByPath.get(`textobs1/c-${id}`));
+    assert.deepEqual(
+      controlledByPath.get(`textobs1/c-${id}`),
+      baselineByPath.get(`textobs1/c-${id}`),
+    );
   }
 });
 

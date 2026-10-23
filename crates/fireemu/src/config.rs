@@ -8667,7 +8667,7 @@ mod tests {
         assert_eq!(
             cfg.database_rules,
             vec![DatabaseRulesEntry {
-                file: "/proj/database.rules.json".to_owned(),
+                file: under_proj("database.rules.json"),
                 scope: DatabaseRulesScope::Default,
             }]
         );

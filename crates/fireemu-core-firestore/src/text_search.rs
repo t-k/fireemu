@@ -49,7 +49,7 @@ fn validate_clause_syntax(raw: &str, quoted: bool) -> Result<(), SearchError> {
         || raw
             .chars()
             .any(|c| matches!(c, '(' | ')' | '|' | '*' | '\\' | ':' | '"'))
-        || (!quoted && matches!(raw, "OR" | "AND" | "NOT"))
+        || (!quoted && matches!(raw, "AND" | "NOT"))
     {
         return Err(invalid("empty or unsupported query syntax"));
     }
@@ -60,6 +60,70 @@ struct Clause {
     field: Option<FieldPath>,
     tokens: Vec<String>,
     excluded: bool,
+}
+struct QueryFragment {
+    clause: Option<Clause>,
+    connector: bool,
+}
+impl QueryFragment {
+    fn parse(
+        raw: &str,
+        field: Option<FieldPath>,
+        excluded: bool,
+        quoted: bool,
+        analyze: fn(&str) -> Vec<String>,
+    ) -> Result<Self, SearchError> {
+        validate_clause_syntax(raw, quoted)?;
+        let connector = !quoted && raw.eq_ignore_ascii_case("or");
+        if connector && excluded {
+            return Err(invalid("unsupported OR context"));
+        }
+        let tokens = analyze(raw);
+        let clause = if tokens.is_empty() {
+            if quoted || excluded || field.is_some() {
+                return Err(invalid("clause contains no searchable tokens"));
+            }
+            None
+        } else {
+            Some(Clause {
+                field,
+                tokens,
+                excluded,
+            })
+        };
+        Ok(Self { clause, connector })
+    }
+    fn is_positive_operand(&self) -> bool {
+        !self.connector && self.clause.as_ref().is_some_and(|clause| !clause.excluded)
+    }
+}
+fn searchable_clauses(fragments: Vec<QueryFragment>) -> Result<Vec<Clause>, SearchError> {
+    let multiple = fragments.len() > 1;
+    if multiple {
+        for (i, _) in fragments
+            .iter()
+            .enumerate()
+            .filter(|(_, fragment)| fragment.connector)
+        {
+            let before = i.checked_sub(1).and_then(|i| fragments.get(i));
+            let after = fragments.get(i + 1);
+            if !before.is_some_and(QueryFragment::is_positive_operand)
+                || !after.is_some_and(QueryFragment::is_positive_operand)
+            {
+                return Err(invalid("unsupported OR context"));
+            }
+        }
+    }
+    Ok(fragments
+        .into_iter()
+        .filter_map(|fragment| {
+            if multiple && fragment.connector {
+                None
+            } else {
+                fragment.clause
+            }
+        })
+        .collect())
 }
 /// A bounded conjunction of terms and same-field positional phrases, optionally excluded or field-restricted. Queries without positive clauses match no documents.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,18 +143,24 @@ impl SearchQuery {
     }
 
     /// The caller must use the same analyzer for queries and corpus batches.
-    /// Empty input and whole sequences of plain tokenless clauses match nothing. Tokenless clauses cannot be quoted, restricted, excluded, or mixed with searchable clauses.
-    /// Parse whitespace-separated terms, `"phrases"`, `-exclusions`, and canonical `field:term` restrictions. OR, grouping, escapes and wildcard syntax are unsupported.
+    /// Plain tokenless fragments are ignored; no positive searchable clauses means no matches. Quoted, restricted, and excluded tokenless fragments remain invalid.
+    /// Unquoted colons delimit conjunctive terms. A leading unmatched quote leaves an ordinary conjunction; balanced phrases remain positional.
+    /// OR is a conjunctive connector between positive operands and a searchable term alone. Legacy `field:"phrase"` restrictions are development approximations; grouping, escapes, and wildcards remain unsupported.
     pub fn parse(input: &str, analyze: fn(&str) -> Vec<String>) -> Result<Self, SearchError> {
         if input.len() > MAX_QUERY_BYTES {
             return Err(invalid("query byte limit exceeded"));
         }
+        if let Some(remainder) = input
+            .trim_start()
+            .strip_prefix('"')
+            .filter(|remainder| !remainder.contains('"'))
+        {
+            return Self::parse(remainder, analyze);
+        }
         let mut chars = input.char_indices().peekable();
-        let mut clauses = Vec::new();
-        let mut clause_count = 0;
-        let mut tokenless = false;
+        let mut fragments = Vec::new();
         while let Some(&(start, c)) = chars.peek() {
-            if c.is_whitespace() {
+            if c.is_whitespace() || c == ':' {
                 chars.next();
                 continue;
             }
@@ -110,15 +180,17 @@ impl SearchQuery {
                     break;
                 }
                 if !backtick && c == ':' {
-                    let raw = &input[begin..i];
-                    let parsed =
-                        FieldPath::parse(raw).map_err(|_| invalid("invalid field restriction"))?;
-                    if parsed.canonical() != raw {
-                        return Err(invalid("field restriction must be canonical"));
+                    if input[i + 1..].starts_with('"') {
+                        let raw = &input[begin..i];
+                        let parsed = FieldPath::parse(raw)
+                            .map_err(|_| invalid("invalid field restriction"))?;
+                        if parsed.canonical() != raw {
+                            return Err(invalid("field restriction must be canonical"));
+                        }
+                        field = Some(parsed);
+                        chars.next();
+                        value_start = i + 1;
                     }
-                    field = Some(parsed);
-                    chars.next();
-                    value_start = i + 1;
                     break;
                 }
                 chars.next();
@@ -144,7 +216,7 @@ impl SearchQuery {
                 }
             } else {
                 while let Some(&(_, c)) = chars.peek() {
-                    if c.is_whitespace() {
+                    if c.is_whitespace() || c == ':' {
                         break;
                     }
                     chars.next();
@@ -152,32 +224,17 @@ impl SearchQuery {
                 let end = chars.peek().map_or(input.len(), |(i, _)| *i);
                 raw = &input[value_start..end];
             }
-            validate_clause_syntax(raw, quoted)?;
-            clause_count += 1;
-            if clause_count > MAX_QUERY_CLAUSES {
+            fragments.push(QueryFragment::parse(raw, field, excluded, quoted, analyze)?);
+            if fragments.len() > MAX_QUERY_CLAUSES {
                 return Err(invalid("query clause limit exceeded"));
-            }
-            let tokens = analyze(raw);
-            if tokens.is_empty() {
-                if quoted || excluded || field.is_some() {
-                    return Err(invalid("clause contains no searchable tokens"));
-                }
-                tokenless = true;
-            } else {
-                clauses.push(Clause {
-                    field,
-                    tokens,
-                    excluded,
-                });
             }
             if chars.peek().is_some_and(|(i, _)| *i <= start) {
                 return Err(invalid("invalid query"));
             }
         }
-        if tokenless && !clauses.is_empty() {
-            return Err(invalid("clause contains no searchable tokens"));
-        }
-        Ok(Self { clauses })
+        Ok(Self {
+            clauses: searchable_clauses(fragments)?,
+        })
     }
 }
 /// Result ordering; ties use ascending document resource names.

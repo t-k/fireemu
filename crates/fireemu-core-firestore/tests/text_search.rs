@@ -71,11 +71,11 @@ fn positional_phrases_do_not_cross_fields_and_exclusions_apply() {
     let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
     assert_eq!(names(&index, "red fox"), ["docs/c", "docs/b", "docs/a"]);
     assert_eq!(names(&index, "\"red fox\""), ["docs/a"]);
-    assert_eq!(names(&index, "red -title:fox"), ["docs/b"]);
-    assert_eq!(names(&index, "title:red body:fox"), ["docs/b"]);
+    assert_eq!(names(&index, "red -\"red fox\""), ["docs/c", "docs/b"]);
+    assert!(names(&index, "title:red body:fox").is_empty());
     assert!(index
         .search(
-            &SearchQuery::parse("missing:red", tokenize).unwrap(),
+            &SearchQuery::parse("missing:\"red\"", tokenize).unwrap(),
             &SearchOptions::default()
         )
         .is_err());
@@ -84,17 +84,7 @@ fn positional_phrases_do_not_cross_fields_and_exclusions_apply() {
 }
 #[test]
 fn malformed_and_unsupported_queries_are_errors() {
-    for query in [
-        "red OR fox",
-        "red|fox",
-        "(red)",
-        "red*",
-        "\"red",
-        "title:",
-        "red\"fox\"",
-        "title:\"red\"fox",
-        "red:fox:jump",
-    ] {
+    for query in ["red|fox", "(red)", "red*", "red\"fox\"", "title:\"red\"fox"] {
         assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
     }
     assert!(SearchQuery::parse(&"x ".repeat(65), tokenize).is_err());
@@ -149,6 +139,7 @@ fn language_overrides_are_validated_and_non_strings_are_ignored() {
 proptest::proptest! {
  #[test]
  fn conjunction_is_commutative_and_phrase_is_subset(a in "[a-z]{1,12}", b in "[a-z]{1,12}") {
+  proptest::prop_assume!(a != "or" && b != "or");
   let docs=[document("a",&format!("{a} {b}"),"",1),document("b",&b,&a,2)]; let index=SearchIndex::build(&definition(),&docs, tokenize).unwrap();
   proptest::prop_assert_eq!(names(&index,&format!("{a} {b}")),names(&index,&format!("{b} {a}")));
   for hit in names(&index,&format!("\"{a} {b}\"")) {let contains=names(&index,&format!("{a} {b}")).contains(&hit);proptest::prop_assert!(contains);}
@@ -263,23 +254,14 @@ fn empty_and_whole_plain_tokenless_queries_match_no_documents() {
 }
 
 #[test]
-fn match_none_preserves_query_bounds_and_rejects_mixed_or_structured_tokenless_clauses() {
+fn match_none_preserves_query_bounds_and_rejects_structured_tokenless_clauses() {
     let index = SearchIndex::build(
         &definition(),
         &[document("cedar", "nebula", "", 1)],
         tokenize,
     )
     .unwrap();
-    for query in [
-        "nebula !!!",
-        "!!! nebula",
-        "-nebula !!!",
-        "title:!!!",
-        "\"!!!\"",
-        "-",
-        "()",
-        "*",
-    ] {
+    for query in ["title:\"!!!\"", "\"!!!\"", "-", "()", "*"] {
         assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
     }
     assert!(names(&index, &"!".repeat(MAX_QUERY_BYTES)).is_empty());
@@ -302,5 +284,123 @@ proptest::proptest! {
         let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
         proptest::prop_assert!(names(&index, &punctuation.join(" ")).is_empty());
         proptest::prop_assert!(names(&index, "-nebula -quartz").is_empty());
+    }
+}
+
+#[test]
+fn unquoted_colons_delimit_conjunctive_terms_without_field_scoping() {
+    let docs = [
+        document("oak", "moss", "nebula title", 1),
+        document("elm", "title gap nebula", "", 2),
+        document("fir", "nebula", "", 3),
+        document("ash", "body nebula", "", 4),
+        document("pine", "title", "", 5),
+        document("cedar", "irrelevant", "nebula", 6),
+    ];
+    let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+    for query in ["title:nebula", "title : nebula", "title nebula"] {
+        assert_eq!(names(&index, query), ["docs/elm", "docs/oak"], "{query}");
+    }
+    assert_eq!(names(&index, "body:nebula"), ["docs/ash"]);
+    assert!(names(&index, "unknown:nebula").is_empty());
+    assert!(SearchQuery::parse("unknown:nebula", tokenize)
+        .unwrap()
+        .is_covered_by(&definition()));
+}
+
+#[test]
+fn a_leading_unmatched_quote_is_a_conjunction_not_an_eof_phrase() {
+    let docs = [
+        document("copper", "cedar amber", "", 1),
+        document("silver", "cedar spacer amber", "", 2),
+        document("iron", "cedar", "amber", 3),
+        document("gold", "amber cedar", "", 4),
+    ];
+    let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+    assert_eq!(names(&index, "\"cedar amber"), names(&index, "cedar amber"));
+    assert_eq!(
+        names(&index, " \t\"cedar amber"),
+        ["docs/gold", "docs/iron", "docs/silver", "docs/copper"]
+    );
+    assert_eq!(names(&index, "\"cedar amber\""), ["docs/copper"]);
+    assert!(names(&index, "\"").is_empty());
+    for query in [
+        "cedar\"",
+        "\"cedar\" amber\"",
+        "cedar \"amber",
+        "-\"cedar amber",
+        "\"\"",
+    ] {
+        assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
+    }
+}
+
+#[test]
+fn contextual_or_is_conjunctive_while_standalone_or_is_searchable() {
+    let docs = [
+        document("argile", "cedar amber", "", 1),
+        document("dolomite", "cedar", "", 2),
+        document("granite", "amber", "", 3),
+        document("chalk", "or", "", 4),
+        document("slate", "cedar or amber", "", 5),
+    ];
+    let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+    for query in ["cedar OR amber", "cedar or amber"] {
+        assert_eq!(
+            names(&index, query),
+            ["docs/slate", "docs/argile"],
+            "{query}"
+        );
+    }
+    for query in ["OR", "or"] {
+        assert_eq!(names(&index, query), ["docs/slate", "docs/chalk"]);
+    }
+    for query in [
+        "OR cedar",
+        "cedar OR",
+        "or cedar",
+        "cedar or",
+        "cedar OR -amber",
+        "-cedar OR amber",
+        "cedar !!! OR amber",
+        "cedar OR OR amber",
+    ] {
+        assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
+    }
+}
+
+#[test]
+fn plain_tokenless_fragments_are_ignored_but_still_count_toward_bounds() {
+    let docs = [
+        document("mauve", "cedar amber", "", 1),
+        document("ochre", "cedar", "", 2),
+    ];
+    let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+    for query in ["cedar !!!", "!!! cedar", "!!! cedar !!!"] {
+        assert_eq!(names(&index, query), names(&index, "cedar"));
+    }
+    assert_eq!(names(&index, "cedar !!! -amber"), ["docs/ochre"]);
+    assert!(names(&index, "-cedar !!!").is_empty());
+    let at_limit = format!("{} cedar", vec!["!!!"; MAX_QUERY_CLAUSES - 1].join(" "));
+    assert_eq!(names(&index, &at_limit), names(&index, "cedar"));
+    assert!(SearchQuery::parse(&format!("!!! {at_limit}"), tokenize).is_err());
+    assert!(SearchQuery::parse(&vec!["cedar"; 32].join(" OR "), tokenize).is_ok());
+    assert!(SearchQuery::parse(&vec!["cedar"; 33].join(" OR "), tokenize).is_err());
+}
+
+proptest::proptest! {
+    #[test]
+    fn bounded_native_parser_forms_match_conjunctions_on_arbitrary_corpora(
+        rows in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY, proptest::bool::ANY), 1..12)
+    ) {
+        let docs: Vec<_> = rows.iter().enumerate().map(|(i, (left, right, literal_or))| document(&format!("synthetic{i}"), &format!("{} {}", if *left { "cedar" } else { "" }, if *literal_or { "or" } else { "" }), if *right { "amber" } else { "" }, i128::try_from(i).unwrap())).collect();
+        let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+        let expected = names(&index, "cedar amber");
+        for query in ["cedar:amber", "cedar OR amber", "cedar or amber", "\"cedar amber"] {
+            proptest::prop_assert_eq!(names(&index, query), expected.clone());
+        }
+        proptest::prop_assert_eq!(names(&index, "cedar !!!"), names(&index, "cedar"));
+        let expected_or: Vec<_> = rows.iter().enumerate().rev().filter(|(_, (_, _, literal_or))| *literal_or).map(|(i, _)| format!("docs/synthetic{i}")).collect();
+        proptest::prop_assert_eq!(names(&index, "OR"), expected_or);
     }
 }

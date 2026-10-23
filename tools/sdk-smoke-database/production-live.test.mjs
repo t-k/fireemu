@@ -319,3 +319,40 @@ test('relay keeps compressed bytes unchanged and records raw response header pai
     assert.deepEqual(events.find(event => event.type === 'http-response').headers, headers);
   } finally { budget.close(); }
 });
+
+test('raw pairs reject non-list duplicates before Node header collapsing', () => {
+  for (const [name, first, second] of [['Content-Type', 'text/plain', 'text/html'], ['X-Unknown', 'one', 'two'], ['Content-Security-Policy', "default-src 'self'", "frame-ancestors 'none'"]]) {
+    const rawHeaders = Object.freeze([name, first, name.toLowerCase(), second]);
+    const nodeHeaders = { [name.toLowerCase()]: name === 'Content-Type' ? first : `${first}, ${second}` };
+    assert.throws(() => selectRelayResponseHeaders(nodeHeaders, rawHeaders), /multiplicity/);
+    assert.deepEqual(rawHeaders, [name, first, name.toLowerCase(), second]);
+  }
+});
+
+test('raw pairs preserve known lists and reject malformed raw input', () => {
+  const rawHeaders = Object.freeze(['Vary', 'Origin', 'vary', 'Accept-Encoding', 'Content-Type', 'text/plain']);
+  assert.deepEqual(selectRelayResponseHeaders({ vary: 'collapsed must not be used' }, rawHeaders), { vary: 'Origin, Accept-Encoding', 'content-type': 'text/plain' });
+  for (const raw of [['Content-Type'], ['Content-Type', 42], [42, 'value'], null, {}]) assert.throws(() => selectRelayResponseHeaders({}, raw));
+});
+
+test('HTTP relay returns raw pairs for the browser selector before fulfillment', async () => {
+  const rawHeaders = ['Content-Type', 'text/plain', 'content-type', 'text/html'];
+  const budget = createBudget({ limits, deadlineMs: 1000, record() {} });
+  const request = (_url, _options, callback) => {
+    const req = new EventEmitter();
+    req.destroy = () => {};
+    req.end = () => queueMicrotask(() => {
+      const response = new EventEmitter();
+      Object.assign(response, { statusCode: 200, headers: { 'content-type': 'text/plain' }, rawHeaders, destroy() {} });
+      callback(response);
+      response.emit('data', Buffer.from('body'));
+      response.emit('end');
+    });
+    return req;
+  };
+  try {
+    const response = await relayHttp({ url: 'https://test-db.firebaseio.com/.lp?ns=test-db', method: 'GET', body: null, headers: {} }, { config: config(), budget, request });
+    assert.deepEqual(response.rawHeaders, rawHeaders);
+    assert.throws(() => selectRelayResponseHeaders(response.headers, response.rawHeaders), /multiplicity/);
+  } finally { budget.close(); }
+});

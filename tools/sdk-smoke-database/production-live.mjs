@@ -20,12 +20,18 @@ export function assertEndpoint(raw, kind, config) {
 }
 
 // The relay retains encoded body bytes unchanged. Alt-Svc is excluded as a transport hint.
-export function selectRelayResponseHeaders(headers) {
+export function selectRelayResponseHeaders(headers, rawHeaders) {
   const hop = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'content-length', 'alt-svc']);
   const unsupported = new Set(['set-cookie', 'set-cookie2', 'report-to', 'reporting-endpoints', 'nel', 'refresh', 'link', 'location']);
   const listFields = new Set(['cache-control', 'vary', 'allow', 'content-encoding', 'content-language', 'accept-ranges', 'access-control-allow-methods', 'access-control-allow-headers', 'access-control-expose-headers', 'timing-allow-origin']);
   const entries = new Map();
-  for (const [rawName, rawValue] of Object.entries(headers)) {
+  let headerEntries = Object.entries(headers);
+  if (rawHeaders !== undefined) {
+    if (!Array.isArray(rawHeaders) || rawHeaders.length % 2 !== 0 || rawHeaders.some(value => typeof value !== 'string')) throw Error('Malformed raw relay headers');
+    headerEntries = [];
+    for (let i = 0; i < rawHeaders.length; i += 2) headerEntries.push([rawHeaders[i], rawHeaders[i + 1]]);
+  }
+  for (const [rawName, rawValue] of headerEntries) {
     const name = rawName.toLowerCase();
     if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name)) throw Error('Malformed relay header name');
     if (rawValue === undefined) continue;
@@ -144,7 +150,7 @@ export async function relayHttp(input, { config, budget, request = httpsRequest 
         });
         res.on('error', error => finish(error));
         res.on('aborted', () => finish(Error('HTTP response aborted')));
-        res.on('end', () => finish(null, { status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+        res.on('end', () => finish(null, { status: res.statusCode, headers: res.headers, rawHeaders: res.rawHeaders, body: Buffer.concat(chunks) }));
       });
       req.on('error', error => finish(error));
       req.on('timeout', () => { budget.stop('HTTP timeout'); finish(Error('HTTP timeout')); });
@@ -275,9 +281,9 @@ export async function runProductionLiveProbe({ playwright, config, bundlePaths, 
             }
             const response = await track(relayHttp({ url, method: req.method(), headers: req.headers(), body: req.postDataBuffer() }, { config, budget }));
             budget.check();
-            const headers = selectRelayResponseHeaders(response.headers);
+            const headers = selectRelayResponseHeaders(response.headers, response.rawHeaders);
             budget.event({ type: 'http-fulfill-headers', url, headers });
-            await route.fulfill({ ...response, headers });
+            await route.fulfill({ status: response.status, body: response.body, headers });
           } catch (error) {
             budget.stop(error.message);
             try { await route.abort('blockedbyclient'); } catch {}

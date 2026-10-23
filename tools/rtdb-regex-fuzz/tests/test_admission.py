@@ -70,6 +70,25 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn("fail-closed 1", report)
         self.assertIn("BLOCKING 0", report)
 
+    def test_equal_transport_failures_are_blocking_in_every_cell(self):
+        for status in (503, "gone"):
+            for cell in CELLS:
+                with self.subTest(status=status, cell=cell):
+                    failed = row(200, 401)
+                    failed[cell] = status
+                    report = self.compare(failed, failed)
+                    self.assertIn("BLOCKING 1", report)
+                    self.assertRegex(report, r"(?m)^BLOCKING ")
+                    self.assertIn(f"{cell} open 1 closed 0", report)
+
+    def test_equal_successes_and_denials_remain_agreements(self):
+        for status in (200, 401):
+            with self.subTest(status=status):
+                agreed = row(200, status)
+                report = self.compare(agreed, agreed)
+                self.assertIn("same 1", report)
+                self.assertIn("BLOCKING 0", report)
+
     def test_new_fixture_rejects_resource_allow_through(self):
         for cell in CELLS:
             with self.subTest(cell=cell):

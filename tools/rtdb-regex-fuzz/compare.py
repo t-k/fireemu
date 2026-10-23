@@ -7,7 +7,8 @@ with a query), sa, su (event streams), xa, xu (event streams with the query), la
 cell's outcome is its status, or "load<status>" when the rules of its context were refused.
 A cell is fail-open, and the row BLOCKING, when fireemu answers 200 where the official
 emulator does not, including a determinization resource refusal. Any other difference is
-fail-closed and listed. The report
+fail-closed and listed. A fireemu transport failure remains BLOCKING even when both
+products stop answering. The report
 counts both per cell.
 """
 import json
@@ -37,7 +38,7 @@ for j, e in zip(jar, emu):
     opened, differed = [], []
     for cell in CELLS:
         a, b = outcome(j, cell), outcome(e, cell)
-        if a == b:
+        if a == b and b not in ("503", "gone"):
             continue
         # fireemu never stops answering; if it did, the cell is not known to be safe.
         if b == "200" or b in ("503", "gone"):

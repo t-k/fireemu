@@ -3065,11 +3065,31 @@ mod document_not_found_layout_tests {
             "/v1/projects/demo-app/databases/(default)/documents:commit",
             body.into_bytes().leak(),
         ));
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // The retained payload charge proves that the request passed initial admission.
+        // A pending wire task alone could still be waiting for the server to accept it.
+        let charged_payload = MAX_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                assert!(!writer.is_finished(), "the held writer remains pending");
+                if rest_payload_limiter().available_permits()
+                    == REST_PAYLOAD_UNITS - charged_payload
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the held writer passes initial admission");
         assert!(!writer.is_finished(), "held behind the transaction");
-        let held = Arc::clone(rest_work_limiter())
-            .try_acquire_many_owned(u32::try_from(MAX_BLOCKING_REST_REQUESTS).unwrap())
-            .expect("the held writer keeps no slot while it waits");
+        let held = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Arc::clone(rest_work_limiter())
+                .acquire_many_owned(u32::try_from(MAX_BLOCKING_REST_REQUESTS).unwrap()),
+        )
+        .await
+        .expect("the held writer releases its slot while it waits")
+        .expect("the work pool remains open");
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         assert!(
             !writer.is_finished(),

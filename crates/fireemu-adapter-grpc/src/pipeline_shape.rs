@@ -609,7 +609,7 @@ fn text_requests() -> &'static Vec<TextRequest> {
     &ROWS
 }
 
-/// Each transport contributes only its own observed INVALID_ARGUMENT message.
+/// Each transport contributes only its own observed `INVALID_ARGUMENT` message.
 fn text_recorded_refusals(requests: &str, production: &str) -> HashMap<String, HashSet<String>> {
     let requests: Value = serde_json::from_str(requests).expect("text requests parse");
     let production: Value = serde_json::from_str(production).expect("text production parses");
@@ -802,6 +802,53 @@ mod text_refusal_tests {
         }
     }
 
+    fn text_request_neighbors(body: &Value) -> Vec<Value> {
+        let mut neighbors = Vec::new();
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]["referenceValue"] =
+            json!("/other");
+        neighbors.push(changed);
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+            ["functionValue"]["args"][0]["stringValue"] = json!("different");
+        neighbors.push(changed);
+        for field in ["extra", "retrieval_depth", "language_code"] {
+            let mut changed = body.clone();
+            changed["structuredPipeline"]["pipeline"]["stages"][1]["options"][field] =
+                if field == "retrieval_depth" {
+                    json!({"integerValue":"1"})
+                } else {
+                    json!({"stringValue":"en"})
+                };
+            neighbors.push(changed);
+        }
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+            ["functionValue"]["options"] = json!({"extra":{"booleanValue":true}});
+        neighbors.push(changed);
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name":"limit","args":[{"integerValue":"1"}]}));
+        neighbors.push(changed);
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        neighbors.push(changed);
+        for (field, value) in [
+            ("transaction", json!("AQ==")),
+            ("autoCommitTransaction", json!(true)),
+        ] {
+            let mut changed = body.clone();
+            changed[field] = value;
+            neighbors.push(changed);
+        }
+        neighbors
+    }
+
     #[test]
     fn exact_text_requests_and_neighbors() {
         let fixture: Value = serde_json::from_str(TEXT_REQUESTS).unwrap();
@@ -848,50 +895,7 @@ mod text_refusal_tests {
                         .code(),
                     tonic::Code::Unimplemented
                 );
-                let mut neighbors = Vec::new();
-                let mut changed = body.clone();
-                changed["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]
-                    ["referenceValue"] = json!("/other");
-                neighbors.push(changed);
-                let mut changed = body.clone();
-                changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
-                    ["functionValue"]["args"][0]["stringValue"] = json!("different");
-                neighbors.push(changed);
-                for field in ["extra", "retrieval_depth", "language_code"] {
-                    let mut changed = body.clone();
-                    changed["structuredPipeline"]["pipeline"]["stages"][1]["options"][field] =
-                        if field == "retrieval_depth" {
-                            json!({"integerValue":"1"})
-                        } else {
-                            json!({"stringValue":"en"})
-                        };
-                    neighbors.push(changed);
-                }
-                let mut changed = body.clone();
-                changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
-                    ["functionValue"]["options"] = json!({"extra":{"booleanValue":true}});
-                neighbors.push(changed);
-                let mut changed = body.clone();
-                changed["structuredPipeline"]["pipeline"]["stages"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!({"name":"limit","args":[{"integerValue":"1"}]}));
-                neighbors.push(changed);
-                let mut changed = body.clone();
-                changed["structuredPipeline"]["pipeline"]["stages"]
-                    .as_array_mut()
-                    .unwrap()
-                    .swap(0, 1);
-                neighbors.push(changed);
-                for (field, value) in [
-                    ("transaction", json!("AQ==")),
-                    ("autoCommitTransaction", json!(true)),
-                ] {
-                    let mut changed = body.clone();
-                    changed[field] = value;
-                    neighbors.push(changed);
-                }
-                for neighbor in neighbors {
+                for neighbor in text_request_neighbors(body) {
                     let neighbor_key = shape(&neighbor);
                     assert_ne!(neighbor_key.as_ref(), Some(&key));
                     assert_eq!(

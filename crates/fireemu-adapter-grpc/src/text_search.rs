@@ -96,6 +96,11 @@ pub fn decode(stage: &pb::pipeline::Stage) -> Result<SearchPlan, Status> {
         retrieval_depth: count(stage, "retrieval_depth")?,
         ..Default::default()
     };
+    if options.retrieval_depth == Some(0) {
+        return Err(Status::invalid_argument(
+            "search(...): 'retrievalDepth' must be at least 1.",
+        ));
+    }
     if let Some(value) = stage.options.get("sort") {
         let Some(pb::value::ValueType::ArrayValue(array)) = &value.value_type else {
             return Err(invalid("sort must be an ordering array"));
@@ -108,6 +113,12 @@ pub fn decode(stage: &pb::pipeline::Stage) -> Result<SearchPlan, Status> {
         let Some(pb::value::ValueType::MapValue(map)) = &ordering.value_type else {
             return Err(invalid("sort entry must be an ordering map"));
         };
+        if map.fields.len() == 2
+            && map.fields.get("expression").is_some_and(is_score)
+            && matches!(map.fields.get("direction").and_then(|v|v.value_type.as_ref()),Some(pb::value::ValueType::StringValue(s)) if s == "ascending" || s == "ASCENDING")
+        {
+            return Err(Status::invalid_argument("search(...) with a document_matches query only supports sorting by score() in descending order."));
+        }
         if map.fields.len() != 2
             || !map.fields.get("expression").is_some_and(is_score)
             || !matches!(map.fields.get("direction").and_then(|v|v.value_type.as_ref()),Some(pb::value::ValueType::StringValue(s)) if s == "descending" || s == "DESCENDING")
@@ -117,12 +128,7 @@ pub fn decode(stage: &pb::pipeline::Stage) -> Result<SearchPlan, Status> {
         options.order = SearchOrder::ScoreDescending;
     }
     let score_fields = decode_score_fields(stage)?;
-    if let Some(value) = stage.options.get("language_code") {
-        if !matches!(&value.value_type,Some(pb::value::ValueType::StringValue(s)) if s == "auto" || fireemu_core_firestore::text_index::is_language_tag(s))
-        {
-            return Err(invalid("language_code must be a language tag or auto"));
-        }
-    }
+    validate_language_option(stage)?;
     if let Some(value) = stage.options.get("query_enhancement") {
         if !matches!(&value.value_type,Some(pb::value::ValueType::StringValue(s)) if s == "disabled")
         {
@@ -136,6 +142,20 @@ pub fn decode(stage: &pb::pipeline::Stage) -> Result<SearchPlan, Status> {
         options,
         score_fields,
     })
+}
+
+fn validate_language_option(stage: &pb::pipeline::Stage) -> Result<(), Status> {
+    if let Some(value) = stage.options.get("language_code") {
+        let Some(pb::value::ValueType::StringValue(language)) = &value.value_type else {
+            return Err(invalid("language_code must be a language tag"));
+        };
+        if language == "auto" || !fireemu_core_firestore::text_index::is_language_tag(language) {
+            return Err(Status::invalid_argument(format!(
+                "Unsupported language_code: {language}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn decode_score_fields(stage: &pb::pipeline::Stage) -> Result<Vec<String>, Status> {
@@ -265,23 +285,45 @@ fn execute_at_snapshot(
             } else {
                 crate::pipeline::result_document(&fields)
             };
-            results.push(pb::ExecutePipelineResponse {
-                results: vec![result],
-                execution_time,
-                ..Default::default()
-            });
+            results.push(result);
         }
     }
+    let responses = pack_search_results(results, execution_time);
     if barrier.epoch() != epoch {
         return Err(Status::unavailable("session reset during text search"));
     }
-    if results.is_empty() {
-        results.push(pb::ExecutePipelineResponse {
-            execution_time,
-            ..Default::default()
-        });
+    Ok(responses)
+}
+
+fn pack_search_results(
+    documents: Vec<pb::Document>,
+    execution_time: Option<prost_types::Timestamp>,
+) -> Vec<pb::ExecutePipelineResponse> {
+    // Keep small result sets together without growing one gRPC message with every hit.
+    // A single document may exceed this target; it is never split across responses.
+    const BATCH_BYTES: usize = 1_048_576;
+    let mut responses = Vec::new();
+    let mut batch = pb::ExecutePipelineResponse {
+        execution_time,
+        ..Default::default()
+    };
+    let mut batch_bytes = prost::Message::encoded_len(&batch);
+    for document in documents {
+        // One tag plus at most ten bytes for the length-delimited document prefix.
+        let document_bytes = prost::Message::encoded_len(&document).saturating_add(11);
+        if !batch.results.is_empty() && batch_bytes.saturating_add(document_bytes) > BATCH_BYTES {
+            responses.push(batch);
+            batch = pb::ExecutePipelineResponse {
+                execution_time,
+                ..Default::default()
+            };
+            batch_bytes = prost::Message::encoded_len(&batch);
+        }
+        batch_bytes = batch_bytes.saturating_add(document_bytes);
+        batch.results.push(document);
     }
-    Ok(results)
+    responses.push(batch);
+    responses
 }
 
 fn search_snapshot(
@@ -431,12 +473,15 @@ mod snapshot_tests {
         )
     }
     fn seed(local: &LocalBackend, title: &str, body: &str) {
+        seed_named(local, "a", title, body);
+    }
+    fn seed_named(local: &LocalBackend, name: &str, title: &str, body: &str) {
         local
             .commit(&pb::CommitRequest {
                 database: DB.into(),
                 writes: vec![pb::Write {
                     operation: Some(pb::write::Operation::Update(pb::Document {
-                        name: format!("{DB}/documents/products/a"),
+                        name: format!("{DB}/documents/products/{name}"),
                         fields: [("title", title), ("body", body)]
                             .into_iter()
                             .map(|(key, text)| {
@@ -505,6 +550,114 @@ mod snapshot_tests {
             Some(pb::value::ValueType::StringValue("after".into()))
         );
     }
+    #[test]
+    fn production_option_refusals_match_recorded_rest_and_grpc_contracts() {
+        let requests: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-text-refusal-requests.json"
+        ))
+        .unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-text-production.json"
+        ))
+        .unwrap();
+        let parent = crate::decode::parse_parent(&format!("{DB}/documents")).unwrap();
+        let mut checked = 0;
+        for program in requests["programs"].as_array().unwrap() {
+            for step in program["steps"].as_array().unwrap() {
+                let body = &step["body"];
+                let request = crate::rest::pipeline_json::request_from_json(DB, body).unwrap();
+                let Err(error) = pipeline::compile_pipeline(&request, &parent, Unrecorded::Refuse)
+                else {
+                    panic!("production refused {}", step["id"]);
+                };
+                let grpc = step["transport"] == "grpc";
+                let shape = if grpc {
+                    crate::pipeline_shape::shape_of_request(&request)
+                } else {
+                    let (_, order) =
+                        crate::rest::json_syntax::parse_with_key_order(body.to_string().as_bytes())
+                            .unwrap();
+                    crate::pipeline_shape::shape_of_json(body, &order)
+                };
+                let actual =
+                    crate::pipeline_shape::RefusalGate::Recorded(shape, DB.into()).answer(error);
+                let expected = &production["programs"][program["id"].as_str().unwrap()]["steps"]
+                    [step["id"].as_str().unwrap()];
+                let message = if grpc {
+                    expected["message"].as_str().unwrap()
+                } else {
+                    expected["body"][0]["error"]["message"].as_str().unwrap()
+                };
+                assert_eq!(
+                    actual.code(),
+                    tonic::Code::InvalidArgument,
+                    "{}",
+                    step["id"]
+                );
+                assert_eq!(actual.message(), message, "{}", step["id"]);
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 8);
+    }
+
+    #[test]
+    fn production_search_batches_all_hits_in_one_response() {
+        let (local, _, parent) = fixture();
+        seed_named(&local, "b", "before", "after");
+        let responses = execute(
+            &local,
+            &parent,
+            compiled(&parent),
+            &allow_all_reads,
+            Unrecorded::OfficialEmulator,
+        )
+        .unwrap();
+        // Both production REST and gRPC recordings return these small hit sets in one batch.
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].results.len(), 2);
+        assert!(responses[0].execution_time.is_some());
+    }
+
+    #[test]
+    fn search_batches_split_large_documents_without_losing_hits() {
+        let (local, _, parent) = fixture();
+        let body = "x".repeat(600_000);
+        seed_named(&local, "a", "before", &body);
+        seed_named(&local, "b", "before", &body);
+        let responses = execute(
+            &local,
+            &parent,
+            compiled(&parent),
+            &allow_all_reads,
+            Unrecorded::OfficialEmulator,
+        )
+        .unwrap();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(
+            responses
+                .iter()
+                .map(|response| response.results.len())
+                .sum::<usize>(),
+            2
+        );
+        assert!(responses
+            .iter()
+            .all(|response| prost::Message::encoded_len(response) <= 1_048_576));
+        let names: Vec<_> = responses
+            .iter()
+            .flat_map(|response| &response.results)
+            .map(|document| document.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                format!("{DB}/documents/products/b"),
+                format!("{DB}/documents/products/a")
+            ]
+        );
+    }
+
     #[test]
     fn reset_after_capture_refuses_the_previous_epoch_instead_of_returning_stale_results() {
         let (local, _, parent) = fixture();

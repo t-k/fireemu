@@ -12,6 +12,9 @@ use crate::{sse, UiBody, UiRequest, UiResponse, UiState, MAX_JSON_BODY_BYTES};
 
 /// Routes `rest` (the path after `/ui/api/`).
 pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiResponse {
+    if let Some(action) = rest.strip_prefix("database/") {
+        return crate::database::route(state, action, req).await;
+    }
     if let Some(path) = rest.strip_prefix("firestore/") {
         return if path == "watch" {
             sse::firestore_watch(state, req)

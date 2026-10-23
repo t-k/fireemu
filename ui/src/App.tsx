@@ -11,6 +11,7 @@ type NavItem = { href: string; key: MessageKey };
 const OFFICIAL_NAV: NavItem[] = [
   { href: "/", key: "nav.overview" },
   { href: "/firestore", key: "nav.firestore" },
+  { href: "/database", key: "database.title" },
   { href: "/auth", key: "nav.auth" },
   { href: "/storage", key: "nav.storage" },
   { href: "/functions", key: "nav.functions" },

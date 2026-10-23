@@ -2067,6 +2067,7 @@ mod refresh_tests {
 
     struct GenerationFixture {
         context: StreamContext,
+        clock: Arc<std::sync::Mutex<VirtualClock>>,
         scope: Scope,
         parent: Option<Parent>,
         cache: Option<DatabaseHashCache>,
@@ -2098,7 +2099,7 @@ mod refresh_tests {
         let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
             LogicalInstant::UNIX_EPOCH,
         )));
-        let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), Arc::clone(&clock), 7));
         let scope = Scope::Project("demo-app".to_owned());
         local
             .restore_scope(&scope, &restored_snapshot("before"))
@@ -2125,6 +2126,7 @@ mod refresh_tests {
             },
         )]);
         GenerationFixture {
+            clock,
             context: StreamContext {
                 local: local.clone(),
                 gateway: Arc::new(gateway),
@@ -3009,6 +3011,380 @@ mod refresh_tests {
         .unwrap();
         assert_eq!(ENCODED_LISTEN_DOCUMENTS.with(std::cell::Cell::get), 0);
         assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn target_add_combined_interleavings_keep_a_common_snapshot_boundary() {
+        const ALLOW: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{path=**} { allow read: if true; } } }";
+        const REVOKE_RESTORED: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /restored/{document} { allow read: if false; } match /second/{document} { allow read: if true; } } }";
+
+        fn assert_boundary(
+            fixture: &GenerationFixture,
+            out: &[PendingListenResponse],
+            expected: &[(i32, &str)],
+        ) {
+            assert_eq!(
+                fixture.targets.keys().copied().collect::<Vec<_>>(),
+                expected.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+            );
+            let boundary_time = global_boundary(out).1.expect("boundary read time");
+            fixture
+                .context
+                .local
+                .with_listen_snapshot(
+                    fixture.parent.as_ref().unwrap(),
+                    |db, version, read_at, _, _| {
+                        assert_eq!(fixture.last_snapshot_version, Some(version));
+                        assert_eq!(boundary_time, encode_instant(read_at));
+                        for (id, collection) in expected {
+                            let query =
+                                Query::new(fireemu_core_firestore::query::QueryScope::collection(
+                                    None,
+                                    CollectionId::try_new(*collection).unwrap(),
+                                ));
+                            let known = db
+                                .run_query_shared_with_stats(&query, None)
+                                .unwrap()
+                                .0
+                                .into_iter()
+                                .map(|document| (document.path.clone(), document.version))
+                                .collect::<BTreeMap<_, _>>();
+                            assert!(fixture.targets[id].current, "target {id} is not current");
+                            assert_eq!(fixture.targets[id].known, known, "target {id}");
+                        }
+                    },
+                )
+                .unwrap();
+            for response in out {
+                if let Some(pb::listen_response::ResponseType::TargetChange(change)) = response
+                    .as_wire()
+                    .and_then(|wire| wire.response_type.as_ref())
+                {
+                    if change.target_change_type
+                        == pb::target_change::TargetChangeType::Current as i32
+                    {
+                        assert_eq!(change.read_time, Some(boundary_time));
+                    }
+                }
+            }
+        }
+
+        fn add(
+            fixture: &mut GenerationFixture,
+            request: &pb::ListenRequest,
+            expected: &[(i32, &str)],
+        ) -> Vec<PendingListenResponse> {
+            let mut out = Vec::new();
+            handle_listen_request(
+                &fixture.context,
+                &mut fixture.parent,
+                &mut fixture.targets,
+                request,
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                &mut out,
+            )
+            .unwrap();
+            assert_boundary(fixture, &out, expected);
+            out
+        }
+
+        fn commit_and_add(
+            fixture: &mut GenerationFixture,
+            request: &pb::ListenRequest,
+            deliver_commit_first: bool,
+            before: &[(i32, &str)],
+            after: &[(i32, &str)],
+        ) -> Vec<PendingListenResponse> {
+            let mut events = fixture
+                .context
+                .local
+                .subscribe_listen(fixture.parent.as_ref().unwrap());
+            fixture
+                .context
+                .local
+                .commit_writes(
+                    fixture.parent.as_ref().unwrap(),
+                    &[set("restored/b")],
+                    &|_, _, _| Ok(()),
+                )
+                .unwrap();
+            if deliver_commit_first {
+                let event = events.try_recv().unwrap();
+                let input = refresh_input_for_event(
+                    fixture.parent.as_ref(),
+                    fixture.last_snapshot_version,
+                    &event,
+                )
+                .expect("the existing targets have not seen this commit");
+                let mut out = Vec::new();
+                refresh_all(
+                    &fixture.context,
+                    fixture.parent.as_ref(),
+                    &mut fixture.targets,
+                    input,
+                    &mut fixture.cache,
+                    &mut fixture.last_snapshot_version,
+                    &mut out,
+                )
+                .unwrap();
+                assert_boundary(fixture, &out, before);
+            }
+            let out = add(fixture, request, after);
+            if !deliver_commit_first {
+                let event = events.try_recv().unwrap();
+                assert!(
+                    refresh_input_for_event(
+                        fixture.parent.as_ref(),
+                        fixture.last_snapshot_version,
+                        &event,
+                    )
+                    .is_none(),
+                    "the add already delivered this commit's snapshot"
+                );
+            }
+            out
+        }
+
+        for deliver_commit_first in [false, true] {
+            let mut fixture = generation_fixture();
+            fixture.targets.clear();
+            fixture.last_snapshot_version = None;
+            let rules = Arc::new(fireemu_core_rules::runtime::RulesetSlot::new(
+                fireemu_core_rules::runtime::LoadedRules::from_source(ALLOW).unwrap(),
+            ));
+            let auth = Arc::new(std::sync::Mutex::new(
+                fireemu_core_auth::store::AuthStore::new(
+                    "demo-app",
+                    fireemu_core_types::determinism::SplitMix64::new(3),
+                    fireemu_core_auth::mfa::TotpPolicy::default(),
+                ),
+            ));
+            fixture.context.rules = Some(Arc::new(RulesEnforcer::new(
+                Arc::clone(&rules),
+                auth,
+                Arc::clone(&fixture.clock),
+            )));
+            fixture.context.principal = Principal::Anonymous;
+            add(
+                &mut fixture,
+                &query_request(1, "restored"),
+                &[(1, "restored")],
+            );
+            add(
+                &mut fixture,
+                &query_request(2, "second"),
+                &[(1, "restored"), (2, "second")],
+            );
+            commit_and_add(
+                &mut fixture,
+                &query_request(3, "restored"),
+                deliver_commit_first,
+                &[(1, "restored"), (2, "second")],
+                &[(1, "restored"), (2, "second"), (3, "restored")],
+            );
+            fixture
+                .context
+                .local
+                .restore_scope(&fixture.scope, &restored_snapshot("replacement"))
+                .unwrap();
+            let restored = add(
+                &mut fixture,
+                &query_request(4, "restored"),
+                &[
+                    (1, "restored"),
+                    (2, "second"),
+                    (3, "restored"),
+                    (4, "restored"),
+                ],
+            );
+            assert_reset_replay(&restored, "replacement");
+            let replacement = fixture
+                .context
+                .local
+                .with_listen_snapshot(fixture.parent.as_ref().unwrap(), |db, _, _, _, _| {
+                    encode_document(&db.get_shared(&path("restored/a")).unwrap())
+                })
+                .unwrap();
+            let restored_wire = restored
+                .iter()
+                .cloned()
+                .map(PendingListenResponse::encode)
+                .collect::<Vec<_>>();
+            for target_id in [1, 3, 4] {
+                let replayed = restored_wire
+                    .iter()
+                    .filter_map(|response| match response.response_type.as_ref() {
+                        Some(pb::listen_response::ResponseType::DocumentChange(change))
+                            if change.target_ids == [target_id] =>
+                        {
+                            Some(change.document.as_ref())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    replayed,
+                    vec![Some(&replacement)],
+                    "target {target_id} replay"
+                );
+            }
+            let reset_ids = restored
+                .iter()
+                .filter_map(PendingListenResponse::as_wire)
+                .filter_map(|response| match response.response_type.as_ref() {
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.target_change_type
+                            == pb::target_change::TargetChangeType::Reset as i32 =>
+                    {
+                        Some(change.target_ids.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(reset_ids, vec![vec![1], vec![2], vec![3]]);
+            rules.replace_source(REVOKE_RESTORED).unwrap();
+            let denied = add(
+                &mut fixture,
+                &query_request(5, "second"),
+                &[(2, "second"), (5, "second")],
+            );
+            let denied_ids = denied
+                .iter()
+                .filter_map(PendingListenResponse::as_wire)
+                .filter_map(|response| match response.response_type.as_ref() {
+                    Some(pb::listen_response::ResponseType::TargetChange(change))
+                        if change.cause.as_ref().is_some_and(|cause| cause.code == 7) =>
+                    {
+                        Some(change.target_ids.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(denied_ids, vec![vec![1], vec![3], vec![4]]);
+            rules.replace_source(ALLOW).unwrap();
+            add(
+                &mut fixture,
+                &query_request(1, "restored"),
+                &[(1, "restored"), (2, "second"), (5, "second")],
+            );
+            let remove = pb::ListenRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                target_change: Some(pb::listen_request::TargetChange::RemoveTarget(1)),
+                ..Default::default()
+            };
+            let mut removed = Vec::new();
+            handle_listen_request(
+                &fixture.context,
+                &mut fixture.parent,
+                &mut fixture.targets,
+                &remove,
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                &mut removed,
+            )
+            .unwrap();
+            assert!(!fixture.targets.contains_key(&1));
+            let boundary = add(
+                &mut fixture,
+                &query_request(1, "second"),
+                &[(1, "second"), (2, "second"), (5, "second")],
+            );
+            let (old_token, old_time) = global_boundary(&boundary);
+            let old_token = old_token.to_vec();
+            let old_time = old_time.expect("historical boundary read time");
+            fixture
+                .clock
+                .lock()
+                .unwrap()
+                .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+                .unwrap();
+            let mut resume = query_request(6, "restored");
+            let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+                resume.target_change.as_mut()
+            else {
+                unreachable!();
+            };
+            target.resume_type = Some(pb::target::ResumeType::ResumeToken(old_token.clone()));
+            let resumed = commit_and_add(
+                &mut fixture,
+                &resume,
+                deliver_commit_first,
+                &[(1, "second"), (2, "second"), (5, "second")],
+                &[(1, "second"), (2, "second"), (5, "second"), (6, "restored")],
+            );
+            let (current_token, current_time) = global_boundary(&resumed);
+            let current_token = current_token.to_vec();
+            let current_time = current_time.expect("current boundary read time");
+            assert_ne!(old_time, current_time);
+            let document = fixture
+                .context
+                .local
+                .with_listen_snapshot(fixture.parent.as_ref().unwrap(), |db, _, _, _, _| {
+                    encode_document(&db.get_shared(&path("restored/b")).unwrap())
+                })
+                .unwrap();
+            let expected = vec![
+                target_change(
+                    pb::target_change::TargetChangeType::Add,
+                    vec![6],
+                    None,
+                    None,
+                )
+                .encode(),
+                target_change(
+                    pb::target_change::TargetChangeType::NoChange,
+                    vec![],
+                    Some(old_token),
+                    Some(old_time),
+                )
+                .encode(),
+                pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                        pb::DocumentChange {
+                            document: Some(document),
+                            target_ids: vec![6],
+                            removed_target_ids: vec![],
+                        },
+                    )),
+                },
+                pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::Filter(
+                        pb::ExistenceFilter {
+                            target_id: 6,
+                            count: 2,
+                            unchanged_names: Some(pb::BloomFilter {
+                                bits: Some(pb::BitSequence {
+                                    bitmap: vec![],
+                                    padding: 0,
+                                }),
+                                hash_count: 0,
+                            }),
+                        },
+                    )),
+                },
+                target_change(
+                    pb::target_change::TargetChangeType::Current,
+                    vec![6],
+                    Some(current_token.clone()),
+                    Some(current_time),
+                )
+                .encode(),
+                target_change(
+                    pb::target_change::TargetChangeType::NoChange,
+                    vec![],
+                    Some(current_token),
+                    Some(current_time),
+                )
+                .encode(),
+            ];
+            let actual = resumed
+                .into_iter()
+                .map(PendingListenResponse::encode)
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]

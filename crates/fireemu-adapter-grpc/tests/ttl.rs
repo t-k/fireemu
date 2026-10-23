@@ -889,3 +889,98 @@ fn a_recreated_path_that_is_currently_expired_is_rechecked_and_deleted() {
     assert_eq!(deleted, 1);
     assert!(!exists(&backend, "sessions/a"));
 }
+
+#[test]
+fn multiple_ttl_policies_preserve_frozen_membership_and_finish_finite_backlogs() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let budget = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN;
+    let skipped = 70;
+    let early_ready = 2;
+    for i in 0..skipped + early_ready {
+        write_document(&backend, &format!("alpha/p{i:05}"), Some(timestamp(1_100)));
+    }
+    for i in 0..=budget {
+        write_document(&backend, &format!("omega/p{i:05}"), Some(timestamp(1_100)));
+    }
+    write_document(
+        &backend,
+        "omega/a-before-later-scan",
+        Some(timestamp(200_000)),
+    );
+    // Registration order differs from the catalog's collection-group order.
+    for name in ["omega", "alpha"] {
+        backend
+            .enable_ttl(PROJECT, DATABASE, group(name), field("expiresAt"))
+            .unwrap();
+    }
+
+    let scans = AtomicUsize::new(0);
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    let deleted = backend.sweep_expired_documents_now_with_hook(&everything(), due, &|| {
+        match scans.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                // The first snapshot is frozen, but reads and writes can run at this seam.
+                assert!(exists(&backend, "alpha/p00000"));
+                for i in 0..skipped {
+                    write_document(
+                        &backend,
+                        &format!("alpha/p{i:05}"),
+                        Some(timestamp(200_000)),
+                    );
+                }
+                write_document(&backend, "alpha/a-after-scan", Some(timestamp(1_100)));
+                // The later policy has not captured its own membership yet.
+                write_document(
+                    &backend,
+                    "omega/a-before-later-scan",
+                    Some(timestamp(1_100)),
+                );
+            }
+            1 => {
+                for i in skipped..skipped + early_ready {
+                    assert!(!exists(&backend, &format!("alpha/p{i:05}")));
+                }
+                assert!(exists(&backend, "alpha/a-after-scan"));
+                write_document(&backend, "omega/b-after-scan", Some(timestamp(1_100)));
+            }
+            _ => panic!("exactly two policies should be scanned"),
+        }
+    });
+    assert_eq!(scans.load(Ordering::SeqCst), 2);
+    assert_eq!(deleted, budget);
+    assert!(exists(&backend, "alpha/a-after-scan"));
+    assert!(!exists(&backend, "omega/a-before-later-scan"));
+    assert!(exists(&backend, "omega/b-after-scan"));
+    for i in 0..skipped {
+        assert!(exists(&backend, &format!("alpha/p{i:05}")));
+    }
+    // The later policy spends the remaining budget in captured path order.
+    let later_seeded_deleted = budget - early_ready - 1;
+    for i in 0..=budget {
+        assert_eq!(
+            exists(&backend, &format!("omega/p{i:05}")),
+            i >= later_seeded_deleted,
+            "later-policy path {i} has the wrong first-batch outcome",
+        );
+    }
+
+    // One new early path, four captured later survivors, and one new later path remain.
+    assert_eq!(
+        backend.sweep_expired_documents(&everything(), due),
+        early_ready + 4
+    );
+    assert!(!exists(&backend, "alpha/a-after-scan"));
+    assert!(!exists(&backend, "omega/b-after-scan"));
+    for i in 0..=budget {
+        assert!(!exists(&backend, &format!("omega/p{i:05}")));
+    }
+    for i in 0..skipped {
+        assert!(exists(&backend, &format!("alpha/p{i:05}")));
+    }
+    write_document(&backend, "omega/after-completion", Some(timestamp(1_100)));
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 0);
+    assert!(exists(&backend, "omega/after-completion"));
+    assert_eq!(backend.sweep_expired_documents_now(&everything(), due), 1);
+}

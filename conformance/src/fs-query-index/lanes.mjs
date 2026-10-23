@@ -17,8 +17,8 @@ export const LANES = {
       "production Firestore REST v1 and gRPC google.firestore.v1 text search, Enterprise Native, database entpipe1",
     localConfig: "fs-ent-text.fireemu.json",
     firebaseJson: "fs-ent-text.firebase.json",
-    harness: "src/fs-ent-pipeline",
-    sources: ["src/fs-query-index", "src/fs-ent-pipeline"],
+    harness: "src/fs-ent-text",
+    sources: ["src/fs-query-index", "src/fs-ent-pipeline", "src/fs-ent-text"],
   },
   "fs-query-index": {
     id: "fs-query-index",

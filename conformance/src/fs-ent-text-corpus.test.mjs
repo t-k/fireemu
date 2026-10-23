@@ -4,12 +4,12 @@ import { readFile } from "node:fs/promises";
 import { Firestore } from "@google-cloud/firestore";
 import { documentMatches, score } from "@google-cloud/firestore/pipelines";
 import { PROGRAMS, INDEXES } from "./fs-ent-pipeline/text-corpus.mjs";
-import { validateCorpus } from "./fs-ent-pipeline/harness.mjs";
+import { validateCorpus } from "./fs-ent-text/harness.mjs";
 import { LANES } from "./fs-query-index/lanes.mjs";
 
 test("text observations use the existing named Enterprise sandbox lane and bounded request guard", () => {
   assert.equal(LANES["fs-ent-text"].database, "entpipe1");
-  assert.equal(LANES["fs-ent-text"].harness, "src/fs-ent-pipeline");
+  assert.equal(LANES["fs-ent-text"].harness, "src/fs-ent-text");
   assert.equal(validateCorpus(PROGRAMS, "fs-ent-text"), PROGRAMS[0].steps.length);
   assert.ok(PROGRAMS[0].steps.length >= 60 && PROGRAMS[0].steps.length <= 140);
 });

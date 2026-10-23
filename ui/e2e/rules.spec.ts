@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { t } from "../src/i18n";
 import { PORTS } from "./global-setup";
 import { api, gotoApp } from "./helpers";
 
@@ -31,10 +32,31 @@ test.describe("Rules", () => {
     await gotoApp(page, "/rules");
     await expect(page.getByText("Not loaded: every request is allowed").first()).toBeVisible();
     await page.locator("#rules-firestore").fill(RULES);
-    await page.getByTestId("rules-firestore-save").click();
-    await expect(page.getByRole("status").filter({ hasNotText: "Loading" })).toContainText(
-      "Rules replaced",
-    );
+    const firestore = page.locator("section").filter({ has: page.locator("#rules-firestore") });
+    let releaseRefresh: (() => void) | undefined;
+    const refreshHeld = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    // Hold the real post-save read so its refresh status coexists with the success notice.
+    await page.route("**/ui/api/control/v1/rules", async (route) => {
+      if (route.request().method() === "GET") await refreshHeld;
+      await route.continue();
+    });
+    try {
+      await page.getByTestId("rules-firestore-save").click();
+      await expect(
+        firestore.getByRole("status").filter({ hasText: t("rules.refreshing") }),
+      ).toHaveText(t("rules.refreshing"));
+      await expect(firestore.getByRole("status")).toHaveCount(2);
+      await expect(firestore.getByRole("status").filter({ hasText: t("rules.saved") })).toHaveText(
+        t("rules.saved"),
+      );
+    } finally {
+      releaseRefresh?.();
+    }
+    await expect(
+      firestore.getByRole("status").filter({ hasText: t("rules.refreshing") }),
+    ).toHaveCount(0);
     await expect(page.getByText("Loaded", { exact: true }).first()).toBeVisible();
     const info = (await api(request, "GET", "control/v1/rules")) as { loaded: boolean };
     expect(info.loaded).toBe(true);

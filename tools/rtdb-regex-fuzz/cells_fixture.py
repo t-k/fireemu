@@ -39,7 +39,7 @@ def outcome(loads, cells, i):
 
 def reason(expr, jar_errors, jar_cells, emu_cells):
     if any("could not determinize efficiently" in str(x) for x in jar_errors):
-        return "the official emulator cannot determinize the pattern, its own resource limit (M14)"
+        return "fireemu denies a pattern refused by the official emulator's determinization resource limit"
     if 500 in jar_cells or 503 in jar_cells or "gone" in jar_cells:
         return "the official emulator answers 500 (an internal error); fireemu denies (ruling 15)"
     beyond = "[\U00010D50-\U00010D65\U00010D70-\U00010D85\U00016EA0-\U00016EB8\U00016EBB-\U00016ED3]"
@@ -102,8 +102,7 @@ for source in args[1:]:
         row = {"expr": j["expr"], "load": jl, "error": jx, "cells": jc}
         outcomes = [(outcome(jl, jc, i), outcome(el, ec, i)) for i in range(len(CELLS))]
         if any(a != b for a, b in outcomes) or jx != ex:
-            determinize = any("could not determinize efficiently" in str(x) for x in jx)
-            if not determinize and any(b == 200 and a != 200 for a, b in outcomes):
+            if any(b == 200 and a != 200 for a, b in outcomes):
                 raise SystemExit(f"fail-open row: {j['expr']!r}")
             row["fireemu"] = {"load": el, "error": ex, "cells": ec,
                               "why": reason(j["expr"], jx, jc, ec)}
@@ -125,6 +124,16 @@ for row in base:
     if "fireemu" in row:
         row["fireemu"]["cells"] = widen(row["fireemu"]["cells"])
     rows.append(row)
+
+# Inherited overrides must satisfy the same contract as newly recorded rows.
+for row in rows:
+    if "fireemu" not in row:
+        continue
+    local = row["fireemu"]
+    if any(outcome(local["load"], local["cells"], i) == 200
+           and outcome(row["load"], row["cells"], i) != 200 for i in range(len(CELLS))):
+        raise SystemExit(f"fail-open row: {row['expr']!r}")
+
 with open(out, "w", encoding="utf-8") as f:
     f.write("[\n")
     f.write(",\n".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in rows))

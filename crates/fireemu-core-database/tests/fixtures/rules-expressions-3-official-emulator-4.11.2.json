@@ -9658,48 +9658,42 @@
   "query": "",
   "load": 400,
   "error": "1:42: Illegal regular expression, could not determinize efficiently\n",
-  "read": null,
-  "fireemu": "determinize"
+  "read": null
  },
  {
   "expr": "' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i)",
   "query": "",
   "load": 400,
   "error": "1:38: Illegal regular expression, could not determinize efficiently\n",
-  "read": null,
-  "fireemu": "determinize"
+  "read": null
  },
  {
   "expr": "!(' a'.matches(/k{0}([^a]{2}|[\\d]{2,3}\\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}/i))",
   "query": "",
   "load": 400,
   "error": "1:40: Illegal regular expression, could not determinize efficiently\n",
-  "read": null,
-  "fireemu": "determinize"
+  "read": null
  },
  {
   "expr": "'ａ [B'.matches(/^((k*?|-{0,2}[\\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\\d|[@-[]+(\\-+b+)*?([A-Z]?[Z-a]+?){2,3}$/)",
   "query": "",
   "load": 400,
   "error": "1:40: Illegal regular expression, could not determinize efficiently\n",
-  "read": null,
-  "fireemu": "determinize"
+  "read": null
  },
  {
   "expr": "'Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i)",
   "query": "",
   "load": 400,
   "error": "1:39: Illegal regular expression, could not determinize efficiently\n",
-  "read": null,
-  "fireemu": "determinize"
+  "read": null
  },
  {
   "expr": "!('Kａ '.matches(/^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\\w-][Z-a]){0}){2,3}[\\]a]+([^a-z]+){2}/i))",
   "query": "",
   "load": 400,
   "error": "1:41: Illegal regular expression, could not determinize efficiently\n",
-  "read": null,
-  "fireemu": "determinize"
+  "read": null
  },
  {
   "expr": "'{'.matches(/^[y-I]/i)",

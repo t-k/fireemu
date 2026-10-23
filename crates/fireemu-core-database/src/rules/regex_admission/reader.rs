@@ -1,7 +1,7 @@
-//! Regex-literal canonical-tree prototype; not wired into production parsing.
+//! Canonical regex-literal tree used by load-time admission.
 //! Input is the literal text after the existing lexer removes format characters.
 //! Group parsing uses an explicit frame stack and has no prototype size cutoff.
-use super::{Failure, ast::Ast, jar_integer};
+use super::{ast::Ast, jar_integer, Failure};
 
 struct Reader {
     units: Vec<u16>,
@@ -75,11 +75,11 @@ impl Reader {
         }
     }
 
-    fn mode_char(&self, unit: u16) -> Result<Ast, Failure> {
+    fn mode_char(&self, unit: u16) -> Ast {
         if self.ignore_case {
             Ast::ascii_char(unit)
         } else {
-            Ok(Ast::Literal(unit))
+            Ast::Literal(unit)
         }
     }
 
@@ -246,15 +246,15 @@ impl Reader {
         if self.take(b'-') {
             if self.peek() == Some(93) {
                 Ok(Ast::Union(
-                    Box::new(self.mode_char(first)?),
-                    Box::new(self.mode_char(45)?),
+                    Box::new(self.mode_char(first)),
+                    Box::new(self.mode_char(45)),
                 ))
             } else {
                 let last = self.escaped_char()?;
                 self.mode_range(first, last)
             }
         } else {
-            self.mode_char(first)
+            Ok(self.mode_char(first))
         }
     }
 
@@ -285,14 +285,14 @@ impl Reader {
                 Ok(tree)
             } else {
                 let unit = self.next()?;
-                self.mode_char(unit)
+                Ok(self.mode_char(unit))
             }
         } else {
             if matches!(self.peek(), Some(36 | 94)) {
                 return Err(Failure::Syntax);
             }
             let unit = self.next()?;
-            self.mode_char(unit)
+            Ok(self.mode_char(unit))
         }
     }
 }

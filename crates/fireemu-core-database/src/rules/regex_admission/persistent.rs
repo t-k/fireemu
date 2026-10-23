@@ -241,6 +241,7 @@ impl Store {
         self.recipe().overrides.entry(q).or_default().accept = Some(accept);
     }
 
+    #[cfg(test)]
     pub(super) fn set_edges(&mut self, q: usize, edges: Vec<Edge>) {
         assert!(q < self.count());
         assert!(edges.iter().all(|edge| edge.to < self.count()));
@@ -323,11 +324,11 @@ impl Iterator for Outgoing {
                     match row.as_ref() {
                         Row::Empty => {}
                         Row::Edges(edges) => {
-                            self.pending.push(Frame::Edges(edges.clone(), 0, offset))
+                            self.pending.push(Frame::Edges(edges.clone(), 0, offset));
                         }
                         Row::Dense(states, q) => {
                             self.pending
-                                .push(Frame::Dense(states.clone(), *q, 0, offset))
+                                .push(Frame::Dense(states.clone(), *q, 0, offset));
                         }
                         Row::Word(word, q) => {
                             if let Some(&unit) = word.get(*q) {
@@ -346,7 +347,7 @@ impl Iterator for Outgoing {
                             self.pending.push(Frame::Node(a.clone(), offset));
                         }
                         Row::Shift(row, shift) => {
-                            self.pending.push(Frame::Node(row.clone(), offset + shift))
+                            self.pending.push(Frame::Node(row.clone(), offset + shift));
                         }
                     }
                     continue;

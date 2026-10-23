@@ -1,7 +1,7 @@
-//! Count-independent bounded-repetition prototype; not a production admission hook.
+//! Count-independent bounded repetition for load-time admission.
 //! Nullable copies use suffix thresholds. Nonnullable copies are indexed lazily.
 use super::{
-    Automaton, Edge, Failure, Graph, State, SubsetIndex, guard_count, push_item, reserve_items,
+    guard_count, push_item, reserve_items, Automaton, Edge, Failure, Graph, State, SubsetIndex,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -204,6 +204,7 @@ pub(super) fn bounded(
     Ok((value, count))
 }
 
+#[cfg(test)]
 pub(super) fn count_only(
     child: &Graph,
     min: u32,
@@ -260,4 +261,20 @@ fn indexed_copy_holes_remain_exact_after_four_units() {
         .filter_map(|(copy, q)| (q == 1).then_some(copy))
         .collect();
     assert_eq!(copies, vec![1, 3]);
+}
+
+#[test]
+fn indexed_pairs_cross_former_two_million_boundary_exactly() {
+    let child = super::tests::odd_length_a_child();
+    // Direct local set evolution, not a full regex witness before the5002 guard.
+    for entries in [999_999, 1_000_000, 1_000_001] {
+        let current = Subset::Indexed((0..entries).map(|i| (2 * i, 1)).collect());
+        let Subset::Indexed(next) = current.next(&child, 2 * entries, 97).unwrap() else {
+            panic!("indexed key kind changed")
+        };
+        assert_eq!(next.len(), 2 * entries as usize);
+        for (i, &(copy, q)) in next.iter().enumerate() {
+            assert_eq!((copy as usize, q), (i, i % 2));
+        }
+    }
 }

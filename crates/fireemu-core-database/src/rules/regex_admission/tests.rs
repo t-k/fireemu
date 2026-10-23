@@ -19,7 +19,7 @@ fn forced_finite_chain_counts_the_empty_successor_subset() {
 
 #[test]
 fn counted_repetition_uses_java_signed_integer_domain() {
-    assert_eq!(jar_integer("2147483647"), Ok(2147483647));
+    assert_eq!(jar_integer("2147483647"), Ok(2_147_483_647));
     assert_eq!(jar_integer("2147483648"), Err(Failure::Integer));
 }
 
@@ -81,7 +81,7 @@ oracle_case!(
 );
 
 fn accepts(value: &Automaton, word: &[u16]) -> bool {
-    let graph = value.expanded().unwrap();
+    let graph = value.expanded();
     let mut current = BTreeSet::from([graph.initial]);
     for &unit in word {
         current = current
@@ -197,11 +197,14 @@ fn utf16_interval_boundaries_and_surrogates_are_not_unicode_scalars() {
 fn allocation_limits_are_inconclusive_and_never_resource_policy() {
     let value = Automaton::literal("a");
     assert!(matches!(
-        value.bounded(0, 2147483647),
+        value.bounded(0, 2_147_483_647),
         Err(Failure::Inconclusive)
     ));
-    assert_eq!(exact_literal_count(1, 2147483647), Ok(Some(2147483649)));
-    assert_eq!(guard_count(2147483649, 5000), Err(Failure::Resource));
+    assert_eq!(
+        exact_literal_count(1, 2_147_483_647),
+        Ok(Some(2_147_483_649))
+    );
+    assert_eq!(guard_count(2_147_483_649, 5000), Err(Failure::Resource));
 }
 
 #[test]
@@ -279,7 +282,7 @@ fn symbolic_bounded_matches_every_small_explicit_partial_dfa() {
 
 fn minimized_graph(mut value: Automaton) -> Graph {
     value.minimize(5000).unwrap();
-    value.expanded().unwrap()
+    value.expanded()
 }
 
 #[test]
@@ -474,12 +477,9 @@ fn ascii_i_character_and_range_construction_matches_actual_jar_trees() {
     ] {
         assert_eq!(ast::Ast::ascii_range(lo, hi).unwrap().encode(), expected);
     }
-    assert_eq!(ast::Ast::ascii_char(97).unwrap().encode(), "U(L(97),L(65))");
-    assert_eq!(ast::Ast::ascii_char(45).unwrap().encode(), "L(45)");
-    assert_eq!(
-        ast::Ast::ascii_char(0x100).unwrap().encode(),
-        "U(L(257),L(256))"
-    );
+    assert_eq!(ast::Ast::ascii_char(97).encode(), "U(L(97),L(65))");
+    assert_eq!(ast::Ast::ascii_char(45).encode(), "L(45)");
+    assert_eq!(ast::Ast::ascii_char(0x100).encode(), "U(L(257),L(256))");
 }
 
 #[test]
@@ -517,17 +517,17 @@ fn ast_compound_nodes_retain_constructor_observations() {
 
 #[test]
 fn every_ascii_i_range_ast_matches_the_offline_jar_reference_digest() {
-    let mut digest = 0xcbf29ce484222325u64;
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
     for lo in 0..128 {
         for hi in 0..128 {
             let encoded = ast::Ast::ascii_range(lo, hi).unwrap().encode() + "\n";
             for byte in encoded.bytes() {
                 digest ^= u64::from(byte);
-                digest = digest.wrapping_mul(1099511628211);
+                digest = digest.wrapping_mul(1_099_511_628_211);
             }
         }
     }
-    assert_eq!(digest, 9261829714427812715);
+    assert_eq!(digest, 9_261_829_714_427_812_715);
 }
 
 fn denotes(tree: &ast::Ast, word: &[u16]) -> bool {
@@ -685,7 +685,7 @@ fn canonical_concat_flattens_empty_resource_operand_as_actual_jar() {
 
 #[test]
 fn minimum_operator_observations_match_every_small_offline_jar_case() {
-    let mut digest = 0xcbf29ce484222325u64;
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
     for accept in 0..4 {
         for encoding in 0..81 {
             let mut transitions = encoding;
@@ -727,12 +727,12 @@ fn minimum_operator_observations_match_every_small_offline_jar_case() {
                 );
                 for byte in row.bytes() {
                     digest ^= u64::from(byte);
-                    digest = digest.wrapping_mul(1099511628211);
+                    digest = digest.wrapping_mul(1_099_511_628_211);
                 }
             }
         }
     }
-    assert_eq!(digest, 10771812847959391979);
+    assert_eq!(digest, 10_771_812_847_959_391_979);
 }
 
 #[test]
@@ -748,35 +748,35 @@ fn minimum_parent_guard_keeps_the_unminimized_star_tail() {
 
 const OBSERVED_LITERAL_PATTERNS: [(&str, bool); 8] = [
     (
-        r###"^((k*?|-{0,2}[\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\d|[@-[]+(\-+b+)*?([A-Z]?[Z-a]+?){2,3}$"###,
+        r"^((k*?|-{0,2}[\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\d|[@-[]+(\-+b+)*?([A-Z]?[Z-a]+?){2,3}$",
         false,
     ),
     (
-        r###"k{0}([^a]{2}|[\d]{2,3}\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}"###,
+        r"k{0}([^a]{2}|[\d]{2,3}\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}",
         true,
     ),
     (
-        r###"k{0}([^a]{2}|[\d]{2,3}\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}"###,
+        r"k{0}([^a]{2}|[\d]{2,3}\.*)+?(a[`-{]?[A-Z]+|[0-9a-f]*[`-{]+){2,3}",
         true,
     ),
     (
-        r###"^((k*?|-{0,2}[\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\d|[@-[]+(\-+b+)*?([A-Z]?[Z-a]+?){2,3}$"###,
+        r"^((k*?|-{0,2}[\]a]*){2,3}(k+?[@-[]+[@-[]{0,2}){0}!+?)+(-{0}()[A-z]*|[ -~]{0,2}[^a-z]{2,3}){2,3}\d|[@-[]+(\-+b+)*?([A-Z]?[Z-a]+?){2,3}$",
         false,
     ),
     (
-        r###"^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\w-][Z-a]){0}){2,3}[\]a]+([^a-z]+){2}"###,
+        r"^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\w-][Z-a]){0}){2,3}[\]a]+([^a-z]+){2}",
         true,
     ),
     (
-        r###"^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\w-][Z-a]){0}){2,3}[\]a]+([^a-z]+){2}"###,
+        r"^([!-Z]+?[-a]+|[@-[]*?(.{0}[^a-z]{2}|k{2})+([\w-][Z-a]){0}){2,3}[\]a]+([^a-z]+){2}",
         true,
     ),
     (
-        r###"([^AZ\\a]{2}{2}\{+*Z??|.[i- ]){2}{2}[~]\D|IB|[a][\]][y-s\--I0-\-]"###,
+        r"([^AZ\\a]{2}{2}\{+*Z??|.[i- ]){2}{2}[~]\D|IB|[a][\]][y-s\--I0-\-]",
         true,
     ),
     (
-        r###"([^AZ\\a]{2}{2}\{+*Z??|.[i- ]){2}{2}[~]\D|IB|[a][\]][y-s\--I0-\-]"###,
+        r"([^AZ\\a]{2}{2}\{+*Z??|.[i- ]){2}{2}[~]\D|IB|[a][\]][y-s\--I0-\-]",
         true,
     ),
 ];
@@ -807,43 +807,35 @@ observed_literal_case!(canonical_literal_observed_row_8, 7);
 #[test]
 fn canonical_literal_reader_matches_independent_jar_grammar_cases() {
     for (source, mode, expected) in [
-        (r###"^a**$"###, false, "T(T(L(97)))"),
-        (r###"^a+?$"###, false, "O(M(1,L(97)))"),
-        (r###"^(|a)$"###, false, "S(124,97)"),
-        (r###"^(a|))$"###, false, "U(L(97),L(41))"),
-        (r###"^[a-\d]$"###, false, "R(97,100)"),
-        (r###"^[\\a]$"###, false, "L(97)"),
+        (r"^a**$", false, "T(T(L(97)))"),
+        (r"^a+?$", false, "O(M(1,L(97)))"),
+        (r"^(|a)$", false, "S(124,97)"),
+        (r"^(a|))$", false, "U(L(97),L(41))"),
+        (r"^[a-\d]$", false, "R(97,100)"),
+        (r"^[\\a]$", false, "L(97)"),
         (
-            r###"^\W$"###,
+            r"^\W$",
             false,
             "N(U(U(R(48,57),R(97,122)),U(R(65,90),L(95))))",
         ),
-        (r###"^\n$"###, false, "L(110)"),
-        (r###"^"$"###, false, "L(34)"),
+        (r"^\n$", false, "L(110)"),
+        (r#"^"$"#, false, "L(34)"),
+        (r"^a{2147483647}$", false, "B(2147483647,2147483647,L(97))"),
         (
-            r###"^a{2147483647}$"###,
-            false,
-            "B(2147483647,2147483647,L(97))",
-        ),
-        (
-            r###"^a{0000000000000000000000000000000000000000000001}$"###,
+            r"^a{0000000000000000000000000000000000000000000001}$",
             false,
             "B(1,1,L(97))",
         ),
-        (r###"^a{2,1}$"###, false, "B(2,1,L(97))"),
-        (r###"^😀$"###, false, "S(55357,56832)"),
-        (r###"^[￾-￿]$"###, false, "R(65534,65535)"),
-        (r###"^$"###, false, "S()"),
-        (r###""###, false, "C(T(A),T(A))"),
-        (r###"^abc$"###, false, "S(97,98,99)"),
-        (r###"a|b"###, false, "U(C(T(A),L(97)),C(L(98),T(A)))"),
-        (r###"^[A-Z]$"###, true, "U(E,U(R(97,122),R(65,90)))"),
-        (
-            r###"^[Z-a]$"###,
-            true,
-            "U(U(E,U(R(122,122),R(90,90))),R(90,97))",
-        ),
-        (r###"^a$"###, true, "U(L(97),L(65))"),
+        (r"^a{2,1}$", false, "B(2,1,L(97))"),
+        (r"^😀$", false, "S(55357,56832)"),
+        (r"^[￾-￿]$", false, "R(65534,65535)"),
+        (r"^$", false, "S()"),
+        (r"", false, "C(T(A),T(A))"),
+        (r"^abc$", false, "S(97,98,99)"),
+        (r"a|b", false, "U(C(T(A),L(97)),C(L(98),T(A)))"),
+        (r"^[A-Z]$", true, "U(E,U(R(97,122),R(65,90)))"),
+        (r"^[Z-a]$", true, "U(U(E,U(R(122,122),R(90,90))),R(90,97))"),
+        (r"^a$", true, "U(L(97),L(65))"),
     ] {
         assert_eq!(
             reader::literal(source, mode).unwrap().encode(),
@@ -863,7 +855,7 @@ fn canonical_literal_reader_matches_independent_jar_grammar_cases() {
 
 #[test]
 fn symbolic_minimum_matches_explicit_algebra_and_all_small_jar_observations() {
-    let mut digest = 0xcbf29ce484222325u64;
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
     for accept in 0..4 {
         for encoding in 0..81 {
             let mut transitions = encoding;
@@ -910,12 +902,12 @@ fn symbolic_minimum_matches_explicit_algebra_and_all_small_jar_observations() {
                 );
                 for byte in row.bytes() {
                     digest ^= u64::from(byte);
-                    digest = digest.wrapping_mul(1099511628211);
+                    digest = digest.wrapping_mul(1_099_511_628_211);
                 }
             }
         }
     }
-    assert_eq!(digest, 10771812847959391979);
+    assert_eq!(digest, 10_771_812_847_959_391_979);
 }
 
 #[test]
@@ -991,13 +983,13 @@ fn canonical_huge_nullable_minimum_is_not_an_implicit_copy_limit() {
 #[test]
 fn java21_all_bmp_case_constructor_records() {
     // Full 65,536-record Java21 primitive oracle, pinned in the private receipt.
-    let mut digest = 14695981039346656037_u64;
+    let mut digest = 14_695_981_039_346_656_037u64;
     for unit in 0..=u16::MAX {
-        for byte in (ast::Ast::ascii_char(unit).unwrap().encode() + "\n").bytes() {
-            digest = (digest ^ u64::from(byte)).wrapping_mul(1099511628211);
+        for byte in (ast::Ast::ascii_char(unit).encode() + "\n").bytes() {
+            digest = (digest ^ u64::from(byte)).wrapping_mul(1_099_511_628_211);
         }
     }
-    assert_eq!(digest, 13610395294619413009);
+    assert_eq!(digest, 13_610_395_294_619_413_009);
 }
 
 #[test]
@@ -1006,7 +998,7 @@ fn only_case_range_constructor_with_maximum_endpoint_is_nonterminating() {
         format!("{:?}", ast::Ast::ascii_range(65534, 65535)),
         "Err(NonTerminatingCanonicalConstruction)"
     );
-    assert_eq!(ast::Ast::ascii_char(65535).unwrap().encode(), "L(65535)");
+    assert_eq!(ast::Ast::ascii_char(65535).encode(), "L(65535)");
     assert_eq!(
         reader::literal("^[\u{fffe}-\u{ffff}]$", false)
             .unwrap()
@@ -1020,19 +1012,19 @@ fn only_case_range_constructor_with_maximum_endpoint_is_nonterminating() {
 #[test]
 fn unicode_range_trees_match_pinned_actual_jar() {
     for (lo, hi, expected) in [
-        (127, 304, 4244167995726107161),
-        (304, 305, 16992878993420153695),
-        (383, 384, 9989053418628567423),
-        (8490, 8491, 10980001434733955442),
-        (55295, 55297, 17496290649030190801),
-        (65533, 65534, 5313257699847433550),
-        (0, 65534, 14200542552053570895),
-        (1000, 100, 12638217986881231904),
-        (65, 65534, 17308574090342897842),
+        (127, 304, 4_244_167_995_726_107_161),
+        (304, 305, 16_992_878_993_420_153_695),
+        (383, 384, 9_989_053_418_628_567_423),
+        (8490, 8491, 10_980_001_434_733_955_442),
+        (55295, 55297, 17_496_290_649_030_190_801),
+        (65533, 65534, 5_313_257_699_847_433_550),
+        (0, 65534, 14_200_542_552_053_570_895),
+        (1000, 100, 12_638_217_986_881_231_904),
+        (65, 65534, 17_308_574_090_342_897_842),
     ] {
-        let mut digest = 14695981039346656037_u64;
+        let mut digest = 14_695_981_039_346_656_037u64;
         for byte in ast::Ast::ascii_range(lo, hi).unwrap().encode().bytes() {
-            digest = (digest ^ u64::from(byte)).wrapping_mul(1099511628211);
+            digest = (digest ^ u64::from(byte)).wrapping_mul(1_099_511_628_211);
         }
         assert_eq!(digest, expected, "range {lo}..{hi}");
     }
@@ -1080,21 +1072,21 @@ fn iterative_reader_matches_9331_actual_jar_short_grammar_trees() {
             other => panic!("unexpected {source:?}: {other:?}"),
         };
         for byte in record.bytes() {
-            *digest = (*digest ^ u64::from(byte)).wrapping_mul(1099511628211);
+            *digest = (*digest ^ u64::from(byte)).wrapping_mul(1_099_511_628_211);
         }
     }
     for (length, expected) in [
-        3055408861054588246,
-        7204934046240591565,
-        5236810536733279,
-        7751056885520992922,
-        5032910289307481147,
-        4491928091250344226,
+        3_055_408_861_054_588_246,
+        7_204_934_046_240_591_565,
+        5_236_810_536_733_279,
+        7_751_056_885_520_992_922,
+        5_032_910_289_307_481_147,
+        4_491_928_091_250_344_226,
     ]
     .into_iter()
     .enumerate()
     {
-        let mut digest = 14695981039346656037_u64;
+        let mut digest = 14_695_981_039_346_656_037u64;
         visit(&mut String::new(), length, &mut digest);
         assert_eq!(digest, expected, "grammar length {length}");
     }
@@ -1135,9 +1127,7 @@ fn parse_error_disposes_deep_partial_trees_on_bounded_native_stack() {
 
 #[test]
 fn locally_swept_unique_word_reaches_true_admitted_guard_boundary() {
-    let mut graph = Automaton::Singleton((0..4999).collect())
-        .expanded()
-        .unwrap();
+    let mut graph = Automaton::Singleton((0..4999).collect()).expanded();
     graph.deterministic = false;
     assert_eq!(graph.minimize(5000), Ok(Some(5001)));
     assert_eq!(graph.state_count(), 5000);
@@ -1146,7 +1136,7 @@ fn locally_swept_unique_word_reaches_true_admitted_guard_boundary() {
 
 #[test]
 fn exact_minimization_has_no_prototype_refinement_work_refusal() {
-    let mut graph = Automaton::Singleton(vec![97; 3000]).expanded().unwrap();
+    let mut graph = Automaton::Singleton(vec![97; 3000]).expanded();
     graph.ensure_dense().unwrap();
     assert_eq!(graph.minimize(5000), Ok(None));
     assert_eq!(graph.state_count(), 3001);
@@ -1219,6 +1209,10 @@ fn local_sweep_preserves_overlapping_destination_reference_counts() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "The exhaustive DFA comparison keeps the independent model and all language checks together."
+)]
 fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas() {
     for code in 0..4096_usize {
         let mut targets = [[3; 2]; 4];
@@ -1277,8 +1271,10 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
                         edges: (0..2)
                             .filter_map(|c| {
                                 (targets[q][c] != 3).then_some(Edge {
-                                    lo: 97 + c as u16,
-                                    hi: 97 + c as u16,
+                                    lo: 97
+                                        + u16::try_from(c).expect("Test alphabet has two labels"),
+                                    hi: 97
+                                        + u16::try_from(c).expect("Test alphabet has two labels"),
                                     to: targets[q][c],
                                 })
                             })
@@ -1288,13 +1284,11 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
             };
             assert_eq!(graph.minimize(5000), Ok(None));
             assert_eq!(graph.state_count(), expected, "code={code} mask={mask}");
-            assert!(
-                graph
-                    .states
-                    .iter()
-                    .flat_map(|s| &s.edges)
-                    .all(|e| e.lo >= 97 && e.hi <= 98)
-            );
+            assert!(graph
+                .states
+                .iter()
+                .flat_map(|s| &s.edges)
+                .all(|e| e.lo >= 97 && e.hi <= 98));
             let dead = graph.state_count();
             let mut pairs = vec![(0, graph.initial)];
             let mut cursor = 0;
@@ -1305,17 +1299,21 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
                     b != dead && graph.states[b].accept,
                     "code={code} mask={mask}"
                 );
-                for c in 0..2 {
+                for (c, &target) in targets[a].iter().enumerate() {
                     let next = if b == dead {
                         dead
                     } else {
                         graph.states[b]
                             .edges
                             .iter()
-                            .find(|e| e.lo <= 97 + c as u16 && 97 + c as u16 <= e.hi)
+                            .find(|e| {
+                                e.lo <= 97 + u16::try_from(c).expect("Test alphabet has two labels")
+                                    && 97 + u16::try_from(c).expect("Test alphabet has two labels")
+                                        <= e.hi
+                            })
                             .map_or(dead, |e| e.to)
                     };
-                    let pair = (targets[a][c], next);
+                    let pair = (target, next);
                     if !pairs.contains(&pair) {
                         pairs.push(pair);
                     }
@@ -1328,9 +1326,7 @@ fn sparse_minimizer_matches_independent_pair_distinguishability_for_32768_dfas()
 
 #[test]
 fn symbolic_repeats_do_not_materialize_irrelevant_global_endpoint_edges() {
-    let child = Automaton::Singleton((0..2499).collect())
-        .expanded()
-        .unwrap();
+    let child = Automaton::Singleton((0..2499).collect()).expanded();
     let mut explicit = Automaton::Graph(child.clone()).bounded(2, 2).unwrap();
     assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
     let (actual, count) = symbolic::bounded(&child, 2, 2, 5000).unwrap();
@@ -1340,9 +1336,7 @@ fn symbolic_repeats_do_not_materialize_irrelevant_global_endpoint_edges() {
 
 #[test]
 fn symbolic_minimum_does_not_materialize_irrelevant_global_endpoint_edges() {
-    let child = Automaton::Singleton((0..2499).collect())
-        .expanded()
-        .unwrap();
+    let child = Automaton::Singleton((0..2499).collect()).expanded();
     let mut explicit = Automaton::Graph(child.clone()).minimum(1).unwrap();
     assert_eq!(explicit.minimize(5000), Ok(Some(5000)));
     let (actual, count) = minimum::compile(&child, 1, 5000).unwrap();
@@ -1352,9 +1346,7 @@ fn symbolic_minimum_does_not_materialize_irrelevant_global_endpoint_edges() {
 
 #[test]
 fn sparse_nullable_bounded_keys_follow_active_suffixes_only() {
-    let mut child = Automaton::Singleton((0..2499).collect())
-        .expanded()
-        .unwrap();
+    let mut child = Automaton::Singleton((0..2499).collect()).expanded();
     child.ensure_dense().unwrap();
     child.states[child.initial].accept = true;
     let mut explicit = Automaton::Graph(child.clone()).bounded(2, 2).unwrap();
@@ -1366,9 +1358,7 @@ fn sparse_nullable_bounded_keys_follow_active_suffixes_only() {
 
 #[test]
 fn sparse_nullable_minimum_keys_follow_active_suffixes_only() {
-    let mut child = Automaton::Singleton((0..2499).collect())
-        .expanded()
-        .unwrap();
+    let mut child = Automaton::Singleton((0..2499).collect()).expanded();
     child.ensure_dense().unwrap();
     child.states[child.initial].accept = true;
     let mut explicit = Automaton::Graph(child.clone()).minimum(1).unwrap();
@@ -1382,7 +1372,7 @@ fn sparse_nullable_minimum_keys_follow_active_suffixes_only() {
 fn certified_expanded_word_bypasses_no_real_guard_or_tag() {
     WORD_MATERIALIZATIONS.with(|count| count.set(0));
     let value = Automaton::Singleton(vec![97; 30000]);
-    let mut graph = value.expanded().unwrap();
+    let mut graph = value.expanded();
     assert_eq!(graph.reachable().len(), 30001);
     assert_eq!(graph.minimize(5000), Ok(None));
     let (expanded, count) = symbolic::bounded(&graph, 1, 1, 5000).unwrap();
@@ -1412,7 +1402,7 @@ fn certified_word_view_matches_explicit_utf16_position_graphs() {
         vec![0xd800],
         vec![0xdc00],
     ] {
-        let view = Automaton::Singleton(units.clone()).expanded().unwrap();
+        let view = Automaton::Singleton(units.clone()).expanded();
         assert!(view.word.is_some());
         assert!(view.states.is_empty());
         let dense = Graph {
@@ -1456,7 +1446,7 @@ fn certified_word_view_matches_explicit_utf16_position_graphs() {
 #[test]
 fn certified_word_clones_share_bytes_but_append_has_fresh_snapshot_identities() {
     WORD_MATERIALIZATIONS.with(|count| count.set(0));
-    let view = Automaton::literal("ab").expanded().unwrap();
+    let view = Automaton::literal("ab").expanded();
     let copy = view.clone();
     assert!(std::sync::Arc::ptr_eq(
         view.word.as_ref().unwrap(),
@@ -1538,7 +1528,7 @@ fn singleton_concat_preserves_chunk_order_and_empty_chunks() {
 #[test]
 fn persistent_store_preserves_exact_dense_and_virtual_rows() {
     for units in [vec![], vec![97], vec![0, 65535, 0xd83d, 0xde00]] {
-        let virtual_graph = Automaton::Singleton(units).expanded().unwrap();
+        let virtual_graph = Automaton::Singleton(units).expanded();
         let store = persistent::Store::from_graph(&virtual_graph);
         assert_eq!(store.count(), virtual_graph.state_count());
         for q in 0..store.count() {
@@ -1625,7 +1615,7 @@ fn persistent_row_copy_freezes_source_but_keeps_targets_live() {
 
 #[test]
 fn persistent_import_has_fresh_namespaces_and_frozen_graph_versions() {
-    let mut source = persistent::Store::from_graph(&Automaton::literal("ab").expanded().unwrap());
+    let mut source = persistent::Store::from_graph(&Automaton::literal("ab").expanded());
     let mut changed = source.clone();
     changed.set_accept(1, true);
     assert!(!source.accepts(1));
@@ -1658,8 +1648,8 @@ fn persistent_row_and_namespace_dags_use_bounded_native_stack() {
                     .map(|q| State {
                         accept: false,
                         edges: vec![Edge {
-                            lo: 97 + q as u16,
-                            hi: 97 + q as u16,
+                            lo: 97 + u16::try_from(q).expect("Test graph has three states"),
+                            hi: 97 + u16::try_from(q).expect("Test graph has three states"),
                             to: if q == 2 { 1 } else { q + 1 },
                         }],
                     })
@@ -1672,8 +1662,7 @@ fn persistent_row_and_namespace_dags_use_bounded_native_stack() {
             }
             assert_eq!(rows.outgoing(0).count(), 3);
             drop(rows);
-            let mut namespaces =
-                persistent::Store::from_graph(&Automaton::literal("").expanded().unwrap());
+            let mut namespaces = persistent::Store::from_graph(&Automaton::literal("").expanded());
             for _ in 0..10000 {
                 let mut next = persistent::Store::from_graph(&Graph::empty());
                 assert_eq!(next.import(&namespaces).unwrap(), 1);
@@ -1691,7 +1680,7 @@ fn persistent_row_and_namespace_dags_use_bounded_native_stack() {
 
 #[test]
 fn persistent_fresh_states_and_memoized_imports_keep_destination_identities() {
-    let mut source = persistent::Store::from_graph(&Automaton::literal("a").expanded().unwrap());
+    let mut source = persistent::Store::from_graph(&Automaton::literal("a").expanded());
     source.set_edges(
         0,
         vec![Edge {
@@ -1837,7 +1826,7 @@ fn eager_unminimized_unary_constructor(value: &Automaton, star: bool) -> Graph {
         graph.states[from].edges.sort_unstable();
         graph.states[from].edges.dedup();
     }
-    let mut graph = value.expanded().unwrap();
+    let mut graph = value.expanded();
     graph.ensure_dense().unwrap();
     let accepting = graph.accepting();
     let old = graph.initial;
@@ -1923,8 +1912,7 @@ fn persistent_unary_routing_matches_explicit_unminimized_state_graphs() {
             WORD_MATERIALIZATIONS.with(|count| count.set(0));
             let actual = if star { value.star() } else { value.optional() }
                 .unwrap()
-                .expanded()
-                .unwrap();
+                .expanded();
             WORD_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
             assert!(!actual.deterministic);
             // This backend's unchanged ordinal IDs give an explicit isomorphism.
@@ -2021,9 +2009,11 @@ fn persistent_varying_histories_match_scalar_snapshots() {
         let mut store = persistent::Store::from_graph(&eager);
         let mut retained = Vec::new();
         for step in 0..40 {
-            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let a = (random as usize >> 8) % 4;
-            let b = (random as usize >> 16) % 4;
+            random = random
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let a = usize::try_from((random >> 8) % 4).unwrap();
+            let b = usize::try_from((random >> 16) % 4).unwrap();
             match step % 4 {
                 0 => {
                     let accept = random & 1 != 0;
@@ -2102,7 +2092,7 @@ fn scalar_collection_constructor(items: &[Automaton], union: bool) -> Graph {
     let mut children: Vec<_> = items
         .iter()
         .map(|a| {
-            let mut graph = a.expanded().unwrap();
+            let mut graph = a.expanded();
             graph.ensure_dense().unwrap();
             graph
         })
@@ -2147,7 +2137,7 @@ fn scalar_collection_constructor(items: &[Automaton], union: bool) -> Graph {
 #[test]
 fn persistent_collection_routing_long_inputs_reach_actual_guard() {
     let word = Automaton::Singleton(vec![97; 30000]);
-    let graph = Automaton::Graph(Automaton::literal("b").expanded().unwrap());
+    let graph = Automaton::Graph(Automaton::literal("b").expanded());
     for union in [false, true] {
         let items = [word.clone(), graph.clone()];
         let mut actual = if union {
@@ -2164,8 +2154,8 @@ fn persistent_collection_routing_long_inputs_reach_actual_guard() {
 fn persistent_collection_routing_preserves_unminimized_identity_and_counts() {
     let values = [
         Automaton::Graph(Graph::empty()),
-        Automaton::Graph(Automaton::literal("").expanded().unwrap()),
-        Automaton::Graph(Automaton::literal("ab").expanded().unwrap()),
+        Automaton::Graph(Automaton::literal("").expanded()),
+        Automaton::Graph(Automaton::literal("ab").expanded()),
         Automaton::literal("a").optional().unwrap(),
         Automaton::literal("b").star().unwrap(),
     ];
@@ -2182,8 +2172,7 @@ fn persistent_collection_routing_preserves_unminimized_identity_and_counts() {
                         Automaton::concat(&items)
                     }
                     .unwrap()
-                    .expanded()
-                    .unwrap();
+                    .expanded();
                     assert_eq!(actual.initial, expected.initial);
                     assert_eq!(actual.state_count(), expected.state_count());
                     assert_eq!(actual.deterministic, expected.deterministic);
@@ -2215,8 +2204,7 @@ fn persistent_union_key_storage_does_not_replace_canonical_guard() {
     let word = Automaton::Singleton(vec![97; 1000]);
     let mut graph = Automaton::collection_union(&vec![word; 2001])
         .unwrap()
-        .expanded()
-        .unwrap();
+        .expanded();
     // The root consumes the first unit. Each following position contains one
     // distinct ID from each imported namespace; the empty successor is counted.
     assert_eq!(graph.state_count(), 1 + 2001 * 1001);
@@ -2456,7 +2444,7 @@ fn single_accept_reset_counts_match_explicit_optional_and_star() {
             .unwrap();
             assert_eq!(count, Some(states as u64 + 2));
             assert_eq!(actual.normal(), explicit.normal());
-            assert_eq!(actual.expanded().unwrap().state_count(), states);
+            assert_eq!(actual.expanded().state_count(), states);
         }
     }
 }
@@ -2466,7 +2454,7 @@ fn bounded_output_storage_retains_more_than_two_million_intervals() {
     let child = single_accept_reset_graph(4999, 402);
     let (actual, count) = symbolic::bounded(&child, 0, 1, 5000).unwrap();
     assert_eq!(count, Some(5001));
-    assert_eq!(actual.expanded().unwrap().state_count(), 4999);
+    assert_eq!(actual.expanded().state_count(), 4999);
 }
 
 #[test]
@@ -2474,5 +2462,214 @@ fn minimum_output_storage_retains_more_than_two_million_intervals() {
     let child = single_accept_reset_graph(4999, 402);
     let (actual, count) = minimum::compile(&child, 0, 5000).unwrap();
     assert_eq!(count, Some(5001));
-    assert_eq!(actual.expanded().unwrap().state_count(), 4999);
+    assert_eq!(actual.expanded().state_count(), 4999);
+}
+
+pub(super) fn odd_length_a_child() -> Graph {
+    Graph {
+        word: None,
+        store: None,
+        initial: 0,
+        deterministic: true,
+        states: vec![
+            State {
+                accept: false,
+                edges: vec![Edge {
+                    lo: 97,
+                    hi: 97,
+                    to: 1,
+                }],
+            },
+            State {
+                accept: true,
+                edges: vec![Edge {
+                    lo: 97,
+                    hi: 97,
+                    to: 0,
+                }],
+            },
+        ],
+    }
+}
+
+// These checks apply to trees produced by the literal reader, not arbitrary ASTs.
+fn assert_reader_compilation_invariants(tree: &ast::Ast) {
+    use ast::Ast;
+    let mut pending = vec![tree];
+    while let Some(node) = pending.pop() {
+        match node {
+            Ast::Union(a, b) | Ast::Concat(a, b) | Ast::Intersection(a, b) => {
+                pending.extend([a.as_ref(), b.as_ref()]);
+            }
+            Ast::Complement(a)
+            | Ast::Optional(a)
+            | Ast::Star(a)
+            | Ast::Minimum(_, a)
+            | Ast::Bounded(_, _, a) => pending.push(a),
+            _ => {}
+        }
+        let value = match node.compile(5000, &mut Vec::new()) {
+            Ok(value) => value,
+            // A canonical guard may refuse before the small residual DFA is built.
+            Err(Failure::Resource) => continue,
+            Err(error) => panic!("reader-generated compilation was incomplete: {error:?}"),
+        };
+        if let Automaton::Graph(graph) = &value {
+            assert!(graph.deterministic);
+            assert!(graph.store.is_none());
+        }
+        match node {
+            Ast::Complement(child) => {
+                let child = child.compile(5000, &mut Vec::new()).unwrap();
+                assert!(child.expanded().state_count() <= 3);
+            }
+            Ast::Intersection(left, right) => {
+                assert!(matches!(left.as_ref(), Ast::Any));
+                assert!(matches!(right.as_ref(), Ast::Complement(_)));
+                assert!(
+                    left.compile(5000, &mut Vec::new())
+                        .unwrap()
+                        .expanded()
+                        .state_count()
+                        <= 2
+                );
+                assert!(
+                    right
+                        .compile(5000, &mut Vec::new())
+                        .unwrap()
+                        .expanded()
+                        .state_count()
+                        <= 3
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn reader_pattern_strategy() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    proptest::sample::select(vec![
+        "a", "ab", ".", "[a-z]", "[^a]", "[a\\D]", "\\W", "a{0}",
+    ])
+    .prop_map(str::to_owned)
+    .prop_recursive(3, 32, 2, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(|s| format!("({s})?")),
+            inner.clone().prop_map(|s| format!("({s})*")),
+            inner.clone().prop_map(|s| format!("({s}){{1,3}}")),
+            inner.clone().prop_map(|s| format!("({s}){{2,}}")),
+            (inner.clone(), inner.clone()).prop_map(|(a, b)| format!("({a}|{b})")),
+            (inner.clone(), inner).prop_map(|(a, b)| format!("({a})({b})")),
+        ]
+    })
+}
+
+fn class_member_denotes(member: usize, word: &[u16], mode: bool) -> bool {
+    let one = word.first().copied().filter(|_| word.len() == 1);
+    let digit = one.is_some_and(|c| (48..=57).contains(&c));
+    let identifier = one.is_some_and(|c| {
+        (48..=57).contains(&c) || (65..=90).contains(&c) || (97..=122).contains(&c) || c == 95
+    });
+    match member {
+        0 => one == Some(97) || mode && one == Some(65),
+        1 => one == Some(90) || mode && one == Some(122),
+        2 => one == Some(48),
+        3 => one == Some(95),
+        4 => one.is_some_and(|c| (97..=122).contains(&c) || mode && (65..=90).contains(&c)),
+        5 | 6 => digit,
+        7 => identifier,
+        8 => !digit,
+        9 => !identifier,
+        10 => one == Some(0),
+        11 => one == Some(0xd7ff),
+        12 => one == Some(0xe000),
+        13 => one == Some(0xffff),
+        14 => one.is_some_and(|c| matches!(c, 0xd83d | 0xde00)),
+        _ => unreachable!(),
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+
+    #[test]
+    fn reader_generated_operator_results_are_normalized(pattern in reader_pattern_strategy(), mode in proptest::bool::ANY) {
+        let tree = reader::literal(&format!("^{pattern}$"), mode).unwrap();
+        assert_reader_compilation_invariants(&tree);
+    }
+
+    #[test]
+    fn reader_generated_classes_have_small_exact_residuals(
+        members in proptest::collection::vec(0usize..15, 1..16),
+        mode in proptest::bool::ANY,
+        negated in proptest::bool::ANY,
+    ) {
+        let tokens = ["a", "Z", "0", "_", "a-z", "0-9", "\\d", "\\w", "\\D", "\\W", "\0", "\u{d7ff}", "\u{e000}", "\u{ffff}", "😀"];
+        let body: String = members.iter().map(|&i| tokens[i]).collect();
+        let prefix = if negated { "^" } else { "" };
+        let tree = reader::literal(&format!("^[{prefix}{body}]$"), mode).unwrap();
+        assert_reader_compilation_invariants(&tree);
+        let value = tree.compile(5000, &mut Vec::new()).unwrap();
+        proptest::prop_assert!(value.expanded().state_count() <= 3);
+        let units = [0, 48, 53, 57, 58, 65, 90, 95, 96, 97, 109, 122, 123, 0xd7ff, 0xd800, 0xd83d, 0xde00, 0xe000, 0xffff];
+        let mut words = vec![vec![], vec![97, 48, 95], vec![0xd83d, 0xde00, 97]];
+        for a in units {
+            words.push(vec![a]);
+            for b in units {
+                words.push(vec![a, b]);
+            }
+        }
+        for word in words {
+            let union = members.iter().any(|&i| class_member_denotes(i, &word, mode));
+            let expected = if negated { word.len() == 1 && !union } else { union };
+            proptest::prop_assert_eq!(accepts(&value, &word), expected);
+        }
+    }
+}
+
+#[test]
+fn a_large_reader_class_does_not_require_large_complement_storage() {
+    let tree = reader::literal(&format!("^[^{}]$", "a".repeat(20_001)), false).unwrap();
+    let value = tree.compile(5000, &mut Vec::new()).unwrap();
+    assert!(value.expanded().state_count() <= 2);
+    assert!(!accepts(&value, &[97]));
+    assert!(accepts(&value, &[98]));
+    assert!(!accepts(&value, &[]));
+    assert!(!accepts(&value, &[98, 98]));
+}
+
+#[test]
+fn admission_facade_reports_checked_allocation_failure_without_acceptance() {
+    let _fault = AllocationFault::after(0);
+    assert_eq!(
+        check("^a{2,3}$", false),
+        Err("Could not check regular expression: allocation failed")
+    );
+}
+
+#[test]
+fn admission_failure_diagnostics_do_not_disguise_operational_errors_as_resource_policy() {
+    let resource = failure_message(Failure::Resource);
+    for failure in [
+        Failure::Allocation,
+        Failure::NonTerminatingCanonicalConstruction,
+        Failure::Inconclusive,
+        Failure::Integer,
+        Failure::Syntax,
+    ] {
+        let message = failure_message(failure);
+        assert!(message.starts_with("Could not check regular expression:"));
+        assert_ne!(message, resource);
+    }
+}
+
+#[test]
+fn nonterminating_case_range_has_a_distinct_admission_error() {
+    assert_eq!(
+        check("^[\u{fffe}-\u{ffff}]$", true),
+        Err("Could not check regular expression: case-insensitive range ends at U+FFFF")
+    );
+    assert!(check("^[\u{fffe}-\u{ffff}]$", false).is_ok());
+    assert!(check("^\u{ffff}$", true).is_ok());
 }

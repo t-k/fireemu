@@ -16,7 +16,6 @@ mod eval;
 mod java_chars;
 mod parse;
 mod pattern;
-#[cfg(test)]
 mod regex_admission;
 
 use std::collections::{BTreeMap, BTreeSet};

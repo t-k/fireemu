@@ -1,15 +1,17 @@
-//! Isolated admission-algebra prototype; deliberately not connected to the rules parser.
-//! Prototype allocation bounds return Inconclusive and are never load-refusal policy.
+//! Load-time admission for the RTDB regular-expression dialect.
+//! Canonical determinization failures are distinct from host and invariant failures.
 //! Independently specified from tagged-automaton behavior; no upstream code is embedded.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+#[cfg(test)]
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 const PROTOTYPE_STATES: usize = 20_000;
 const PROTOTYPE_EDGES: usize = 2_000_000;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Failure {
     Resource,
     Allocation,
@@ -17,6 +19,31 @@ enum Failure {
     Inconclusive,
     Integer,
     Syntax,
+}
+
+/// Checks every literal during parsing, including literals in unevaluated branches.
+/// The shared matcher remains responsible for evaluation after successful admission.
+pub(super) fn check(pattern: &str, ignore_case: bool) -> Result<(), &'static str> {
+    let result = reader::literal(pattern, ignore_case)
+        .and_then(|tree| tree.compile(5000, &mut ast::Trace::default()));
+    result.map(|_| ()).map_err(failure_message)
+}
+
+fn failure_message(failure: Failure) -> &'static str {
+    match failure {
+        Failure::Resource => "Illegal regular expression, could not determinize efficiently",
+        Failure::Allocation => "Could not check regular expression: allocation failed",
+        Failure::NonTerminatingCanonicalConstruction => {
+            "Could not check regular expression: case-insensitive range ends at U+FFFF"
+        }
+        // Successful reader-generated children are normalized; class complements and
+        // products have at most three and six states respectively. Generic reference
+        // helper limits are not an admission policy for valid reader-generated trees.
+        Failure::Inconclusive => "Could not check regular expression: admission invariant failed",
+        Failure::Integer | Failure::Syntax => {
+            "Could not check regular expression: admission grammar disagrees with the literal parser"
+        }
+    }
 }
 
 fn guard_count(count: u64, threshold: u64) -> Result<u64, Failure> {
@@ -29,6 +56,7 @@ fn guard_count(count: u64, threshold: u64) -> Result<u64, Failure> {
 
 // A forced-determinized finite chain also visits the empty successor subset.
 // One exact copy remains a deterministic graph, and zero remains a singleton.
+#[cfg(test)]
 fn exact_literal_count(units: u64, copies: u64) -> Result<Option<u64>, Failure> {
     if copies <= 1 {
         return Ok(None);
@@ -105,6 +133,13 @@ fn state_bound(count: usize) -> Result<(), Failure> {
 #[cfg(test)]
 thread_local! { static ALLOCATION_FAILURE_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) }; }
 
+#[cfg_attr(
+    not(test),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "Test-only allocation faults use the same Result propagation as production."
+    )
+)]
 fn allocation_point() -> Result<(), Failure> {
     #[cfg(test)]
     ALLOCATION_FAILURE_AFTER.with(|remaining| match remaining.get() {
@@ -227,7 +262,8 @@ impl Graph {
         self.store.as_mut().unwrap().fresh(accept, Vec::new())
     }
     // Explicit constructor-only transition. Symbolic readers never call this.
-    // Its old prototype bound is still an activation blocker, not load policy.
+    // Reader-generated constructors enter with normalized dense children, so
+    // this generic reference-helper bound does not determine load admission.
     fn ensure_dense(&mut self) -> Result<(), Failure> {
         if let Some(store) = &self.store {
             state_bound(store.count())?;
@@ -244,6 +280,7 @@ impl Graph {
             return Ok(());
         };
         state_bound(word.len() + 1)?;
+        #[cfg(test)]
         WORD_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
         self.states = (0..=word.len())
             .map(|q| State {
@@ -310,6 +347,7 @@ impl Graph {
         Ok(offset + other.initial)
     }
 
+    #[cfg(test)]
     fn append(&mut self, other: &Self) -> Result<usize, Failure> {
         self.ensure_dense()?;
         let offset = self.states.len();
@@ -529,7 +567,8 @@ impl Graph {
                     to
                 };
                 let row = &mut out[cursor].edges;
-                let hi = (end - 1) as u16;
+                let hi =
+                    u16::try_from(end - 1).expect("UTF-16 interval endpoint is at most U+FFFF");
                 if let Some(last) = row.last_mut() {
                     if last.to == to && u32::from(last.hi) + 1 == lo {
                         last.hi = hi;
@@ -538,7 +577,7 @@ impl Graph {
                 }
                 reserve_items(row, 1)?;
                 row.push(Edge {
-                    lo: lo as u16,
+                    lo: u16::try_from(lo).expect("UTF-16 interval start is at most U+FFFF"),
                     hi,
                     to,
                 });
@@ -563,6 +602,7 @@ impl Graph {
         Ok(count)
     }
 
+    #[cfg(test)]
     fn normal(&self) -> String {
         let mut ids = BTreeMap::from([(self.initial, 0)]);
         let mut queue = vec![self.initial];
@@ -570,11 +610,13 @@ impl Graph {
         let mut cursor = 0;
         while cursor < queue.len() {
             let i = queue[cursor];
-            out.push_str(&format!(
+            write!(
+                &mut out,
                 "{}{}[",
                 cursor,
                 if self.accepts(i) { "+" } else { "-" }
-            ));
+            )
+            .expect("writing to String cannot fail");
             let mut edges: Vec<_> = self.outgoing(i).collect();
             edges.sort_unstable_by_key(|e| (e.lo, e.hi, e.to));
             for e in edges {
@@ -583,7 +625,8 @@ impl Graph {
                     queue.push(e.to);
                     next
                 });
-                out.push_str(&format!("{}-{}:{},", e.lo, e.hi, id));
+                write!(&mut out, "{}-{}:{},", e.lo, e.hi, id)
+                    .expect("writing to String cannot fail");
             }
             out.push(']');
             cursor += 1;
@@ -597,16 +640,16 @@ impl Automaton {
         Self::Singleton(text.encode_utf16().collect())
     }
 
-    fn expanded(&self) -> Result<Graph, Failure> {
+    fn expanded(&self) -> Graph {
         match self {
-            Self::Graph(g) => Ok(g.clone()),
-            Self::Singleton(units) => Ok(Graph {
+            Self::Graph(g) => g.clone(),
+            Self::Singleton(units) => Graph {
                 word: Some(Arc::new(units.clone())),
                 store: None,
                 states: Vec::new(),
                 initial: 0,
                 deterministic: true,
-            }),
+            },
         }
     }
 
@@ -628,10 +671,7 @@ impl Automaton {
             }
             return Ok(Self::Singleton(units));
         }
-        let mut graphs = items
-            .iter()
-            .map(Self::expanded)
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut graphs = items.iter().map(Self::expanded).collect::<Vec<_>>();
         if graphs.iter().any(|g| g.accepting().is_empty()) {
             return Ok(Self::Graph(Graph::empty()));
         }
@@ -663,7 +703,7 @@ impl Automaton {
     fn collection_union(items: &[Self]) -> Result<Self, Failure> {
         let mut result = Graph::empty();
         for item in items {
-            let graph = item.expanded()?;
+            let graph = item.expanded();
             if graph.accepting().is_empty() {
                 continue;
             }
@@ -675,7 +715,7 @@ impl Automaton {
     }
 
     fn optional(&self) -> Result<Self, Failure> {
-        let mut graph = self.expanded()?;
+        let mut graph = self.expanded();
         let old = graph.initial;
         let initial = graph.fresh(false)?;
         graph.copy_edges(initial, old)?;
@@ -686,7 +726,7 @@ impl Automaton {
     }
 
     fn star(&self) -> Result<Self, Failure> {
-        let mut graph = self.expanded()?;
+        let mut graph = self.expanded();
         let accepting = graph.accepting();
         let old = graph.initial;
         let initial = graph.fresh(true)?;
@@ -699,11 +739,12 @@ impl Automaton {
         Ok(Self::Graph(graph))
     }
 
+    #[cfg(test)]
     fn bounded(&self, min: u32, max: u32) -> Result<Self, Failure> {
         if min > max {
             return Ok(Self::Graph(Graph::empty()));
         }
-        let child = Self::Graph(self.expanded()?);
+        let child = Self::Graph(self.expanded());
         if max as usize > PROTOTYPE_STATES {
             return Err(Failure::Inconclusive);
         }
@@ -714,9 +755,9 @@ impl Automaton {
         };
         let extra = max - min;
         if extra > 0 {
-            let mut tail = child.expanded()?;
+            let mut tail = child.expanded();
             for _ in 1..extra {
-                let mut head = child.expanded()?;
+                let mut head = child.expanded();
                 let accepting = head.accepting();
                 let initial = head.append(&tail)?;
                 for i in accepting {
@@ -724,7 +765,7 @@ impl Automaton {
                 }
                 tail = head;
             }
-            let mut graph = result.expanded()?;
+            let mut graph = result.expanded();
             let accepting = graph.accepting();
             let initial = graph.append(&tail)?;
             for i in accepting {
@@ -761,6 +802,7 @@ impl Automaton {
         })
     }
 
+    #[cfg(test)]
     fn minimum(&self, min: u32) -> Result<Self, Failure> {
         if min == 0 {
             return self.star();
@@ -775,7 +817,7 @@ impl Automaton {
     }
 
     fn complement(&self, threshold: u64) -> Result<Self, Failure> {
-        let mut graph = self.expanded()?;
+        let mut graph = self.expanded();
         graph.determinize(threshold)?;
         graph.ensure_dense()?;
         let points = graph.points();
@@ -833,7 +875,7 @@ impl Automaton {
             graph.accepts(state)
         }
         if let Self::Singleton(word) = self {
-            return Ok(if contains(&other.expanded()?, word) {
+            return Ok(if contains(&other.expanded(), word) {
                 self.clone()
             } else {
                 Self::Graph(Graph::empty())
@@ -842,8 +884,8 @@ impl Automaton {
         if matches!(other, Self::Singleton(_)) {
             return other.intersection(self);
         }
-        let left = self.expanded()?;
-        let right = other.expanded()?;
+        let left = self.expanded();
+        let right = other.expanded();
         if !left.deterministic || !right.deterministic {
             return Err(Failure::Inconclusive);
         }
@@ -896,6 +938,7 @@ impl Automaton {
         }
     }
 
+    #[cfg(test)]
     fn normal(&self) -> String {
         match self {
             Self::Singleton(units) => format!(
@@ -911,6 +954,7 @@ impl Automaton {
     }
 }
 
+#[cfg(test)]
 fn trace_case(name: &str) -> Result<String, Failure> {
     let a = Automaton::literal("a");
     let mut value = match name {
@@ -964,6 +1008,7 @@ mod java21_case;
 #[path = "regex_admission/minimize.rs"]
 mod minimize;
 
+#[cfg(test)]
 thread_local! { static WORD_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 // This is an actual host allocation/capacity result, never the canonical guard.

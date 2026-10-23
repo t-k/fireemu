@@ -1,6 +1,6 @@
 //! Symbolic minimum-repeat prototype retaining the unminimized star-tail identities.
 use super::{
-    Automaton, Edge, Failure, Graph, State, SubsetIndex, guard_count, push_item, reserve_items,
+    guard_count, push_item, reserve_items, Automaton, Edge, Failure, Graph, State, SubsetIndex,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -216,6 +216,7 @@ pub(super) fn compile(
     Ok((value, count))
 }
 
+#[cfg(test)]
 pub(super) fn count_only(child: &Graph, min: u32, threshold: u64) -> Result<Option<u64>, Failure> {
     construct(child, min, threshold).map(|(_, count)| count)
 }
@@ -274,4 +275,26 @@ fn indexed_prefix_scratch_failure_is_operational_allocation() {
     }
     let _fault = super::AllocationFault::after(4);
     assert!(current.next(&child, 4, 97).is_ok());
+}
+
+#[test]
+fn indexed_prefix_crosses_former_two_million_boundary_exactly() {
+    let child = super::tests::odd_length_a_child();
+    // The seeded mathematical set isolates allocation/equality at the old limit.
+    // It does not claim a full canonical witness reachable before the guard.
+    for entries in [999_999, 1_000_000, 1_000_001] {
+        let current = Key {
+            prefix: Prefix::Indexed((0..entries).map(|i| (2 * i, 1)).collect()),
+            tail: vec![],
+        };
+        let next = current.next(&child, 2 * entries, 97).unwrap();
+        assert!(next.tail.is_empty());
+        let Prefix::Indexed(pairs) = next.prefix else {
+            panic!("indexed prefix kind changed")
+        };
+        assert_eq!(pairs.len(), 2 * entries as usize);
+        for (i, &(copy, q)) in pairs.iter().enumerate() {
+            assert_eq!((copy as usize, q), (i, i % 2));
+        }
+    }
 }

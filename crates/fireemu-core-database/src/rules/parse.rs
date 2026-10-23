@@ -657,6 +657,8 @@ impl Lexer<'_> {
         }
         check_anchors(&pattern).map_err(|message| ExprError::new(start, message))?;
         check_groups_and_counts(&pattern).map_err(|message| ExprError::new(start, message))?;
+        super::regex_admission::check(&pattern, flags == "i")
+            .map_err(|message| ExprError::new(start, message))?;
         Ok((start, Token::Regex(pattern, flags)))
     }
 }

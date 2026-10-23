@@ -1,4 +1,4 @@
-//! Canonical-tree compiler prototype, separate from regex literal parsing.
+//! Canonical-tree compiler for load-time regular-expression admission.
 use super::{Automaton, Failure};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,6 +18,7 @@ pub(super) enum Ast {
     Bounded(u32, u32, Box<Self>),
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct Step {
     pub node: &'static str,
@@ -26,16 +27,39 @@ pub(super) struct Step {
     pub guard: Option<u64>,
 }
 
+#[cfg(test)]
+pub(super) type Trace = Vec<Step>;
+#[cfg(not(test))]
+pub(super) type Trace = ();
+
+fn record_step(
+    trace: &mut Trace,
+    node: &'static str,
+    singleton: bool,
+    deterministic: bool,
+    guard: Option<u64>,
+) {
+    #[cfg(test)]
+    trace.push(Step {
+        node,
+        singleton,
+        deterministic,
+        guard,
+    });
+    #[cfg(not(test))]
+    let _ = (trace, node, singleton, deterministic, guard);
+}
+
 impl Ast {
-    pub(super) fn ascii_char(unit: u16) -> Result<Self, Failure> {
-        Ok(if super::java21_case::alphabetic(unit) {
+    pub(super) fn ascii_char(unit: u16) -> Self {
+        if super::java21_case::alphabetic(unit) {
             Self::Union(
                 Box::new(Self::Literal(super::java21_case::lower(unit))),
                 Box::new(Self::Literal(super::java21_case::upper(unit))),
             )
         } else {
             Self::Literal(unit)
-        })
+        }
     }
 
     pub(super) fn ascii_range(lo: u16, hi: u16) -> Result<Self, Failure> {
@@ -91,11 +115,7 @@ impl Ast {
         result
     }
 
-    pub(super) fn compile(
-        &self,
-        threshold: u64,
-        trace: &mut Vec<Step>,
-    ) -> Result<Automaton, Failure> {
+    pub(super) fn compile(&self, threshold: u64, trace: &mut Trace) -> Result<Automaton, Failure> {
         enum Task<'a> {
             Visit(&'a Ast),
             Apply(&'a Ast, usize),
@@ -138,26 +158,22 @@ impl Ast {
                 Self::Optional(..) => (children.pop().unwrap().optional()?, "optional"),
                 Self::Star(..) => (children.pop().unwrap().star()?, "star"),
                 Self::Minimum(min, _) => {
-                    let child = children.pop().unwrap().expanded()?;
+                    let child = children.pop().unwrap().expanded();
                     let (value, count) = super::minimum::compile(&child, *min, threshold)?;
-                    trace.push(Step {
-                        node: "minimum",
-                        singleton: false,
-                        deterministic: count.is_none(),
-                        guard: count,
-                    });
+                    record_step(trace, "minimum", false, count.is_none(), count);
                     values.push(value);
                     continue;
                 }
                 Self::Bounded(min, max, _) => {
-                    let child = children.pop().unwrap().expanded()?;
+                    let child = children.pop().unwrap().expanded();
                     let (value, count) = super::symbolic::bounded(&child, *min, *max, threshold)?;
-                    trace.push(Step {
-                        node: "bounded",
-                        singleton: matches!(value, Automaton::Singleton(_)),
-                        deterministic: count.is_none(),
-                        guard: count,
-                    });
+                    record_step(
+                        trace,
+                        "bounded",
+                        matches!(value, Automaton::Singleton(_)),
+                        count.is_none(),
+                        count,
+                    );
                     values.push(value);
                     continue;
                 }
@@ -167,17 +183,13 @@ impl Ast {
                 Automaton::Graph(graph) => (false, graph.deterministic),
             };
             let guard = value.minimize(threshold)?;
-            trace.push(Step {
-                node: label,
-                singleton,
-                deterministic,
-                guard,
-            });
+            record_step(trace, label, singleton, deterministic, guard);
             values.push(value);
         }
         Ok(values.pop().unwrap())
     }
 
+    #[cfg(test)]
     pub(super) fn encode(&self) -> String {
         match self {
             Self::Empty => "E".to_owned(),
@@ -204,6 +216,10 @@ impl Ast {
 // becomes native call-stack depth, including partially built trees on parse errors.
 impl Drop for Ast {
     fn drop(&mut self) {
+        #[allow(
+            clippy::vec_box,
+            reason = "The worklist owns detached child boxes so AST destruction stays iterative."
+        )]
         fn detach(node: &mut Ast, pending: &mut Vec<Box<Ast>>) {
             match node {
                 Ast::Union(a, b) | Ast::Concat(a, b) | Ast::Intersection(a, b) => {

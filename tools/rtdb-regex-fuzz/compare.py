@@ -6,8 +6,8 @@ Each row holds the answers of fourteen cells (see probe.mjs): ra, ru, qa, qu (re
 with a query), sa, su (event streams), xa, xu (event streams with the query), la, lu (realtime listens), wa, wu (`.write`) and va, vu (`.validate`), signed in (a) and anonymous (u). A
 cell's outcome is its status, or "load<status>" when the rules of its context were refused.
 A cell is fail-open, and the row BLOCKING, when fireemu answers 200 where the official
-emulator does not, except for a pattern the official emulator cannot determinize (its own
-resource limit: listed as M14). Any other difference is fail-closed and listed. The report
+emulator does not, including a determinization resource refusal. Any other difference is
+fail-closed and listed. The report
 counts both per cell.
 """
 import json
@@ -30,7 +30,7 @@ def outcome(row, cell):
     return str(row.get(cell))
 
 
-blocking, closed, listed, same = [], [], [], 0
+blocking, closed, same = [], [], 0
 per_cell = {cell: {"open": 0, "closed": 0} for cell in CELLS}
 interesting = []
 for j, e in zip(jar, emu):
@@ -50,11 +50,10 @@ for j, e in zip(jar, emu):
         same += 1
         continue
     line = f"{j['expr']!r}: " + "; ".join(opened + differed)
-    determinize = any("could not determinize efficiently" in str(j.get(f"err{c}")) for c in "RWV")
-    (listed if determinize else blocking if opened else closed).append(line)
+    (blocking if opened else closed).append(line)
     interesting.append({"jar": j, "fireemu": e})
 summary = (f"rows {len(jar)}, same {same}, fail-closed {len(closed)}, "
-           f"determinize (M14) {len(listed)}, BLOCKING {len(blocking)}")
+           f"BLOCKING {len(blocking)}")
 with open(sys.argv[3], "w", encoding="utf-8") as f:
     f.write(summary + "\n")
     f.write("per cell: " + ", ".join(f"{c} open {v['open']} closed {v['closed']}" for c, v in per_cell.items()) + "\n")
@@ -62,8 +61,6 @@ with open(sys.argv[3], "w", encoding="utf-8") as f:
         f.write(f"BLOCKING {line}\n")
     for line in closed:
         f.write(f"closed {line}\n")
-    for line in listed:
-        f.write(f"M14 {line}\n")
 if len(sys.argv) > 4:
     with open(sys.argv[4], "w", encoding="utf-8") as f:
         json.dump(interesting, f, ensure_ascii=False, indent=1)

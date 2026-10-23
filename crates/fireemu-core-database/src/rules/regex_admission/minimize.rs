@@ -2,6 +2,8 @@
 use super::{Edge, Graph, State};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+type SignatureGroups = BTreeMap<Vec<(u16, u16)>, Vec<usize>>;
+
 fn intervals(mut row: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
     row.sort_unstable();
     let mut result: Vec<(u16, u16)> = Vec::new();
@@ -17,6 +19,10 @@ fn intervals(mut row: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
     result
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Splitter snapshots and block identity updates form one refinement invariant."
+)]
 pub(super) fn refine(graph: &mut Graph) {
     // Certified chain suffixes have distinct lengths and residual languages.
     if graph.word.is_some() {
@@ -30,13 +36,21 @@ pub(super) fn refine(graph: &mut Graph) {
         for edge in &state.edges {
             let lo = u32::from(edge.lo);
             if cursor < lo {
-                incoming[dead].push((source, cursor as u16, edge.lo - 1));
+                incoming[dead].push((
+                    source,
+                    u16::try_from(cursor).expect("Gap starts below a UTF-16 edge"),
+                    edge.lo - 1,
+                ));
             }
             incoming[edge.to].push((source, edge.lo, edge.hi));
             cursor = u32::from(edge.hi) + 1;
         }
         if cursor < 65536 {
-            incoming[dead].push((source, cursor as u16, u16::MAX));
+            incoming[dead].push((
+                source,
+                u16::try_from(cursor).expect("Gap starts below U+10000"),
+                u16::MAX,
+            ));
         }
     }
     incoming[dead].push((dead, 0, u16::MAX));
@@ -67,7 +81,7 @@ pub(super) fn refine(graph: &mut Graph) {
                 signatures.entry(source).or_default().push((lo, hi));
             }
         }
-        let mut affected: BTreeMap<usize, BTreeMap<Vec<(u16, u16)>, Vec<usize>>> = BTreeMap::new();
+        let mut affected: BTreeMap<usize, SignatureGroups> = BTreeMap::new();
         for (source, row) in signatures {
             affected
                 .entry(membership[source])

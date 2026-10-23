@@ -18,7 +18,8 @@
 //!   a user. Any other value, `auth=owner` included, is anonymous under the emulator profile,
 //!   as on the official emulator, and refused with 401 under strict.
 //!
-//! The emulator's `owner` passes everywhere, `productionExact`'s locked default included.
+//! The emulator's `owner` passes everywhere, `productionExact`'s locked default included,
+//! unless a REST administrator explicitly supplies a Rules auth override.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -83,7 +84,7 @@ pub(crate) enum Access {
     Owner,
     /// Another administrator credential (an OAuth access token).
     Admin,
-    /// A signed-in user: the `auth` value rules see.
+    /// The Rules `auth` value from a user credential or a trusted administrator override.
     User(Json),
     /// No usable credential.
     Anonymous,
@@ -101,7 +102,18 @@ impl Access {
     ) -> Result<Self, Refused> {
         let bearer = authorization.and_then(|v| v.strip_prefix("Bearer "));
         if let Some(token) = bearer.or_else(|| params.get("access_token").map(String::as_str)) {
-            return Self::administrator(token, credentials);
+            let administrator = Self::administrator(token, credentials)?;
+            let Some(override_text) = params.get("auth_variable_override") else {
+                return Ok(administrator);
+            };
+            // Only an already accepted administrator can supply Rules input. Preserve the
+            // exact object rather than interpreting it as ID-token claims. Malformed or
+            // scalar overrides fail closed as local policy, not an observed native error.
+            return match crate::json_parse::parse(override_text).map_err(|_| Refused)? {
+                Json::Null => Ok(Self::Anonymous),
+                object @ Json::Object(_) => Ok(Self::User(object)),
+                _ => Err(Refused),
+            };
         }
         let Some(token) = params.get("auth") else {
             return Ok(Self::Anonymous);
@@ -507,4 +519,92 @@ fn wire_query_text(q: &QueryParams) -> String {
         .map(|(name, value)| format!("\"{name}\":{value}"))
         .collect();
     format!("{{{}}}", body.join(","))
+}
+
+#[cfg(test)]
+mod admin_override_tests {
+    use super::*;
+
+    // A finite total-function model of the local credential/modifier boundary. Malformed
+    // input policy and nonadministrator handling are local safety contracts, not oracle rows.
+    #[test]
+    fn admin_auth_override_total_function_model() {
+        for strict in [false, true] {
+            for credential in [None, Some("owner"), Some("other")] {
+                for modifier in [
+                    None,
+                    Some("null"),
+                    Some(r#"{"uid":"arbitrary","extra":{"n":3}}"#),
+                    Some("broken"),
+                    Some("1"),
+                    Some("[]"),
+                ] {
+                    for query_token in [false, true] {
+                        let mut params = BTreeMap::new();
+                        let authorization = credential.map(|token| format!("Bearer {token}"));
+                        if query_token {
+                            if let Some(token) = credential {
+                                params.insert("access_token".to_owned(), token.to_owned());
+                            }
+                        }
+                        if let Some(value) = modifier {
+                            params.insert("auth_variable_override".to_owned(), value.to_owned());
+                        }
+                        let config = Credentials {
+                            strict,
+                            ..Credentials::default()
+                        };
+                        let actual = Access::from_rest(
+                            if query_token {
+                                None
+                            } else {
+                                authorization.as_deref()
+                            },
+                            &params,
+                            &config,
+                            "ns",
+                            0,
+                        );
+                        let expected = match credential {
+                            None => Ok(Access::Anonymous),
+                            Some("other") if strict => Err(Refused),
+                            Some(token) => match modifier {
+                                None if token == "owner" => Ok(Access::Owner),
+                                None => Ok(Access::Admin),
+                                Some("null") => Ok(Access::Anonymous),
+                                Some(value) if value.starts_with('{') => {
+                                    Ok(Access::User(crate::json_parse::parse(value).unwrap()))
+                                }
+                                Some(_) => Err(Refused),
+                            },
+                        };
+                        assert_eq!(actual, expected, "strict={strict}, credential={credential:?}, modifier={modifier:?}, query={query_token}");
+                        if credential.is_some() && modifier.is_some() && actual.is_ok() {
+                            assert!(!matches!(actual, Ok(Access::Owner | Access::Admin)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn admin_auth_override_does_not_modify_a_user_credential() {
+        let credentials = Credentials {
+            strict: true,
+            id_tokens: Some(Arc::new(|_, _, _| {
+                Some(r#"{"sub":"original","iat":1}"#.to_owned())
+            })),
+        };
+        let base = BTreeMap::from([("auth".to_owned(), "local-verifier-token".to_owned())]);
+        let expected = Access::from_rest(None, &base, &credentials, "ns", 0).unwrap();
+        for modifier in ["null", r#"{"uid":"replacement"}"#, "broken"] {
+            let mut params = base.clone();
+            params.insert("auth_variable_override".to_owned(), modifier.to_owned());
+            assert_eq!(
+                Access::from_rest(None, &params, &credentials, "ns", 0),
+                Ok(expected.clone())
+            );
+        }
+    }
 }

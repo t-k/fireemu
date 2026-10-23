@@ -19,6 +19,37 @@ export function assertEndpoint(raw, kind, config) {
   return url;
 }
 
+// The relay retains encoded body bytes unchanged. Alt-Svc is excluded as a transport hint.
+export function selectRelayResponseHeaders(headers) {
+  const hop = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'content-length', 'alt-svc']);
+  const unsupported = new Set(['set-cookie', 'set-cookie2', 'report-to', 'reporting-endpoints', 'nel', 'refresh', 'link', 'location']);
+  const listFields = new Set(['cache-control', 'vary', 'allow', 'content-encoding', 'content-language', 'accept-ranges', 'access-control-allow-methods', 'access-control-allow-headers', 'access-control-expose-headers', 'timing-allow-origin']);
+  const entries = new Map();
+  for (const [rawName, rawValue] of Object.entries(headers)) {
+    const name = rawName.toLowerCase();
+    if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name)) throw Error('Malformed relay header name');
+    if (rawValue === undefined) continue;
+    const values = Array.isArray(rawValue) ? [...rawValue] : [rawValue];
+    if (!values.length || values.some(value => typeof value !== 'string' || /[\r\n\0]/.test(value))) throw Error(`Malformed relay header: ${name}`);
+    if (unsupported.has(name) || ((name === 'content-security-policy' || name === 'content-security-policy-report-only') && values.some(value => /(?:^|[;,])\s*report-(?:uri|to)(?:\s|$)/i.test(value)))) throw Error(`Unsupported relay response feature: ${name}`);
+    entries.set(name, [...(entries.get(name) ?? []), ...values]);
+  }
+  for (const value of entries.get('connection') ?? []) {
+    for (const token of value.split(',')) {
+      const name = token.trim().toLowerCase();
+      if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name)) throw Error('Malformed Connection token');
+      hop.add(name);
+    }
+  }
+  const selected = [];
+  for (const [name, values] of entries) {
+    if (hop.has(name)) continue;
+    if (values.length > 1 && !listFields.has(name)) throw Error(`Unsupported relay header multiplicity: ${name}`);
+    selected.push([name, values.join(', ')]);
+  }
+  return Object.fromEntries(selected);
+}
+
 export function createBudget({ limits, deadlineMs, record, now = () => performance.now() }) {
   for (const key of [...COUNTERS, 'responseBytes']) if (!Number.isSafeInteger(limits?.[key]) || limits[key] < 0) throw Error(`Invalid limit: ${key}`);
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || typeof record !== 'function') throw Error('Invalid deadline or recorder');
@@ -97,7 +128,7 @@ export async function relayHttp(input, { config, budget, request = httpsRequest 
         let size = 0;
         const chunks = [];
         try {
-          budget.event({ type: 'http-response', url: url.href, status: res.statusCode, headers: res.headers });
+          budget.event({ type: 'http-response', url: url.href, status: res.statusCode, headers: res.headers, rawHeaders: res.rawHeaders });
           if (!Number.isInteger(res.statusCode) || res.statusCode < 200 || res.statusCode >= 300) throw Error(`HTTP status/redirect: ${res.statusCode}`);
         } catch (error) { finish(error); return; }
         res.on('data', chunk => {
@@ -244,7 +275,8 @@ export async function runProductionLiveProbe({ playwright, config, bundlePaths, 
             }
             const response = await track(relayHttp({ url, method: req.method(), headers: req.headers(), body: req.postDataBuffer() }, { config, budget }));
             budget.check();
-            const headers = Object.fromEntries(Object.entries(response.headers).filter(([key]) => ['content-type', 'cache-control'].includes(key)).map(([key, value]) => [key, String(value)]));
+            const headers = selectRelayResponseHeaders(response.headers);
+            budget.event({ type: 'http-fulfill-headers', url, headers });
             await route.fulfill({ ...response, headers });
           } catch (error) {
             budget.stop(error.message);

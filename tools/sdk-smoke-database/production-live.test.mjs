@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { assertEndpoint, createBudget, relayHttp, runProductionLiveProbe } from './production-live.mjs';
+import { assertEndpoint, createBudget, relayHttp, runProductionLiveProbe, selectRelayResponseHeaders } from './production-live.mjs';
 
 const limits = { httpAttempts: 8, wsConnections: 4, clientMessages: 10, serverMessages: 10, outboundBytes: 1000, inboundBytes: 1000, responseBytes: 100 };
 const config = () => ({ projectId: 'test-project', databaseURL: 'https://test-db.firebaseio.com', namespace: 'test-db', allowedOrigins: ['https://test-db.firebaseio.com', 'wss://test-db.firebaseio.com'], prefixes: ['owned/sdk/round1/ws', 'owned/sdk/round1/lp', 'owned/sdk/round2/ws', 'owned/sdk/round2/lp'], deadlineMs: 1000, limits: { ...limits } });
@@ -263,4 +263,59 @@ test('omitted ns cannot infer identity from arbitrary or mismatched allowed host
   const c = config();
   assert.throws(() => assertEndpoint('wss://test-db.europe-west1.firebasedatabase.app/.ws?v=5', 'ws', c));
   assert.throws(() => assertEndpoint('wss://s-internal.firebaseio.com/.ws?v=5&ns=test-db', 'ws', c));
+});
+
+
+test('relay preserves end-to-end policies, CORS, representation and passive metadata without mutation', () => {
+  const raw = Object.freeze({ 'Permissions-Policy': 'unload=()', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'self'", 'X-Frame-Options': 'SAMEORIGIN', 'Cross-Origin-Resource-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp', 'Cross-Origin-Opener-Policy': 'same-origin', 'Referrer-Policy': 'no-referrer', 'Access-Control-Allow-Origin': 'https://client.invalid', 'Cache-Control': 'no-cache', ETag: '"original"', 'Content-Type': 'text/javascript; charset=utf-8', 'Content-Encoding': 'gzip', 'X-Passive-Unknown': 'original-value' });
+  const selected = selectRelayResponseHeaders(raw);
+  assert.deepEqual(selected, Object.fromEntries(Object.entries(raw).map(([name, value]) => [name.toLowerCase(), value])));
+  assert.equal(raw['Permissions-Policy'], 'unload=()');
+});
+
+test('relay removes fixed and Connection-nominated hop headers, framing and transport hints', () => {
+  const headers = { CONNECTION: 'keep-alive, X-Private-Hop', 'x-private-hop': 'remove', 'Keep-Alive': 'timeout=5', 'Proxy-Connection': 'close', 'Proxy-Authenticate': 'Basic', 'Proxy-Authorization': 'secret', TE: 'trailers', Trailer: 'digest', 'Transfer-Encoding': 'chunked', Upgrade: 'websocket', 'Content-Length': '999', 'Alt-Svc': 'h3=":443"', 'content-type': 'text/plain' };
+  assert.deepEqual(selectRelayResponseHeaders(headers), { 'content-type': 'text/plain' });
+});
+
+test('relay refuses session, reporting, navigation and network-hint response features', () => {
+  for (const [name, value] of [['Set-Cookie', ['a=1', 'b=2']], ['set-cookie2', 'a=1'], ['Report-To', '{}'], ['Reporting-Endpoints', 'default="https://collector.invalid"'], ['NEL', '{}'], ['Refresh', '1; url=https://other.invalid'], ['Link', '</other>; rel=prefetch'], ['Location', 'https://other.invalid'], ['Content-Security-Policy', "default-src 'self'; REPORT-URI /report"], ['Content-Security-Policy-Report-Only', "default-src 'self'; report-to group"], ['Content-Security-Policy', "default-src 'self', report-uri /report"]]) {
+    assert.throws(() => selectRelayResponseHeaders({ [name]: value }), /Unsupported/);
+    assert.throws(() => selectRelayResponseHeaders({ Connection: name, [name]: value }), /Unsupported/);
+  }
+});
+
+test('relay explicitly combines list-valued arrays and rejects ambiguous or malformed multiplicity', () => {
+  const raw = Object.freeze({ Vary: Object.freeze(['Origin', 'Accept-Encoding']), 'Cache-Control': Object.freeze(['no-store', 'max-age=0']) });
+  assert.deepEqual(selectRelayResponseHeaders(raw), { vary: 'Origin, Accept-Encoding', 'cache-control': 'no-store, max-age=0' });
+  assert.deepEqual(raw.Vary, ['Origin', 'Accept-Encoding']);
+  for (const headers of [{ 'content-type': ['text/plain', 'text/html'] }, { 'x-unknown': ['one', 'two'] }, { 'x-empty': [] }, { 'x-value': 42 }, { 'Bad Name': 'x' }, { 'x-value': 'a\r\nb' }]) assert.throws(() => selectRelayResponseHeaders(headers));
+});
+
+
+test('relay keeps compressed bytes unchanged and records raw response header pairs', async () => {
+  const rawHeaders = ['Content-Encoding', 'gzip', 'Permissions-Policy', 'unload=()'];
+  const headers = { 'content-encoding': 'gzip', 'permissions-policy': 'unload=()' };
+  const encoded = Buffer.from([0x1f, 0x8b, 0x08, 0x00]);
+  const events = [];
+  const budget = createBudget({ limits, deadlineMs: 1000, record: event => events.push(event) });
+  const request = (_url, _options, callback) => {
+    const req = new EventEmitter();
+    req.destroy = () => {};
+    req.end = () => queueMicrotask(() => {
+      const response = new EventEmitter();
+      Object.assign(response, { statusCode: 200, headers, rawHeaders, destroy() {} });
+      callback(response);
+      response.emit('data', encoded);
+      response.emit('end');
+    });
+    return req;
+  };
+  try {
+    const result = await relayHttp({ url: 'https://test-db.firebaseio.com/.lp?ns=test-db', method: 'GET', headers: {}, body: null }, { config: config(), budget, request });
+    assert.deepEqual(result.body, encoded);
+    assert.deepEqual(selectRelayResponseHeaders(result.headers), headers);
+    assert.deepEqual(events.find(event => event.type === 'http-response').rawHeaders, rawHeaders);
+    assert.deepEqual(events.find(event => event.type === 'http-response').headers, headers);
+  } finally { budget.close(); }
 });

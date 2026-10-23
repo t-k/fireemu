@@ -85,7 +85,6 @@ fn positional_phrases_do_not_cross_fields_and_exclusions_apply() {
 #[test]
 fn malformed_and_unsupported_queries_are_errors() {
     for query in [
-        "",
         "red OR fox",
         "red|fox",
         "(red)",
@@ -235,19 +234,73 @@ fn incremental_batches_equal_full_build_and_rejections_are_atomic() {
 }
 
 #[test]
-fn exclusion_only_queries_return_the_corpus_complement_with_zero_scores() {
+fn exclusion_only_queries_match_no_documents() {
     let docs = [
-        document("a", "waffles", "", 1),
-        document("b", "red blue", "", 2),
-        document("c", "", "", 3),
+        document("copper", "nebula", "", 1),
+        document("willow", "quartz mica", "", 2),
+        document("blank", "", "", 3),
     ];
     let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
-    assert_eq!(names(&index, "-waffles"), ["docs/c", "docs/b"]);
-    assert_eq!(names(&index, "-\"red blue\""), ["docs/c", "docs/a"]);
-    let query = SearchQuery::parse("-waffles", tokenize).unwrap();
-    assert!(index
-        .search(&query, &SearchOptions::default())
-        .unwrap()
-        .iter()
-        .all(|hit| hit.score == 0.0));
+    for query in ["-nebula", "-absent", "-\"quartz mica\"", "-nebula -mica"] {
+        assert!(names(&index, query).is_empty(), "{query}");
+    }
+    assert_eq!(names(&index, "quartz -nebula"), ["docs/willow"]);
+    assert!(names(&index, "quartz -mica").is_empty());
+}
+
+#[test]
+fn empty_and_whole_plain_tokenless_queries_match_no_documents() {
+    let docs = [
+        document("juniper", "nebula quartz", "mica", 1),
+        document("alder", "copper", "nebula", 2),
+        document("blank", "", "", 3),
+    ];
+    let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+    for query in ["", " \t\n", "!!!", "! . , ;", "… —"] {
+        assert!(names(&index, query).is_empty(), "{query:?}");
+    }
+    assert_eq!(names(&index, "nebula"), ["docs/alder", "docs/juniper"]);
+}
+
+#[test]
+fn match_none_preserves_query_bounds_and_rejects_mixed_or_structured_tokenless_clauses() {
+    let index = SearchIndex::build(
+        &definition(),
+        &[document("cedar", "nebula", "", 1)],
+        tokenize,
+    )
+    .unwrap();
+    for query in [
+        "nebula !!!",
+        "!!! nebula",
+        "-nebula !!!",
+        "title:!!!",
+        "\"!!!\"",
+        "-",
+        "()",
+        "*",
+    ] {
+        assert!(SearchQuery::parse(query, tokenize).is_err(), "{query}");
+    }
+    assert!(names(&index, &"!".repeat(MAX_QUERY_BYTES)).is_empty());
+    assert!(SearchQuery::parse(&"!".repeat(MAX_QUERY_BYTES + 1), tokenize).is_err());
+    assert!(names(&index, &vec!["!!!"; MAX_QUERY_CLAUSES].join(" ")).is_empty());
+    assert!(SearchQuery::parse(&vec!["!!!"; MAX_QUERY_CLAUSES + 1].join(" "), tokenize).is_err());
+    assert!(names(&index, &vec!["-nebula"; MAX_QUERY_CLAUSES].join(" ")).is_empty());
+    assert!(
+        SearchQuery::parse(&vec!["-nebula"; MAX_QUERY_CLAUSES + 1].join(" "), tokenize).is_err()
+    );
+}
+
+proptest::proptest! {
+    #[test]
+    fn no_positive_plain_queries_never_match_an_arbitrary_nonempty_corpus(
+        rows in proptest::collection::vec("[a-z]{1,12}", 1..8),
+        punctuation in proptest::collection::vec(proptest::sample::select(vec!["!", ".", ",", ";", "…"]), 0..=MAX_QUERY_CLAUSES),
+    ) {
+        let docs: Vec<_> = rows.iter().enumerate().map(|(i, word)| document(&format!("sample{i}"), word, "", i128::try_from(i).unwrap())).collect();
+        let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+        proptest::prop_assert!(names(&index, &punctuation.join(" ")).is_empty());
+        proptest::prop_assert!(names(&index, "-nebula -quartz").is_empty());
+    }
 }

@@ -44,13 +44,24 @@ impl std::error::Error for SearchError {}
 fn invalid(message: &str) -> SearchError {
     SearchError::InvalidQuery(message.into())
 }
+fn validate_clause_syntax(raw: &str, quoted: bool) -> Result<(), SearchError> {
+    if raw.is_empty()
+        || raw
+            .chars()
+            .any(|c| matches!(c, '(' | ')' | '|' | '*' | '\\' | ':' | '"'))
+        || (!quoted && matches!(raw, "OR" | "AND" | "NOT"))
+    {
+        return Err(invalid("empty or unsupported query syntax"));
+    }
+    Ok(())
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Clause {
     field: Option<FieldPath>,
     tokens: Vec<String>,
     excluded: bool,
 }
-/// A bounded conjunction of terms and same-field positional phrases, optionally excluded or field-restricted.
+/// A bounded conjunction of terms and same-field positional phrases, optionally excluded or field-restricted. Queries without positive clauses match no documents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchQuery {
     clauses: Vec<Clause>,
@@ -68,6 +79,7 @@ impl SearchQuery {
     }
 
     /// The caller must use the same analyzer for queries and corpus batches.
+    /// Empty input and whole sequences of plain tokenless clauses match nothing. Tokenless clauses cannot be quoted, restricted, excluded, or mixed with searchable clauses.
     /// Parse whitespace-separated terms, `"phrases"`, `-exclusions`, and canonical `field:term` restrictions. OR, grouping, escapes and wildcard syntax are unsupported.
     pub fn parse(input: &str, analyze: fn(&str) -> Vec<String>) -> Result<Self, SearchError> {
         if input.len() > MAX_QUERY_BYTES {
@@ -75,6 +87,8 @@ impl SearchQuery {
         }
         let mut chars = input.char_indices().peekable();
         let mut clauses = Vec::new();
+        let mut clause_count = 0;
+        let mut tokenless = false;
         while let Some(&(start, c)) = chars.peek() {
             if c.is_whitespace() {
                 chars.next();
@@ -138,32 +152,30 @@ impl SearchQuery {
                 let end = chars.peek().map_or(input.len(), |(i, _)| *i);
                 raw = &input[value_start..end];
             }
-            if raw.is_empty()
-                || raw
-                    .chars()
-                    .any(|c| matches!(c, '(' | ')' | '|' | '*' | '\\' | ':' | '"'))
-                || (!quoted && matches!(raw, "OR" | "AND" | "NOT"))
-            {
-                return Err(invalid("empty or unsupported query syntax"));
+            validate_clause_syntax(raw, quoted)?;
+            clause_count += 1;
+            if clause_count > MAX_QUERY_CLAUSES {
+                return Err(invalid("query clause limit exceeded"));
             }
             let tokens = analyze(raw);
             if tokens.is_empty() {
-                return Err(invalid("clause contains no searchable tokens"));
-            }
-            clauses.push(Clause {
-                field,
-                tokens,
-                excluded,
-            });
-            if clauses.len() > MAX_QUERY_CLAUSES {
-                return Err(invalid("query clause limit exceeded"));
+                if quoted || excluded || field.is_some() {
+                    return Err(invalid("clause contains no searchable tokens"));
+                }
+                tokenless = true;
+            } else {
+                clauses.push(Clause {
+                    field,
+                    tokens,
+                    excluded,
+                });
             }
             if chars.peek().is_some_and(|(i, _)| *i <= start) {
                 return Err(invalid("invalid query"));
             }
         }
-        if clauses.is_empty() {
-            return Err(invalid("a query clause is required"));
+        if tokenless && !clauses.is_empty() {
+            return Err(invalid("clause contains no searchable tokens"));
         }
         Ok(Self { clauses })
     }
@@ -396,6 +408,9 @@ impl SearchIndex {
                     return Err(SearchError::UnknownField(field.canonical()));
                 }
             }
+        }
+        if !query.clauses.iter().any(|clause| !clause.excluded) {
+            return Ok(Vec::new());
         }
         let mut candidates: Vec<usize> = (0..self.documents.len())
             .filter(|id| {

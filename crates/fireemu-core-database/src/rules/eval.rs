@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use super::coverage::Observer;
 use super::parse::{BinaryOp, Expr, ExprKind};
 use crate::json::Json;
 use crate::key::validate_key;
@@ -140,8 +141,8 @@ enum Value<'a> {
 }
 
 /// Evaluates a whole rule: true only when it evaluates to `true`.
-pub fn allows(expr: &Expr, scope: &Scope<'_>) -> bool {
-    matches!(eval(expr, scope), Some(Value::Bool(true)))
+pub fn allows(expr: &Expr, scope: &Scope<'_>, observer: &mut Observer<'_>) -> bool {
+    matches!(eval(expr, scope, observer), Some(Value::Bool(true)))
 }
 
 fn from_json<'a>(json: &Json) -> Value<'a> {
@@ -198,7 +199,37 @@ fn number_text(n: f64) -> String {
     format!("{mantissa}E{exponent}")
 }
 
-fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
+fn eval<'a>(expr: &Expr, scope: &Scope<'a>, observer: &mut Observer<'_>) -> Option<Value<'a>> {
+    let value = eval_inner(expr, scope, observer);
+    if let Some(value) = &value {
+        let variable = match &expr.kind {
+            ExprKind::Name(name) => Some(name.as_str()),
+            _ => None,
+        };
+        record_value(observer, expr.diagnostic, value, variable);
+    }
+    value
+}
+
+fn record_value(observer: &mut Observer<'_>, id: usize, value: &Value<'_>, variable: Option<&str>) {
+    let diagnostic = match value {
+        Value::Null | Value::AuthEmpty => Json::Null,
+        Value::Bool(value) => Json::Bool(*value),
+        Value::Num(value) => crate::number::Number::from_f64(*value)
+            .map_or_else(|| Json::string(number_text(*value)), Json::Number),
+        Value::Long(value) => Json::int(*value),
+        Value::Str(value) => Json::String(value.clone()),
+        Value::Ordering(keys) => Json::String(keys.join("/")),
+        _ => observer.opaque(variable),
+    };
+    observer.record(id, diagnostic);
+}
+
+fn eval_inner<'a>(
+    expr: &Expr,
+    scope: &Scope<'a>,
+    observer: &mut Observer<'_>,
+) -> Option<Value<'a>> {
     match &expr.kind {
         ExprKind::Bool(b) => Some(Value::Bool(*b)),
         ExprKind::Number(n) => Some(Value::Num(*n)),
@@ -208,14 +239,18 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
         ExprKind::Regex(pattern) => Some(Value::Regex(pattern.clone())),
         ExprKind::Array(items) => items
             .iter()
-            .map(|item| eval(item, scope))
+            .map(|item| eval(item, scope, observer))
             .collect::<Option<Vec<_>>>()
             .map(Value::Array),
         ExprKind::Name(name) => variable(name, scope),
-        ExprKind::Member(object, name) => member(eval(object, scope)?, name, scope),
+        ExprKind::Member(object, name) => {
+            let object = eval(object, scope, observer)?;
+            observer.member_name(expr.diagnostic, name);
+            member(object, name, scope)
+        }
         ExprKind::Index(object, index) => {
-            let object = eval(object, scope)?;
-            let key = match eval(index, scope)? {
+            let object = eval(object, scope, observer)?;
+            let key = match eval(index, scope, observer)? {
                 Value::Str(s) => s,
                 Value::Num(n) => number_text(n),
                 _ => return None,
@@ -226,26 +261,40 @@ fn eval<'a>(expr: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
             let ExprKind::Member(object, name) = &callee.kind else {
                 return None;
             };
-            let object = eval(object, scope)?;
+            let object = eval(object, scope, observer)?;
+            observer.member_name(callee.diagnostic, name);
+            let callable = matches!(object, Value::Snapshot(_) | Value::Str(_));
+            if callable {
+                let method = observer.opaque(None);
+                observer.record(callee.diagnostic, method);
+            }
+            // Authorization retains its original receiver/argument/call order. The local
+            // diagnostic format resolves a missing callee before observing its arguments.
+            if !callable {
+                observer.suppressed += 1;
+            }
             let arguments = arguments
                 .iter()
-                .map(|a| eval(a, scope))
-                .collect::<Option<Vec<_>>>()?;
-            call(object, name, &arguments)
+                .map(|a| eval(a, scope, observer))
+                .collect::<Option<Vec<_>>>();
+            if !callable {
+                observer.suppressed -= 1;
+            }
+            call(object, name, &arguments?)
         }
-        ExprKind::Not(operand) => match eval(operand, scope)? {
+        ExprKind::Not(operand) => match eval(operand, scope, observer)? {
             Value::Bool(b) => Some(Value::Bool(!b)),
             _ => None,
         },
-        ExprKind::Neg(operand) => match eval(operand, scope)? {
+        ExprKind::Neg(operand) => match eval(operand, scope, observer)? {
             Value::Num(n) => Some(Value::Num(-n)),
             _ => None,
         },
-        ExprKind::Binary(op, left, right) => binary(*op, left, right, scope),
-        ExprKind::Chain(op, operands) => chain(*op, operands, scope),
-        ExprKind::Ternary(condition, then, otherwise) => match eval(condition, scope)? {
-            Value::Bool(true) => eval(then, scope),
-            Value::Bool(false) => eval(otherwise, scope),
+        ExprKind::Binary(op, left, right) => binary(*op, left, right, scope, observer),
+        ExprKind::Chain(op, operands) => chain(*op, operands, scope, observer, expr.diagnostic),
+        ExprKind::Ternary(condition, then, otherwise) => match eval(condition, scope, observer)? {
+            Value::Bool(true) => eval(then, scope, observer),
+            Value::Bool(false) => eval(otherwise, scope, observer),
             _ => None,
         },
     }
@@ -573,34 +622,53 @@ fn snapshot_call<'a>(
 
 /// `left op right` for an operator the parser does not chain (`&&`, `||` and `+` are
 /// always [`chain`]s).
-fn binary<'a>(op: BinaryOp, left: &Expr, right: &Expr, scope: &Scope<'a>) -> Option<Value<'a>> {
-    let l = eval(left, scope)?;
-    let r = eval(right, scope)?;
+fn binary<'a>(
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+    scope: &Scope<'a>,
+    observer: &mut Observer<'_>,
+) -> Option<Value<'a>> {
+    let l = eval(left, scope, observer)?;
+    let r = eval(right, scope, observer)?;
     combine(op, &l, &r)
 }
 
 /// A chain of `&&`, `||` or `+`, read left to right as the nested operators it stands for:
 /// `&&` and `||` stop at the first operand that decides.
-fn chain<'a>(op: BinaryOp, operands: &[Expr], scope: &Scope<'a>) -> Option<Value<'a>> {
+fn chain<'a>(
+    op: BinaryOp,
+    operands: &[Expr],
+    scope: &Scope<'a>,
+    observer: &mut Observer<'_>,
+    diagnostic: usize,
+) -> Option<Value<'a>> {
     let (first, rest) = operands.split_first()?;
     if matches!(op, BinaryOp::And | BinaryOp::Or) {
-        let Value::Bool(mut value) = eval(first, scope)? else {
+        let Value::Bool(mut value) = eval(first, scope, observer)? else {
             return None;
         };
-        for operand in rest {
-            if (op == BinaryOp::And && !value) || (op == BinaryOp::Or && value) {
-                break;
+        let prefixes = observer.prefixes(diagnostic, operands.len());
+        for (index, operand) in rest.iter().enumerate() {
+            if !((op == BinaryOp::And && !value) || (op == BinaryOp::Or && value)) {
+                let Value::Bool(next) = eval(operand, scope, observer)? else {
+                    return None;
+                };
+                value = next;
             }
-            let Value::Bool(next) = eval(operand, scope)? else {
-                return None;
-            };
-            value = next;
+            if prefixes[index] != diagnostic {
+                observer.record(prefixes[index], Json::Bool(value));
+            }
         }
         return Some(Value::Bool(value));
     }
-    let mut value = eval(first, scope)?;
-    for operand in rest {
-        value = combine(op, &value, &eval(operand, scope)?)?;
+    let mut value = eval(first, scope, observer)?;
+    let prefixes = observer.prefixes(diagnostic, operands.len());
+    for (index, operand) in rest.iter().enumerate() {
+        value = combine(op, &value, &eval(operand, scope, observer)?)?;
+        if prefixes[index] != diagnostic {
+            record_value(observer, prefixes[index], &value, None);
+        }
     }
     Some(value)
 }

@@ -404,6 +404,20 @@ impl Database {
         )
     }
 
+    /// Returns emulator-only coverage for the installed source, without evaluating rules.
+    pub(crate) fn rules_coverage(&self, namespace: &str) -> Json {
+        let text = self.rules_text(namespace);
+        let report = self.loaded_rules(namespace).map_or_else(
+            || {
+                rules_file::compile(&text)
+                    .expect("the default rules are valid")
+                    .coverage_report()
+            },
+            |loaded| loaded.rules.coverage_report(),
+        );
+        Json::object([("rules", Json::String(text)), ("report", report)])
+    }
+
     /// Loads `text` as the rules of `namespace`. Listens and event streams the new rules no
     /// longer allow are cancelled: the returned events go to the streams, the realtime
     /// cancellations wait among the pushes.
@@ -414,13 +428,18 @@ impl Database {
         now: i64,
     ) -> Result<Vec<(u64, SseEvent)>, RulesError> {
         let rules = rules_file::compile(text)?;
-        self.store_rules(
-            namespace,
-            LoadedRules {
-                text: text.to_owned(),
-                rules,
-            },
-        );
+        if self
+            .loaded_rules(namespace)
+            .is_none_or(|loaded| loaded.text != text)
+        {
+            self.store_rules(
+                namespace,
+                LoadedRules {
+                    text: text.to_owned(),
+                    rules,
+                },
+            );
+        }
         Ok(self.revoke(namespace, None, now))
     }
 

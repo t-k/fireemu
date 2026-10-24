@@ -12,6 +12,7 @@
 //! in the file, as the official emulator does.
 
 mod check;
+mod coverage;
 mod eval;
 mod java_chars;
 mod parse;
@@ -47,6 +48,8 @@ pub enum RuleSource {
     Bool(bool),
     /// An expression string.
     Expr(SourceExpr),
+    /// An expression with a separate decoded diagnostic anchor; error positions stay raw.
+    LocatedExpr(SourceExpr, (usize, usize)),
 }
 
 /// One level of the rules file.
@@ -82,9 +85,9 @@ impl fmt::Display for RulesError {
 }
 
 #[derive(Debug, Clone)]
-enum Rule {
-    Const(bool),
-    Expr(parse::Expr),
+struct Rule {
+    expr: parse::Expr,
+    coverage: coverage::Coverage,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -133,6 +136,47 @@ impl Rules {
                 .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
                 .map(|root| Self { root })
         })
+    }
+
+    /// Returns the emulator-only expression diagnostics collected by this rules tree.
+    pub fn coverage_report(&self) -> Json {
+        fn report(node: &RuleNode) -> Json {
+            let mut result = BTreeMap::new();
+            for (name, rule) in [
+                (".read", &node.read),
+                (".write", &node.write),
+                (".validate", &node.validate),
+            ] {
+                if let Some(rule) = rule {
+                    result.insert(name.to_owned(), rule.coverage.report(rule.expr.diagnostic));
+                }
+            }
+            for (name, child) in &node.children {
+                result.insert(name.clone(), report(child));
+            }
+            if let Some((name, child)) = &node.wildcard {
+                result.insert(name.clone(), report(child));
+            }
+            Json::Object(result)
+        }
+        report(&self.root)
+    }
+
+    /// Enables diagnostic collection without changing evaluation or permission decisions.
+    pub fn set_coverage_enabled(&self, enabled: bool) {
+        let mut pending = vec![&self.root];
+        while let Some(node) = pending.pop() {
+            for rule in [&node.read, &node.write, &node.validate]
+                .into_iter()
+                .flatten()
+            {
+                rule.coverage.enabled(enabled);
+            }
+            pending.extend(node.children.values());
+            if let Some((_, child)) = &node.wildcard {
+                pending.push(child);
+            }
+        }
     }
 
     /// Whether `requester` may read `path` (with `query`, for a query) in the tree `root` with
@@ -362,10 +406,7 @@ impl Rules {
 }
 
 fn run(rule: &Rule, scope: &eval::Scope<'_>) -> bool {
-    match rule {
-        Rule::Const(b) => *b,
-        Rule::Expr(expr) => eval::allows(expr, scope),
-    }
+    eval::allows(&rule.expr, scope, &mut rule.coverage.observer())
 }
 
 /// The rules level for `key` below `node`: the exact key, else the wildcard, which binds.
@@ -390,9 +431,20 @@ fn compile_rule(
     let Some(source) = source else {
         return Ok(None);
     };
+    let diagnostic_anchor = match source {
+        RuleSource::LocatedExpr(_, anchor) => Some(*anchor),
+        _ => None,
+    };
     match source {
-        RuleSource::Bool(b) => Ok(Some(Rule::Const(*b))),
-        RuleSource::Expr(source) => {
+        RuleSource::Bool(b) => compile_rule(
+            Some(&RuleSource::Expr(SourceExpr {
+                text: b.to_string(),
+                positions: vec![(1, 1)],
+            })),
+            kind,
+            wildcards,
+        ),
+        RuleSource::Expr(source) | RuleSource::LocatedExpr(source, _) => {
             let located = |error: ExprError| {
                 let (line, column) = source
                     .positions
@@ -406,9 +458,14 @@ fn compile_rule(
                     message: error.message,
                 }
             };
-            let mut expr = parse::parse(&source.text).map_err(located)?;
+            let (mut expr, templates) =
+                parse::parse_with_diagnostics(&source.text).map_err(located)?;
             check::check(&mut expr, kind, wildcards).map_err(located)?;
-            Ok(Some(Rule::Expr(expr)))
+            let anchor = diagnostic_anchor
+                .or_else(|| source.positions.first().copied())
+                .unwrap_or((1, 1));
+            let coverage = coverage::Coverage::new(&source.text, anchor, templates);
+            Ok(Some(Rule { expr, coverage }))
         }
     }
 }

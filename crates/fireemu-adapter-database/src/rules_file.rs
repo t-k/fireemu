@@ -289,7 +289,10 @@ impl Reader {
         let word = match self.peek() {
             Some('"') => {
                 let (text, positions) = self.string()?;
-                return Ok(RuleSource::Expr(SourceExpr { text, positions }));
+                return Ok(RuleSource::LocatedExpr(
+                    SourceExpr { text, positions },
+                    (start.line, start.column + 1),
+                ));
             }
             Some('t') => "true",
             Some('f') => "false",
@@ -305,11 +308,19 @@ impl Reader {
                 None => return Err(self.error_here("Unexpected EOF.")),
             }
         }
-        match word {
-            "true" => Ok(RuleSource::Bool(true)),
-            "false" => Ok(RuleSource::Bool(false)),
-            _ => Err(invalid()),
+        if word == "null" {
+            return Err(invalid());
         }
+        let positions = (0..=word.len())
+            .map(|offset| (start.line, start.column + offset))
+            .collect();
+        Ok(RuleSource::LocatedExpr(
+            SourceExpr {
+                text: word.to_owned(),
+                positions,
+            },
+            (start.line, start.column),
+        ))
     }
 
     /// `.indexOn`: a string, or an array of strings.

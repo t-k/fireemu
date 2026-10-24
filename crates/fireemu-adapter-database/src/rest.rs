@@ -1071,13 +1071,31 @@ impl Database {
         if method != "GET" {
             return Err(Refusal::new(405, "Unsupported request type"));
         }
-        if name != "databases.json" {
+        if !matches!(name, "databases.json" | "coverage.json" | "coverage") {
             return Err(Refusal::new(404, "404 Not Found"));
         }
         if self.options.inspect_needs_owner && *access != Access::Owner {
             return Err(Refusal::new(401, "Permission denied"));
         }
         self.namespace(namespace);
+        if name == "coverage.json" {
+            let report = render(&self.rules_coverage(namespace), Style::Compact);
+            return Ok(respond(HttpResponse {
+                status: 200,
+                headers: json_headers(),
+                body: render(&Json::String(report), Style::Compact).into_bytes(),
+            }));
+        }
+        if name == "coverage" {
+            return Ok(respond(HttpResponse {
+                status: 200,
+                headers: vec![(
+                    "Content-Type".to_owned(),
+                    "text/html; charset=UTF-8".to_owned(),
+                )],
+                body: coverage_html(&self.rules_coverage(namespace)).into_bytes(),
+            }));
+        }
         let names: Vec<Json> = self
             .namespaces
             .keys()
@@ -2296,3 +2314,114 @@ mod tests {
         assert_eq!(crate::listen::views_built(), before + 1);
     }
 }
+
+/// A self-contained diagnostic viewer; source and values are always inserted as text.
+fn coverage_html(data: &Json) -> String {
+    let data = render(data, Style::Compact)
+        .replace('<', "\\u003c")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
+    let mut html = String::from(
+        r#"<!doctype html><html lang="en"><meta charset="utf-8"><title>Realtime Database Rules coverage</title>
+<style>body{font:16px system-ui;margin:2rem;color:#202124}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px ui-monospace,monospace;line-height:1.7}.observed{background:#d8f2dc;text-decoration:underline dotted}.unrecorded{background:#eceff1}.expression:focus,.expression:hover{outline:2px solid #185abc}#details{min-height:4em;padding:1em;background:#f5f5f5}</style>
+<h1>Realtime Database Rules coverage</h1><p>Hover or focus a highlighted expression to inspect its recorded results. Empty values can mean an unvisited expression or evaluation failure.</p><pre id="rules"></pre><pre id="details" aria-live="polite">Select an expression.</pre>
+<script id="coverage-data" type="application/json">"#,
+    );
+    html.push_str(&data);
+    html.push_str("</script><script>\nconst data = JSON.parse(document.getElementById('coverage-data').textContent)");
+    html.push_str(COVERAGE_VIEWER_SCRIPT);
+    html
+}
+
+const COVERAGE_VIEWER_SCRIPT: &str = r#";
+const source = data.rules;
+const ranges = [];
+let cursor = 0;
+function space() {
+  for (;;) {
+    while (/\s/.test(source[cursor] || '') && cursor < source.length) cursor++;
+    if (source.slice(cursor,cursor+2) === '//') { while (cursor < source.length && source[cursor] !== '\n') cursor++; }
+    else if (source.slice(cursor,cursor+2) === '/*') { const end=source.indexOf('*/',cursor+2); cursor=end<0?source.length:end+2; }
+    else return;
+  }
+}
+function quoted() {
+  cursor++;
+  const start=cursor, offsets=[], ends=[];
+  let decoded='';
+  while(cursor<source.length && source[cursor] !== '"') {
+    const at=cursor;
+    let character=source[cursor++];
+    if(character === '\\') {
+      const escape=source[cursor++];
+      if(escape === 'u') { character=String.fromCharCode(parseInt(source.slice(cursor,cursor+4),16)); cursor+=4; }
+      else character=({n:'\n',r:'\r',t:'\t',b:'\b',f:'\f'})[escape] ?? escape;
+    }
+    decoded+=character; offsets.push(at); ends.push(cursor);
+  }
+  cursor++;
+  return {decoded,offsets,ends,start};
+}
+function position(index) {
+  const lines=source.slice(0,index).split('\n');
+  return [lines.length-1,lines[lines.length-1].length];
+}
+function relative(location,token) {
+  const target=location.split(':').map(Number);
+  let [row,column]=position(token.start);
+  for(let i=0;i<token.decoded.length;i++) {
+    if(row===target[0] && column===target[1]) return i;
+    if(token.decoded[i]==='\n') { row++;column=0; } else column++;
+  }
+  return -1;
+}
+function expressions(node,token) {
+  if(!node || typeof node.text !== 'string') return;
+  const first=relative(node['location-start'],token),last=relative(node['location-end'],token);
+  if(first>=0 && last>=first && token.ends[last]!==undefined) ranges.push({start:token.offsets[first],end:token.ends[last],node});
+  for(const child of node.children || []) expressions(child,token);
+}
+function value(report,root=false) {
+  space();
+  if(source[cursor]==='{') {
+    cursor++;space();
+    while(cursor<source.length && source[cursor]!=='}') {
+      const key=quoted().decoded;space();cursor++;
+      const child=report && Object.hasOwn(report,key)?report[key]:undefined;
+      value(root && key==='rules'?data.report:child);space();
+      if(source[cursor]!==',') break;
+      cursor++;space();
+    }
+    cursor++;return;
+  }
+  if(source[cursor]==='"') { const token=quoted();expressions(report,token);return; }
+  if(source[cursor]==='[') {
+    cursor++;space();
+    while(cursor<source.length && source[cursor]!==']') { value(undefined);space();if(source[cursor]!==',')break;cursor++; }
+    cursor++;return;
+  }
+  const start=cursor;
+  while(cursor<source.length && !/[\s,}\]]/.test(source[cursor])) cursor++;
+  const decoded=source.slice(start,cursor);
+  expressions(report,{decoded,start,offsets:Array.from(decoded,(_,i)=>start+i),ends:Array.from(decoded,(_,i)=>start+i+1)});
+}
+value(undefined,true);
+const boundaries=Array.from(new Set([0,source.length,...ranges.flatMap(range=>[range.start,range.end])])).sort((a,b)=>a-b);
+const container=document.getElementById('rules'),details=document.getElementById('details');
+function description(node) {
+  return node.text+'\n'+(node.values.length?node.values.map(item=>JSON.stringify(item.value)+' × '+item.count).join('\n'):'No recorded result');
+}
+for(let i=0;i<boundaries.length-1;i++) {
+  const start=boundaries[i],end=boundaries[i+1];
+  const matches=ranges.filter(range=>range.start<=start && range.end>=end).sort((a,b)=>(a.end-a.start)-(b.end-b.start));
+  if(!matches.length) { container.append(document.createTextNode(source.slice(start,end)));continue; }
+  const node=matches[0].node,span=document.createElement('span');
+  span.className='expression '+(node.values.length?'observed':'unrecorded');
+  span.textContent=source.slice(start,end);span.title=description(node);span.tabIndex=0;
+  span.dataset.start=String(start);span.dataset.end=String(end);
+  span.addEventListener('mouseenter',()=>{details.textContent=description(node);});
+  span.addEventListener('focus',()=>{details.textContent=description(node);});
+  container.append(span);
+}
+</script></html>"#;

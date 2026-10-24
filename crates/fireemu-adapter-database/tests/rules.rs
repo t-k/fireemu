@@ -2593,3 +2593,482 @@ proptest::proptest! {
         proptest::prop_assert_eq!(judge(true), absent);
     }
 }
+
+/// The finite Jar4.11.2 coverage observation, with only opaque object IDs normalized.
+#[test]
+fn coverage_replays_the_observed_compound_tree_and_primitive_histograms() {
+    fn normalize(
+        value: &mut serde_json::Value,
+        identities: &mut std::collections::BTreeMap<String, String>,
+    ) {
+        match value {
+            serde_json::Value::String(text) if text.starts_with("hash@") => {
+                let next = identities.len();
+                *text = identities
+                    .entry(text.clone())
+                    .or_insert_with(|| format!("hash@class{next}"))
+                    .clone();
+            }
+            serde_json::Value::Array(items) => items
+                .iter_mut()
+                .for_each(|item| normalize(item, identities)),
+            serde_json::Value::Object(items) => items
+                .values_mut()
+                .for_each(|item| normalize(item, identities)),
+            _ => {}
+        }
+    }
+    let steps: Vec<(String,String,String,bool,String,u16)> = serde_json::from_str(r#"[["unconfigured-a-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["unconfigured-b-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-b", false, "", 200], ["empty-load", "PUT", "/.settings/rules.json?ns=demo-cv12-a", true, "{\"rules\":{}}\n", 200], ["empty-rules-readback", "GET", "/.settings/rules.json?ns=demo-cv12-a", true, "", 200], ["empty-before-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["empty-read-0", "GET", "/sample.json?ns=demo-cv12-a", false, "", 401], ["empty-write-0", "PUT", "/sample.json?ns=demo-cv12-a", false, "1", 401], ["empty-after-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["literal-load", "PUT", "/.settings/rules.json?ns=demo-cv12-a", true, "{\"rules\":{\".read\":true,\".write\":false}}\n", 200], ["literal-rules-readback", "GET", "/.settings/rules.json?ns=demo-cv12-a", true, "", 200], ["literal-before-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["literal-read-0", "GET", "/sample.json?ns=demo-cv12-a", false, "", 200], ["literal-write-0", "PUT", "/sample.json?ns=demo-cv12-a", false, "1", 401], ["literal-read-1", "GET", "/sample.json?ns=demo-cv12-a", false, "", 200], ["literal-write-1", "PUT", "/sample.json?ns=demo-cv12-a", false, "1", 401], ["literal-after-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["literal-repeat-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["owner-write", "PUT", "/sample.json?ns=demo-cv12-a", true, "2", 200], ["owner-read", "GET", "/sample.json?ns=demo-cv12-a", true, "", 200], ["owner-after-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["compound-load", "PUT", "/.settings/rules.json?ns=demo-cv12-a", true, "{\r\n  \"rules\": {\r\n    \".read\": \"true && (false || data.child(\\\"é😀\\\").exists())\",\r\n    \".write\": \"false && data.child(\\\"missing\\\").val().contains(\\\"x\\\")\",\r\n    \"allowed\": {\".read\":\"true || data.child(\\\"missing\\\").val().contains(\\\"x\\\")\", \".write\":true, \".validate\":\"newData.isString() && newData.val().length > 0\"},\r\n    \"denied\": {\".read\":false},\r\n    \"runtimeError\": {\".read\":\"data.child(\\\"missing\\\").val().contains(\\\"x\\\")\"}\r\n  }\r\n}\r\n", 200], ["compound-rules-readback", "GET", "/.settings/rules.json?ns=demo-cv12-a", true, "", 200], ["compound-before-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200], ["compound-root-read", "GET", "/.json?ns=demo-cv12-a", false, "", 401], ["compound-root-write", "PUT", "/.json?ns=demo-cv12-a", false, "{\"x\":1}", 401], ["shortcircuit-read", "GET", "/allowed.json?ns=demo-cv12-a", false, "", 200], ["validate-write", "PUT", "/allowed.json?ns=demo-cv12-a", false, "\"observed\"", 200], ["validate-denied-write", "PUT", "/allowed.json?ns=demo-cv12-a", false, "0", 401], ["denied-read", "GET", "/denied.json?ns=demo-cv12-a", false, "", 401], ["runtime-error-read", "GET", "/runtimeError.json?ns=demo-cv12-a", false, "", 401], ["compound-after-json", "GET", "/.inspect/coverage.json?ns=demo-cv12-a", false, "", 200]]"#).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(r#"{"report":{".read":{"children":[{"location-end":"2:17","location-start":"2:14","text":"true","values":[{"count":4,"value":true}]},{"children":[{"location-end":"2:27","location-start":"2:23","text":"false","values":[{"count":4,"value":false}]},{"children":[{"children":[{"children":[{"children":[{"location-end":"2:35","location-start":"2:32","text":"data","values":[{"count":1,"value":"hash@class0"},{"count":1,"value":"hash@class1"},{"count":1,"value":"hash@class2"},{"count":1,"value":"hash@class3"}]},{"location-end":"2:41","location-start":"2:37","text":"child","values":[{"count":4,"value":"child"}]}],"location-end":"2:41","location-start":"2:32","text":"data.child","values":[{"count":1,"value":"hash@class4"},{"count":1,"value":"hash@class5"},{"count":1,"value":"hash@class6"},{"count":1,"value":"hash@class7"}]},{"location-end":"2:47","location-start":"2:43","text":"\"é😀\"","values":[{"count":4,"value":"é😀"}]}],"location-end":"2:48","location-start":"2:32","text":"data.child(\"é😀\")","values":[{"count":1,"value":"hash@class8"},{"count":1,"value":"hash@class9"},{"count":1,"value":"hash@class10"},{"count":1,"value":"hash@class11"}]},{"location-end":"2:55","location-start":"2:50","text":"exists","values":[{"count":4,"value":"exists"}]}],"location-end":"2:55","location-start":"2:32","text":"data.child(\"é😀\").exists","values":[{"count":1,"value":"hash@class12"},{"count":1,"value":"hash@class13"},{"count":1,"value":"hash@class14"},{"count":1,"value":"hash@class15"}]}],"location-end":"2:57","location-start":"2:32","text":"data.child(\"é😀\").exists()","values":[{"count":4,"value":false}]}],"location-end":"2:57","location-start":"2:23","text":"false || data.child(\"é😀\").exists()","values":[{"count":4,"value":false}]}],"location-end":"2:58","location-start":"2:14","text":"true && (false || data.child(\"é😀\").exists())","values":[{"count":4,"value":false}]},".write":{"children":[{"location-end":"3:19","location-start":"3:15","text":"false","values":[{"count":3,"value":false}]},{"children":[{"children":[{"children":[{"children":[{"children":[{"children":[{"location-end":"3:27","location-start":"3:24","text":"data","values":[]},{"location-end":"3:33","location-start":"3:29","text":"child","values":[]}],"location-end":"3:33","location-start":"3:24","text":"data.child","values":[]},{"location-end":"3:43","location-start":"3:35","text":"\"missing\"","values":[]}],"location-end":"3:44","location-start":"3:24","text":"data.child(\"missing\")","values":[]},{"location-end":"3:48","location-start":"3:46","text":"val","values":[]}],"location-end":"3:48","location-start":"3:24","text":"data.child(\"missing\").val","values":[]}],"location-end":"3:50","location-start":"3:24","text":"data.child(\"missing\").val()","values":[]},{"location-end":"3:59","location-start":"3:52","text":"contains","values":[]}],"location-end":"3:59","location-start":"3:24","text":"data.child(\"missing\").val().contains","values":[]},{"location-end":"3:63","location-start":"3:61","text":"\"x\"","values":[]}],"location-end":"3:64","location-start":"3:24","text":"data.child(\"missing\").val().contains(\"x\")","values":[]}],"location-end":"3:64","location-start":"3:15","text":"false && data.child(\"missing\").val().contains(\"x\")","values":[{"count":3,"value":false}]},"allowed":{".read":{"children":[{"location-end":"4:28","location-start":"4:25","text":"true","values":[{"count":1,"value":true}]},{"children":[{"children":[{"children":[{"children":[{"children":[{"children":[{"location-end":"4:36","location-start":"4:33","text":"data","values":[]},{"location-end":"4:42","location-start":"4:38","text":"child","values":[]}],"location-end":"4:42","location-start":"4:33","text":"data.child","values":[]},{"location-end":"4:52","location-start":"4:44","text":"\"missing\"","values":[]}],"location-end":"4:53","location-start":"4:33","text":"data.child(\"missing\")","values":[]},{"location-end":"4:57","location-start":"4:55","text":"val","values":[]}],"location-end":"4:57","location-start":"4:33","text":"data.child(\"missing\").val","values":[]}],"location-end":"4:59","location-start":"4:33","text":"data.child(\"missing\").val()","values":[]},{"location-end":"4:68","location-start":"4:61","text":"contains","values":[]}],"location-end":"4:68","location-start":"4:33","text":"data.child(\"missing\").val().contains","values":[]},{"location-end":"4:72","location-start":"4:70","text":"\"x\"","values":[]}],"location-end":"4:73","location-start":"4:33","text":"data.child(\"missing\").val().contains(\"x\")","values":[]}],"location-end":"4:73","location-start":"4:25","text":"true || data.child(\"missing\").val().contains(\"x\")","values":[{"count":1,"value":true}]},".validate":{"children":[{"children":[{"children":[{"location-end":"4:115","location-start":"4:109","text":"newData","values":[{"count":1,"value":"hash@class16"},{"count":1,"value":"hash@class17"}]},{"location-end":"4:124","location-start":"4:117","text":"isString","values":[{"count":2,"value":"isString"}]}],"location-end":"4:124","location-start":"4:109","text":"newData.isString","values":[{"count":1,"value":"hash@class18"},{"count":1,"value":"hash@class19"}]}],"location-end":"4:126","location-start":"4:109","text":"newData.isString()","values":[{"count":1,"value":true},{"count":1,"value":false}]},{"children":[{"children":[{"children":[{"children":[{"location-end":"4:137","location-start":"4:131","text":"newData","values":[{"count":1,"value":"hash@class16"}]},{"location-end":"4:141","location-start":"4:139","text":"val","values":[{"count":1,"value":"val"}]}],"location-end":"4:141","location-start":"4:131","text":"newData.val","values":[{"count":1,"value":"hash@class20"}]}],"location-end":"4:143","location-start":"4:131","text":"newData.val()","values":[{"count":1,"value":"observed"}]},{"location-end":"4:150","location-start":"4:145","text":"length","values":[{"count":1,"value":"length"}]}],"location-end":"4:150","location-start":"4:131","text":"newData.val().length","values":[{"count":1,"value":8.0}]},{"location-end":"4:154","location-start":"4:154","text":"0","values":[{"count":1,"value":0.0}]}],"location-end":"4:154","location-start":"4:131","text":"newData.val().length > 0","values":[{"count":1,"value":true}]}],"location-end":"4:154","location-start":"4:109","text":"newData.isString() && newData.val().length > 0","values":[{"count":1,"value":true},{"count":1,"value":false}]},".write":{"location-end":"4:93","location-start":"4:90","text":"true","values":[{"count":2,"value":true}]}},"denied":{".read":{"location-end":"5:27","location-start":"5:23","text":"false","values":[{"count":1,"value":false}]}},"runtimeError":{".read":{"children":[{"children":[{"children":[{"children":[{"children":[{"children":[{"location-end":"6:33","location-start":"6:30","text":"data","values":[{"count":1,"value":"hash@class21"}]},{"location-end":"6:39","location-start":"6:35","text":"child","values":[{"count":1,"value":"child"}]}],"location-end":"6:39","location-start":"6:30","text":"data.child","values":[{"count":1,"value":"hash@class22"}]},{"location-end":"6:49","location-start":"6:41","text":"\"missing\"","values":[{"count":1,"value":"missing"}]}],"location-end":"6:50","location-start":"6:30","text":"data.child(\"missing\")","values":[{"count":1,"value":"hash@class23"}]},{"location-end":"6:54","location-start":"6:52","text":"val","values":[{"count":1,"value":"val"}]}],"location-end":"6:54","location-start":"6:30","text":"data.child(\"missing\").val","values":[{"count":1,"value":"hash@class24"}]}],"location-end":"6:56","location-start":"6:30","text":"data.child(\"missing\").val()","values":[{"count":1,"value":null}]},{"location-end":"6:65","location-start":"6:58","text":"contains","values":[{"count":1,"value":"contains"}]}],"location-end":"6:65","location-start":"6:30","text":"data.child(\"missing\").val().contains","values":[]},{"location-end":"6:69","location-start":"6:67","text":"\"x\"","values":[]}],"location-end":"6:70","location-start":"6:30","text":"data.child(\"missing\").val().contains(\"x\")","values":[]}}},"rules":"{\r\n  \"rules\": {\r\n    \".read\": \"true && (false || data.child(\\\"é😀\\\").exists())\",\r\n    \".write\": \"false && data.child(\\\"missing\\\").val().contains(\\\"x\\\")\",\r\n    \"allowed\": {\".read\":\"true || data.child(\\\"missing\\\").val().contains(\\\"x\\\")\", \".write\":true, \".validate\":\"newData.isString() && newData.val().length > 0\"},\r\n    \"denied\": {\".read\":false},\r\n    \"runtimeError\": {\".read\":\"data.child(\\\"missing\\\").val().contains(\\\"x\\\")\"}\r\n  }\r\n}\r\n"}"#).unwrap();
+    let mut database = db();
+    for (name, method, target, owner, body, status) in steps {
+        let (actual, response) = call(
+            &mut database,
+            &method,
+            &target,
+            if owner { OWNER } else { &[] },
+            &body,
+        );
+        assert_eq!(actual, status, "{name}: {response}");
+        if name == "compound-after-json" {
+            let encoded: String = serde_json::from_str(&response).unwrap();
+            let mut report: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+            normalize(&mut report, &mut std::collections::BTreeMap::new());
+            assert_eq!(report, expected);
+        }
+    }
+}
+
+fn coverage(database: &mut Database, namespace: &str) -> serde_json::Value {
+    let (status, body) = call(
+        database,
+        "GET",
+        &format!("/.inspect/coverage.json?ns={namespace}"),
+        &[],
+        "",
+    );
+    assert_eq!(status, 200, "{body}");
+    let inner: String = serde_json::from_str(&body).unwrap();
+    serde_json::from_str(&inner).unwrap()
+}
+
+#[test]
+fn coverage_lifetime_is_scoped_to_source_and_namespace() {
+    let mut database = db();
+    let text = "{\"rules\":{\".read\":true,\".write\":false}}\n";
+    load(&mut database, "coverage-a", text);
+    assert_eq!(
+        call(&mut database, "GET", "/.json?ns=coverage-a", &[], "").0,
+        200
+    );
+    assert_eq!(
+        call(&mut database, "PUT", "/.json?ns=coverage-a", &[], "1").0,
+        401
+    );
+    let before = coverage(&mut database, "coverage-a");
+    assert_eq!(
+        before["report"][".read"]["values"],
+        serde_json::json!([{"value":true,"count":1}])
+    );
+    assert_eq!(
+        before["report"][".write"]["values"],
+        serde_json::json!([{"value":false,"count":1}])
+    );
+    assert!(before["report"][".read"].get("children").is_none());
+    load(&mut database, "coverage-a", text);
+    assert_eq!(coverage(&mut database, "coverage-a"), before);
+    assert_eq!(
+        call(
+            &mut database,
+            "PUT",
+            "/.settings/rules.json?ns=coverage-a",
+            OWNER,
+            r#"{"rules":{".read":"true &&"}}"#
+        )
+        .0,
+        400
+    );
+    for (method, body) in [("PUT", "1"), ("GET", ""), ("DELETE", "")] {
+        assert_eq!(
+            call(&mut database, method, "/.json?ns=coverage-a", OWNER, body).0,
+            200
+        );
+    }
+    load(&mut database, "coverage-b", text);
+    call(&mut database, "GET", "/.json?ns=coverage-b", &[], "");
+    assert_eq!(coverage(&mut database, "coverage-a"), before);
+    load(
+        &mut database,
+        "coverage-a",
+        r#"{"rules":{".read":false,".write":true}}"#,
+    );
+    assert_eq!(
+        coverage(&mut database, "coverage-a")["report"][".read"]["values"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        call(&mut database, "GET", "/.json?ns=coverage-a", &[], "").0,
+        401
+    );
+    assert_eq!(
+        coverage(&mut database, "coverage-a")["report"][".read"]["values"],
+        serde_json::json!([{"value":false,"count":1}])
+    );
+}
+
+#[test]
+fn coverage_consumes_seeded_pairwise_lifecycle_cases() {
+    // PICT pairwise rows include the four mandatory regression seeds.
+    let table = r"Outcome	ShortCircuit	Kind	Bypass	Namespace	Reload
+allow	and	boolean	anonymous	same	none
+error	none	call	anonymous	same	rejected
+deny	or	unicode	override	other	same
+allow	and	call	owner	other	changed
+error	or	unicode	owner	same	none
+deny	none	boolean	owner	other	same
+error	and	unicode	anonymous	other	same
+deny	none	boolean	override	same	changed
+allow	or	call	override	same	same
+error	or	unicode	anonymous	other	changed
+deny	and	unicode	owner	other	rejected
+deny	none	call	override	other	none
+error	or	boolean	override	same	rejected
+allow	and	unicode	override	other	rejected
+allow	none	unicode	owner	same	same
+deny	none	boolean	anonymous	other	none
+";
+    for row in table.lines().skip(1) {
+        let values: Vec<_> = row.split('\t').collect();
+        let [outcome, short_circuit, kind, bypass, scope, reload] = values.as_slice() else {
+            panic!("invalid row {row}")
+        };
+        let result = match *outcome {
+            "allow" => "true",
+            "deny" => "false",
+            _ => "data.child('absent').val().contains('x')",
+        };
+        let result = match *kind {
+            "unicode" => format!("'é😀'.length == 3 && ({result})"),
+            "call" => format!("!data.exists() && ({result})"),
+            _ => result.to_owned(),
+        };
+        let expression = match *short_circuit {
+            "and" => format!("true && ({result})"),
+            "or" => format!("false || ({result})"),
+            _ => result,
+        };
+        let source = serde_json::json!({"rules":{".read":expression,".write":false}}).to_string();
+        let mut database = db();
+        load(&mut database, "coverage-pict-a", &source);
+        let namespace = if *scope == "same" {
+            "coverage-pict-a"
+        } else {
+            load(&mut database, "coverage-pict-b", &source);
+            "coverage-pict-b"
+        };
+        let untouched = coverage(&mut database, "coverage-pict-a");
+        let headers = if *bypass == "anonymous" {
+            &[][..]
+        } else {
+            OWNER
+        };
+        let suffix = if *bypass == "override" {
+            "&auth_variable_override=null"
+        } else {
+            ""
+        };
+        let status = call(
+            &mut database,
+            "GET",
+            &format!("/.json?ns={namespace}{suffix}"),
+            headers,
+            "",
+        )
+        .0;
+        assert_eq!(
+            status,
+            if *bypass == "owner" || *outcome == "allow" {
+                200
+            } else {
+                401
+            },
+            "{row}"
+        );
+        let before = coverage(&mut database, namespace);
+        let values = before["report"][".read"]["values"].as_array().unwrap();
+        assert_eq!(
+            values.is_empty(),
+            *bypass == "owner" || *outcome == "error",
+            "{row}"
+        );
+        match *reload {
+            "same" => {
+                load(&mut database, namespace, &source);
+            }
+            "rejected" => {
+                assert_eq!(
+                    call(
+                        &mut database,
+                        "PUT",
+                        &format!("/.settings/rules.json?ns={namespace}"),
+                        OWNER,
+                        r#"{"rules":{".read":"true &&"}}"#
+                    )
+                    .0,
+                    400
+                );
+            }
+            "changed" => {
+                load(&mut database, namespace, r#"{"rules":{".read":false}}"#);
+            }
+            _ => {}
+        }
+        let after = coverage(&mut database, namespace);
+        if *reload == "changed" {
+            assert_eq!(after["report"][".read"]["values"], serde_json::json!([]));
+        } else {
+            assert_eq!(after, before, "{row}");
+        }
+        if *scope == "other" {
+            assert_eq!(
+                coverage(&mut database, "coverage-pict-a"),
+                untouched,
+                "{row}"
+            );
+        }
+        assert_eq!(
+            call(
+                &mut database,
+                "GET",
+                &format!("/.json?ns={namespace}"),
+                OWNER,
+                ""
+            )
+            .1,
+            "null"
+        );
+    }
+}
+
+#[test]
+fn coverage_html_embeds_the_same_data_and_escapes_script_breakers() {
+    let mut database = db();
+    let source = serde_json::json!({"rules":{".read":"'</script><img src=x onerror=alert(1)>😀'.length > 0"}}).to_string();
+    let source = format!("/*\u{2028}*/{source}");
+    load(&mut database, "coverage-html", &source);
+    let expected = coverage(&mut database, "coverage-html");
+    let (response, _) = respond(
+        &mut database,
+        "GET",
+        "/.inspect/coverage?ns=coverage-html",
+        &[],
+        "",
+    );
+    assert_eq!(response.status, 200);
+    assert!(response.headers.contains(&(
+        "Content-Type".to_owned(),
+        "text/html; charset=UTF-8".to_owned()
+    )));
+    let html = String::from_utf8(response.body).unwrap();
+    let data = html
+        .split_once("<script id=\"coverage-data\" type=\"application/json\">")
+        .unwrap()
+        .1
+        .split_once("</script>")
+        .unwrap()
+        .0;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(data).unwrap(),
+        expected
+    );
+    assert!(!data.contains("</script>"));
+    assert!(!data.contains('\u{2028}'));
+    assert!(!html.contains("innerHTML"));
+    for name in ["coverage", "coverage.json"] {
+        let (status, body) = call(
+            &mut database,
+            "POST",
+            &format!("/.inspect/{name}?ns=coverage-html"),
+            &[],
+            "",
+        );
+        assert_eq!(status, 405);
+        assert!(serde_json::from_str::<serde_json::Value>(&body)
+            .unwrap()
+            .is_object());
+    }
+    let mut protected = Database::new(
+        RestOptions {
+            inspect_needs_owner: true,
+            ..RestOptions::default()
+        },
+        7,
+    );
+    for name in ["coverage", "coverage.json"] {
+        assert_eq!(
+            call(
+                &mut protected,
+                "GET",
+                &format!("/.inspect/{name}?ns=coverage-html"),
+                &[],
+                ""
+            )
+            .0,
+            401
+        );
+        assert_eq!(
+            call(
+                &mut protected,
+                "GET",
+                &format!("/.inspect/{name}?ns=coverage-html"),
+                OWNER,
+                ""
+            )
+            .0,
+            200
+        );
+    }
+}
+
+#[test]
+fn coverage_valid_callees_record_arguments_and_invalid_callees_keep_completed_children() {
+    let mut database = db();
+    let text = r#"{"rules":{".read":"data.val().contains('argument')"}}"#;
+    load(&mut database, "coverage-callee", text);
+    assert_eq!(
+        call(&mut database, "GET", "/.json?ns=coverage-callee", &[], "").0,
+        401
+    );
+    let report = coverage(&mut database, "coverage-callee");
+    let expression = &report["report"][".read"];
+    assert_eq!(expression["values"], serde_json::json!([]));
+    assert_eq!(expression["children"][1]["values"], serde_json::json!([]));
+    assert_eq!(
+        expression["children"][0]["children"][1]["values"],
+        serde_json::json!([{"value":"contains","count":1}])
+    );
+    assert_eq!(
+        expression["children"][0]["children"][0]["values"],
+        serde_json::json!([{"value":null,"count":1}])
+    );
+    call(
+        &mut database,
+        "PUT",
+        "/.json?ns=coverage-callee",
+        OWNER,
+        r#""argument""#,
+    );
+    assert_eq!(
+        call(&mut database, "GET", "/.json?ns=coverage-callee", &[], "").0,
+        200
+    );
+    let report = coverage(&mut database, "coverage-callee");
+    assert_eq!(
+        report["report"][".read"]["children"][1]["values"],
+        serde_json::json!([{"value":"argument","count":1}])
+    );
+    assert_eq!(
+        call(&mut database, "GET", "/.json?ns=coverage-callee", OWNER, "").1,
+        r#""argument""#
+    );
+}
+
+#[test]
+fn coverage_same_source_reload_still_revalidates_streams() {
+    let mut database = db();
+    let text = serde_json::json!({"rules":{".read":format!("now < {LATER}")}}).to_string();
+    load(&mut database, "coverage-revalidate", &text);
+    let request = request(
+        "GET",
+        "/.json?ns=coverage-revalidate",
+        &[("Accept", "text/event-stream")],
+        "",
+    );
+    let Handled::Stream { id, .. } = database.handle(&request, NOW) else {
+        panic!("stream")
+    };
+    let before = coverage(&mut database, "coverage-revalidate");
+    assert_eq!(
+        before["report"][".read"]["values"],
+        serde_json::json!([{"value":true,"count":1}])
+    );
+    let events = database
+        .set_rules("coverage-revalidate", &text, LATER)
+        .unwrap();
+    assert_eq!(events, vec![(id, SseEvent::cancel())]);
+    assert_eq!(database.subscription_count(), 0);
+    assert_eq!(
+        coverage(&mut database, "coverage-revalidate")["report"][".read"]["values"],
+        serde_json::json!([{"value":true,"count":1},{"value":false,"count":1}])
+    );
+}
+
+#[test]
+fn coverage_local_decoded_coordinates_keep_raw_unicode_and_escape_anchors_separate() {
+    let mut database = db();
+    for (source, expected_text, leading) in [
+        (
+            serde_json::json!({"rules":{"é😀":{".read":"  '😀'.length > 0 && (\ntrue)"}}})
+                .to_string(),
+            "'😀'.length > 0 && (\ntrue)",
+            2,
+        ),
+        (
+            r#"{"rules":{"é😀":{".read":"\u0074rue"}}}"#.to_owned(),
+            "true",
+            0,
+        ),
+    ] {
+        load(&mut database, "coverage-positions", &source);
+        let anchor = source.find("\".read\":\"").unwrap() + "\".read\":\"".len();
+        let column = source[..anchor].encode_utf16().count() + leading;
+        let report = coverage(&mut database, "coverage-positions");
+        let node = &report["report"]["é😀"][".read"];
+        assert_eq!(node["text"], expected_text);
+        assert_eq!(node["location-start"], format!("0:{column}"));
+        if expected_text.contains('\n') {
+            assert_eq!(node["location-end"], "1:4");
+        } else {
+            assert_eq!(node["location-end"], format!("0:{}", column + 3));
+        }
+    }
+}
+
+#[test]
+fn coverage_html_preserves_prototype_named_rule_children_as_json_data() {
+    let mut database = db();
+    let source = r#"{"rules":{"__proto__":{".read":true},"constructor":{".read":false},"prototype":{".read":"true || data.child('unvisited').exists()"}}}"#;
+    load(&mut database, "coverage-properties", source);
+    for name in ["__proto__", "constructor", "prototype"] {
+        call(
+            &mut database,
+            "GET",
+            &format!("/{name}.json?ns=coverage-properties"),
+            &[],
+            "",
+        );
+    }
+    let expected = coverage(&mut database, "coverage-properties");
+    let (status, html) = call(
+        &mut database,
+        "GET",
+        "/.inspect/coverage?ns=coverage-properties",
+        &[],
+        "",
+    );
+    assert_eq!(status, 200);
+    let data = html
+        .split_once("<script id=\"coverage-data\" type=\"application/json\">")
+        .unwrap()
+        .1
+        .split_once("</script>")
+        .unwrap()
+        .0;
+    let parsed: serde_json::Value = serde_json::from_str(data).unwrap();
+    assert_eq!(parsed, expected);
+    for name in ["__proto__", "constructor", "prototype"] {
+        assert!(parsed["report"].get(name).is_some());
+    }
+    assert!(html.contains("JSON.parse(document.getElementById('coverage-data').textContent)"));
+    assert!(html.contains("Object.hasOwn(report,key)"));
+}

@@ -1,9 +1,16 @@
 //! `projects/{p}/databases/{d}/collectionGroups/{g}/indexes[/{id}]`: create, list, get and
 //! delete composite indexes, answered in production's shapes.
 
+// Native build integration uses the transport's tonic status throughout the admitted callback.
+#![allow(clippy::result_large_err)]
+
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{
     IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, MAX_COMPOSITE_INDEXES,
+};
+use fireemu_core_firestore::text_index::{
+    DefaultTextLanguage, LanguageOverridePolicy, TextIndexBuildError, TextIndexCatalog,
+    TextIndexDefinition, TextIndexState, TextIndexType, TextIndexedField, TextMatchType,
 };
 use fireemu_core_types::ids::CollectionId;
 use serde_json::{json, Value};
@@ -306,18 +313,47 @@ pub(crate) fn route(
     rest: &[&str],
     body: &Value,
 ) -> RestResponse {
+    let enterprise =
+        state.gateway.ctx.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    if enterprise
+        && method == "POST"
+        && rest.is_empty()
+        && (body.get("searchIndexOptions").is_some()
+            || body["fields"].as_array().is_some_and(|fields| {
+                fields
+                    .iter()
+                    .any(|field| field.get("searchConfig").is_some())
+            }))
+    {
+        return create_text_index(state, project, database, group, body)
+            .unwrap_or_else(|status| crate::rest::error_response(&status));
+    }
+    let text = if enterprise {
+        match text_route(state, project, database, group, method, rest) {
+            Ok(Some(response)) if !rest.is_empty() => return response,
+            Ok(response) => response,
+            Err(status) => return crate::rest::error_response(&status),
+        }
+    } else {
+        None
+    };
     let configured = state.local.configured_composites(project, database);
     let registry = state.local.admin().indexes();
     let now = state.local.admin_now();
     match (method, rest) {
         ("POST", []) => create_index(state, (project, database, group), body),
         ("GET", []) => {
-            let indexes: Vec<Value> = registry
+            let mut indexes: Vec<Value> = registry
                 .view(project, database, &configured)
                 .iter()
                 .filter(|i| group == "-" || i.definition.collection_group.as_str() == group)
                 .map(|i| index_json(project, database, i, registry.state(i, now)))
                 .collect();
+            if let Some(response) = &text {
+                if let Some(text_indexes) = response.body["indexes"].as_array() {
+                    indexes.extend(text_indexes.iter().cloned());
+                }
+            }
             if indexes.is_empty() {
                 ok(json!({}))
             } else {
@@ -351,4 +387,315 @@ pub(crate) fn route(
         }
         _ => crate::rest::not_found_text(),
     }
+}
+
+fn text_unverified(message: impl std::fmt::Display) -> tonic::Status {
+    tonic::Status::unimplemented(format!("FS_TEXT_ADMIN_UNVERIFIED: {message}"))
+}
+
+fn text_definition(
+    group: &str,
+    id: String,
+    body: &Value,
+) -> Result<TextIndexDefinition, tonic::Status> {
+    if body.as_object().is_none_or(|object| {
+        object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "queryScope" | "fields" | "searchIndexOptions"))
+    }) || body["queryScope"] != "COLLECTION"
+        || body["searchIndexOptions"]
+            .as_object()
+            .is_none_or(|object| object.len() != 2)
+        || body["searchIndexOptions"]["textLanguage"] != "en"
+    {
+        return Err(text_unverified("text index request options"));
+    }
+    let fields = body["fields"]
+        .as_array()
+        .filter(|fields| fields.len() == 1)
+        .ok_or_else(|| text_unverified("text index fields"))?;
+    let field = &fields[0];
+    if field.as_object().is_none_or(|object| object.len() != 2)
+        || field["searchConfig"]
+            != json!({"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}})
+    {
+        return Err(text_unverified("text index field configuration"));
+    }
+    let path = field["fieldPath"]
+        .as_str()
+        .ok_or_else(|| text_unverified("text field path"))?;
+    let override_path = body["searchIndexOptions"]["textLanguageOverrideFieldPath"]
+        .as_str()
+        .ok_or_else(|| text_unverified("text language override"))?;
+    Ok(TextIndexDefinition {
+        id,
+        collection_id: CollectionId::try_new(group).map_err(text_unverified)?,
+        query_scope: IndexQueryScope::Collection,
+        api_scope: "ANY_API".into(),
+        fields: vec![TextIndexedField {
+            path: FieldPath::parse(path).map_err(text_unverified)?,
+            index_type: TextIndexType::Tokenized,
+            match_type: TextMatchType::MatchGlobally,
+        }],
+        language: DefaultTextLanguage::Tag("en".into()),
+        language_override: LanguageOverridePolicy::ExplicitField(
+            FieldPath::parse(override_path).map_err(text_unverified)?,
+        ),
+        state: TextIndexState::Creating,
+    })
+}
+
+fn text_index_name(project: &str, database: &str, definition: &TextIndexDefinition) -> String {
+    format!(
+        "projects/{project}/databases/{database}/collectionGroups/{}/indexes/{}",
+        definition.collection_id.as_str(),
+        definition.id
+    )
+}
+
+fn text_index_json(
+    project: &str,
+    database: &str,
+    definition: &TextIndexDefinition,
+) -> Result<Value, tonic::Status> {
+    let DefaultTextLanguage::Tag(language) = &definition.language else {
+        return Err(text_unverified("default text language"));
+    };
+    let LanguageOverridePolicy::ExplicitField(override_path) = &definition.language_override else {
+        return Err(text_unverified("text language override policy"));
+    };
+    Ok(json!({
+        "name": text_index_name(project, database, definition), "queryScope": scope_name(definition.query_scope),
+        "fields": definition.fields.iter().map(|field| json!({"fieldPath":field.path.canonical(),"searchConfig":{"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}}})).collect::<Vec<_>>(),
+        "state":definition.state.as_str(),"density":"SPARSE_ANY",
+        "searchIndexOptions":{"textLanguage":language,"textLanguageOverrideFieldPath":override_path.canonical()},
+    }))
+}
+
+fn create_text_index(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    group: &str,
+    body: &Value,
+) -> Result<RestResponse, tonic::Status> {
+    let id = state.local.admin().indexes().reserve_id();
+    let definition = text_definition(group, id, body)?;
+    state.local.with_native_text_snapshot(project, database, |_, catalog| {
+        if let Some((_, _, existing)) = catalog.entries().find(|(p,d,existing)| *p == project && *d == database
+            && existing.collection_id == definition.collection_id && existing.query_scope == definition.query_scope
+            && existing.fields == definition.fields && existing.language == definition.language && existing.language_override == definition.language_override) {
+            return Ok(error(tonic::Code::AlreadyExists, &format!("index already exists with index ID = {}", existing.id), None));
+        }
+        let now = state.local.admin_now();
+        let operation = super::operations::reserve_id(state, project, database);
+        let initial = json!({"name":format!("projects/{project}/databases/{database}/operations/{operation}"),"metadata":{
+            "@type":INDEX_METADATA_TYPE_URL,"startTime":instant(now),"index":text_index_name(project,database,&definition),"state":"INITIALIZING"
+        }});
+        catalog.add(project, database, definition.clone()).map_err(text_unverified)?;
+        let generation = catalog.build(project, database, &definition.id).ok_or_else(|| tonic::Status::internal("text build is missing"))?.generation;
+        catalog.schedule_native(project,database,&definition.id,generation,fireemu_core_firestore::text_index::NativeTextBuildSchedule {operation:operation.clone(),start_time:now,monotonic_start_nanos:state.local.text_build_elapsed_nanos(),owner_epoch:std::sync::Arc::clone(state.local.text_build_epoch())}).map_err(text_unverified)?;
+        state.local.admin().operations().record_text(project, database, &operation,
+            super::operations::NativeTextBuild {index:definition.id.clone(),generation}, initial.clone());
+        Ok(ok(initial))
+    })
+}
+
+fn source_language<'a>(
+    definition: &TextIndexDefinition,
+    document: &'a fireemu_core_firestore::store::Document,
+) -> Option<&'a fireemu_core_firestore::value::Value> {
+    let LanguageOverridePolicy::ExplicitField(path) = &definition.language_override else {
+        return None;
+    };
+    let mut segments = path.segments().iter();
+    let mut value = document.fields.get(segments.next()?)?;
+    for segment in segments {
+        let fireemu_core_firestore::value::Value::Map(fields) = value else {
+            return None;
+        };
+        value = fields.get(segment)?;
+    }
+    Some(value)
+}
+
+/// Optional observer scope; unsupported work in another collection must not block this one.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct NativeTextSelection<'a> {
+    pub collection: Option<&'a str>,
+    pub index: Option<&'a str>,
+    pub operation: Option<&'a str>,
+}
+
+/// Advances one database's native work while its admitted source snapshot and catalog are held.
+/// Separate HTTP observations may straddle this transition; each terminal view remains immutable.
+pub(crate) fn advance_text_builds(
+    local: &crate::local::LocalBackend,
+    project: &str,
+    database: &str,
+    db: &fireemu_core_firestore::store::FirestoreState,
+    catalog: &mut TextIndexCatalog,
+    selection: NativeTextSelection<'_>,
+) -> Result<(), tonic::Status> {
+    local.check_native_text_epoch(catalog)?;
+    let targets: Vec<_> = catalog
+        .entries()
+        .filter(|(p, d, definition)| {
+            *p == project
+                && *d == database
+                && definition.state == TextIndexState::Creating
+                && selection
+                    .collection
+                    .is_none_or(|group| definition.collection_id.as_str() == group)
+                && selection.index.is_none_or(|id| definition.id == id)
+        })
+        .filter_map(|(_, _, definition)| {
+            catalog
+                .build(project, database, &definition.id)
+                .and_then(|build| {
+                    build
+                        .native
+                        .clone()
+                        .map(|schedule| (definition.clone(), build.generation, schedule))
+                })
+        })
+        .filter(|(_, _, schedule)| {
+            selection
+                .operation
+                .is_none_or(|id| schedule.operation == id)
+        })
+        .collect();
+    for (definition, generation, schedule) in targets {
+        let elapsed = std::time::Duration::from_nanos(
+            u64::try_from(
+                local
+                    .text_build_elapsed_nanos()
+                    .saturating_sub(schedule.monotonic_start_nanos),
+            )
+            .unwrap_or(u64::MAX),
+        );
+        if !local
+            .admin()
+            .indexes()
+            .build_due(elapsed, schedule.start_time, local.admin_now())
+        {
+            continue;
+        }
+        let target = super::operations::NativeTextBuild {
+            index: definition.id.clone(),
+            generation,
+        };
+        let documents: Vec<_> = db
+            .documents()
+            .into_iter()
+            .filter(|document| document.path.collection_id() == &definition.collection_id)
+            .collect();
+        for document in &documents {
+            if let Some(language) = source_language(&definition, document) {
+                match language {
+                    fireemu_core_firestore::value::Value::String(tag)
+                        if tag == "en"
+                            || !fireemu_core_firestore::text_index::is_language_tag(tag) => {}
+                    _ => return Err(text_unverified("source language value")),
+                }
+            }
+        }
+        let mut ready_definition = definition.clone();
+        ready_definition.state = TextIndexState::Ready;
+        let mut response = text_index_json(project, database, &ready_definition)?;
+        response["@type"] = json!(INDEX_TYPE_URL);
+        let end = std::cmp::max(
+            local.admin_now(),
+            fireemu_core_types::time::LogicalInstant::from_nanos(
+                schedule.start_time.as_nanos() + 1_000_000,
+            ),
+        );
+        local.admin().operations().finish_text(project,database,&schedule.operation,&target, || {
+            let mut terminal = json!({"name":format!("projects/{project}/databases/{database}/operations/{}",schedule.operation),"metadata":{"@type":INDEX_METADATA_TYPE_URL,"startTime":instant(schedule.start_time),"index":text_index_name(project,database,&definition),"state":"INITIALIZING"}});
+            terminal["done"] = json!(true);
+            terminal["metadata"]["endTime"] = instant(end);
+            match catalog.lifecycle(project,database,&target.index,"completeBackfill",Some(target.generation),10_000,None,documents.clone(),fireemu_adapter_support::lexical::tokenize_index) {
+                Ok(()) => {
+                    terminal["metadata"]["state"] = json!("SUCCESSFUL");
+                    terminal["metadata"]["progressDocuments"] = if documents.is_empty() {json!({})} else {json!({"estimatedWork":documents.len().to_string(),"completedWork":documents.len().to_string()})};
+                    terminal["response"] = response;
+                }
+                Err(TextIndexBuildError::InvalidSource(fireemu_core_firestore::text_index::TextIndexSourceError::Search(fireemu_core_firestore::text_search::SearchError::InvalidLanguageOverride(path)))) => {
+                    let language = documents.iter().find(|document| document.path.resource_name() == path).and_then(|document| source_language(&definition,document));
+                    let Some(fireemu_core_firestore::value::Value::String(value)) = language else {return Err(text_unverified("unresolved source language error"));};
+                    if fireemu_core_firestore::text_index::is_language_tag(value) { return Err(text_unverified("unrecorded text language error")); }
+                    let message = format!("Invalid text language: {value}");
+                    catalog.lifecycle(project,database,&target.index,"failBuild",Some(target.generation),1,Some(&message),Vec::new(),fireemu_adapter_support::lexical::tokenize_index).map_err(text_unverified)?;
+                    terminal["metadata"]["state"] = json!("FAILED");
+                    terminal["metadata"]["progressDocuments"] = json!({});
+                    terminal["error"] = json!({"code":3,"message":message});
+                }
+                Err(error) => return Err(text_unverified(error)),
+            }
+            Ok(terminal)
+        })?;
+    }
+    Ok(())
+}
+
+fn text_route(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    group: &str,
+    method: &str,
+    rest: &[&str],
+) -> Result<Option<RestResponse>, tonic::Status> {
+    if state.local.text_search_configuration()?.is_none() {
+        return Ok(None);
+    }
+    if method == "GET" {
+        state.local.advance_native_text_builds(
+            project,
+            database,
+            NativeTextSelection {
+                collection: (group != "-").then_some(group),
+                index: rest.first().copied(),
+                operation: None,
+            },
+        )?;
+    }
+    state
+        .local
+        .with_native_text_snapshot(project, database, |_, catalog| {
+            let scoped = |definition: &&TextIndexDefinition| {
+                group == "-" || definition.collection_id.as_str() == group
+            };
+            match (method, rest) {
+                ("GET", []) => {
+                    let indexes = catalog
+                        .entries()
+                        .filter(|(p, d, _)| *p == project && *d == database)
+                        .map(|(_, _, definition)| definition)
+                        .filter(scoped)
+                        .map(|definition| text_index_json(project, database, definition))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(Some(ok(json!({"indexes":indexes}))))
+                }
+                ("GET", [id]) => catalog.get(project, database, id).filter(scoped).map_or(
+                    Ok(None),
+                    |definition| {
+                        text_index_json(project, database, definition).map(|value| Some(ok(value)))
+                    },
+                ),
+                ("DELETE", [id]) => {
+                    if catalog
+                        .get(project, database, id)
+                        .is_some_and(|definition| {
+                            group == "-" || definition.collection_id.as_str() == group
+                        })
+                    {
+                        catalog.remove(project, database, id);
+                        return Ok(Some(ok(json!({}))));
+                    }
+                    Ok(None)
+                }
+                _ => Ok(None),
+            }
+        })
 }

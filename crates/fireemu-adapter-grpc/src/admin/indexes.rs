@@ -145,6 +145,24 @@ impl IndexRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Allocates an opaque ID shared by composite and text index resources.
+    pub(crate) fn reserve_id(&self) -> String {
+        index_id(&mut self.lock().seed)
+    }
+
+    /// The common local elapsed-build policy, independent of index kind.
+    pub(crate) fn build_due(
+        &self,
+        elapsed: Duration,
+        start_time: LogicalInstant,
+        now: LogicalInstant,
+    ) -> bool {
+        let build = self.build();
+        elapsed >= build
+            || now.as_nanos() - start_time.as_nanos()
+                >= i128::try_from(build.as_nanos()).unwrap_or(i128::MAX)
+    }
+
     /// Sets how long a build takes (tests and embedders).
     pub fn set_build_duration(&self, build: Duration) {
         *self
@@ -163,11 +181,7 @@ impl IndexRegistry {
     /// Where `index` stands at virtual time `now`.
     #[must_use]
     pub fn state(&self, index: &RuntimeIndex, now: LogicalInstant) -> IndexState {
-        let build = self.build();
-        let virtual_elapsed = now.as_nanos() - index.start_time.as_nanos();
-        if index.started.elapsed() >= build
-            || virtual_elapsed >= i128::try_from(build.as_nanos()).unwrap_or(i128::MAX)
-        {
+        if self.build_due(index.started.elapsed(), index.start_time, now) {
             IndexState::Ready
         } else {
             IndexState::Creating

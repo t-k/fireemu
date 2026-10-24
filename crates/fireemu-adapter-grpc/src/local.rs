@@ -314,6 +314,8 @@ pub struct FieldOperation {
 pub struct LocalBackend {
     gateway: Gateway,
     text_search: Mutex<Option<crate::text_search::Configuration>>,
+    text_build_origin: std::time::Instant,
+    text_build_epoch: Arc<()>,
     /// Reloadable index catalog used for every new query plan.
     indexes: RwLock<BTreeMap<(Option<String>, String), fireemu_core_firestore::index::IndexSet>>,
     /// Time-to-live field configuration per database, keyed like [`LocalBackend::indexes`]:
@@ -2634,6 +2636,8 @@ impl LocalBackend {
             lock_lease: DEFAULT_LOCK_LEASE,
             gateway,
             text_search: Mutex::new(None),
+            text_build_origin: std::time::Instant::now(),
+            text_build_epoch: Arc::new(()),
             indexes,
             ttl: RwLock::new(BTreeMap::new()),
             ttl_sweeps: Mutex::new(TtlSweepState::default()),
@@ -2902,6 +2906,121 @@ impl LocalBackend {
             .map_err(|_| lock_poisoned())
     }
 
+    pub(crate) fn with_native_text_snapshot<T>(
+        &self,
+        project: &str,
+        database: &str,
+        f: impl FnOnce(
+            &FirestoreState,
+            &mut fireemu_core_firestore::text_index::TextIndexCatalog,
+        ) -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let config = self.text_search_configuration()?.ok_or_else(|| {
+            Status::unimplemented("FS_TEXT_ADMIN_UNVERIFIED: no text catalog attached")
+        })?;
+        let parent = parse_parent(&format!(
+            "projects/{project}/databases/{database}/documents"
+        ))
+        .map_err(status)?;
+        self.read_db(&parent, |db| {
+            let mut catalog = config.catalog.lock().map_err(|_| lock_poisoned())?;
+            self.check_native_text_epoch(&catalog)?;
+            f(db, &mut catalog)
+        })
+    }
+
+    pub(crate) fn text_build_epoch(&self) -> &Arc<()> {
+        &self.text_build_epoch
+    }
+
+    pub(crate) fn check_native_text_epoch(
+        &self,
+        catalog: &fireemu_core_firestore::text_index::TextIndexCatalog,
+    ) -> Result<(), Status> {
+        if catalog.entries().any(|(p, d, definition)| {
+            catalog
+                .build(p, d, &definition.id)
+                .and_then(|build| build.native.as_ref())
+                .is_some_and(|native| !Arc::ptr_eq(&native.owner_epoch, &self.text_build_epoch))
+        }) {
+            return Err(Status::unimplemented(
+                "FS_TEXT_ADMIN_UNVERIFIED: text build belongs to another backend epoch",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn text_build_elapsed_nanos(&self) -> u128 {
+        self.text_build_origin.elapsed().as_nanos()
+    }
+
+    pub(crate) fn advance_native_text_builds(
+        &self,
+        project: &str,
+        database: &str,
+        selection: crate::admin::index_rest::NativeTextSelection<'_>,
+    ) -> Result<(), Status> {
+        let Some(config) = self.text_search_configuration()? else {
+            return Ok(());
+        };
+        let pending = {
+            let catalog = config.catalog.lock().map_err(|_| lock_poisoned())?;
+            let pending = catalog.entries().any(|(p, d, definition)| {
+                p == project
+                    && d == database
+                    && definition.state
+                        == fireemu_core_firestore::text_index::TextIndexState::Creating
+                    && catalog
+                        .build(p, d, &definition.id)
+                        .is_some_and(|build| build.native.is_some())
+            });
+            pending
+        };
+        if !pending {
+            return Ok(());
+        }
+        self.with_native_text_snapshot(project, database, |db, catalog| {
+            self.advance_text_builds_at_snapshot(project, database, db, catalog, selection)
+        })
+    }
+
+    pub(crate) fn advance_text_builds_at_snapshot(
+        &self,
+        project: &str,
+        database: &str,
+        db: &FirestoreState,
+        catalog: &mut fireemu_core_firestore::text_index::TextIndexCatalog,
+        selection: crate::admin::index_rest::NativeTextSelection<'_>,
+    ) -> Result<(), Status> {
+        crate::admin::index_rest::advance_text_builds(
+            self, project, database, db, catalog, selection,
+        )
+    }
+
+    fn forget_native_text_builds(&self, owned: impl Fn(&str, &str) -> bool) {
+        let Ok(Some(config)) = self.text_search_configuration() else {
+            return;
+        };
+        if let Ok(mut catalog) = config.catalog.lock() {
+            let targets: Vec<_> = catalog
+                .entries()
+                .filter(|(p, d, definition)| {
+                    owned(p, d)
+                        && catalog
+                            .build(p, d, &definition.id)
+                            .and_then(|build| build.native.as_ref())
+                            .is_some_and(|native| {
+                                Arc::ptr_eq(&native.owner_epoch, &self.text_build_epoch)
+                            })
+                })
+                .map(|(p, d, definition)| (p.to_owned(), d.to_owned(), definition.id.clone()))
+                .collect();
+            for (project, database, id) in targets {
+                catalog.remove(&project, &database, &id);
+            }
+        };
+    }
+
     /// The session's admission barrier (share it with every other mutable surface).
     #[must_use]
     pub fn barrier(&self) -> Arc<AdmissionBarrier> {
@@ -2989,6 +3108,7 @@ impl LocalBackend {
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         let cleared = self.take_scope(scope);
+        self.forget_native_text_builds(|project, _| scope.owns_project(project));
         self.admin.reset(|project| scope.owns_project(project));
         self.bump_generations(&cleared);
         self.announce_wipe(cleared);
@@ -2998,6 +3118,7 @@ impl LocalBackend {
     /// the wipe, and a later request is refused unless something creates it again.
     pub fn delete_database(&self, project: &str, database: &str) {
         let _exclusive = self.barrier.pause();
+        self.forget_native_text_builds(|p, d| p == project && d == database);
         let key = (project.to_owned(), database.to_owned());
         let removed = match self.databases.lock() {
             Ok(mut dbs) => dbs.remove(&key).map(DatabaseHandle),

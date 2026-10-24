@@ -215,10 +215,20 @@ fn execute_at_snapshot(
                    version: Option<fireemu_core_firestore::store::CommitVersion>,
                    check: crate::rules::ReadCheck<'_>| {
         guard(db, version, check)?;
-        let catalog = config
+        let mut catalog = config
             .catalog
             .lock()
             .map_err(|_| Status::internal("text index catalog is poisoned"))?;
+        local.advance_text_builds_at_snapshot(
+            parent.project.as_str(),
+            parent.database.as_str(),
+            db,
+            &mut catalog,
+            crate::admin::index_rest::NativeTextSelection {
+                collection: Some(&collection),
+                ..Default::default()
+            },
+        )?;
         let definitions = catalog
             .entries()
             .filter(|(p, d, def)| {

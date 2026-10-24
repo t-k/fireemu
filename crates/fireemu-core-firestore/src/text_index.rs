@@ -278,6 +278,30 @@ impl TextIndexSet {
     }
 }
 
+/// Native build provenance and transport-neutral scheduling offsets. The owning backend
+/// interprets the monotonic offset against its own lifetime; snapshots stay in that backend.
+#[derive(Debug, Clone)]
+pub struct NativeTextBuildSchedule {
+    /// The operation's final resource segment.
+    pub operation: String,
+    /// Logical start instant used by the shared build timing policy.
+    pub start_time: fireemu_core_types::time::LogicalInstant,
+    /// Nanoseconds elapsed from the owning backend's monotonic epoch at creation.
+    pub monotonic_start_nanos: u128,
+    /// Identity of the owning backend epoch; cloning preserves identity rather than rebasing.
+    pub owner_epoch: std::sync::Arc<()>,
+}
+
+impl PartialEq for NativeTextBuildSchedule {
+    fn eq(&self, other: &Self) -> bool {
+        self.operation == other.operation
+            && self.start_time == other.start_time
+            && self.monotonic_start_nanos == other.monotonic_start_nanos
+            && std::sync::Arc::ptr_eq(&self.owner_epoch, &other.owner_epoch)
+    }
+}
+impl Eq for NativeTextBuildSchedule {}
+
 /// Progress of one explicit local index build. A completed snapshot is published only by
 /// `completeBackfill`; advancing a batch never makes a partially built index searchable.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -290,6 +314,8 @@ pub struct TextIndexBuild {
     pub total: Option<usize>,
     /// Injected failure, retained until repair.
     pub failure: Option<String>,
+    /// Native provenance survives bounded operation-view eviction and terminal view deletion.
+    pub native: Option<NativeTextBuildSchedule>,
     source: Vec<crate::store::Document>,
     index: Option<crate::text_search::SearchIndex>,
 }
@@ -310,6 +336,23 @@ impl TextIndexBuild {
     }
 }
 
+/// Structured source refusals retain the local control API's existing error text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextIndexSourceError {
+    /// An index input failure with its original typed search cause.
+    Search(crate::text_search::SearchError),
+    /// A source document belongs to another project, database or collection.
+    OutsideScope,
+}
+impl fmt::Display for TextIndexSourceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Search(error) => fmt::Display::fmt(error, f),
+            Self::OutsideScope => f.write_str("document is outside the text index scope"),
+        }
+    }
+}
+
 /// A refused local build operation. A refusal never changes the catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextIndexBuildError {
@@ -324,13 +367,13 @@ pub enum TextIndexBuildError {
     /// No further unique generation can be allocated.
     GenerationExhausted,
     /// Invalid source language or duplicate document identity.
-    InvalidSource(String),
+    InvalidSource(TextIndexSourceError),
 }
 
 impl fmt::Display for TextIndexBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Self::InvalidSource(message) = self {
-            return f.write_str(message);
+            return fmt::Display::fmt(message, f);
         }
         f.write_str(match self {
             Self::InvalidSource(_) => "invalid text index source",
@@ -419,6 +462,11 @@ impl TextIndexCatalog {
             if let Some(index) = &build.index {
                 total = total.saturating_add(index.retained_bytes());
             }
+            if let Some(native) = &build.native {
+                total = total
+                    .saturating_add(bytes(native.operation.capacity()))
+                    .saturating_add(16);
+            }
             if let Some(failure) = &build.failure {
                 total = total.saturating_add(bytes(failure.capacity()));
             }
@@ -451,6 +499,26 @@ impl TextIndexCatalog {
             },
         );
         Ok(warnings)
+    }
+
+    /// Attaches Native provenance to exactly the newly inserted generation.
+    pub fn schedule_native(
+        &mut self,
+        project: &str,
+        database: &str,
+        id: &str,
+        generation: u64,
+        schedule: NativeTextBuildSchedule,
+    ) -> Result<(), TextIndexBuildError> {
+        let build = self
+            .builds
+            .get_mut(&(project.to_owned(), database.to_owned(), id.to_owned()))
+            .ok_or(TextIndexBuildError::NotFound)?;
+        if build.generation != generation {
+            return Err(TextIndexBuildError::StaleGeneration);
+        }
+        build.native = Some(schedule);
+        Ok(())
     }
 
     /// Removes a definition; `true` when it existed.
@@ -589,7 +657,7 @@ impl TextIndexCatalog {
                 || document.path.collection_id() != &def.collection_id
         }) {
             return Err(TextIndexBuildError::InvalidSource(
-                "document is outside the text index scope".into(),
+                TextIndexSourceError::OutsideScope,
             ));
         }
         let (prepared_index, prepared_processed) =
@@ -666,9 +734,8 @@ fn prepare_postings(
     documents: &[crate::store::Document],
     analyze: fn(&str) -> Vec<String>,
 ) -> Result<(Option<crate::text_search::SearchIndex>, usize), TextIndexBuildError> {
-    let source_error = |error: crate::text_search::SearchError| {
-        TextIndexBuildError::InvalidSource(error.to_string())
-    };
+    let source_error =
+        |error| TextIndexBuildError::InvalidSource(TextIndexSourceError::Search(error));
     let convert = |documents: &[crate::store::Document]| {
         documents
             .iter()
@@ -744,5 +811,176 @@ mod retained_bytes_tests {
             .expect("valid definition");
 
         assert!(catalog.retained_bytes() > empty);
+    }
+}
+
+#[cfg(test)]
+mod generation_properties {
+    use super::*;
+
+    fn definition() -> TextIndexDefinition {
+        TextIndexDefinition {
+            id: "generation".into(),
+            collection_id: CollectionId::try_new("items").unwrap(),
+            query_scope: IndexQueryScope::Collection,
+            api_scope: "ANY_API".into(),
+            fields: vec![TextIndexedField {
+                path: FieldPath::parse("title").unwrap(),
+                index_type: TextIndexType::Tokenized,
+                match_type: TextMatchType::MatchGlobally,
+            }],
+            language: DefaultTextLanguage::Tag("en".into()),
+            language_override: LanguageOverridePolicy::ExplicitField(
+                FieldPath::parse("language").unwrap(),
+            ),
+            state: TextIndexState::Creating,
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+        #[test]
+        fn generations_and_lifecycle_are_scoped_under_replacement(
+            steps in proptest::collection::vec((0usize..4, 0u8..5, proptest::prelude::any::<bool>()), 1..64)
+        ) {
+            let mut catalog=TextIndexCatalog::default();
+            let mut model=std::collections::BTreeMap::<usize,(u64,TextIndexState)>::new();
+            let mut stale=std::collections::BTreeMap::new();
+            for (scope,action,use_stale) in steps {
+                let project=if scope<2 {"p"} else {"other"};
+                let database=if scope%2==0 {"(default)"} else {"named"};
+                if action==0 {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = model.entry(scope) {
+                        catalog.add(project,database,definition()).unwrap();
+                        let generation=catalog.build(project,database,"generation").unwrap().generation;
+                        if let Some(old)=stale.get(&scope) {proptest::prop_assert!(generation>*old);}
+                        entry.insert((generation,TextIndexState::Creating));
+                    }
+                } else if action==1 {
+                    if let Some((generation,_))=model.remove(&scope) {stale.insert(scope,generation);}
+                    catalog.remove(project,database,"generation");
+                } else if let Some(&(generation,state))=model.get(&scope) {
+                    let supplied=if use_stale {Some(stale.get(&scope).copied().unwrap_or(0))} else {Some(generation)};
+                    let operation=match action {2=>"completeBackfill",3=>"failBuild",_=>"repair"};
+                    let before=catalog.clone();
+                    let answer=catalog.lifecycle(project,database,"generation",operation,supplied,1,None,Vec::new(),|_|Vec::new());
+                    let allowed=supplied==Some(generation) && match action {2=>state==TextIndexState::Creating,3=>state!=TextIndexState::NeedsRepair,_=>state==TextIndexState::NeedsRepair};
+                    proptest::prop_assert_eq!(answer.is_ok(),allowed);
+                    if allowed {
+                        let next_state=match action {2=>TextIndexState::Ready,3=>TextIndexState::NeedsRepair,_=>TextIndexState::Creating};
+                        let next_generation=catalog.build(project,database,"generation").unwrap().generation;
+                        if action==4 {proptest::prop_assert!(next_generation>generation);stale.insert(scope,generation);}
+                        model.insert(scope,(next_generation,next_state));
+                    } else {proptest::prop_assert_eq!(&catalog,&before);}
+                }
+                for (&index,&(generation,state)) in &model {
+                    let p=if index<2 {"p"} else {"other"};let d=if index%2==0 {"(default)"} else {"named"};
+                    proptest::prop_assert_eq!(catalog.build(p,d,"generation").unwrap().generation,generation);
+                    proptest::prop_assert_eq!(catalog.get(p,d,"generation").unwrap().state,state);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod native_schedule_tests {
+    use super::*;
+
+    #[test]
+    fn source_causes_keep_the_existing_local_control_display() {
+        let cause = crate::text_search::SearchError::InvalidLanguageOverride(
+            "projects/p/databases/(default)/documents/items/doc".into(),
+        );
+        let error = TextIndexBuildError::InvalidSource(TextIndexSourceError::Search(cause.clone()));
+        assert_eq!(error.to_string(), cause.to_string());
+        assert!(matches!(
+            error,
+            TextIndexBuildError::InvalidSource(TextIndexSourceError::Search(
+                crate::text_search::SearchError::InvalidLanguageOverride(_)
+            ))
+        ));
+        assert_eq!(
+            TextIndexBuildError::InvalidSource(TextIndexSourceError::OutsideScope).to_string(),
+            "document is outside the text index scope"
+        );
+    }
+
+    #[test]
+    fn native_schedule_identity_is_pointer_based_and_survives_catalog_capture() {
+        let epoch = std::sync::Arc::new(());
+        let schedule = NativeTextBuildSchedule {
+            operation: "operation".into(),
+            start_time: fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            monotonic_start_nanos: 17,
+            owner_epoch: std::sync::Arc::clone(&epoch),
+        };
+        assert_eq!(schedule, schedule.clone());
+        assert_ne!(
+            schedule,
+            NativeTextBuildSchedule {
+                owner_epoch: std::sync::Arc::new(()),
+                ..schedule.clone()
+            }
+        );
+        let mut catalog = TextIndexCatalog::default();
+        catalog
+            .add(
+                "p",
+                "(default)",
+                TextIndexDefinition {
+                    id: "native".into(),
+                    collection_id: CollectionId::try_new("items").unwrap(),
+                    query_scope: IndexQueryScope::Collection,
+                    api_scope: "ANY_API".into(),
+                    fields: vec![TextIndexedField {
+                        path: FieldPath::parse("title").unwrap(),
+                        index_type: TextIndexType::Tokenized,
+                        match_type: TextMatchType::MatchGlobally,
+                    }],
+                    language: DefaultTextLanguage::Tag("en".into()),
+                    language_override: LanguageOverridePolicy::ExplicitField(
+                        FieldPath::parse("language").unwrap(),
+                    ),
+                    state: TextIndexState::Creating,
+                },
+            )
+            .unwrap();
+        let generation = catalog
+            .build("p", "(default)", "native")
+            .unwrap()
+            .generation;
+        let before = catalog.clone();
+        assert_eq!(
+            catalog.schedule_native("p", "(default)", "native", generation + 1, schedule.clone()),
+            Err(TextIndexBuildError::StaleGeneration)
+        );
+        assert_eq!(catalog, before);
+        catalog
+            .schedule_native("p", "(default)", "native", generation, schedule.clone())
+            .unwrap();
+        let captured = catalog.extract(|project| project == "p");
+        catalog.retain_others(|project| project == "p");
+        catalog.replace(|project| project == "p", &captured);
+        assert_eq!(
+            catalog
+                .build("p", "(default)", "native")
+                .unwrap()
+                .native
+                .as_ref(),
+            Some(&schedule)
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &catalog
+                .build("p", "(default)", "native")
+                .unwrap()
+                .native
+                .as_ref()
+                .unwrap()
+                .owner_epoch,
+            &epoch
+        ));
+        catalog.remove("p", "(default)", "native");
+        assert!(catalog.build("p", "(default)", "native").is_none());
     }
 }

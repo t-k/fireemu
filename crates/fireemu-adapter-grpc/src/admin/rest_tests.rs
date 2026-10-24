@@ -2511,3 +2511,667 @@ proptest::proptest! {
         proptest::prop_assert_eq!(status != 501, allowed && !mongo);
     }
 }
+
+fn native_text_body() -> Value {
+    json!({"queryScope":"COLLECTION","fields":[{
+        "fieldPath":"title","searchConfig":{"textSpec":{"indexSpecs":[{
+            "indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"
+        }]}}
+    }],"searchIndexOptions":{"textLanguage":"en","textLanguageOverrideFieldPath":"language"}})
+}
+
+fn native_text_state() -> (
+    RestState,
+    Arc<Mutex<VirtualClock>>,
+    Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+) {
+    let (state, clock) = enterprise_native_state(true);
+    state
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::from_secs(3600));
+    let catalog = Arc::new(Mutex::new(
+        fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+    ));
+    state
+        .local
+        .set_text_indexes(Arc::clone(&catalog), false)
+        .unwrap();
+    (state, clock, catalog)
+}
+
+#[test]
+fn native_text_admin_success_shares_catalog_wire_schema_and_terminal_operation() {
+    let (state, clock, catalog) = native_text_state();
+    for database in ["(default)", "entnamed"] {
+        let base = format!("/v1/projects/p/databases/{database}");
+        let group = format!("{base}/collectionGroups/items/indexes");
+        let (status, body) = call(
+            &state,
+            "PATCH",
+            &format!("{base}/documents/items/good"),
+            json!({"fields":{"title":{"stringValue":"repairprobe-marker"},"language":{"stringValue":"en"}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, initial) = call(&state, "POST", &group, native_text_body());
+        assert_eq!(status, 200, "{initial}");
+        assert_eq!(initial["metadata"]["state"], "INITIALIZING");
+        assert!(initial.get("done").is_none());
+        let index_name = initial["metadata"]["index"].as_str().unwrap();
+        let index_path = format!("/v1/{index_name}");
+        let operation_path = format!("/v1/{}", initial["name"].as_str().unwrap());
+        let id = index_name.rsplit('/').next().unwrap();
+        assert_eq!(
+            catalog
+                .lock()
+                .unwrap()
+                .get("p", database, id)
+                .unwrap()
+                .state,
+            fireemu_core_firestore::text_index::TextIndexState::Creating
+        );
+        let (status, creating) = call(&state, "GET", &index_path, Value::Null);
+        assert_eq!(status, 200, "{creating}");
+        assert_eq!(creating["state"], "CREATING");
+        assert_eq!(creating["fields"], native_text_body()["fields"]);
+        assert_eq!(creating["density"], "SPARSE_ANY");
+        assert_eq!(
+            creating["searchIndexOptions"],
+            native_text_body()["searchIndexOptions"]
+        );
+        let (status, listed) = call(&state, "GET", &group, Value::Null);
+        assert_eq!(status, 200, "{listed}");
+        assert_eq!(listed["indexes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            call(
+                &state,
+                "GET",
+                &index_path.replacen("/projects/p/", "/projects/other/", 1),
+                Value::Null
+            )
+            .0,
+            404
+        );
+        advance(&clock, 3600);
+        let (status, terminal) = call(&state, "GET", &operation_path, Value::Null);
+        assert_eq!(status, 200, "{terminal}");
+        assert_eq!(terminal["done"], true);
+        assert_eq!(terminal["metadata"]["state"], "SUCCESSFUL");
+        assert_eq!(
+            terminal["metadata"]["progressDocuments"],
+            json!({"estimatedWork":"1","completedWork":"1"})
+        );
+        assert_eq!(terminal["response"]["state"], "READY");
+        assert_eq!(terminal["response"]["fields"], native_text_body()["fields"]);
+        assert_eq!(
+            catalog
+                .lock()
+                .unwrap()
+                .get("p", database, id)
+                .unwrap()
+                .state,
+            fireemu_core_firestore::text_index::TextIndexState::Ready
+        );
+        let (status, hits) = call(
+            &state,
+            "POST",
+            &format!("{base}/documents:executePipeline"),
+            json!({"structuredPipeline":{"pipeline":{"stages":[
+                {"name":"collection","args":[{"referenceValue":"/items"}]},
+                {"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"repairprobe-marker"}]}}}}
+            ]}}}),
+        );
+        assert_eq!(status, 200, "{hits}");
+        assert_eq!(hits[0]["results"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            call(&state, "DELETE", &index_path, Value::Null),
+            (200, json!({}))
+        );
+        assert_eq!(call(&state, "GET", &index_path, Value::Null).0, 404);
+        assert!(catalog.lock().unwrap().get("p", database, id).is_none());
+        assert_eq!(
+            call(&state, "GET", &operation_path, Value::Null).1,
+            terminal
+        );
+    }
+}
+
+#[test]
+fn native_text_admin_failed_operation_stays_terminal_after_source_and_index_deletion() {
+    let (state, clock, catalog) = native_text_state();
+    let base = "/v1/projects/p/databases/(default)";
+    let bad = format!("{base}/documents/items/bad");
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        &bad,
+        json!({"fields":{"title":{"stringValue":"repairprobe-marker"},"language":{"stringValue":"not a language"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, initial) = call(
+        &state,
+        "POST",
+        &format!("{base}/collectionGroups/items/indexes"),
+        native_text_body(),
+    );
+    assert_eq!(status, 200, "{initial}");
+    let index_name = initial["metadata"]["index"].as_str().unwrap();
+    let id = index_name.rsplit('/').next().unwrap();
+    let index_path = format!("/v1/{index_name}");
+    let operation_path = format!("/v1/{}", initial["name"].as_str().unwrap());
+    advance(&clock, 3600);
+    let (status, failed) = call(&state, "GET", &operation_path, Value::Null);
+    assert_eq!(status, 200, "{failed}");
+    assert_eq!(failed["done"], true);
+    assert_eq!(failed["metadata"]["state"], "FAILED");
+    assert_eq!(failed["metadata"]["progressDocuments"], json!({}));
+    assert_eq!(
+        failed["error"],
+        json!({"code":3,"message":"Invalid text language: not a language"})
+    );
+    assert!(failed.get("response").is_none());
+    assert_eq!(
+        call(&state, "GET", &index_path, Value::Null).1["state"],
+        "NEEDS_REPAIR"
+    );
+    assert_eq!(
+        catalog
+            .lock()
+            .unwrap()
+            .get("p", "(default)", id)
+            .unwrap()
+            .state,
+        fireemu_core_firestore::text_index::TextIndexState::NeedsRepair
+    );
+    assert_eq!(call(&state, "DELETE", &bad, Value::Null).0, 200);
+    advance(&clock, 3600);
+    assert_eq!(call(&state, "GET", &operation_path, Value::Null).1, failed);
+    assert_eq!(
+        call(&state, "GET", &index_path, Value::Null).1["state"],
+        "NEEDS_REPAIR"
+    );
+    assert_eq!(
+        call(&state, "DELETE", &index_path, Value::Null),
+        (200, json!({}))
+    );
+    assert_eq!(call(&state, "GET", &index_path, Value::Null).0, 404);
+    assert_eq!(call(&state, "GET", &operation_path, Value::Null).1, failed);
+}
+
+#[test]
+fn native_text_admin_lists_configuration_from_the_same_search_catalog() {
+    use fireemu_core_firestore::text_index::{
+        DefaultTextLanguage, LanguageOverridePolicy, TextIndexDefinition, TextIndexState,
+        TextIndexType, TextIndexedField, TextMatchType,
+    };
+    let (state, _, catalog) = native_text_state();
+    catalog
+        .lock()
+        .unwrap()
+        .add(
+            "p",
+            "(default)",
+            TextIndexDefinition {
+                id: "CICAgLocalText".to_owned(),
+                collection_id: fireemu_core_types::ids::CollectionId::try_new("items").unwrap(),
+                query_scope: fireemu_core_firestore::index::IndexQueryScope::Collection,
+                api_scope: "ANY_API".to_owned(),
+                fields: vec![TextIndexedField {
+                    path: fireemu_core_firestore::field_path::FieldPath::parse("title").unwrap(),
+                    index_type: TextIndexType::Tokenized,
+                    match_type: TextMatchType::MatchGlobally,
+                }],
+                language: DefaultTextLanguage::Tag("en".to_owned()),
+                language_override: LanguageOverridePolicy::ExplicitField(
+                    fireemu_core_firestore::field_path::FieldPath::parse("language").unwrap(),
+                ),
+                state: TextIndexState::Ready,
+            },
+        )
+        .unwrap();
+    let (status, listed) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(
+        listed["indexes"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
+    assert_eq!(listed["indexes"][0]["fields"], native_text_body()["fields"]);
+    assert_eq!(listed["indexes"][0]["density"], "SPARSE_ANY");
+    assert_eq!(
+        listed["indexes"][0]["searchIndexOptions"],
+        native_text_body()["searchIndexOptions"]
+    );
+    state.local.reset_project("p");
+    assert!(
+        catalog
+            .lock()
+            .unwrap()
+            .get("p", "(default)", "CICAgLocalText")
+            .is_some(),
+        "configured definition survives native cleanup"
+    );
+}
+
+#[test]
+fn native_text_admin_work_outlives_operation_view_retention() {
+    let (state, clock, _) = native_text_state();
+    let (status, initial) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+        native_text_body(),
+    );
+    assert_eq!(status, 200, "{initial}");
+    let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+    for i in 0..130 {
+        state.local.admin().operations().record_views(
+            "p",
+            "(default)",
+            &format!("retained-{i}"),
+            json!({"done":true}),
+            json!({"done":true}),
+        );
+    }
+    advance(&clock, 3600);
+    assert_eq!(call(&state, "GET", &index, Value::Null).1["state"], "READY");
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            &format!("/v1/{}", initial["name"].as_str().unwrap()),
+            Value::Null
+        )
+        .0,
+        404
+    );
+    state.local.reset_project("p");
+    assert_eq!(call(&state, "GET", &index, Value::Null).0, 404);
+}
+
+#[test]
+fn native_text_admin_completion_reconciles_construction_writes_and_merges_index_kinds() {
+    let (state, clock, _) = native_text_state();
+    let group = "/v1/projects/p/databases/(default)/collectionGroups/items/indexes";
+    let (_, initial) = call(&state, "POST", group, native_text_body());
+    let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+    let (status, ordinary) = call(
+        &state,
+        "POST",
+        group,
+        json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}),
+    );
+    assert_eq!(status, 200, "{ordinary}");
+    let (_, listed) = call(&state, "GET", group, Value::Null);
+    let mut densities: Vec<_> = listed["indexes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|index| index["density"].as_str().unwrap())
+        .collect();
+    densities.sort_unstable();
+    assert_eq!(densities, ["SPARSE_ALL", "SPARSE_ANY"]);
+    for id in ["during1", "during2"] {
+        let (status, body) = call(
+            &state,
+            "PATCH",
+            &format!("/v1/projects/p/databases/(default)/documents/items/{id}"),
+            json!({"fields":{"title":{"stringValue":"construction"},"language":{"stringValue":"en"}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let pipeline = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/items"}]},{"name":"search","options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"construction"}]}}}}]}}});
+    assert_eq!(
+        call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/documents:executePipeline",
+            pipeline.clone()
+        )
+        .0,
+        400
+    );
+    advance(&clock, 3600);
+    let (status, hits) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/documents:executePipeline",
+        pipeline,
+    );
+    assert_eq!(status, 200, "{hits}");
+    assert_eq!(hits[0]["results"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        call(&state, "GET", &operation, Value::Null).1["metadata"]["progressDocuments"]
+            ["completedWork"],
+        "2"
+    );
+}
+
+#[test]
+fn native_text_admin_language_failures_use_the_actual_typed_source_value() {
+    for language in [
+        json!({"stringValue":"another invalid language!"}),
+        json!({"integerValue":"7"}),
+        json!({"stringValue":"fr"}),
+    ] {
+        let (state, clock, catalog) = native_text_state();
+        call(
+            &state,
+            "PATCH",
+            "/v1/projects/p/databases/(default)/documents/items/doc",
+            json!({"fields":{"title":{"stringValue":"marker"},"language":language}}),
+        );
+        let (_, initial) = call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+            native_text_body(),
+        );
+        let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+        advance(&clock, 3600);
+        let (status, answer) = call(&state, "GET", &operation, Value::Null);
+        let malformed = language
+            .get("stringValue")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains('!'));
+        if malformed {
+            assert_eq!(status, 200, "{answer}");
+            assert_eq!(
+                answer["error"],
+                json!({"code":3,"message":"Invalid text language: another invalid language!"})
+            );
+        } else {
+            assert_eq!(status, 501, "{answer}");
+            assert!(answer["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("FS_TEXT_ADMIN_UNVERIFIED:"));
+            assert_eq!(
+                catalog.lock().unwrap().entries().next().unwrap().2.state,
+                fireemu_core_firestore::text_index::TextIndexState::Creating
+            );
+        }
+    }
+}
+
+#[test]
+fn native_text_admin_stale_generation_cannot_complete_a_replacement() {
+    let (state, clock, catalog) = native_text_state();
+    let (_, initial) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+        native_text_body(),
+    );
+    let name = initial["metadata"]["index"].as_str().unwrap();
+    let id = name.rsplit('/').next().unwrap();
+    let old_generation;
+    {
+        let mut catalog = catalog.lock().unwrap();
+        let definition = catalog.get("p", "(default)", id).unwrap().clone();
+        old_generation = catalog.build("p", "(default)", id).unwrap().generation;
+        catalog.remove("p", "(default)", id);
+        catalog.add("p", "(default)", definition).unwrap();
+        assert_ne!(
+            catalog.build("p", "(default)", id).unwrap().generation,
+            old_generation
+        );
+    }
+    advance(&clock, 3600);
+    let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+    assert_eq!(call(&state, "GET", &operation, Value::Null).1, initial);
+    assert_eq!(
+        catalog
+            .lock()
+            .unwrap()
+            .get("p", "(default)", id)
+            .unwrap()
+            .state,
+        fireemu_core_firestore::text_index::TextIndexState::Creating
+    );
+}
+
+#[test]
+#[allow(clippy::result_large_err)]
+fn native_text_admin_snapshot_serializes_completion_with_delete_and_reset() {
+    for reset in [false, true] {
+        let (state, clock, catalog) = native_text_state();
+        let state = Arc::new(state);
+        let (_, initial) = call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+            native_text_body(),
+        );
+        let path = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+        advance(&clock, 3600);
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let started = Arc::new(std::sync::Barrier::new(2));
+        std::thread::scope(|scope| {
+            let build_state = Arc::clone(&state);
+            let build_entered = Arc::clone(&entered);
+            let build_release = Arc::clone(&release);
+            let build = scope.spawn(move || {
+                build_state
+                    .local
+                    .with_native_text_snapshot("p", "(default)", |db, catalog| {
+                        build_entered.wait();
+                        build_release.wait();
+                        build_state.local.advance_text_builds_at_snapshot(
+                            "p",
+                            "(default)",
+                            db,
+                            catalog,
+                            super::index_rest::NativeTextSelection::default(),
+                        )
+                    })
+                    .unwrap();
+            });
+            entered.wait();
+            let deleting_state = Arc::clone(&state);
+            let started_delete = Arc::clone(&started);
+            let delete_path = path.clone();
+            let delete = scope.spawn(move || {
+                started_delete.wait();
+                if reset {
+                    deleting_state.local.reset_project("p");
+                } else {
+                    assert_eq!(
+                        call(&deleting_state, "DELETE", &delete_path, Value::Null).0,
+                        200
+                    );
+                }
+            });
+            started.wait();
+            release.wait();
+            build.join().unwrap();
+            delete.join().unwrap();
+        });
+        assert!(catalog.lock().unwrap().entries().next().is_none());
+        assert_eq!(call(&state, "GET", &path, Value::Null).0, 404);
+    }
+}
+
+#[test]
+fn native_text_admin_unsupported_collection_does_not_block_another_target() {
+    let (state, clock, _) = native_text_state();
+    let mut good = None;
+    let mut bad = None;
+    for (group, language) in [("items", "en"), ("unsupported", "fr")] {
+        call(
+            &state,
+            "PATCH",
+            &format!("/v1/projects/p/databases/(default)/documents/{group}/doc"),
+            json!({"fields":{"title":{"stringValue":"marker"},"language":{"stringValue":language}}}),
+        );
+        let (status, initial) = call(
+            &state,
+            "POST",
+            &format!("/v1/projects/p/databases/(default)/collectionGroups/{group}/indexes"),
+            native_text_body(),
+        );
+        assert_eq!(status, 200, "{initial}");
+        if group == "items" {
+            good = Some(initial);
+        } else {
+            bad = Some(initial);
+        }
+    }
+    advance(&clock, 3600);
+    let good = good.unwrap();
+    let bad = bad.unwrap();
+    let bad_operation = format!("/v1/{}", bad["name"].as_str().unwrap());
+    assert_eq!(call(&state, "GET", &bad_operation, Value::Null).0, 501);
+    let good_operation = format!("/v1/{}", good["name"].as_str().unwrap());
+    assert_eq!(
+        call(&state, "GET", &good_operation, Value::Null).1["metadata"]["state"],
+        "SUCCESSFUL"
+    );
+    let index = format!("/v1/{}", good["metadata"]["index"].as_str().unwrap());
+    assert_eq!(call(&state, "GET", &index, Value::Null).1["state"], "READY");
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+            Value::Null
+        )
+        .0,
+        200
+    );
+    let (status, hits) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/documents:executePipeline",
+        json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/items"}]},{"name":"search","options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"marker"}]}}}}]}}}),
+    );
+    assert_eq!(status, 200, "{hits}");
+    assert_eq!(hits[0]["results"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn native_text_admin_shared_backend_keeps_one_epoch_and_foreign_backend_cannot_advance() {
+    let (state, clock, catalog) = native_text_state();
+    let (other, other_clock) = enterprise_native_state(true);
+    other
+        .local
+        .set_text_indexes(Arc::clone(&catalog), false)
+        .unwrap();
+    call(
+        &state,
+        "PATCH",
+        "/v1/projects/p/databases/(default)/documents/items/source",
+        json!({"fields":{"title":{"stringValue":"owner"},"language":{"stringValue":"en"}}}),
+    );
+    let (_, initial) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+        native_text_body(),
+    );
+    let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+    advance(&other_clock, 3600);
+    let (status, body) = call(&other, "GET", &index, Value::Null);
+    assert_eq!(status, 501, "{body}");
+    assert_eq!(
+        catalog.lock().unwrap().entries().next().unwrap().2.state,
+        fireemu_core_firestore::text_index::TextIndexState::Creating
+    );
+    other.local.reset_project("p");
+    assert_eq!(
+        catalog.lock().unwrap().entries().next().unwrap().2.state,
+        fireemu_core_firestore::text_index::TextIndexState::Creating
+    );
+    let captured = catalog.lock().unwrap().extract(|project| project == "p");
+    catalog
+        .lock()
+        .unwrap()
+        .replace(|project| project == "p", &captured);
+    let cloned = Arc::clone(&state.local);
+    assert!(Arc::ptr_eq(&cloned, &state.local));
+    advance(&clock, 3600);
+    cloned
+        .advance_native_text_builds(
+            "p",
+            "(default)",
+            super::index_rest::NativeTextSelection::default(),
+        )
+        .unwrap();
+    let (_, terminal) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", initial["name"].as_str().unwrap()),
+        Value::Null,
+    );
+    assert_eq!(
+        terminal["metadata"]["progressDocuments"]["completedWork"],
+        "1"
+    );
+    assert_eq!(
+        call(
+            &state,
+            "DELETE",
+            &format!("/v1/{}", initial["name"].as_str().unwrap()),
+            Value::Null
+        )
+        .0,
+        200
+    );
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            &format!("/v1/{}", initial["name"].as_str().unwrap()),
+            Value::Null
+        )
+        .0,
+        404
+    );
+    assert_eq!(call(&state, "GET", &index, Value::Null).1["state"], "READY");
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            &format!("/v1/{}", initial["name"].as_str().unwrap()),
+            Value::Null
+        )
+        .0,
+        404
+    );
+    cloned.reset_project("p");
+    assert!(catalog.lock().unwrap().entries().next().is_none());
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+    #[test]
+    fn native_text_admin_schema_roundtrips_fields_and_refuses_unknown_options(
+        field in "[a-z]{1,8}",
+        override_field in "[a-z]{1,8}",
+        unknown in 0usize..4,
+    ) {
+        let (state,_,_)=native_text_state();
+        let mut request=native_text_body();
+        request["fields"][0]["fieldPath"]=json!(field);
+        request["searchIndexOptions"]["textLanguageOverrideFieldPath"]=json!(override_field);
+        let (status,initial)=call(&state,"POST","/v1/projects/p/databases/(default)/collectionGroups/items/indexes",request.clone());
+        proptest::prop_assert_eq!(status,200,"{}",initial);
+        let (_,resource)=call(&state,"GET",&format!("/v1/{}",initial["metadata"]["index"].as_str().unwrap()),Value::Null);
+        proptest::prop_assert_eq!(&resource["fields"],&request["fields"]);
+        proptest::prop_assert_eq!(&resource["searchIndexOptions"],&request["searchIndexOptions"]);
+        match unknown {
+            0=>request["searchIndexOptions"]["textLanguage"]=json!("fr"),
+            1=>request["queryScope"]=json!("COLLECTION_GROUP"),
+            2=>request["fields"][0]["searchConfig"]["textSpec"]["indexSpecs"][0]["matchType"]=json!("UNRECORDED"),
+            _=>request["unknown"]=json!(true),
+        }
+        proptest::prop_assert_eq!(call(&state,"POST","/v1/projects/p/databases/(default)/collectionGroups/items/indexes",request).0,501);
+    }
+}

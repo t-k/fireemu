@@ -7,8 +7,12 @@
 //! answered unfinished and never reports `done`, and `operations.get` of a delete answers under
 //! a shorter name than the one the delete returned.
 
+// Native build integration uses the transport's tonic status throughout the admitted callback.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
+use tonic::Status;
 
 use serde_json::{json, Value};
 
@@ -28,6 +32,8 @@ pub enum OperationKind {
     DeleteDatabase,
     /// `collectionGroups.indexes.create`: its answer follows the index it builds.
     CreateIndex,
+    /// A Native text index build, bound to one catalog generation.
+    CreateTextIndex,
     /// Export, import or bulk delete: finished by the time it is first polled.
     Managed,
     /// `collectionGroups.fields.patch`: its answer follows the patch it applies.
@@ -43,6 +49,13 @@ impl OperationKind {
             Self::CreateDatabase | Self::UpdateDatabase | Self::DeleteDatabase
         )
     }
+}
+
+/// Scheduling and generation linkage only; definitions live in the shared text catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NativeTextBuild {
+    pub index: String,
+    pub generation: u64,
 }
 
 /// One recorded operation.
@@ -61,6 +74,7 @@ pub struct StoredOperation {
     pub current: Value,
     /// The index an index operation builds.
     pub index: Option<String>,
+    pub(crate) native_text: Option<NativeTextBuild>,
 }
 
 /// The operations of every database of one backend.
@@ -126,6 +140,7 @@ impl OperationStore {
             OperationKind::CreateDatabase
             | OperationKind::UpdateDatabase
             | OperationKind::CreateIndex
+            | OperationKind::CreateTextIndex
             | OperationKind::Managed
             | OperationKind::Field => {
                 let id = opaque_id(
@@ -172,6 +187,7 @@ impl OperationStore {
             initial,
             current,
             index: None,
+            native_text: None,
         };
         self.push(project, database, stored.clone());
         stored
@@ -218,6 +234,7 @@ impl OperationStore {
                 initial,
                 current,
                 index: None,
+                native_text: None,
             },
         );
     }
@@ -234,6 +251,7 @@ impl OperationStore {
                 current: initial.clone(),
                 initial,
                 index: None,
+                native_text: None,
             },
         );
     }
@@ -257,8 +275,59 @@ impl OperationStore {
                 current: initial.clone(),
                 initial,
                 index: Some(index.to_owned()),
+                native_text: None,
             },
         );
+    }
+
+    pub(crate) fn record_text(
+        &self,
+        project: &str,
+        database: &str,
+        id: &str,
+        target: NativeTextBuild,
+        initial: Value,
+    ) {
+        self.push(
+            project,
+            database,
+            StoredOperation {
+                id: id.to_owned(),
+                alias: None,
+                kind: OperationKind::CreateTextIndex,
+                current: initial.clone(),
+                initial,
+                index: None,
+                native_text: Some(target),
+            },
+        );
+    }
+
+    /// Completes the catalog work even if its bounded wire view was evicted. The caller
+    /// holds the admitted source and matching catalog generation before this mutex.
+    pub(crate) fn finish_text(
+        &self,
+        project: &str,
+        database: &str,
+        id: &str,
+        expected: &NativeTextBuild,
+        finish: impl FnOnce() -> Result<Value, Status>,
+    ) -> Result<(), Status> {
+        let mut all = self.lock();
+        let operation = all
+            .get_mut(&(project.to_owned(), database.to_owned()))
+            .and_then(|queue| queue.iter_mut().find(|op| op.id == id));
+        match operation {
+            Some(op) if op.native_text.as_ref() != Some(expected) || is_done(&op.current) => Ok(()),
+            Some(op) => {
+                op.current = finish()?;
+                Ok(())
+            }
+            None => {
+                finish()?;
+                Ok(())
+            }
+        }
     }
 
     /// The operation `id` (or its alias) names in a database.
@@ -507,6 +576,18 @@ pub(crate) fn route(
     action: Option<&str>,
     params: &BTreeMap<String, Vec<String>>,
 ) -> RestResponse {
+    if method == "GET" {
+        if let Err(status) = state.local.advance_native_text_builds(
+            project,
+            database,
+            super::index_rest::NativeTextSelection {
+                operation: rest.first().copied(),
+                ..Default::default()
+            },
+        ) {
+            return crate::rest::error_response(&status);
+        }
+    }
     let store = state.local.admin().operations();
     let field_operation = |id: &str| {
         let name = format!("projects/{project}/databases/{database}/operations/{id}");
@@ -545,6 +626,14 @@ pub(crate) fn route(
             }
         }
         ("POST", [id], Some("cancel")) => {
+            if store
+                .get(project, database, id)
+                .is_some_and(|op| op.native_text.is_some())
+            {
+                return crate::rest::error_response(&Status::unimplemented(
+                    "FS_TEXT_ADMIN_UNVERIFIED: text build cancellation",
+                ));
+            }
             if store
                 .get(project, database, id)
                 .is_some_and(|op| op.kind == OperationKind::CreateIndex)

@@ -197,6 +197,7 @@ pub(crate) fn execute(
     execute_at_snapshot(local, parent, compiled, guard, unrecorded, || {})
 }
 
+#[allow(clippy::too_many_lines)]
 fn execute_at_snapshot(
     local: &LocalBackend,
     parent: &Parent,
@@ -241,6 +242,11 @@ fn execute_at_snapshot(
             })
             .map(|(_, _, definition)| definition.clone())
             .collect::<Vec<_>>();
+        local.check_native_text_epoch(&catalog, |p, d, def| {
+            p == parent.project.as_str()
+                && d == parent.database.as_str()
+                && definitions.iter().any(|selected| selected.id == def.id)
+        })?;
         if definitions.is_empty() {
             return Err(Status::failed_precondition(
                 "FS_TEXT_INDEX: a READY collection text index is required",

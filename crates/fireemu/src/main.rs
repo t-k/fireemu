@@ -3571,7 +3571,10 @@ fn control_state(
         Arc::new(snapshots::RealtimeDatabase(realtime_database.clone())),
         Arc::new(snapshots::Auth(registry.clone())),
         Arc::new(snapshots::Faults(faults.clone(), cfg.auth_project.clone())),
-        Arc::new(snapshots::TextIndexes(text_indexes.clone())),
+        Arc::new(snapshots::TextIndexes(
+            text_indexes.clone(),
+            backend.clone(),
+        )),
         Arc::new(snapshots::SessionClock(clock.clone())),
         Arc::new(snapshots::Rules("firestore rules", rules.clone())),
     ];

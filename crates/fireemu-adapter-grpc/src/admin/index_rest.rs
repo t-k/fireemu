@@ -403,9 +403,14 @@ fn text_definition(
             .keys()
             .any(|key| !matches!(key.as_str(), "queryScope" | "fields" | "searchIndexOptions"))
     }) || body["queryScope"] != "COLLECTION"
-        || body["searchIndexOptions"]
-            .as_object()
-            .is_none_or(|object| object.len() != 2)
+        || body["searchIndexOptions"].as_object().is_none_or(|object| {
+            object.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "textLanguage" | "textLanguageOverrideFieldPath"
+                )
+            })
+        })
         || body["searchIndexOptions"]["textLanguage"] != "en"
     {
         return Err(text_unverified("text index request options"));
@@ -424,9 +429,12 @@ fn text_definition(
     let path = field["fieldPath"]
         .as_str()
         .ok_or_else(|| text_unverified("text field path"))?;
-    let override_path = body["searchIndexOptions"]["textLanguageOverrideFieldPath"]
-        .as_str()
-        .ok_or_else(|| text_unverified("text language override"))?;
+    let override_path = match body["searchIndexOptions"].get("textLanguageOverrideFieldPath") {
+        None => "language",
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| text_unverified("text language override"))?,
+    };
     Ok(TextIndexDefinition {
         id,
         collection_id: CollectionId::try_new(group).map_err(text_unverified)?,
@@ -480,12 +488,16 @@ fn create_text_index(
     body: &Value,
 ) -> Result<RestResponse, tonic::Status> {
     let id = state.local.admin().indexes().reserve_id();
-    let definition = text_definition(group, id, body)?;
+    let mut definition = text_definition(group, id, body)?;
     state.local.with_native_text_snapshot(project, database, |_, catalog| {
         if let Some((_, _, existing)) = catalog.entries().find(|(p,d,existing)| *p == project && *d == database
             && existing.collection_id == definition.collection_id && existing.query_scope == definition.query_scope
             && existing.fields == definition.fields && existing.language == definition.language && existing.language_override == definition.language_override) {
+            state.local.check_native_text_epoch(catalog, |p,d,def| p == project && d == database && def.id == existing.id)?;
             return Ok(error(tonic::Code::AlreadyExists, &format!("index already exists with index ID = {}", existing.id), None));
+        }
+        while catalog.get(project, database, &definition.id).is_some() {
+            definition.id = state.local.admin().indexes().reserve_id();
         }
         let now = state.local.admin_now();
         let operation = super::operations::reserve_id(state, project, database);
@@ -525,10 +537,13 @@ pub(crate) struct NativeTextSelection<'a> {
     pub collection: Option<&'a str>,
     pub index: Option<&'a str>,
     pub operation: Option<&'a str>,
+    pub operation_targets: Option<&'a [(&'a str, &'a super::operations::NativeTextBuild)]>,
 }
 
 /// Advances one database's native work while its admitted source snapshot and catalog are held.
 /// Separate HTTP observations may straddle this transition; each terminal view remains immutable.
+// Keep selected-source preparation and its single publication boundary together.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn advance_text_builds(
     local: &crate::local::LocalBackend,
     project: &str,
@@ -537,7 +552,6 @@ pub(crate) fn advance_text_builds(
     catalog: &mut TextIndexCatalog,
     selection: NativeTextSelection<'_>,
 ) -> Result<(), tonic::Status> {
-    local.check_native_text_epoch(catalog)?;
     let targets: Vec<_> = catalog
         .entries()
         .filter(|(p, d, definition)| {
@@ -559,12 +573,24 @@ pub(crate) fn advance_text_builds(
                         .map(|schedule| (definition.clone(), build.generation, schedule))
                 })
         })
-        .filter(|(_, _, schedule)| {
+        .filter(|(definition, generation, schedule)| {
             selection
                 .operation
                 .is_none_or(|id| schedule.operation == id)
+                && selection.operation_targets.is_none_or(|targets| {
+                    targets.iter().any(|(operation, target)| {
+                        schedule.operation == *operation
+                            && definition.id == target.index
+                            && *generation == target.generation
+                    })
+                })
         })
         .collect();
+    local.check_native_text_epoch(catalog, |p, d, def| {
+        p == project && d == database && targets.iter().any(|(target, _, _)| target.id == def.id)
+    })?;
+    let mut trial = catalog.clone();
+    let mut completions = Vec::new();
     for (definition, generation, schedule) in targets {
         let elapsed = std::time::Duration::from_nanos(
             u64::try_from(
@@ -610,32 +636,73 @@ pub(crate) fn advance_text_builds(
                 schedule.start_time.as_nanos() + 1_000_000,
             ),
         );
-        local.admin().operations().finish_text(project,database,&schedule.operation,&target, || {
-            let mut terminal = json!({"name":format!("projects/{project}/databases/{database}/operations/{}",schedule.operation),"metadata":{"@type":INDEX_METADATA_TYPE_URL,"startTime":instant(schedule.start_time),"index":text_index_name(project,database,&definition),"state":"INITIALIZING"}});
-            terminal["done"] = json!(true);
-            terminal["metadata"]["endTime"] = instant(end);
-            match catalog.lifecycle(project,database,&target.index,"completeBackfill",Some(target.generation),10_000,None,documents.clone(),fireemu_adapter_support::lexical::tokenize_index) {
-                Ok(()) => {
-                    terminal["metadata"]["state"] = json!("SUCCESSFUL");
-                    terminal["metadata"]["progressDocuments"] = if documents.is_empty() {json!({})} else {json!({"estimatedWork":documents.len().to_string(),"completedWork":documents.len().to_string()})};
-                    terminal["response"] = response;
-                }
-                Err(TextIndexBuildError::InvalidSource(fireemu_core_firestore::text_index::TextIndexSourceError::Search(fireemu_core_firestore::text_search::SearchError::InvalidLanguageOverride(path)))) => {
-                    let language = documents.iter().find(|document| document.path.resource_name() == path).and_then(|document| source_language(&definition,document));
-                    let Some(fireemu_core_firestore::value::Value::String(value)) = language else {return Err(text_unverified("unresolved source language error"));};
-                    if fireemu_core_firestore::text_index::is_language_tag(value) { return Err(text_unverified("unrecorded text language error")); }
-                    let message = format!("Invalid text language: {value}");
-                    catalog.lifecycle(project,database,&target.index,"failBuild",Some(target.generation),1,Some(&message),Vec::new(),fireemu_adapter_support::lexical::tokenize_index).map_err(text_unverified)?;
-                    terminal["metadata"]["state"] = json!("FAILED");
-                    terminal["metadata"]["progressDocuments"] = json!({});
-                    terminal["error"] = json!({"code":3,"message":message});
-                }
-                Err(error) => return Err(text_unverified(error)),
+        let mut terminal = json!({"name":format!("projects/{project}/databases/{database}/operations/{}",schedule.operation),"metadata":{"@type":INDEX_METADATA_TYPE_URL,"startTime":instant(schedule.start_time),"index":text_index_name(project,database,&definition),"state":"INITIALIZING"}});
+        terminal["done"] = json!(true);
+        terminal["metadata"]["endTime"] = instant(end);
+        match trial.lifecycle(
+            project,
+            database,
+            &target.index,
+            "completeBackfill",
+            Some(target.generation),
+            10_000,
+            None,
+            documents.clone(),
+            fireemu_adapter_support::lexical::tokenize_index,
+        ) {
+            Ok(()) => {
+                terminal["metadata"]["state"] = json!("SUCCESSFUL");
+                terminal["metadata"]["progressDocuments"] = if documents.is_empty() {
+                    json!({})
+                } else {
+                    json!({"estimatedWork":documents.len().to_string(),"completedWork":documents.len().to_string()})
+                };
+                terminal["response"] = response;
             }
-            Ok(terminal)
-        })?;
+            Err(TextIndexBuildError::InvalidSource(
+                fireemu_core_firestore::text_index::TextIndexSourceError::Search(
+                    fireemu_core_firestore::text_search::SearchError::InvalidLanguageOverride(path),
+                ),
+            )) => {
+                let language = documents
+                    .iter()
+                    .find(|document| document.path.resource_name() == path)
+                    .and_then(|document| source_language(&definition, document));
+                let Some(fireemu_core_firestore::value::Value::String(value)) = language else {
+                    return Err(text_unverified("unresolved source language error"));
+                };
+                if fireemu_core_firestore::text_index::is_language_tag(value) {
+                    return Err(text_unverified("unrecorded text language error"));
+                }
+                let message = format!("Invalid text language: {value}");
+                trial
+                    .lifecycle(
+                        project,
+                        database,
+                        &target.index,
+                        "failBuild",
+                        Some(target.generation),
+                        1,
+                        Some(&message),
+                        Vec::new(),
+                        fireemu_adapter_support::lexical::tokenize_index,
+                    )
+                    .map_err(text_unverified)?;
+                terminal["metadata"]["state"] = json!("FAILED");
+                terminal["metadata"]["progressDocuments"] = json!({});
+                terminal["error"] = json!({"code":3,"message":message});
+            }
+            Err(error) => return Err(text_unverified(error)),
+        }
+        completions.push((schedule.operation, target, terminal));
     }
-    Ok(())
+    local.admin().operations().finish_text(
+        project,
+        database,
+        &completions,
+        selection.operation_targets,
+        || *catalog = trial,
+    )
 }
 
 fn text_route(
@@ -657,6 +724,7 @@ fn text_route(
                 collection: (group != "-").then_some(group),
                 index: rest.first().copied(),
                 operation: None,
+                ..Default::default()
             },
         )?;
     }
@@ -666,6 +734,14 @@ fn text_route(
             let scoped = |definition: &&TextIndexDefinition| {
                 group == "-" || definition.collection_id.as_str() == group
             };
+            state
+                .local
+                .check_native_text_epoch(catalog, |p, d, definition| {
+                    p == project
+                        && d == database
+                        && (group == "-" || definition.collection_id.as_str() == group)
+                        && rest.first().is_none_or(|id| definition.id == *id)
+                })?;
             match (method, rest) {
                 ("GET", []) => {
                     let indexes = catalog

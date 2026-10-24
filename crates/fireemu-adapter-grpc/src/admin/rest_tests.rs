@@ -2525,7 +2525,17 @@ fn native_text_state() -> (
     Arc<Mutex<VirtualClock>>,
     Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
 ) {
-    let (state, clock) = enterprise_native_state(true);
+    native_text_state_for(true)
+}
+
+fn native_text_state_for(
+    strict: bool,
+) -> (
+    RestState,
+    Arc<Mutex<VirtualClock>>,
+    Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+) {
+    let (state, clock) = enterprise_native_state(strict);
     state
         .local
         .admin()
@@ -3147,6 +3157,688 @@ fn native_text_admin_shared_backend_keeps_one_epoch_and_foreign_backend_cannot_a
     );
     cloned.reset_project("p");
     assert!(catalog.lock().unwrap().entries().next().is_none());
+}
+
+#[test]
+fn native_text_admin_foreign_epoch_does_not_block_unrelated_scopes() {
+    let (owner, owner_clock, catalog) = native_text_state();
+    let (_, foreign) = call(
+        &owner,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/foreign/indexes",
+        native_text_body(),
+    );
+    let (other, _) = enterprise_native_state(true);
+    other.local.set_text_indexes(catalog, false).unwrap();
+    for base in [
+        "/v1/projects/p/databases/(default)",
+        "/v1/projects/other/databases/(default)",
+        "/v1/projects/p/databases/entnamed",
+    ] {
+        let group = format!("{base}/collectionGroups/local/indexes");
+        let (status, created) = call(&other, "POST", &group, native_text_body());
+        assert_eq!(status, 200, "{base}: {created}");
+        if base == "/v1/projects/p/databases/(default)" {
+            assert_eq!(
+                created["name"], foreign["name"],
+                "the independent backend ordinals deliberately collide"
+            );
+        }
+        assert_eq!(
+            call(&other, "GET", &format!("{base}/operations"), Value::Null).0,
+            200
+        );
+        let index = format!("/v1/{}", created["metadata"]["index"].as_str().unwrap());
+        assert_eq!(call(&other, "GET", &index, Value::Null).0, 200);
+        assert_eq!(
+            call(
+                &other,
+                "GET",
+                &format!("/v1/{}", created["name"].as_str().unwrap()),
+                Value::Null
+            )
+            .0,
+            200
+        );
+        assert_eq!(call(&other, "GET", &group, Value::Null).0, 200);
+        assert_eq!(call(&other, "DELETE", &index, Value::Null).0, 200);
+    }
+    let index = format!("/v1/{}", foreign["metadata"]["index"].as_str().unwrap());
+    assert_eq!(call(&other, "GET", &index, Value::Null).0, 501);
+    assert_eq!(call(&other, "DELETE", &index, Value::Null).0, 501);
+    assert_eq!(
+        call(&owner, "GET", &index, Value::Null).1["state"],
+        "CREATING"
+    );
+    advance(&owner_clock, 3600);
+    assert_eq!(call(&owner, "GET", &index, Value::Null).1["state"], "READY");
+    assert_eq!(call(&other, "GET", &index, Value::Null).0, 501);
+    assert_eq!(call(&other, "DELETE", &index, Value::Null).0, 501);
+    let (status, body) = call(
+        &other,
+        "POST",
+        "/v1/projects/p/databases/(default)/documents:executePipeline",
+        json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/foreign"}]},
+            {"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"scopeword"}]}}}}
+        ]}}}),
+    );
+    assert_eq!(
+        status, 501,
+        "a selected READY Native definition still belongs to its owning backend: {body}"
+    );
+}
+
+#[test]
+fn native_text_admin_foreign_epoch_preserves_configured_ready_search() {
+    use fireemu_core_firestore::text_index::*;
+    let (owner, _, catalog) = native_text_state();
+    let (_, created) = call(
+        &owner,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/foreign/indexes",
+        native_text_body(),
+    );
+    let id = created["metadata"]["index"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let mut definition = catalog
+        .lock()
+        .unwrap()
+        .get("p", "(default)", id)
+        .unwrap()
+        .clone();
+    definition.id = "configured".into();
+    definition.collection_id = fireemu_core_types::ids::CollectionId::try_new("local").unwrap();
+    definition.state = TextIndexState::Ready;
+    for (p, d) in [("p", "(default)"), ("other", "entnamed")] {
+        catalog
+            .lock()
+            .unwrap()
+            .add(p, d, definition.clone())
+            .unwrap();
+    }
+    let (other, _) = enterprise_native_state(true);
+    other.local.set_text_indexes(catalog, false).unwrap();
+    for base in [
+        "/v1/projects/p/databases/(default)",
+        "/v1/projects/other/databases/entnamed",
+    ] {
+        assert_eq!(
+            call(
+                &other,
+                "PATCH",
+                &format!("{base}/documents/local/good"),
+                json!({"fields":{"title":{"stringValue":"scopeword"}}})
+            )
+            .0,
+            200
+        );
+        let (status, hits) = call(
+            &other,
+            "POST",
+            &format!("{base}/documents:executePipeline"),
+            json!({"structuredPipeline":{"pipeline":{"stages":[
+                {"name":"collection","args":[{"referenceValue":"/local"}]},
+                {"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"scopeword"}]}}}}
+            ]}}}),
+        );
+        assert_eq!(status, 200, "{hits}");
+        assert_eq!(hits[0]["results"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn native_text_admin_mode_guards_hold_with_attached_catalog() {
+    for (edition, mode, explicit) in [
+        (FirestoreEdition::Standard, FirestoreApiMode::Native, false),
+        (
+            FirestoreEdition::Enterprise,
+            FirestoreApiMode::MongoDbCompatible,
+            false,
+        ),
+        (FirestoreEdition::Standard, FirestoreApiMode::Native, true),
+    ] {
+        let (state, _) = state_with_context(true, IndexValidationPolicy::Production, edition, mode);
+        let database = if explicit {
+            let mut request = native();
+            request["databaseEdition"] = json!("ENTERPRISE");
+            assert_eq!(
+                call(
+                    &state,
+                    "POST",
+                    "/v1/projects/p/databases?databaseId=disabled",
+                    request
+                )
+                .0,
+                200
+            );
+            "disabled"
+        } else {
+            "(default)"
+        };
+        let base = format!("/v1/projects/p/databases/{database}");
+        let requests = [
+            (
+                "GET",
+                format!("{base}/collectionGroups/items/indexes"),
+                Value::Null,
+            ),
+            (
+                "POST",
+                format!("{base}/collectionGroups/items/indexes"),
+                native_text_body(),
+            ),
+            (
+                "GET",
+                format!("{base}/documents/items/missing"),
+                Value::Null,
+            ),
+        ];
+        let before = requests
+            .iter()
+            .map(|(method, path, body)| call(&state, method, path, body.clone()))
+            .collect::<Vec<_>>();
+        assert_ne!(
+            before[1].0, 200,
+            "this mode never admits Native text create"
+        );
+        state
+            .local
+            .set_text_indexes(
+                Arc::new(Mutex::new(
+                    fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+                )),
+                false,
+            )
+            .unwrap();
+        let after = requests
+            .iter()
+            .map(|(method, path, body)| call(&state, method, path, body.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            before, after,
+            "attaching a catalog cannot change mode or access guards"
+        );
+    }
+}
+
+#[test]
+fn native_text_admin_omitted_override_defaults_to_observed_language_field() {
+    for strict in [true, false] {
+        let (state, _, _) = native_text_state_for(strict);
+        let mut request = native_text_body();
+        request["searchIndexOptions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("textLanguageOverrideFieldPath");
+        let (status, initial) = call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+            request,
+        );
+        assert_eq!(status, 200, "{initial}");
+        let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+        let (status, definition) = call(&state, "GET", &index, Value::Null);
+        assert_eq!(status, 200, "{definition}");
+        assert_eq!(
+            definition["searchIndexOptions"],
+            json!({"textLanguage":"en","textLanguageOverrideFieldPath":"language"})
+        );
+        assert_eq!(definition["density"], "SPARSE_ANY");
+        let (status, duplicate) = call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+            native_text_body(),
+        );
+        assert_eq!(
+            status, 409,
+            "normalization must share the same definition: {duplicate}"
+        );
+        for value in [Value::Null, json!(true), json!(1), json!(""), json!({})] {
+            let mut invalid = native_text_body();
+            invalid["searchIndexOptions"]["textLanguageOverrideFieldPath"] = value;
+            assert_eq!(
+                call(
+                    &state,
+                    "POST",
+                    "/v1/projects/p/databases/(default)/collectionGroups/other/indexes",
+                    invalid
+                )
+                .0,
+                501
+            );
+        }
+        let mut unknown = native_text_body();
+        unknown["searchIndexOptions"]["unknown"] = json!(true);
+        assert_eq!(
+            call(
+                &state,
+                "POST",
+                "/v1/projects/p/databases/(default)/collectionGroups/other/indexes",
+                unknown
+            )
+            .0,
+            501
+        );
+    }
+}
+
+#[test]
+fn native_text_admin_partial_catalog_restore_refuses_disconnected_work_but_keeps_terminal_audit() {
+    let (state, clock, catalog) = native_text_state();
+    let (_, initial) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+        native_text_body(),
+    );
+    let captured = catalog.lock().unwrap().extract(|p| p == "p");
+    let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+    advance(&clock, 3600);
+    let (status, terminal) = call(&state, "GET", &operation, Value::Null);
+    assert_eq!(status, 200, "{terminal}");
+    assert_eq!(terminal["done"], true);
+    // A direct core-only rewind is outside the supported combined CONTROL hook.
+    catalog.lock().unwrap().replace(|p| p == "p", &captured);
+    let (status, audit) = call(&state, "GET", &operation, Value::Null);
+    assert_eq!(
+        status, 200,
+        "a retained terminal audit needs no source advancement: {audit}"
+    );
+    assert_eq!(audit, terminal);
+    let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+    assert_eq!(call(&state, "GET", &index, Value::Null).0, 501);
+    assert_eq!(
+        *catalog.lock().unwrap(),
+        captured,
+        "unsupported partial rewind cannot mutate work under an old terminal view"
+    );
+}
+
+#[test]
+fn native_text_admin_operation_observers_resolve_retained_local_targets_only() {
+    for mode in ["missing", "ordinary", "terminal", "deleted", "evicted"] {
+        let (owner, _, catalog) = native_text_state();
+        let (_, foreign) = call(
+            &owner,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/foreign/indexes",
+            native_text_body(),
+        );
+        let (other, clock) = enterprise_native_state(true);
+        other
+            .local
+            .set_text_indexes(catalog.clone(), false)
+            .unwrap();
+        other
+            .local
+            .admin()
+            .indexes()
+            .set_build_duration(std::time::Duration::from_secs(3600));
+        let store = other.local.admin().operations();
+        let id = foreign["name"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        let operation = format!("/v1/{}", foreign["name"].as_str().unwrap());
+        if mode == "ordinary" {
+            store.record_views(
+                "p",
+                "(default)",
+                id,
+                json!({"done":true,"ordinary":true}),
+                json!({"done":true,"ordinary":true}),
+            );
+        } else if mode != "missing" {
+            let (_, local) = call(
+                &other,
+                "POST",
+                "/v1/projects/p/databases/(default)/collectionGroups/local/indexes",
+                native_text_body(),
+            );
+            assert_eq!(local["name"], foreign["name"]);
+            if mode == "evicted" {
+                for i in 0..128 {
+                    store.record_views(
+                        "p",
+                        "(default)",
+                        &format!("evict-{i}"),
+                        Value::Null,
+                        json!({"done":true}),
+                    );
+                }
+            } else {
+                advance(&clock, 3600);
+                let index = format!("/v1/{}", local["metadata"]["index"].as_str().unwrap());
+                assert_eq!(call(&other, "GET", &index, Value::Null).1["state"], "READY");
+                if mode == "deleted" {
+                    assert_eq!(call(&other, "DELETE", &operation, Value::Null).0, 200);
+                }
+            }
+        }
+        let before = catalog.lock().unwrap().clone();
+        let retained = store.get("p", "(default)", id);
+        let (status, body) = call(&other, "GET", &operation, Value::Null);
+        if matches!(mode, "ordinary" | "terminal") {
+            assert_eq!(status, 200, "{mode}: {body}");
+            assert_eq!(body, retained.unwrap().current);
+        } else {
+            assert_eq!(status, 404, "{mode}: {body}");
+        }
+        assert_eq!(
+            call(
+                &other,
+                "GET",
+                "/v1/projects/p/databases/(default)/operations",
+                Value::Null
+            )
+            .0,
+            200,
+            "{mode}"
+        );
+        assert_eq!(
+            *catalog.lock().unwrap(),
+            before,
+            "{mode} operation observation cannot advance unrelated or unretained work"
+        );
+    }
+}
+
+#[test]
+fn native_text_admin_operation_list_prepares_all_selected_sources_before_publication() {
+    for foreign_epoch in [false, true] {
+        let (state, clock, catalog) = native_text_state();
+        call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/good/indexes",
+            native_text_body(),
+        );
+        call(
+            &state,
+            "PATCH",
+            "/v1/projects/p/databases/(default)/documents/bad/doc",
+            json!({"fields":{"title":{"stringValue":"bad"},"language":{"stringValue":if foreign_epoch {"en"}else{"fr"}}}}),
+        );
+        let (_, bad) = call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/bad/indexes",
+            native_text_body(),
+        );
+        let id = bad["metadata"]["index"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        let (generation, original) = {
+            let catalog = catalog.lock().unwrap();
+            let build = catalog.build("p", "(default)", id).unwrap();
+            (build.generation, build.native.clone().unwrap())
+        };
+        if foreign_epoch {
+            let mut foreign = original.clone();
+            foreign.owner_epoch = Arc::new(());
+            catalog
+                .lock()
+                .unwrap()
+                .schedule_native("p", "(default)", id, generation, foreign)
+                .unwrap();
+        }
+        advance(&clock, 3600);
+        let before = catalog.lock().unwrap().clone();
+        let operations = state.local.admin().operations().list("p", "(default)");
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/v1/projects/p/databases/(default)/operations",
+            Value::Null,
+        );
+        assert_eq!(status, 501, "{body}");
+        assert_eq!(
+            *catalog.lock().unwrap(),
+            before,
+            "all source and epoch validation precedes any generation publication"
+        );
+        assert_eq!(
+            state.local.admin().operations().list("p", "(default)"),
+            operations
+        );
+        let expected = super::operations::OperationStore::default();
+        expected.reserve("p", "(default)");
+        expected.reserve("p", "(default)");
+        assert_eq!(
+            state.local.admin().operations().reserve("p", "(default)"),
+            expected.reserve("p", "(default)"),
+            "refusal cannot mint an operation ID"
+        );
+        catalog
+            .lock()
+            .unwrap()
+            .schedule_native("p", "(default)", id, generation, original)
+            .unwrap();
+        call(
+            &state,
+            "PATCH",
+            "/v1/projects/p/databases/(default)/documents/bad/doc",
+            json!({"fields":{"title":{"stringValue":"fixed"},"language":{"stringValue":"en"}}}),
+        );
+        let (status, body) = call(
+            &state,
+            "GET",
+            "/v1/projects/p/databases/(default)/operations",
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|op| op["metadata"]["state"] == "SUCCESSFUL"));
+    }
+}
+
+#[test]
+fn native_text_admin_stale_retained_operation_cannot_advance_a_new_native_generation() {
+    let (state, clock, catalog) = native_text_state();
+    let (_, initial) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+        native_text_body(),
+    );
+    let id = initial["metadata"]["index"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    {
+        let mut catalog = catalog.lock().unwrap();
+        let definition = catalog.get("p", "(default)", id).unwrap().clone();
+        let schedule = catalog
+            .build("p", "(default)", id)
+            .unwrap()
+            .native
+            .clone()
+            .unwrap();
+        catalog.remove("p", "(default)", id);
+        catalog.add("p", "(default)", definition).unwrap();
+        let generation = catalog.build("p", "(default)", id).unwrap().generation;
+        catalog
+            .schedule_native("p", "(default)", id, generation, schedule)
+            .unwrap();
+    }
+    advance(&clock, 3600);
+    let before = catalog.lock().unwrap().clone();
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", initial["name"].as_str().unwrap()),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, initial);
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            "/v1/projects/p/databases/(default)/operations",
+            Value::Null
+        )
+        .0,
+        200
+    );
+    assert_eq!(*catalog.lock().unwrap(), before);
+}
+
+#[test]
+fn native_text_admin_lost_observer_selection_returns_current_absence_before_preflight_error() {
+    for foreign_epoch in [false, true] {
+        let (state, clock, catalog) = native_text_state();
+        call(
+            &state,
+            "PATCH",
+            "/v1/projects/p/databases/(default)/documents/items/bad",
+            json!({"fields":{"title":{"stringValue":"bad"},"language":{"stringValue":"fr"}}}),
+        );
+        let (_, initial) = call(
+            &state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+            native_text_body(),
+        );
+        let id = initial["name"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        let store = state.local.admin().operations();
+        let observed = store.get("p", "(default)", id).unwrap();
+        let target = observed.native_text.as_ref().unwrap();
+        if foreign_epoch {
+            let mut catalog = catalog.lock().unwrap();
+            let build = catalog.build("p", "(default)", &target.index).unwrap();
+            let mut schedule = build.native.clone().unwrap();
+            let generation = build.generation;
+            schedule.owner_epoch = Arc::new(());
+            catalog
+                .schedule_native("p", "(default)", &target.index, generation, schedule)
+                .unwrap();
+        }
+        // Deterministically interleave eviction after selection and before admission/preparation.
+        for i in 0..128 {
+            store.record_views(
+                "p",
+                "(default)",
+                &format!("evicted-{i}"),
+                Value::Null,
+                json!({"done":true}),
+            );
+        }
+        advance(&clock, 3600);
+        let before = catalog.lock().unwrap().clone();
+        let targets = [(observed.id.as_str(), target)];
+        state.local.advance_native_text_builds("p","(default)",super::index_rest::NativeTextSelection {operation_targets:Some(&targets),..Default::default()}).expect("a lost retained selection returns current absence rather than a source/epoch error");
+        assert_eq!(*catalog.lock().unwrap(), before);
+        assert_eq!(
+            call(
+                &state,
+                "GET",
+                &format!("/v1/{}", initial["name"].as_str().unwrap()),
+                Value::Null
+            )
+            .0,
+            404
+        );
+    }
+}
+
+fn assert_operation_publication_waits_for_control(publisher: &str) {
+    use fireemu_core_session::tenancy::Scope;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let (state, _) = state();
+    let catalog = Arc::new(Mutex::new(
+        fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+    ));
+    state
+        .local
+        .set_text_indexes(catalog.clone(), false)
+        .unwrap();
+    let scope = Scope::Project("p".into());
+    let barrier = state.local.barrier();
+    let exclusive = barrier.exclusive();
+    let captured = state.local.capture_native_text(&scope, &catalog).unwrap();
+    let rollback = state
+        .local
+        .capture_native_text_rollback(&scope, &catalog)
+        .unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::scope(|threads| {
+        let state_ref = &state;
+        let worker=threads.spawn(move || {
+            started_tx.send(()).unwrap();
+            let answer=match publisher {
+                "database"=>(200,super::operations::record(state_ref,"p","(default)",super::operations::OperationKind::UpdateDatabase,&json!({}),Some(json!({}))).initial),
+                "composite"=>call(state_ref,"POST","/v1/projects/p/databases/(default)/collectionGroups/items/indexes",json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]})),
+                "managed"=>{let response=super::managed::finish(state_ref,"p","(default)",&json!({}),&json!({}),&json!({}));(response.status,response.body)},
+                _=>unreachable!(),
+            };
+            done_tx.send(answer).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let early = done_rx.recv_timeout(Duration::from_secs(2)).ok();
+        let completed_during_control = early.is_some();
+        state
+            .local
+            .restore_native_text(&scope, &catalog, &captured)
+            .unwrap();
+        state
+            .local
+            .rollback_native_text(&scope, &catalog, &rollback)
+            .unwrap();
+        drop(exclusive);
+        let (status, answer) =
+            early.unwrap_or_else(|| done_rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        worker.join().unwrap();
+        assert!(!completed_during_control,"{publisher} published a retained view inside exclusive CONTROL; rollback can discard that accepted publication");
+        assert_eq!(status, 200, "{answer}");
+        let id = answer["name"].as_str().unwrap().rsplit('/').next().unwrap();
+        assert!(
+            state
+                .local
+                .admin()
+                .operations()
+                .get("p", "(default)", id)
+                .is_some(),
+            "publication accepted after CONTROL remains retained"
+        );
+    });
+}
+
+#[test]
+fn native_text_admin_database_operation_publication_waits_for_control() {
+    assert_operation_publication_waits_for_control("database");
+}
+#[test]
+fn native_text_admin_composite_operation_publication_waits_for_control() {
+    assert_operation_publication_waits_for_control("composite");
+}
+#[test]
+fn native_text_admin_managed_operation_publication_waits_for_control() {
+    assert_operation_publication_waits_for_control("managed");
 }
 
 proptest::proptest! {

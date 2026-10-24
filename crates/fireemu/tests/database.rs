@@ -855,6 +855,152 @@ fn sign_up(daemon: &Daemon, email: &str, tenant: Option<&str>) -> (String, Strin
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one ordered, two-round Native observation matrix
+fn locally_signed_users_match_twenty_native_auth_rules_cases() {
+    let native: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/rtdb-genuine-auth-native.json")).unwrap();
+    let cases = native["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 20);
+    let ids: std::collections::BTreeSet<_> = cases
+        .iter()
+        .map(|case| case["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 20);
+
+    let dir = Scratch::new("database", "native-signed-users");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":[
+            {"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"},
+            {"instance":"other-default-rtdb","rules":"database.rules.json"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("database.rules.json"),
+        r#"{"rules":{"rounds":{"$round":{"users":{"$uid":{
+            ".read":"auth != null && auth.uid == $uid",
+            ".write":"auth != null && auth.uid == $uid"}}}}}}"#,
+    )
+    .unwrap();
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion":1,"profile":"strict","productionExact":true,"auth":{"idTokenSigning":"session-rsa","allowUnsignedIdTokens":false}}"#,
+    )
+    .unwrap();
+    let daemon = Daemon::start(&[
+        "--firebase-json",
+        firebase_json.to_str().unwrap(),
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database,auth",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    let pid = daemon.child.id();
+    eprintln!(
+        "auth03 local daemon pid={pid} database_port={port} auth_port={}",
+        daemon.auth_port()
+    );
+    let users = BTreeMap::from([
+        ("a", sign_up(&daemon, "a@example.invalid", None)),
+        ("b", sign_up(&daemon, "b@example.invalid", None)),
+    ]);
+    assert!(users["a"].0 != users["b"].0);
+    for (_, token) in users.values() {
+        assert_eq!(token.split('.').count(), 3);
+        assert!(!token.rsplit('.').next().unwrap().is_empty());
+    }
+    // Each environment issues its own tokens. Only Rules-visible roles and outcomes
+    // are compared; Native token bytes or validity under the local signer are not.
+    let target = |round: u64, role: &str, actor: &str| {
+        let uid = &users[role].0;
+        let auth = users
+            .get(actor)
+            .map_or(String::new(), |(_, token)| format!("&auth={token}"));
+        format!("/rounds/r{round}/users/{uid}.json?ns=demo-rtdb-default-rtdb{auth}")
+    };
+    let mut covered = std::collections::BTreeSet::new();
+    let mut protected_readbacks = 0;
+    for case in cases {
+        let id = case["id"].as_str().unwrap();
+        let round = case["round"].as_u64().unwrap();
+        let actor = case["actor"].as_str().unwrap();
+        let role = case["target"].as_str().unwrap();
+        let method = case["method"].as_str().unwrap();
+        assert!(matches!(round, 1 | 2));
+        assert!(matches!(actor, "a" | "b" | "anonymous"));
+        assert!(matches!(role, "a" | "b"));
+        assert!(matches!(method, "GET" | "PUT"));
+        assert!(covered.insert((round, actor, role, method)));
+        let body = if method == "PUT" {
+            serde_json::to_string(&case["requestBody"]).unwrap()
+        } else {
+            String::new()
+        };
+        let (status, body) = request(port, method, &target(round, role, actor), &[], &body);
+        assert_eq!(u64::from(status), case["status"].as_u64().unwrap(), "{id}");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body, case["body"], "{id}");
+        if let Some(protected) = case.get("protectedReadback") {
+            // Use the target's genuine user token, never an administrator override.
+            let (status, body) = request(port, "GET", &target(round, role, role), &[], "");
+            assert_eq!(
+                u64::from(status),
+                protected["status"].as_u64().unwrap(),
+                "{id}"
+            );
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                body, protected["body"],
+                "{id}: denied PUT changed the value"
+            );
+            protected_readbacks += 1;
+        }
+    }
+    assert_eq!(covered.len(), 20);
+    assert_eq!(protected_readbacks, 6);
+    for round in [1, 2] {
+        for (actor, role) in [
+            ("a", "a"),
+            ("b", "b"),
+            ("a", "b"),
+            ("b", "a"),
+            ("anonymous", "a"),
+        ] {
+            for method in ["GET", "PUT"] {
+                assert!(covered.contains(&(round, actor, role, method)));
+            }
+        }
+    }
+
+    // A genuine signed token is also bound to the instance's project. The foreign
+    // instance has the same rules, so an absent rules file cannot explain this denial.
+    let foreign = target(1, "a", "a").replace("ns=demo-rtdb-default-rtdb", "ns=other-default-rtdb");
+    assert_eq!(request(port, "GET", &foreign, &[], "").0, 401);
+
+    // A damaged signature must not become a Rules identity through claim decoding.
+    let mut parts = users["a"].1.split('.');
+    let (head, claims, signature) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    let first = if signature.starts_with('A') { 'B' } else { 'A' };
+    let damaged = format!("{head}.{claims}.{first}{}", &signature[1..]);
+    let own = target(1, "a", "anonymous");
+    assert_eq!(
+        request(port, "GET", &format!("{own}&auth={damaged}"), &[], "").0,
+        401
+    );
+    drop(daemon);
+    eprintln!("auth03 local daemon retired pid={pid}");
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // one matrix: profile x token kind x instance kind
 fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
     let dir = Scratch::new("database", "credentials");

@@ -75,7 +75,7 @@ test("Realtime Database keyboard edits deliver real SSE changes and Rules cancel
     await page.reload();
     await page.getByLabel(t("database.path")).fill(path);
     await page.getByLabel(t("database.path")).press("Enter");
-    await expect(page.getByLabel(t("database.json"))).toHaveValue("null");
+    await expect(page.getByLabel(t("database.json"), { exact: true })).toHaveValue("null");
     const stream = await fetch(location, {
       headers: { accept: "text/event-stream" },
       signal: controller.signal,
@@ -83,7 +83,7 @@ test("Realtime Database keyboard edits deliver real SSE changes and Rules cancel
     expect(stream.status).toBe(200);
     reader = stream.body!.getReader();
     expect(await nextEvent()).toEqual({ event: "put", data: { path: "/", data: null } });
-    const source = page.getByLabel(t("database.json"));
+    const source = page.getByLabel(t("database.json"), { exact: true });
     await source.fill('{"written":1}');
     await source.press("Tab");
     await page.keyboard.press("Tab");

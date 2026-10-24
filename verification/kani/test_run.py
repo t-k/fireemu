@@ -17,13 +17,52 @@ from unittest import mock
 SPEC = importlib.util.spec_from_file_location("kani_runner", Path(__file__).with_name("run.py"))
 
 
+COVER_COUNTS = {
+    "harnesses::limit_boundary_classification": 1,
+    "harnesses::totp_window_boundary": 3,
+    "harnesses::production_index_never_false_accepts": 3,
+}
+
+
 def successful_output(names):
-    # The terse block and summary syntax come from actual Kani0.67 output.
+    # Summary syntax is from real pinned Kani0.67 proof output.
     return "".join(
         f"Checking harness {name}...\n\nVERIFICATION RESULT:\n ** 0 of 174 failed (1 unreachable)\n\n"
-        "VERIFICATION:- SUCCESSFUL\nVerification Time: 0.1s\n\n"
+        + (f" ** {COVER_COUNTS[name]} of {COVER_COUNTS[name]} cover properties satisfied\n\n" if name in COVER_COUNTS else "")
+        + "VERIFICATION:- SUCCESSFUL\nVerification Time: 0.1s\n\n"
         for name in names
     ) + f"Manual Harness Summary:\nComplete - {len(names)} successfully verified harnesses, 0 failures, {len(names)} total.\n"
+
+
+def cover_output(names, mode, target="harnesses::totp_window_boundary"):
+    output = successful_output(names)
+    if mode == "exact":
+        return output
+    if mode == "outside_unsatisfied":
+        return " ** 0 of 1 cover properties satisfied\n" + output
+    if mode == "trailing_unsatisfied":
+        return output + " ** 0 of 1 cover properties satisfied\n"
+    if mode == "relocated_final":
+        cover = " ** 3 of 3 cover properties satisfied\n"
+        prefix, suffix = output.rsplit(cover, 1)
+        return prefix + suffix + cover
+    if mode.startswith("unexpected"):
+        target = "harnesses::severity_is_monotone"
+    marker = f"Checking harness {target}..."
+    prefix, after = output.split(marker, 1)
+    block, separator, rest = after.partition("Checking harness ")
+    if mode.startswith("unexpected"):
+        satisfied = 0 if mode == "unexpected_unsatisfied" else 1
+        block = block.replace("VERIFICATION:-", f" ** {satisfied} of 1 cover properties satisfied\n\nVERIFICATION:-", 1)
+    else:
+        count = COVER_COUNTS[target]
+        line = f" ** {count} of {count} cover properties satisfied\n"
+        variants = {"missing": "", "partial": f" ** {count - 1} of {count - 1} cover properties satisfied\n",
+                    "zero": " ** 0 of 0 cover properties satisfied\n",
+                    "unsatisfied": f" ** 0 of {count} cover properties satisfied\n",
+                    "duplicate": line + line}
+        block = block.replace(line, variants[mode], 1)
+    return prefix + marker + block + separator + rest
 
 
 class RunnerContract(unittest.TestCase):
@@ -120,6 +159,35 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
                 with self.assertRaises(ValueError):
                     self.runner.execute(self.directory / "result.json")
                 self.assertFalse((self.directory / "result.json").exists())
+
+    def test_each_explicit_cover_summary_must_be_complete_and_unique(self):
+        receipt = self.directory / "result.json"
+        for target in COVER_COUNTS:
+            for mode in ["missing", "partial", "zero", "unsatisfied", "duplicate"]:
+                with self.subTest(target=target, mode=mode):
+                    receipt.unlink(missing_ok=True)
+                    self.output.write_text(cover_output(self.runner.EXPECTED_HARNESSES, mode, target))
+                    with self.assertRaises(ValueError):
+                        self.runner.execute(receipt)
+                    self.assertFalse(receipt.exists())
+        for mode in ["unexpected_unsatisfied", "unexpected_satisfied", "outside_unsatisfied"]:
+            with self.subTest(mode=mode):
+                receipt.unlink(missing_ok=True)
+                self.output.write_text(cover_output(self.runner.EXPECTED_HARNESSES, mode))
+                with self.assertRaises(ValueError):
+                    self.runner.execute(receipt)
+                self.assertFalse(receipt.exists())
+
+    def test_cover_summaries_after_manual_summary_are_rejected(self):
+        receipt = self.directory / "result.json"
+        for label in ["relocated_final", "trailing_unsatisfied"]:
+            changed = cover_output(self.runner.EXPECTED_HARNESSES, label)
+            with self.subTest(label=label):
+                receipt.unlink(missing_ok=True)
+                self.output.write_text(changed)
+                with self.assertRaises(ValueError):
+                    self.runner.execute(receipt)
+                self.assertFalse(receipt.exists())
 
     def test_missing_extra_and_duplicate_source_inventory_rejected(self):
         expected = self.runner.EXPECTED_HARNESSES
@@ -328,14 +396,14 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
                 with self.subTest(row=row):
                     receipt = self.directory / "result.json"
                     receipt.unlink(missing_ok=True)
-                    self.output.write_text(successful_output(self.runner.EXPECTED_HARNESSES) if row["Output"] == "exact" else "")
+                    self.output.write_text(cover_output(self.runner.EXPECTED_HARNESSES, row.get("Covers", "exact")) if row["Output"] == "exact" else "")
                     if row["Output"] == "stale":
                         receipt.write_text("stale")
                     environment = {"FAKE_VERSION": self.runner.KANI_VERSION if row["Version"] == "exact" else "0.0.0",
                                    "FAKE_EXIT": "0" if row["Exit"] == "zero" else "7",
                                    "FAKE_CHILD": "yes" if row["Exit"] == "timeout" else "no"}
                     with mock.patch.dict(os.environ, environment), mock.patch.object(self.runner, "PROOF_TIMEOUT", 0.3, create=True):
-                        if row == {"Version": "exact", "Exit": "zero", "Output": "exact"}:
+                        if row["Version"] == "exact" and row["Exit"] == "zero" and row["Output"] == "exact" and row.get("Covers", "exact") == "exact":
                             self.runner.execute(receipt)
                         else:
                             with self.assertRaises((ValueError, OSError, subprocess.SubprocessError)):

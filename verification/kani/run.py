@@ -27,6 +27,11 @@ EXPECTED_HARNESSES = tuple("harnesses::" + name for name in (
     "production_index_never_false_accepts",
 ))
 
+EXPECTED_COVERS = {
+    "harnesses::limit_boundary_classification": 1,
+    "harnesses::totp_window_boundary": 3,
+    "harnesses::production_index_never_false_accepts": 3,
+}
 
 def discover_harnesses():
     """Reject proof inventory changes until the execution contract is updated."""
@@ -42,16 +47,24 @@ def validate_output(output):
     count = len(EXPECTED_HARNESSES)
     if summary != [(str(count), "0", str(count))] or output.count("Manual Harness Summary:") != 1:
         raise ValueError("incomplete or unsuccessful proof summary")
-    blocks = re.split(r"^Checking harness ([^\n]+)\.\.\.\s*$", output, flags=re.M)
+    proof_output, trailer = output.split("Manual Harness Summary:", 1)
+    blocks = re.split(r"^Checking harness ([^\n]+)\.\.\.\s*$", proof_output, flags=re.M)
     names = blocks[1::2]
     if len(names) != count or set(names) != set(EXPECTED_HARNESSES):
         raise ValueError("actual proof identities differ from the execution contract")
-    for block in blocks[2::2]:
+    if "cover properties" in blocks[0] or "cover properties" in trailer:
+        raise ValueError("cover summary outside a proof result")
+    for name, block in zip(names, blocks[2::2]):
         if re.findall(r"^VERIFICATION:- (\S+)$", block, re.M) != ["SUCCESSFUL"]:
             raise ValueError("a proof did not succeed")
         checks = re.findall(r"^ \*\* (\d+) of (\d+) failed(?: \([^\n]*\))?$", block, re.M)
         if len(checks) != 1 or checks[0][0] != "0" or int(checks[0][1]) < 1:
             raise ValueError("missing or failed verification checks")
+        count = EXPECTED_COVERS.get(name, 0)
+        expected = [f" ** {count} of {count} cover properties satisfied"] if count else []
+        covers = [line for line in block.splitlines() if "cover properties" in line]
+        if covers != expected:
+            raise ValueError(f"missing, incomplete or unexpected cover summary: {name}")
 
 
 def run_command(command, timeout, capture_output=False):

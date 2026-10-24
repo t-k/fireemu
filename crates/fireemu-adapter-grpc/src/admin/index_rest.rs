@@ -417,18 +417,27 @@ fn text_definition(
     }
     let fields = body["fields"]
         .as_array()
-        .filter(|fields| fields.len() == 1)
+        .filter(|fields| !fields.is_empty())
         .ok_or_else(|| text_unverified("text index fields"))?;
-    let field = &fields[0];
-    if field.as_object().is_none_or(|object| object.len() != 2)
-        || field["searchConfig"]
-            != json!({"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}})
-    {
-        return Err(text_unverified("text index field configuration"));
-    }
-    let path = field["fieldPath"]
-        .as_str()
-        .ok_or_else(|| text_unverified("text field path"))?;
+    let fields = fields
+        .iter()
+        .map(|field| {
+            if field.as_object().is_none_or(|object| object.len() != 2)
+                || field["searchConfig"]
+                    != json!({"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}})
+            {
+                return Err(text_unverified("text index field configuration"));
+            }
+            let path = field["fieldPath"]
+                .as_str()
+                .ok_or_else(|| text_unverified("text field path"))?;
+            Ok(TextIndexedField {
+                path: FieldPath::parse(path).map_err(text_unverified)?,
+                index_type: TextIndexType::Tokenized,
+                match_type: TextMatchType::MatchGlobally,
+            })
+        })
+        .collect::<Result<Vec<_>, tonic::Status>>()?;
     let override_path = match body["searchIndexOptions"].get("textLanguageOverrideFieldPath") {
         None => "language",
         Some(value) => value
@@ -440,11 +449,7 @@ fn text_definition(
         collection_id: CollectionId::try_new(group).map_err(text_unverified)?,
         query_scope: IndexQueryScope::Collection,
         api_scope: "ANY_API".into(),
-        fields: vec![TextIndexedField {
-            path: FieldPath::parse(path).map_err(text_unverified)?,
-            index_type: TextIndexType::Tokenized,
-            match_type: TextMatchType::MatchGlobally,
-        }],
+        fields,
         language: DefaultTextLanguage::Tag("en".into()),
         language_override: LanguageOverridePolicy::ExplicitField(
             FieldPath::parse(override_path).map_err(text_unverified)?,
@@ -716,7 +721,8 @@ fn text_route(
     if state.local.text_search_configuration()?.is_none() {
         return Ok(None);
     }
-    if method == "GET" {
+    let list = method == "GET" && rest.is_empty();
+    if method == "GET" && !list {
         state.local.advance_native_text_builds(
             project,
             database,
@@ -730,7 +736,7 @@ fn text_route(
     }
     state
         .local
-        .with_native_text_snapshot(project, database, |_, catalog| {
+        .with_native_text_snapshot(project, database, |db, catalog| {
             let scoped = |definition: &&TextIndexDefinition| {
                 group == "-" || definition.collection_id.as_str() == group
             };
@@ -739,16 +745,28 @@ fn text_route(
                 .check_native_text_epoch(catalog, |p, d, definition| {
                     p == project
                         && d == database
-                        && (group == "-" || definition.collection_id.as_str() == group)
+                        && (list || group == "-" || definition.collection_id.as_str() == group)
                         && rest.first().is_none_or(|id| definition.id == *id)
                 })?;
             match (method, rest) {
                 ("GET", []) => {
+                    for (_, _, definition) in catalog
+                        .entries()
+                        .filter(|(p, d, _)| *p == project && *d == database)
+                    {
+                        text_index_json(project, database, definition)?;
+                    }
+                    state.local.advance_text_builds_at_snapshot(
+                        project,
+                        database,
+                        db,
+                        catalog,
+                        NativeTextSelection::default(),
+                    )?;
                     let indexes = catalog
                         .entries()
                         .filter(|(p, d, _)| *p == project && *d == database)
                         .map(|(_, _, definition)| definition)
-                        .filter(scoped)
                         .map(|definition| text_index_json(project, database, definition))
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok(Some(ok(json!({"indexes":indexes}))))

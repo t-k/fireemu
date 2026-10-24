@@ -2552,6 +2552,571 @@ fn native_text_state_for(
 }
 
 #[test]
+fn native_text_admin_multiple_fields_preserve_definition_and_search_both_fields() {
+    for strict in [true, false] {
+        for database in ["(default)", "entnamed"] {
+            for explicit_override in [true, false] {
+                let (state, clock, _) = native_text_state_for(strict);
+                let base = format!("/v1/projects/p/databases/{database}");
+                let group = format!("{base}/collectionGroups/items/indexes");
+                let mut request = native_text_body();
+                let mut second = request["fields"][0].clone();
+                second["fieldPath"] = json!("body");
+                request["fields"].as_array_mut().unwrap().push(second);
+                if !explicit_override {
+                    request["searchIndexOptions"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("textLanguageOverrideFieldPath");
+                }
+                for (id, field) in [("titleonly", "title"), ("bodyonly", "body")] {
+                    let mut fields = serde_json::Map::new();
+                    fields.insert(field.into(), json!({"stringValue":"multifieldmarker"}));
+                    fields.insert("language".into(), json!({"stringValue":"en"}));
+                    let (status, document) = call(
+                        &state,
+                        "PATCH",
+                        &format!("{base}/documents/items/{id}"),
+                        json!({"fields":fields}),
+                    );
+                    assert_eq!(status, 200, "{document}");
+                }
+                let (status, initial) = call(&state, "POST", &group, request.clone());
+                assert_eq!(status, 200, "{strict} {database}: {initial}");
+                let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+                let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+                let (status, creating) = call(&state, "GET", &index, Value::Null);
+                assert_eq!(status, 200, "{creating}");
+                assert_eq!(creating["fields"], request["fields"]);
+                assert_eq!(creating["density"], "SPARSE_ANY");
+                assert_eq!(
+                    creating["searchIndexOptions"],
+                    native_text_body()["searchIndexOptions"]
+                );
+                let (status, listed) = call(&state, "GET", &group, Value::Null);
+                assert_eq!(status, 200, "{listed}");
+                assert_eq!(listed["indexes"], json!([creating]));
+                advance(&clock, 3600);
+                let (status, terminal) = call(&state, "GET", &operation, Value::Null);
+                assert_eq!(status, 200, "{terminal}");
+                assert_eq!(terminal["done"], true);
+                assert_eq!(terminal["response"]["state"], "READY");
+                assert_eq!(terminal["response"]["fields"], request["fields"]);
+                assert_eq!(
+                    terminal["response"]["searchIndexOptions"],
+                    native_text_body()["searchIndexOptions"]
+                );
+                let (status, hits) = call(
+                    &state,
+                    "POST",
+                    &format!("{base}/documents:executePipeline"),
+                    json!({"structuredPipeline":{"pipeline":{"stages":[
+                        {"name":"collection","args":[{"referenceValue":"/items"}]},
+                        {"name":"search","options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"multifieldmarker"}]}}}}
+                    ]}}}),
+                );
+                assert_eq!(status, 200, "{hits}");
+                assert_eq!(hits[0]["results"].as_array().unwrap().len(), 2, "{hits}");
+            }
+        }
+    }
+}
+
+#[test]
+fn native_text_admin_multiple_fields_refuse_unobserved_shapes() {
+    for strict in [true, false] {
+        for variant in 0..6 {
+            let (state, _, _) = native_text_state_for(strict);
+            let mut request = native_text_body();
+            let mut second = request["fields"][0].clone();
+            second["fieldPath"] = json!("body");
+            request["fields"].as_array_mut().unwrap().push(second);
+            match variant {
+                0 => request["fields"] = json!([]),
+                1 => request["fields"][1] = json!({"fieldPath":"body","order":"ASCENDING"}),
+                2 => {
+                    request["fields"][1]["searchConfig"]["textSpec"]["indexSpecs"][0]
+                        ["indexType"] = json!("UNRECORDED");
+                }
+                3 => request["fields"][1]["extra"] = json!(true),
+                4 => request["fields"][1]["fieldPath"] = json!(null),
+                _ => request["fields"][1]["fieldPath"] = json!("title"),
+            }
+            let (status, response) = call(
+                &state,
+                "POST",
+                "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+                request,
+            );
+            assert_ne!(status, 200, "{strict} {variant}: {response}");
+            if variant != 5 {
+                assert_eq!(status, 501, "{strict} {variant}: {response}");
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn native_text_admin_cross_group_list_is_database_scoped_and_keeps_item_scope() {
+    for strict in [true, false] {
+        let (state, clock, _) = native_text_state_for(strict);
+        let base = "/v1/projects/p/databases/(default)";
+        let mut text_indexes = Vec::new();
+        let mut text_operations = Vec::new();
+        for group in ["articles", "notes"] {
+            let (status, created) = call(
+                &state,
+                "POST",
+                &format!("{base}/collectionGroups/{group}/indexes"),
+                native_text_body(),
+            );
+            assert_eq!(status, 200, "{created}");
+            text_indexes.push(created["metadata"]["index"].as_str().unwrap().to_owned());
+            text_operations.push(created["name"].as_str().unwrap().to_owned());
+        }
+        for foreign_base in [
+            "/v1/projects/other/databases/(default)",
+            "/v1/projects/p/databases/entnamed",
+        ] {
+            let (status, created) = call(
+                &state,
+                "POST",
+                &format!("{foreign_base}/collectionGroups/articles/indexes"),
+                native_text_body(),
+            );
+            assert_eq!(status, 200, "{created}");
+        }
+        let mut ordinary_indexes = Vec::new();
+        for group in ["articles", "notes"] {
+            let (status, created) = call(
+                &state,
+                "POST",
+                &format!("{base}/collectionGroups/{group}/indexes"),
+                json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}),
+            );
+            assert_eq!(status, 200, "{created}");
+            ordinary_indexes.push(created["metadata"]["index"].as_str().unwrap().to_owned());
+        }
+        advance(&clock, 3600);
+        for (position, group) in ["articles", "notes"].into_iter().enumerate() {
+            let (status, listed) = call(
+                &state,
+                "GET",
+                &format!("{base}/collectionGroups/{group}/indexes"),
+                Value::Null,
+            );
+            assert_eq!(status, 200, "{listed}");
+            let mut names: Vec<_> = listed["indexes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap().to_owned())
+                .collect();
+            names.sort();
+            let mut expected = text_indexes.clone();
+            expected.push(ordinary_indexes[position].clone());
+            expected.sort();
+            assert_eq!(names, expected, "{listed}");
+            assert!(
+                listed["indexes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|entry| entry["state"] == "READY"),
+                "{listed}"
+            );
+        }
+        let mut terminal_operations = Vec::new();
+        for operation in &text_operations {
+            let terminal = call(&state, "GET", &format!("/v1/{operation}"), Value::Null);
+            assert_eq!(terminal.0, 200, "{}", terminal.1);
+            assert_eq!(terminal.1["done"], true);
+            terminal_operations.push(terminal);
+        }
+        let (status, document) = call(
+            &state,
+            "PATCH",
+            &format!("{base}/documents/notes/later"),
+            json!({"fields":{"title":{"stringValue":"later"},"language":{"stringValue":"fr"}}}),
+        );
+        assert_eq!(status, 200, "{document}");
+        let (status, listed) = call(
+            &state,
+            "GET",
+            &format!("{base}/collectionGroups/articles/indexes"),
+            Value::Null,
+        );
+        assert_eq!(
+            status, 200,
+            "terminal metadata must not revalidate a later source value: {listed}"
+        );
+        for (operation, terminal) in text_operations.iter().zip(terminal_operations) {
+            assert_eq!(
+                call(&state, "GET", &format!("/v1/{operation}"), Value::Null),
+                terminal
+            );
+        }
+        let wrong_group = format!(
+            "/v1/{}",
+            text_indexes[0].replace("/collectionGroups/articles/", "/collectionGroups/notes/")
+        );
+        assert_eq!(call(&state, "GET", &wrong_group, Value::Null).0, 404);
+        assert_eq!(
+            call(&state, "DELETE", &wrong_group, Value::Null),
+            (200, json!({}))
+        );
+        assert_eq!(
+            call(
+                &state,
+                "GET",
+                &format!("/v1/{}", text_indexes[0]),
+                Value::Null
+            )
+            .0,
+            200
+        );
+    }
+}
+
+#[test]
+fn native_text_admin_cross_group_list_validates_every_visible_source_before_publication() {
+    let (state, clock, catalog) = native_text_state();
+    let base = "/v1/projects/p/databases/(default)";
+    for group in ["good", "bad"] {
+        let (status, initial) = call(
+            &state,
+            "POST",
+            &format!("{base}/collectionGroups/{group}/indexes"),
+            native_text_body(),
+        );
+        assert_eq!(status, 200, "{initial}");
+    }
+    assert_eq!(
+        call(
+            &state,
+            "PATCH",
+            &format!("{base}/documents/bad/doc"),
+            json!({"fields":{"title":{"stringValue":"marker"},"language":{"stringValue":"fr"}}}),
+        )
+        .0,
+        200
+    );
+    advance(&clock, 3600);
+    let before = catalog.lock().unwrap().clone();
+    let operations = state.local.admin().operations().list("p", "(default)");
+    let list = format!("{base}/collectionGroups/good/indexes");
+    let (status, answer) = call(&state, "GET", &list, Value::Null);
+    assert_eq!(status, 501, "{answer}");
+    assert_eq!(*catalog.lock().unwrap(), before);
+    assert_eq!(
+        state.local.admin().operations().list("p", "(default)"),
+        operations
+    );
+    assert_eq!(
+        call(
+            &state,
+            "PATCH",
+            &format!("{base}/documents/bad/doc"),
+            json!({"fields":{"title":{"stringValue":"marker"},"language":{"stringValue":"en"}}}),
+        )
+        .0,
+        200
+    );
+    let (status, answer) = call(&state, "GET", &list, Value::Null);
+    assert_eq!(status, 200, "{answer}");
+    let indexes = answer["indexes"].as_array().unwrap();
+    assert_eq!(indexes.len(), 2);
+    assert!(
+        indexes.iter().all(|index| index["state"] == "READY"),
+        "{answer}"
+    );
+}
+
+#[test]
+fn native_text_admin_cross_group_list_foreign_ready_rejection_preserves_due_builds() {
+    let (owner, owner_clock, catalog) = native_text_state();
+    let base = "/v1/projects/p/databases/(default)";
+    let (_, foreign) = call(
+        &owner,
+        "POST",
+        &format!("{base}/collectionGroups/foreign/indexes"),
+        native_text_body(),
+    );
+    advance(&owner_clock, 3600);
+    let foreign_operation = format!("/v1/{}", foreign["name"].as_str().unwrap());
+    let foreign_terminal = call(&owner, "GET", &foreign_operation, Value::Null);
+    assert_eq!(foreign_terminal.0, 200, "{}", foreign_terminal.1);
+    assert_eq!(foreign_terminal.1["response"]["state"], "READY");
+
+    let (other, other_clock) = enterprise_native_state(true);
+    other
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::from_secs(3600));
+    other
+        .local
+        .set_text_indexes(Arc::clone(&catalog), false)
+        .unwrap();
+    let (status, document) = call(
+        &other,
+        "PATCH",
+        &format!("{base}/documents/local/good"),
+        json!({"fields":{"title":{"stringValue":"marker"},"language":{"stringValue":"en"}}}),
+    );
+    assert_eq!(status, 200, "{document}");
+    let list = format!("{base}/collectionGroups/local/indexes");
+    let (status, own) = call(&other, "POST", &list, native_text_body());
+    assert_eq!(status, 200, "{own}");
+    let own_operation = format!("/v1/{}", own["name"].as_str().unwrap());
+    advance(&other_clock, 3600);
+    let before = catalog.lock().unwrap().clone();
+    let pending = other.local.admin().operations().list("p", "(default)");
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0].current.get("done").is_none());
+    let catalog_states: Vec<_> = before
+        .entries()
+        .map(|(_, _, definition)| definition.state)
+        .collect();
+    assert!(catalog_states.contains(&fireemu_core_firestore::text_index::TextIndexState::Ready));
+    assert!(catalog_states.contains(&fireemu_core_firestore::text_index::TextIndexState::Creating));
+
+    let (status, refused) = call(&other, "GET", &list, Value::Null);
+    assert_eq!(status, 501, "{refused}");
+    assert_eq!(
+        *catalog.lock().unwrap(),
+        before,
+        "a rejected LIST cannot publish the own due build before noticing a foreign READY epoch"
+    );
+    assert_eq!(
+        other.local.admin().operations().list("p", "(default)"),
+        pending
+    );
+
+    let foreign_index = format!("/v1/{}", foreign["metadata"]["index"].as_str().unwrap());
+    assert_eq!(
+        call(&owner, "DELETE", &foreign_index, Value::Null),
+        (200, json!({}))
+    );
+    let (status, listed) = call(&other, "GET", &list, Value::Null);
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["indexes"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["indexes"][0]["name"], own["metadata"]["index"]);
+    assert_eq!(listed["indexes"][0]["state"], "READY");
+    let (status, terminal) = call(&other, "GET", &own_operation, Value::Null);
+    assert_eq!(status, 200, "{terminal}");
+    assert_eq!(terminal["done"], true);
+    assert_eq!(terminal["metadata"]["state"], "SUCCESSFUL");
+    assert_eq!(terminal["response"]["name"], own["metadata"]["index"]);
+    assert_eq!(
+        call(&owner, "GET", &foreign_operation, Value::Null),
+        foreign_terminal
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn native_text_admin_cross_group_list_unrenderable_ready_metadata_preserves_due_builds() {
+    use fireemu_core_firestore::text_index::{DefaultTextLanguage, LanguageOverridePolicy};
+    // Pairwise-generated rows: metadata, scope, foreign READY, own due, changed terminal source.
+    let cases = [
+        ("Autodetect", "SameDatabase", false, true, true),
+        ("Disabled", "SameDatabase", false, true, true),
+        ("Implicit", "SameDatabase", false, true, false),
+        ("ExplicitEn", "SameDatabase", true, true, true),
+        ("Autodetect", "OtherDatabase", false, true, true),
+        ("Disabled", "OtherProject", false, true, false),
+        ("ExplicitEn", "SameDatabase", false, false, true),
+        ("Autodetect", "SameDatabase", false, false, true),
+        ("Implicit", "OtherProject", true, false, true),
+        ("Implicit", "OtherDatabase", true, false, false),
+        ("ExplicitEn", "OtherDatabase", true, true, false),
+        ("Disabled", "OtherDatabase", true, false, true),
+        ("Autodetect", "OtherProject", true, true, false),
+        ("ExplicitEn", "OtherProject", true, true, true),
+    ];
+    for (row, (metadata, scope, foreign_ready, own_due, changed_source)) in
+        cases.into_iter().enumerate()
+    {
+        eprintln!("Native LIST PICT row {row}: {metadata}/{scope}/foreign={foreign_ready}/due={own_due}/terminal_source_changed={changed_source}");
+        let (state, clock, catalog) = native_text_state();
+        let base = "/v1/projects/p/databases/(default)";
+        let (status, history) = call(
+            &state,
+            "POST",
+            &format!("{base}/collectionGroups/history/indexes"),
+            native_text_body(),
+        );
+        assert_eq!(status, 200, "{history}");
+        advance(&clock, 3600);
+        let history_operation = format!("/v1/{}", history["name"].as_str().unwrap());
+        let history_terminal = call(&state, "GET", &history_operation, Value::Null);
+        assert_eq!(history_terminal.0, 200, "{}", history_terminal.1);
+        assert_eq!(history_terminal.1["metadata"]["state"], "SUCCESSFUL");
+        if changed_source {
+            let (status, document) = call(
+                &state,
+                "PATCH",
+                &format!("{base}/documents/history/later"),
+                json!({"fields":{"title":{"stringValue":"later"},"language":{"stringValue":"fr"}}}),
+            );
+            assert_eq!(status, 200, "{document}");
+        }
+        let foreign_owner = if foreign_ready {
+            let (foreign, foreign_clock) = enterprise_native_state(true);
+            foreign
+                .local
+                .admin()
+                .indexes()
+                .set_build_duration(std::time::Duration::from_secs(3600));
+            foreign
+                .local
+                .set_text_indexes(Arc::clone(&catalog), false)
+                .unwrap();
+            let (status, initial) = call(
+                &foreign,
+                "POST",
+                &format!("{base}/collectionGroups/foreign/indexes"),
+                native_text_body(),
+            );
+            assert_eq!(status, 200, "{initial}");
+            advance(&foreign_clock, 3600);
+            let (status, terminal) = call(
+                &foreign,
+                "GET",
+                &format!("/v1/{}", initial["name"].as_str().unwrap()),
+                Value::Null,
+            );
+            assert_eq!(status, 200, "{terminal}");
+            assert_eq!(terminal["metadata"]["state"], "SUCCESSFUL");
+            Some((
+                foreign,
+                format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap()),
+            ))
+        } else {
+            None
+        };
+        let history_id = history["metadata"]["index"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        let mut configured = catalog
+            .lock()
+            .unwrap()
+            .get("p", "(default)", history_id)
+            .unwrap()
+            .clone();
+        configured.id = "CICAgConfiguredText".into();
+        configured.collection_id =
+            fireemu_core_types::ids::CollectionId::try_new("configured").unwrap();
+        match metadata {
+            "ExplicitEn" => {}
+            "Autodetect" => configured.language = DefaultTextLanguage::Autodetect,
+            "Disabled" => configured.language_override = LanguageOverridePolicy::Disabled,
+            "Implicit" => {
+                configured.language_override = LanguageOverridePolicy::ImplicitLanguageField;
+            }
+            _ => unreachable!("unknown generated metadata policy"),
+        }
+        let (config_project, config_database) = match scope {
+            "SameDatabase" => ("p", "(default)"),
+            "OtherDatabase" => ("p", "entnamed"),
+            "OtherProject" => ("other", "(default)"),
+            _ => unreachable!("unknown generated scope"),
+        };
+        catalog
+            .lock()
+            .unwrap()
+            .add(config_project, config_database, configured)
+            .unwrap();
+        let (status, document) = call(
+            &state,
+            "PATCH",
+            &format!("{base}/documents/local/good"),
+            json!({"fields":{"title":{"stringValue":"marker"},"language":{"stringValue":"en"}}}),
+        );
+        assert_eq!(status, 200, "{document}");
+        let list = format!("{base}/collectionGroups/local/indexes");
+        let (status, own) = call(&state, "POST", &list, native_text_body());
+        assert_eq!(status, 200, "{own}");
+        let operation = format!("/v1/{}", own["name"].as_str().unwrap());
+        if own_due {
+            advance(&clock, 3600);
+        }
+        let before = catalog.lock().unwrap().clone();
+        let operations = state.local.admin().operations().list("p", "(default)");
+        let (status, observed) = call(&state, "GET", &list, Value::Null);
+        let refused = foreign_ready || (scope == "SameDatabase" && metadata != "ExplicitEn");
+        if refused {
+            assert_eq!(status, 501, "row {row}: {observed}");
+            assert_eq!(
+                *catalog.lock().unwrap(),
+                before,
+                "row {row}: a refused LIST cannot publish the own due build"
+            );
+            assert_eq!(
+                state.local.admin().operations().list("p", "(default)"),
+                operations,
+                "row {row}"
+            );
+        } else {
+            assert_eq!(status, 200, "row {row}: {observed}");
+            let indexes = observed["indexes"].as_array().unwrap();
+            assert_eq!(
+                indexes.len(),
+                2 + usize::from(scope == "SameDatabase"),
+                "row {row}: {observed}"
+            );
+            let own_index = indexes
+                .iter()
+                .find(|index| index["name"] == own["metadata"]["index"])
+                .unwrap();
+            assert_eq!(
+                own_index["state"],
+                if own_due { "READY" } else { "CREATING" }
+            );
+        }
+        assert_eq!(
+            call(&state, "GET", &history_operation, Value::Null),
+            history_terminal,
+            "row {row}"
+        );
+        let configured_path = format!("/v1/projects/{config_project}/databases/{config_database}/collectionGroups/configured/indexes/CICAgConfiguredText");
+        assert_eq!(
+            call(&state, "DELETE", &configured_path, Value::Null),
+            (200, json!({}))
+        );
+        if let Some((owner, index)) = &foreign_owner {
+            assert_eq!(call(owner, "DELETE", index, Value::Null), (200, json!({})));
+        }
+        if !own_due {
+            advance(&clock, 3600);
+        }
+        let (status, listed) = call(&state, "GET", &list, Value::Null);
+        assert_eq!(status, 200, "row {row}: {listed}");
+        let indexes = listed["indexes"].as_array().unwrap();
+        assert_eq!(indexes.len(), 2);
+        assert!(indexes.iter().all(|index| index["state"] == "READY"));
+        assert!(indexes
+            .iter()
+            .any(|index| index["name"] == own["metadata"]["index"]));
+        let (status, terminal) = call(&state, "GET", &operation, Value::Null);
+        assert_eq!(status, 200, "{terminal}");
+        assert_eq!(terminal["done"], true);
+        assert_eq!(terminal["metadata"]["state"], "SUCCESSFUL");
+        assert_eq!(terminal["response"]["name"], own["metadata"]["index"]);
+        assert_eq!(
+            call(&state, "GET", &history_operation, Value::Null),
+            history_terminal,
+            "row {row}"
+        );
+    }
+}
+
+#[test]
 fn native_text_admin_success_shares_catalog_wire_schema_and_terminal_operation() {
     let (state, clock, catalog) = native_text_state();
     for database in ["(default)", "entnamed"] {
@@ -3054,7 +3619,7 @@ fn native_text_admin_unsupported_collection_does_not_block_another_target() {
             Value::Null
         )
         .0,
-        200
+        501
     );
     let (status, hits) = call(
         &state,
@@ -3200,7 +3765,14 @@ fn native_text_admin_foreign_epoch_does_not_block_unrelated_scopes() {
             .0,
             200
         );
-        assert_eq!(call(&other, "GET", &group, Value::Null).0, 200);
+        assert_eq!(
+            call(&other, "GET", &group, Value::Null).0,
+            if base == "/v1/projects/p/databases/(default)" {
+                501
+            } else {
+                200
+            }
+        );
         assert_eq!(call(&other, "DELETE", &index, Value::Null).0, 200);
     }
     let index = format!("/v1/{}", foreign["metadata"]["index"].as_str().unwrap());
@@ -3214,6 +3786,17 @@ fn native_text_admin_foreign_epoch_does_not_block_unrelated_scopes() {
     assert_eq!(call(&owner, "GET", &index, Value::Null).1["state"], "READY");
     assert_eq!(call(&other, "GET", &index, Value::Null).0, 501);
     assert_eq!(call(&other, "DELETE", &index, Value::Null).0, 501);
+    assert_eq!(
+        call(
+            &other,
+            "GET",
+            "/v1/projects/p/databases/(default)/collectionGroups/local/indexes",
+            Value::Null,
+        )
+        .0,
+        501,
+        "cross-group listing selects the foreign READY definition without changing item scope"
+    );
     let (status, body) = call(
         &other,
         "POST",
@@ -3847,21 +4430,35 @@ proptest::proptest! {
     fn native_text_admin_schema_roundtrips_fields_and_refuses_unknown_options(
         field in "[a-z]{1,8}",
         override_field in "[a-z]{1,8}",
+        multiple_fields in proptest::bool::ANY,
         unknown in 0usize..4,
     ) {
         let (state,_,_)=native_text_state();
         let mut request=native_text_body();
-        request["fields"][0]["fieldPath"]=json!(field);
+        request["fields"][0]["fieldPath"]=json!(&field);
+        if multiple_fields {
+            let mut second=request["fields"][0].clone();
+            second["fieldPath"]=json!(format!("{field}z"));
+            request["fields"].as_array_mut().unwrap().push(second);
+        }
         request["searchIndexOptions"]["textLanguageOverrideFieldPath"]=json!(override_field);
         let (status,initial)=call(&state,"POST","/v1/projects/p/databases/(default)/collectionGroups/items/indexes",request.clone());
         proptest::prop_assert_eq!(status,200,"{}",initial);
         let (_,resource)=call(&state,"GET",&format!("/v1/{}",initial["metadata"]["index"].as_str().unwrap()),Value::Null);
         proptest::prop_assert_eq!(&resource["fields"],&request["fields"]);
         proptest::prop_assert_eq!(&resource["searchIndexOptions"],&request["searchIndexOptions"]);
+        let other_group=format!("other{field}");
+        let (status,other)=call(&state,"POST",&format!("/v1/projects/p/databases/(default)/collectionGroups/{other_group}/indexes"),request.clone());
+        proptest::prop_assert_eq!(status,200,"{}",other);
+        let (status,listed)=call(&state,"GET","/v1/projects/p/databases/(default)/collectionGroups/items/indexes",Value::Null);
+        proptest::prop_assert_eq!(status,200,"{}",listed);
+        let indexes=listed["indexes"].as_array().unwrap();
+        proptest::prop_assert_eq!(indexes.len(),2,"{}",listed);
+        proptest::prop_assert!(indexes.iter().all(|index| index["fields"]==request["fields"] && index["searchIndexOptions"]==request["searchIndexOptions"]));
         match unknown {
             0=>request["searchIndexOptions"]["textLanguage"]=json!("fr"),
             1=>request["queryScope"]=json!("COLLECTION_GROUP"),
-            2=>request["fields"][0]["searchConfig"]["textSpec"]["indexSpecs"][0]["matchType"]=json!("UNRECORDED"),
+            2=>request["fields"][usize::from(multiple_fields)]["searchConfig"]["textSpec"]["indexSpecs"][0]["matchType"]=json!("UNRECORDED"),
             _=>request["unknown"]=json!(true),
         }
         proptest::prop_assert_eq!(call(&state,"POST","/v1/projects/p/databases/(default)/collectionGroups/items/indexes",request).0,501);

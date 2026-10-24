@@ -84,8 +84,12 @@ pub(crate) enum Access {
     Owner,
     /// Another administrator credential (an OAuth access token).
     Admin,
-    /// The Rules `auth` value from a user credential or a trusted administrator override.
+    /// The Rules `auth` value from a user credential.
     User(Json),
+    /// Administrator origin with an exact object supplied only as Rules input.
+    AdminAsUser(Json),
+    /// Administrator origin with explicit null Rules input.
+    AdminAsAnonymous,
     /// No usable credential.
     Anonymous,
 }
@@ -110,8 +114,8 @@ impl Access {
             // exact object rather than interpreting it as ID-token claims. Malformed or
             // scalar overrides fail closed as local policy, not an observed native error.
             return match crate::json_parse::parse(override_text).map_err(|_| Refused)? {
-                Json::Null => Ok(Self::Anonymous),
-                object @ Json::Object(_) => Ok(Self::User(object)),
+                Json::Null => Ok(Self::AdminAsAnonymous),
+                object @ Json::Object(_) => Ok(Self::AdminAsUser(object)),
                 _ => Err(Refused),
             };
         }
@@ -139,8 +143,38 @@ impl Access {
     /// `auth` as rules see it.
     fn auth(&self) -> Json {
         match self {
-            Self::User(auth) => auth.clone(),
+            Self::User(auth) | Self::AdminAsUser(auth) => auth.clone(),
             _ => Json::Null,
+        }
+    }
+
+    /// The originating principal supplied to committed-change consumers.
+    pub(crate) fn principal(&self) -> crate::changes::Principal {
+        match self {
+            Self::Owner | Self::Admin | Self::AdminAsUser(_) | Self::AdminAsAnonymous => {
+                crate::changes::Principal {
+                    auth_type: "ADMIN".to_owned(),
+                    auth_id: None,
+                    auth: None,
+                }
+            }
+            Self::Anonymous => crate::changes::Principal {
+                auth_type: "UNAUTHENTICATED".to_owned(),
+                auth_id: None,
+                auth: None,
+            },
+            Self::User(auth) => {
+                let value: serde_json::Value = serde_json::from_str(&render(auth, Style::Compact))
+                    .expect("validated Rules auth is representable as JSON");
+                crate::changes::Principal {
+                    auth_type: "USER".to_owned(),
+                    auth_id: value
+                        .get("uid")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    auth: Some(value),
+                }
+            }
         }
     }
 }
@@ -525,6 +559,55 @@ fn wire_query_text(q: &QueryParams) -> String {
 mod admin_override_tests {
     use super::*;
 
+    #[test]
+    fn originating_principal_is_not_replaced_by_admin_rules_override() {
+        for modifier in ["null", r#"{"uid":"impersonated","extra":true}"#] {
+            let params =
+                BTreeMap::from([("auth_variable_override".to_owned(), modifier.to_owned())]);
+            let access = Access::from_rest(
+                Some("Bearer owner"),
+                &params,
+                &Credentials::default(),
+                "ns",
+                0,
+            )
+            .unwrap();
+            let actor = access.principal();
+            assert_eq!(actor.auth_type, "ADMIN");
+            assert_eq!(actor.auth_id, None);
+            assert_eq!(actor.auth, None);
+            assert_eq!(access.auth(), crate::json_parse::parse(modifier).unwrap());
+        }
+    }
+
+    #[test]
+    fn originating_principal_keeps_verified_user_identity_and_anonymous_state() {
+        let credentials = Credentials {
+            strict: true,
+            id_tokens: Some(Arc::new(|_, _, _| {
+                Some(r#"{"sub":"genuine","iat":1}"#.to_owned())
+            })),
+        };
+        let params = BTreeMap::from([("auth".to_owned(), "verifier-input".to_owned())]);
+        let user = Access::from_rest(None, &params, &credentials, "ns", 0).unwrap();
+        let actor = user.principal();
+        assert_eq!(actor.auth_type, "USER");
+        assert_eq!(actor.auth_id.as_deref(), Some("genuine"));
+        assert_eq!(
+            actor
+                .auth
+                .as_ref()
+                .and_then(|auth| auth.get("uid"))
+                .and_then(serde_json::Value::as_str),
+            Some("genuine")
+        );
+        let anonymous = Access::from_rest(None, &BTreeMap::new(), &credentials, "ns", 0)
+            .unwrap()
+            .principal();
+        assert_eq!(anonymous.auth_type, "UNAUTHENTICATED");
+        assert!(anonymous.auth_id.is_none() && anonymous.auth.is_none());
+    }
+
     // A finite total-function model of the local credential/modifier boundary. Malformed
     // input policy and nonadministrator handling are local safety contracts, not oracle rows.
     #[test]
@@ -571,10 +654,10 @@ mod admin_override_tests {
                             Some(token) => match modifier {
                                 None if token == "owner" => Ok(Access::Owner),
                                 None => Ok(Access::Admin),
-                                Some("null") => Ok(Access::Anonymous),
-                                Some(value) if value.starts_with('{') => {
-                                    Ok(Access::User(crate::json_parse::parse(value).unwrap()))
-                                }
+                                Some("null") => Ok(Access::AdminAsAnonymous),
+                                Some(value) if value.starts_with('{') => Ok(Access::AdminAsUser(
+                                    crate::json_parse::parse(value).unwrap(),
+                                )),
                                 Some(_) => Err(Refused),
                             },
                         };

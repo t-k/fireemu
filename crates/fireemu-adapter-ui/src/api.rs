@@ -319,6 +319,16 @@ fn storage(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
 #[must_use]
 pub fn trigger_json(trigger: &Trigger) -> Value {
     match trigger {
+        Trigger::Database {
+            event,
+            instance,
+            reference,
+        } => json!({
+            "kind": "database",
+            "event": event.database_event_type(),
+            "instance": instance,
+            "ref": reference.as_str(),
+        }),
         Trigger::Http { callable, .. } => json!({"kind": "http", "callable": callable}),
         Trigger::Firestore {
             event,

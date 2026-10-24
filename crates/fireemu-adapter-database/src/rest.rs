@@ -216,6 +216,7 @@ struct Call<'a> {
     condition: Option<Condition<'a>>,
     context: ServerValueContext,
     access: Access,
+    disable_triggers: bool,
 }
 
 /// A conditional request header.
@@ -298,6 +299,8 @@ impl NamespacesSnapshot {
 #[derive(Debug)]
 pub struct Database {
     options: RestOptions,
+    change_sink: Option<std::sync::Arc<dyn crate::changes::ChangeSink>>,
+    next_change: u64,
     /// One generator for the whole server, so push ids increase across namespaces.
     push_ids: PushIdGenerator,
     namespaces: BTreeMap<String, Namespace>,
@@ -324,10 +327,18 @@ pub struct Database {
     clock: ServerClock,
     /// The writes each realtime connection registered for its end, with its namespace.
     on_disconnect: BTreeMap<u64, (String, Pending)>,
+    deferred_disconnects: std::collections::VecDeque<DeferredDisconnect>,
     /// The rules loaded per namespace.
     rules: BTreeMap<String, LoadedRules>,
     /// Who each realtime connection is (anonymous until it authenticates).
     client_access: BTreeMap<u64, Access>,
+}
+
+#[derive(Debug)]
+struct DeferredDisconnect {
+    namespace: String,
+    pending: Pending,
+    access: Access,
 }
 
 /// The server's callback for messages that wait outside a request.
@@ -375,6 +386,8 @@ impl Database {
     pub fn new(options: RestOptions, seed: u64) -> Self {
         Self {
             options,
+            change_sink: None,
+            next_change: 1,
             push_ids: PushIdGenerator::new(seed),
             namespaces: BTreeMap::new(),
             imported: std::collections::BTreeSet::new(),
@@ -391,9 +404,77 @@ impl Database {
             waker: Waker::default(),
             clock: ServerClock::default(),
             on_disconnect: BTreeMap::new(),
+            deferred_disconnects: std::collections::VecDeque::new(),
             rules: BTreeMap::new(),
             client_access: BTreeMap::new(),
         }
+    }
+
+    /// Installs the coupled Functions event sink before serving writes.
+    pub fn set_change_sink(&mut self, sink: std::sync::Arc<dyn crate::changes::ChangeSink>) {
+        self.change_sink = Some(sink);
+    }
+
+    pub(crate) fn commit_set(
+        &mut self,
+        namespace: &str,
+        path: &Path,
+        value: &Json,
+        context: ServerValueContext,
+        principal: crate::changes::Principal,
+    ) -> Result<Option<Node>, crate::changes::ChangeError> {
+        self.commit_change(namespace, context, principal, |tree| {
+            tree.set(path, value, context)
+        })
+    }
+
+    pub(crate) fn commit_update(
+        &mut self,
+        namespace: &str,
+        path: &Path,
+        entries: &[(String, Json)],
+        context: ServerValueContext,
+        principal: crate::changes::Principal,
+    ) -> Result<(), crate::changes::ChangeError> {
+        self.commit_change(namespace, context, principal, |tree| {
+            tree.update(path, entries, context)
+        })
+    }
+
+    fn commit_change<R>(
+        &mut self,
+        namespace: &str,
+        context: ServerValueContext,
+        principal: crate::changes::Principal,
+        operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
+    ) -> Result<R, crate::changes::ChangeError> {
+        let sink = self
+            .change_sink
+            .clone()
+            .filter(|sink| sink.interested(namespace));
+        if sink.is_none() {
+            return operation(self.tree_mut(namespace))
+                .map_err(crate::changes::ChangeError::Database);
+        }
+        let next = self.next_change.checked_add(1).ok_or_else(|| {
+            crate::changes::ChangeError::Admission(
+                fireemu_core_types::admission::EventAdmissionError::Unavailable(
+                    "RTDB event source sequence exhausted".to_owned(),
+                ),
+            )
+        })?;
+        let change = crate::changes::ChangeContext {
+            namespace: namespace.to_owned(),
+            sequence: self.next_change,
+            now_millis: context.now_millis,
+            principal,
+        };
+        let tree = self.tree_mut(namespace);
+        let (result, candidate) =
+            crate::changes::prepare(tree, change, sink.as_deref(), operation)?;
+        candidate.commit(tree);
+        self.next_change = next;
+        Ok(result)
     }
 
     /// The tree of `namespace`, if it was ever used.
@@ -676,6 +757,9 @@ impl Database {
             condition,
             context: ServerValueContext { now_millis },
             access,
+            disable_triggers: params
+                .get("disableTriggers")
+                .is_some_and(|value| value == "true"),
         };
         match method.as_str() {
             "GET" => {
@@ -750,10 +834,21 @@ impl Database {
         if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
             return Err(Refusal::new(401, "Permission denied"));
         }
-        let tree = &mut self.namespace(&call.namespace).tree;
-        let node = tree
-            .set(&call.path, &value, call.context)
-            .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
+        let node = if call.disable_triggers {
+            self.tree_mut(&call.namespace)
+                .set(&call.path, &value, call.context)
+                .map_err(crate::changes::ChangeError::Database)
+        } else {
+            self.commit_set(
+                &call.namespace,
+                &call.path,
+                &value,
+                call.context,
+                call.access.principal(),
+            )
+        }
+        .map_err(|err| change_refusal(&err, || data_refusal(body.text)))?;
+        let tree = &self.namespace(&call.namespace).tree;
         let response = written(
             tree,
             &call.path,
@@ -782,10 +877,20 @@ impl Database {
         if !self.may_write(&call.namespace, &op, &call.access, call.context.now_millis) {
             return Err(Refusal::new(401, "Permission denied"));
         }
-        self.namespace(&call.namespace)
-            .tree
-            .set(&child, &value, call.context)
-            .map_err(|err| write_refusal(&err, || data_refusal(body.text)))?;
+        if call.disable_triggers {
+            self.tree_mut(&call.namespace)
+                .set(&child, &value, call.context)
+                .map_err(crate::changes::ChangeError::Database)
+        } else {
+            self.commit_set(
+                &call.namespace,
+                &child,
+                &value,
+                call.context,
+                call.access.principal(),
+            )
+        }
+        .map_err(|err| change_refusal(&err, || data_refusal(body.text)))?;
         let name = Json::object([("name", Json::String(id))]);
         let response = json_response(&name, &call.output, None);
         // A new child: the write always changes something.
@@ -812,8 +917,20 @@ impl Database {
         // The answer echoes the request with its placeholders resolved, read before the
         // update changes what they resolve against.
         let echo = patch_echo(tree, &call.path, &entries, call.context);
-        tree.update(&call.path, &wire, call.context)
-            .map_err(|err| write_refusal(&err, || Refusal::bad(PATCH_ERROR)))?;
+        if call.disable_triggers {
+            self.tree_mut(&call.namespace)
+                .update(&call.path, &wire, call.context)
+                .map_err(crate::changes::ChangeError::Database)
+        } else {
+            self.commit_update(
+                &call.namespace,
+                &call.path,
+                &wire,
+                call.context,
+                call.access.principal(),
+            )
+        }
+        .map_err(|err| change_refusal(&err, || Refusal::bad(PATCH_ERROR)))?;
         let effective = self.effective(&call.namespace, &absolute, before);
         let entries = entries
             .into_iter()
@@ -1181,6 +1298,8 @@ impl Database {
     pub fn clear_namespaces_where(&mut self, cleared: impl Fn(&str) -> bool) {
         self.on_disconnect
             .retain(|_, (namespace, _)| !cleared(namespace));
+        self.deferred_disconnects
+            .retain(|job| !cleared(&job.namespace));
         // A reset session was never imported into, so an export leaves its empty namespaces out.
         self.imported.retain(|namespace| !cleared(namespace));
         let names: Vec<String> = self
@@ -1245,6 +1364,8 @@ impl Database {
     ) {
         self.on_disconnect
             .retain(|_, (namespace, _)| !owned(namespace));
+        self.deferred_disconnects
+            .retain(|job| !owned(&job.namespace));
         self.imported.retain(|namespace| !owned(namespace));
         self.imported
             .extend(snapshot.imported.iter().filter(|name| owned(name)).cloned());
@@ -1279,6 +1400,7 @@ impl Database {
 
     /// Takes the stream events caused outside a request, in order.
     pub fn drain_events(&mut self) -> Vec<(u64, SseEvent)> {
+        self.retry_disconnects(self.clock.now());
         std::mem::take(&mut self.events)
     }
 
@@ -1312,9 +1434,39 @@ impl Database {
         let Some((namespace, pending)) = self.on_disconnect.remove(&client) else {
             return;
         };
-        let entries = self.on_disconnect_writes(&namespace, pending.entries(), &access, now_millis);
+        self.deferred_disconnects.push_back(DeferredDisconnect {
+            namespace,
+            pending,
+            access,
+        });
+        self.retry_disconnects(now_millis);
+        self.wake();
+    }
+
+    fn retry_disconnects(&mut self, now_millis: i64) {
+        while let Some(job) = self.deferred_disconnects.pop_front() {
+            if matches!(
+                self.apply_disconnect(&job, now_millis),
+                Err(crate::changes::ChangeError::Admission(_))
+            ) {
+                // Retry at the server's next flush; never spin on unavailable capacity.
+                self.deferred_disconnects.push_front(job);
+                break;
+            }
+        }
+    }
+
+    fn apply_disconnect(
+        &mut self,
+        job: &DeferredDisconnect,
+        now_millis: i64,
+    ) -> Result<(), crate::changes::ChangeError> {
+        let namespace = &job.namespace;
+        // Recheck current Rules and resolve server values at the actual commit time.
+        let entries =
+            self.on_disconnect_writes(namespace, job.pending.entries(), &job.access, now_millis);
         if entries.is_empty() {
-            return;
+            return Ok(());
         }
         let context = ServerValueContext { now_millis };
         let root_value = match entries.as_slice() {
@@ -1323,15 +1475,15 @@ impl Database {
         };
         let change = if let Some(value) = root_value {
             let paths = [Path::root()];
-            let before = self.before_write(&namespace, &paths);
-            if self
-                .tree_mut(&namespace)
-                .set(&paths[0], &value, context)
-                .is_err()
-            {
-                return;
-            }
-            let effective = self.effective(&namespace, &paths, before)[0];
+            let before = self.before_write(namespace, &paths);
+            self.commit_set(
+                namespace,
+                &paths[0],
+                &value,
+                context,
+                job.access.principal(),
+            )?;
+            let effective = self.effective(namespace, &paths, before)[0];
             let [path] = paths;
             Change::Put { path, effective }
         } else {
@@ -1343,15 +1495,15 @@ impl Database {
                 .into_iter()
                 .map(|(keys, value)| (keys.join("/"), value))
                 .collect();
-            let before = self.before_write(&namespace, &paths);
-            if self
-                .tree_mut(&namespace)
-                .update(&Path::root(), &wire, context)
-                .is_err()
-            {
-                return;
-            }
-            let effective = self.effective(&namespace, &paths, before);
+            let before = self.before_write(namespace, &paths);
+            self.commit_update(
+                namespace,
+                &Path::root(),
+                &wire,
+                context,
+                job.access.principal(),
+            )?;
+            let effective = self.effective(namespace, &paths, before);
             Change::Patch {
                 base: Path::root(),
                 entries: paths
@@ -1361,11 +1513,9 @@ impl Database {
                     .collect(),
             }
         };
-        let events = self.notify(&namespace, &change, now_millis);
+        let events = self.notify(namespace, &change, now_millis);
         self.events.extend(events);
-        if let Some(waker) = &self.waker.0 {
-            waker();
-        }
+        Ok(())
     }
 
     /// Registers `value` to be written at `path` when `client`'s connection ends.
@@ -1845,6 +1995,18 @@ fn written(
 
 /// The refusal for a write the tree did not accept: the official emulator's own text for a
 /// priority on an absent node, `otherwise` for anything else.
+fn change_refusal(
+    err: &crate::changes::ChangeError,
+    otherwise: impl FnOnce() -> Refusal,
+) -> Refusal {
+    match err {
+        crate::changes::ChangeError::Database(error) => write_refusal(error, otherwise),
+        crate::changes::ChangeError::Admission(_) => {
+            Refusal::new(503, "Functions event admission unavailable")
+        }
+    }
+}
+
 fn write_refusal(err: &DatabaseError, otherwise: impl FnOnce() -> Refusal) -> Refusal {
     if err.kind == ErrorKind::PriorityOnAbsentNode {
         return Refusal::bad("could not set priority on non-existent node");

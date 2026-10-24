@@ -625,6 +625,7 @@ dependencies = [
  "bytes",
  "fireemu-adapter-support",
  "fireemu-core-database",
+ "fireemu-core-session",
  "fireemu-core-types",
  "http-body-util",
  "hyper",

@@ -293,6 +293,28 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 consume_app_check_token: consume,
             }
         }
+        "database" => {
+            let event_type = s(trigger, "eventType").ok_or("database eventType is required")?;
+            let event = fireemu_core_functions::manifest::DocumentEvent::from_database_event_type(
+                &event_type,
+            )
+            .ok_or("unknown database eventType")?;
+            let reference = s(trigger, "ref").ok_or("database ref is required")?;
+            let reference = fireemu_core_functions::manifest::DatabasePattern::parse(&reference)?;
+            let instance = s(trigger, "instance").unwrap_or_else(|| "*".to_owned());
+            if instance.is_empty()
+                || instance.contains(['/', '{', '}'])
+                || instance.contains("**")
+                || instance.matches('*').count() > 1
+            {
+                return Err("invalid database instance pattern".to_owned());
+            }
+            Trigger::Database {
+                event,
+                instance,
+                reference,
+            }
+        }
         "firestore" => {
             let event_type = s(trigger, "eventType")
                 .ok_or_else(|| format!("manifest: function {name:?}: eventType is required"))?;
@@ -582,6 +604,7 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                     "enforceAppCheck": enforce_app_check,
                     "consumeAppCheckToken": consume_app_check_token.as_str(),
                 }),
+                Trigger::Database { event, instance, reference } => json!({"type": "database", "eventType": event.database_event_type(), "instance": instance, "ref": reference.as_str()}),
                 Trigger::Firestore {
                     event,
                     database,

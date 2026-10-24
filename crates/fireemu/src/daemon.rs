@@ -597,6 +597,18 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         },
         cfg.seed ^ 0x5254_4442,
     )));
+    if let Some(runtime) = &functions_runtime {
+        // The local instance region and DNS suffix are trusted runtime defaults, never request input.
+        realtime_database
+            .lock()
+            .map_err(|_| "the Realtime Database state lock is poisoned".to_owned())?
+            .set_change_sink(functions::database_sink(
+                runtime,
+                &cfg.auth_project,
+                "us-central1",
+                "firebaseio.com",
+            ));
+    }
     // The rules files of `firebase.json`, each in its instance; one that does not load stops
     // the start, as firebase-tools does, and a change is loaded again.
     if !cfg.database_rules_resolved.is_empty() {
@@ -1598,6 +1610,7 @@ async fn serve_suite(
                 listener,
                 realtime_database.clone(),
                 fireemu_adapter_database::server::ServerConfig {
+                    admission: Some(backend.barrier()),
                     clock: Arc::new(move || clock_millis(&database_clock)),
                     ..fireemu_adapter_database::server::ServerConfig::default()
                 },

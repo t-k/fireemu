@@ -1828,3 +1828,207 @@ mod auth_event_shapes {
         }
     }
 }
+
+/// Immutable RTDB source operation; independent of its transport and Rules impersonation.
+#[derive(Clone)]
+pub struct DatabaseCommit {
+    /// Project owning the namespace.
+    pub project: String,
+    /// Database instance name.
+    pub instance: String,
+    /// Native database location.
+    pub location: String,
+    /// Native database DNS suffix.
+    pub host: String,
+    /// Source operation sequence.
+    pub sequence: u64,
+    /// Source commit instant.
+    pub time: LogicalInstant,
+    /// Resolved export-form snapshots selected at the source.
+    pub data: DatabaseChangeData,
+    /// Legacy principal classification.
+    pub auth_type: String,
+    /// Verified principal identifier, when known.
+    pub auth_id: Option<String>,
+    /// Legacy user auth object, never a bearer credential.
+    pub auth: Option<Value>,
+}
+
+/// RTDB source snapshots, with no dependency on a database transport or tree type.
+#[derive(Clone)]
+pub enum DatabaseChangeData {
+    /// Whole-tree projection for generic callers.
+    Whole {
+        /// Tree before the source mutation.
+        before: Value,
+        /// Tree after the source mutation.
+        after: Value,
+    },
+    /// Exact changed references already selected by the database bridge.
+    References(Vec<DatabaseReferenceChange>),
+}
+/// A concrete changed reference and its immutable export-form snapshots.
+#[derive(Clone)]
+pub struct DatabaseReferenceChange {
+    /// Slash-delimited concrete reference.
+    pub reference: String,
+    /// State before the source commit.
+    pub before: Value,
+    /// State after the source commit.
+    pub after: Value,
+}
+
+/// Projects changed concrete references for one declared RTDB trigger.
+#[must_use]
+pub fn database_event_payloads(
+    commit: &DatabaseCommit,
+    function: &FunctionSpec,
+) -> Vec<(String, Value)> {
+    let mut result = Vec::new();
+    visit_database_event_payloads(commit, function, |reference, payload| {
+        result.push((reference, payload));
+        Ok::<_, std::convert::Infallible>(())
+    })
+    .expect("an infallible collector");
+    result
+}
+
+/// Streams matching payloads so admission can stop before retaining excessive fanout.
+pub fn visit_database_event_payloads<E>(
+    commit: &DatabaseCommit,
+    function: &FunctionSpec,
+    mut visit: impl FnMut(String, Value) -> Result<(), E>,
+) -> Result<(), E> {
+    use fireemu_core_functions::manifest::database_glob_matches;
+    let Trigger::Database {
+        event,
+        instance,
+        reference,
+    } = &function.trigger
+    else {
+        return Ok(());
+    };
+    if !database_glob_matches(instance, &commit.instance)
+        || (function.generation == FunctionGeneration::Second && function.region != commit.location)
+    {
+        return Ok(());
+    }
+    let whole_references;
+    let references = match &commit.data {
+        DatabaseChangeData::Whole { before, after } => {
+            if before == after {
+                return Ok(());
+            }
+            let mut paths = std::collections::BTreeSet::new();
+            database_paths(before, reference.depth(), String::new(), &mut paths);
+            database_paths(after, reference.depth(), String::new(), &mut paths);
+            whole_references = paths
+                .into_iter()
+                .map(|path| DatabaseReferenceChange {
+                    before: database_value_at(before, &path).clone(),
+                    after: database_value_at(after, &path).clone(),
+                    reference: path,
+                })
+                .collect::<Vec<_>>();
+            &whole_references
+        }
+        DatabaseChangeData::References(references) => references,
+    };
+    let auth_type = match commit.auth_type.as_str() {
+        "USER" => "app_user",
+        "ADMIN" => "admin",
+        "UNAUTHENTICATED" => "unauthenticated",
+        _ => "unknown",
+    };
+    for change in references {
+        let path = &change.reference;
+        let Some(_params) = reference.matches(path) else {
+            continue;
+        };
+        let (before, after) = (&change.before, &change.after);
+        if before == after {
+            continue;
+        }
+        let actual = if before.is_null() {
+            DocumentEvent::Created
+        } else if after.is_null() {
+            DocumentEvent::Deleted
+        } else {
+            DocumentEvent::Updated
+        };
+        if !event.accepts(actual) {
+            continue;
+        }
+        let reported = event.database_event_type();
+        let mut payload = json!({
+            "specversion":"1.0", "id":"", "type":reported,
+            "source":format!("//firebasedatabase.googleapis.com/projects/{}/locations/{}/instances/{}", commit.project, commit.location, commit.instance),
+            "subject":format!("refs{}", path), "time":rfc3339(commit.time),
+            "datacontenttype":"application/json",
+            "firebasedatabasehost":commit.host, "instance":commit.instance,
+            "location":commit.location, "ref":path.trim_start_matches('/'), "authtype":auth_type,
+            "data":{"@type":"type.googleapis.com/google.events.firebase.database.v1.ReferenceEventData", "data":before, "delta":database_delta(before, after)},
+        });
+        if let Some(id) = &commit.auth_id {
+            payload["authid"] = json!(id);
+        }
+        if function.generation == FunctionGeneration::First && commit.auth_type == "USER" {
+            if let Some(auth) = &commit.auth {
+                payload["auth"] = auth.clone();
+            }
+        }
+        visit(
+            if path.is_empty() {
+                "/".to_owned()
+            } else {
+                path.clone()
+            },
+            payload,
+        )?;
+    }
+    Ok(())
+}
+
+fn database_paths(
+    value: &Value,
+    depth: usize,
+    path: String,
+    output: &mut std::collections::BTreeSet<String>,
+) {
+    if depth == 0 {
+        output.insert(path);
+        return;
+    }
+    if let Some(children) = value.as_object() {
+        for (key, child) in children {
+            if !key.starts_with('.') {
+                database_paths(child, depth - 1, format!("{path}/{key}"), output);
+            }
+        }
+    }
+}
+
+fn database_value_at<'a>(value: &'a Value, path: &str) -> &'a Value {
+    path.trim_matches('/')
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(value, |current, part| {
+            current.get(part).unwrap_or(&Value::Null)
+        })
+}
+
+fn database_delta(before: &Value, after: &Value) -> Value {
+    let (Some(old), Some(new)) = (before.as_object(), after.as_object()) else {
+        return after.clone();
+    };
+    let keys: std::collections::BTreeSet<_> = old.keys().chain(new.keys()).collect();
+    let mut delta = Map::new();
+    for key in keys {
+        let previous = old.get(key).unwrap_or(&Value::Null);
+        let next = new.get(key).unwrap_or(&Value::Null);
+        if previous != next {
+            delta.insert(key.clone(), database_delta(previous, next));
+        }
+    }
+    Value::Object(delta)
+}

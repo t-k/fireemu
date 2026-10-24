@@ -683,6 +683,7 @@ impl CausalityLog {
 
 fn source_name(source: EventSource) -> &'static str {
     match source {
+        EventSource::Database => "database",
         EventSource::Firestore => "firestore",
         EventSource::Storage => "storage",
         EventSource::Scheduler => "scheduler",
@@ -792,6 +793,28 @@ struct DeliveryDraft {
     raw_data: Option<Arc<str>>,
     retained_bytes: usize,
     parent: Option<String>,
+}
+
+/// Counts serialized IPC bytes without retaining another copy of a source snapshot.
+#[derive(Default)]
+struct FrameByteCount(usize);
+
+impl std::io::Write for FrameByteCount {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let count = self
+            .0
+            .checked_add(bytes.len())
+            .filter(|count| *count <= crate::protocol::MAX_FRAME_BYTES)
+            .ok_or_else(|| {
+                std::io::Error::other("database invocation exceeds the runner frame limit")
+            })?;
+        self.0 = count;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// A complete, capacity-charged batch of source-trigger deliveries that remains invisible
@@ -2393,6 +2416,175 @@ impl FunctionsRuntime {
                     .saturating_sub(payload.retained_bytes);
             }
         }
+    }
+
+    /// Exact RTDB capture patterns for the bridge's bounded tree projection.
+    #[must_use]
+    pub fn database_capture_patterns(
+        &self,
+        project: &str,
+        instance: &str,
+        location: &str,
+    ) -> Vec<fireemu_core_functions::manifest::DatabasePattern> {
+        if project != self.config.project || !self.background_triggers_enabled() {
+            return Vec::new();
+        }
+        self.manifest
+            .functions
+            .iter()
+            .filter_map(|function| {
+                let Trigger::Database {
+                    instance: pattern,
+                    reference,
+                    ..
+                } = &function.trigger
+                else {
+                    return None;
+                };
+                (fireemu_core_functions::manifest::database_glob_matches(pattern, instance)
+                    && (function.generation
+                        == fireemu_core_functions::manifest::FunctionGeneration::First
+                        || function.region == location))
+                    .then(|| reference.clone())
+            })
+            .collect()
+    }
+
+    /// Reserves an RTDB source operation's complete trigger fanout before data publication.
+    pub fn reserve_database_events(
+        self: &Arc<Self>,
+        commit: &crate::events::DatabaseCommit,
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
+        if commit.project != self.config.project || !self.background_triggers_enabled() {
+            return Ok(self.empty_event_reservation());
+        }
+        let result = (|| {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| SourceEventAdmissionError::Unavailable)?;
+            let mut drafts = Vec::new();
+            let mut draft_bytes = 0usize;
+            for function in &self.manifest.functions {
+                crate::events::visit_database_event_payloads(
+                    commit,
+                    function,
+                    |reference, mut payload| {
+                        let event_type = payload["type"]
+                            .as_str()
+                            .ok_or(SourceEventAdmissionError::InvalidEvent)?
+                            .to_owned();
+                        let copies = self.delivery_copies(&function.name, &event_type);
+                        let ordinal = inner
+                            .next_event
+                            .checked_add(
+                                u64::try_from(drafts.len())
+                                    .map_err(|_| SourceEventAdmissionError::Capacity)?,
+                            )
+                            .and_then(|value| value.checked_add(1))
+                            .ok_or(SourceEventAdmissionError::Capacity)?;
+                        payload["id"] = json!(crate::events::event_id_uuid(&format!(
+                            "{}-{ordinal}",
+                            self.config.session.value()
+                        )));
+                        if !self.database_invoke_frame_fits(
+                            function,
+                            &payload,
+                            ordinal,
+                            inner.epoch,
+                        ) {
+                            return Err(SourceEventAdmissionError::Capacity);
+                        }
+                        let retained_bytes = Self::retained_event_bytes(
+                            &function.name,
+                            &event_type,
+                            &reference,
+                            &payload,
+                        )
+                        .ok_or(SourceEventAdmissionError::Capacity)?;
+                        draft_bytes = draft_bytes
+                            .checked_add(
+                                retained_bytes
+                                    .checked_mul(copies)
+                                    .ok_or(SourceEventAdmissionError::Capacity)?,
+                            )
+                            .ok_or(SourceEventAdmissionError::Capacity)?;
+                        let count = drafts
+                            .len()
+                            .checked_add(copies)
+                            .ok_or(SourceEventAdmissionError::Capacity)?;
+                        if !Self::can_admit_events(
+                            &inner,
+                            EventSource::Database,
+                            count,
+                            draft_bytes,
+                        ) {
+                            return Err(SourceEventAdmissionError::Capacity);
+                        }
+                        let payload = Arc::new(payload);
+                        for _ in 0..copies {
+                            drafts.push(DeliveryDraft {
+                                function: function.name.clone(),
+                                event_type: event_type.clone(),
+                                subject: reference.clone(),
+                                time: commit.time,
+                                payload: Arc::clone(&payload),
+                                raw_data: None,
+                                retained_bytes,
+                                parent: Some(format!(
+                                    "database-commit:{}@{}",
+                                    commit.instance, commit.sequence
+                                )),
+                            });
+                        }
+                        Ok(())
+                    },
+                )?;
+            }
+            self.reserve_drafts(EventSource::Database, drafts, &mut inner)
+        })();
+        if let Err(error) = &result {
+            self.note_admission_refusal(*error);
+        }
+        result
+    }
+
+    // Reserve the longest delivery metadata supported by the existing types: event ids and
+    // epochs are fixed after admission, attempts are u32, and RFC3339 years are 0000-9999
+    // with at most nine fractional digits. Count the actual escaped event and entry point.
+    fn database_invoke_frame_fits(
+        &self,
+        function: &FunctionSpec,
+        event: &Value,
+        ordinal: u64,
+        epoch: Epoch,
+    ) -> bool {
+        let envelope = json!({
+            "type":"invoke", "invocationId":format!("{ordinal}-{}", u32::MAX),
+            "function":function.name, "entryPoint":function.entry_point, "trigger":"database",
+            "event":null, "admittedAt":"9999-12-31T23:59:59.999999999Z",
+            "deadline":"9999-12-31T23:59:59.999999999Z", "attempt":u32::MAX,
+            "session":self.config.session.value().to_string(), "epoch":epoch.value(),
+        });
+        let mut count = FrameByteCount::default();
+        if serde_json::to_writer(&mut count, &envelope).is_err() {
+            return false;
+        }
+        count.0 -= b"null".len();
+        let Some(fields) = event.as_object() else {
+            return false;
+        };
+        let mut fields: BTreeMap<&str, &Value> = fields
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+            .collect();
+        let trace = json!("00-00000000000000000000000000000000-0000000000000000-01");
+        if self.profile == FunctionsHttpProfile::Strict
+            && function.generation == fireemu_core_functions::manifest::FunctionGeneration::Second
+        {
+            fields.insert("traceparent", &trace);
+        }
+        serde_json::to_writer(&mut count, &fields).is_ok()
     }
 
     /// Reserves the complete Firestore trigger fan-out before the source commit is published.
@@ -5776,6 +5968,7 @@ impl FunctionsRuntime {
             )))
             .unwrap_or(now);
         let trigger = match &spec.trigger {
+            Trigger::Database { .. } => "database",
             Trigger::Firestore { .. } => "firestore",
             Trigger::Storage { .. } => "storage",
             Trigger::Schedule { .. } => "schedule",

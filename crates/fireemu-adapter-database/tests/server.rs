@@ -1220,3 +1220,227 @@ async fn the_rules_route_answers_loopback_peers_only_however_its_path_is_written
         assert!(server.await.unwrap_err().is_cancelled());
     }
 }
+
+// This fixture models only the existing reservation epoch cancellation contract;
+// actual Functions reservation semantics are covered by the runtime and Loom controls.
+#[derive(Debug)]
+struct ResetAdmissionSink {
+    epoch: Arc<std::sync::atomic::AtomicU64>,
+    reserved: std::sync::mpsc::SyncSender<u64>,
+    resume: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+    published: Arc<Mutex<Vec<fireemu_adapter_database::changes::CommittedChange>>>,
+}
+
+struct ResetAdmissionPublication {
+    epoch: Arc<std::sync::atomic::AtomicU64>,
+    reserved_epoch: u64,
+    change: fireemu_adapter_database::changes::CommittedChange,
+    published: Arc<Mutex<Vec<fireemu_adapter_database::changes::CommittedChange>>>,
+}
+
+impl fireemu_adapter_database::changes::Publication for ResetAdmissionPublication {
+    fn publish(self: Box<Self>) {
+        if self.epoch.load(std::sync::atomic::Ordering::SeqCst) == self.reserved_epoch {
+            self.published.lock().unwrap().push(self.change);
+        }
+    }
+}
+
+impl fireemu_adapter_database::changes::ChangeSink for ResetAdmissionSink {
+    fn reserve(
+        &self,
+        change: &fireemu_adapter_database::changes::CommittedChange,
+    ) -> Result<
+        Box<dyn fireemu_adapter_database::changes::Publication>,
+        fireemu_core_types::admission::EventAdmissionError,
+    > {
+        let reserved_epoch = self.epoch.load(std::sync::atomic::Ordering::SeqCst);
+        self.reserved.send(reserved_epoch).unwrap();
+        self.resume
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        Ok(Box::new(ResetAdmissionPublication {
+            epoch: self.epoch.clone(),
+            reserved_epoch,
+            change: change.clone(),
+            published: self.published.clone(),
+        }))
+    }
+}
+
+// Abort even on panic; the normal path also awaits the owned server's cancellation.
+struct ResetAdmissionTask<T>(tokio::task::JoinHandle<T>);
+impl<T> Drop for ResetAdmissionTask<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // Keep the causal schedule and its finally-style cleanup together.
+async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::mpsc;
+
+    let limit = Duration::from_secs(5);
+    let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+    let epoch = Arc::new(AtomicU64::new(0));
+    let armed = Arc::new(AtomicBool::new(false));
+    let published = Arc::new(Mutex::new(Vec::new()));
+    let (clock_tx, clock_rx) = mpsc::sync_channel(1);
+    let (clock_resume_tx, clock_resume_rx) = mpsc::channel();
+    let clock_resume_rx = Arc::new(Mutex::new(clock_resume_rx));
+    let (reserved_tx, reserved_rx) = mpsc::sync_channel(1);
+    let (reserve_resume_tx, reserve_resume_rx) = mpsc::channel();
+    let (reset_advance_tx, reset_advance_rx) = mpsc::channel();
+    let (cleared_tx, cleared_rx) = mpsc::channel();
+    let (reset_done_tx, reset_done_rx) = mpsc::channel();
+    let reset_thread = Arc::new(Mutex::new(None::<std::thread::JoinHandle<()>>));
+
+    let database = Arc::new(Mutex::new(Database::new(RestOptions::default(), 3)));
+    let port = std::env::var("PORT").map_or(0, |value| value.parse::<u16>().unwrap());
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let config = ServerConfig {
+        admission: Some(barrier.clone()),
+        clock: {
+            let armed = armed.clone();
+            Arc::new(move || {
+                if armed.swap(false, Ordering::SeqCst) {
+                    clock_tx.send(()).unwrap();
+                    clock_resume_rx.lock().unwrap().recv_timeout(limit).unwrap();
+                }
+                1_000
+            })
+        },
+        ..ServerConfig::default()
+    };
+    let mut server = ResetAdmissionTask(tokio::spawn(serve(listener, database.clone(), config)));
+    let mut controller = ResetAdmissionTask(tokio::spawn({
+        let database = database.clone();
+        let epoch = epoch.clone();
+        let published = published.clone();
+        let reset_thread = reset_thread.clone();
+        let reset_advance = reset_advance_tx.clone();
+        let clock_resume = clock_resume_tx.clone();
+        let reserve_resume = reserve_resume_tx.clone();
+        async move {
+            // A completed warm-up proves startup installed its clock before reset starts.
+            assert!(exchange(&address, "GET", "/.json?ns=reset-admission", "")
+                .await
+                .starts_with("HTTP/1.1 200"));
+            database
+                .lock()
+                .unwrap()
+                .set_change_sink(Arc::new(ResetAdmissionSink {
+                    epoch: epoch.clone(),
+                    reserved: reserved_tx,
+                    resume: Arc::new(Mutex::new(reserve_resume_rx)),
+                    published: published.clone(),
+                }));
+            *reset_thread.lock().unwrap() = Some(std::thread::spawn({
+                let database = database.clone();
+                let epoch = epoch.clone();
+                move || {
+                    let exclusive = barrier.exclusive();
+                    database.lock().unwrap().clear_namespaces_where(|_| true);
+                    cleared_tx.send(()).unwrap();
+                    reset_advance_rx.recv_timeout(limit).unwrap();
+                    epoch.store(1, Ordering::SeqCst);
+                    // Exclusive spans the complete clear + Functions epoch transition.
+                    drop(exclusive);
+                    reset_done_tx.send(()).unwrap();
+                }
+            }));
+            cleared_rx.recv_timeout(limit).unwrap();
+            armed.store(true, Ordering::SeqCst);
+            let mut writing = ResetAdmissionTask(tokio::spawn(async move {
+                exchange(
+                    &address,
+                    "PUT",
+                    "/probe.json?ns=reset-admission",
+                    r#""retained""#,
+                )
+                .await
+            }));
+
+            // Dispatch the spawned writer before a blocking checkpoint can occupy its worker.
+            tokio::task::yield_now().await;
+
+            // This bounded observation selects a concrete schedule; absence is not the oracle.
+            // A skipped REST admission reaches the clock while reset still holds exclusive.
+            let forced_old_epoch = match clock_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(()) => {
+                    clock_resume.send(()).unwrap();
+                    assert_eq!(reserved_rx.recv_timeout(limit).unwrap(), 0);
+                    reset_advance.send(()).unwrap();
+                    reset_done_rx.recv_timeout(limit).unwrap();
+                    reserve_resume.send(()).unwrap();
+                    true
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    reset_advance.send(()).unwrap();
+                    reset_done_rx.recv_timeout(limit).unwrap();
+                    clock_rx.recv_timeout(limit).unwrap();
+                    clock_resume.send(()).unwrap();
+                    assert_eq!(reserved_rx.recv_timeout(limit).unwrap(), 1);
+                    reserve_resume.send(()).unwrap();
+                    false
+                }
+                Err(error) => panic!("clock checkpoint disconnected: {error}"),
+            };
+            eprintln!("reset_admission_forced_old_epoch={forced_old_epoch}");
+            let response = tokio::time::timeout(limit, &mut writing.0)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            let source = database
+                .lock()
+                .unwrap()
+                .tree("reset-admission")
+                .unwrap()
+                .get_json(
+                    &fireemu_core_database::Path::root(),
+                    fireemu_core_database::Format::Export,
+                );
+            assert_eq!(
+                source,
+                fireemu_core_database::Json::object([(
+                    "probe",
+                    fireemu_core_database::Json::string("retained")
+                ),])
+            );
+            let events = published.lock().unwrap();
+            // Positive terminal oracle: every retained source mutation owns its event.
+            assert_eq!(
+                events.len(),
+                1,
+                "retained source has no published event; forced={forced_old_epoch}"
+            );
+            assert_eq!(events[0].context.namespace, "reset-admission");
+            assert!(matches!(&events[0].data,
+                fireemu_adapter_database::changes::ChangeData::Whole { before, after }
+                    if before.is_null() && after == &serde_json::json!({"probe":"retained"})));
+        }
+    }));
+    let outcome = tokio::time::timeout(Duration::from_secs(20), &mut controller.0).await;
+    // Finally-style cleanup also releases every blocking test checkpoint after a panic.
+    let _ = reset_advance_tx.send(());
+    let _ = clock_resume_tx.send(());
+    let _ = reserve_resume_tx.send(());
+    if outcome.is_err() {
+        controller.0.abort();
+        let _ = (&mut controller.0).await;
+    }
+    let reset_handle = reset_thread.lock().unwrap().take();
+    let reset_result = reset_handle.map(std::thread::JoinHandle::join);
+    server.0.abort();
+    let _ = (&mut server.0).await;
+    if let Some(result) = reset_result {
+        result.unwrap();
+    }
+    outcome.unwrap().unwrap();
+}

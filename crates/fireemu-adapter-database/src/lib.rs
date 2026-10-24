@@ -6,6 +6,7 @@
 //! [`server`] runs it behind hyper and delivers the streaming events.
 
 mod access;
+pub mod changes;
 pub mod json_parse;
 pub mod json_text;
 mod listen;

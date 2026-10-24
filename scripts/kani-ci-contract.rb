@@ -9,6 +9,7 @@ module KaniCiContract
   TOOLCHAIN_VERSION = "1.94.0"
   INSTALL_KANI = "cargo install --locked kani-verifier --version 0.67.0"
   SETUP_KANI = "cargo kani setup"
+  RUNNER_TESTS = "python3 -m unittest discover -s verification/kani -p 'test_*.py'"
   RUN_PROOFS = "python3 verification/kani/run.py"
   VERIFY_TOOLCHAIN = %(rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \\"\\(.*\\)\\"/\\1/p' rust-toolchain.toml)")
 
@@ -50,10 +51,10 @@ module KaniCiContract
     assert(errors, job["permissions"] == { "contents" => "read" }, "kani job permissions must be contents: read only")
 
     steps = job["steps"]
-    assert(errors, steps.is_a?(Array) && steps.length == 6, "kani job must have exactly six required steps")
+    assert(errors, steps.is_a?(Array) && steps.length == 7, "kani job must have exactly seven required steps")
     return errors unless steps.is_a?(Array)
 
-    checkout, toolchain, verify, install, setup, proofs = steps
+    checkout, toolchain, verify, install, setup, runner_tests, proofs = steps
     assert(errors, checkout.is_a?(Hash) && exact_keys?(checkout.keys, %w[uses with]) && checkout["uses"] == CHECKOUT,
       "checkout must use the pinned actions/checkout commit")
     checkout_with = checkout.is_a?(Hash) ? checkout["with"] : nil
@@ -66,6 +67,7 @@ module KaniCiContract
     assert_step(errors, verify, "verify the pinned toolchain", VERIFY_TOOLCHAIN)
     assert_step(errors, install, "install Kani", INSTALL_KANI)
     assert_step(errors, setup, "set up Kani", SETUP_KANI)
+    assert_step(errors, runner_tests, "test Kani runner", RUNNER_TESTS)
     assert_step(errors, proofs, "run bounded proofs", RUN_PROOFS)
     errors
   end

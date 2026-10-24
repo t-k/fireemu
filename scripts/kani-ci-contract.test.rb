@@ -34,6 +34,8 @@ class KaniCiContractTest < Minitest::Test
             run: cargo install --locked kani-verifier --version 0.67.0
           - name: set up Kani
             run: cargo kani setup
+          - name: test Kani runner
+            run: python3 -m unittest discover -s verification/kani -p 'test_*.py'
           - name: run bounded proofs
             run: python3 verification/kani/run.py
   YAML
@@ -60,9 +62,12 @@ class KaniCiContractTest < Minitest::Test
   TSV
 
   def test_checked_in_workflow_satisfies_the_contract
-    errors = KaniCiContract.validate_file(File.expand_path("../.github/workflows/kani.yml", __dir__))
+    workflow_path = File.expand_path("../.github/workflows/kani.yml", __dir__)
+    workflow = YAML.safe_load(File.read(workflow_path), aliases: true)
+    runner_test = workflow.dig("jobs", "kani", "steps").find { |step| step["name"] == "test Kani runner" }
 
-    assert_empty errors
+    assert_equal "python3 -m unittest discover -s verification/kani -p 'test_*.py'", runner_test&.fetch("run")
+    assert_empty KaniCiContract.validate_file(workflow_path)
   end
 
   def test_yaml_mutations_that_remove_required_guards_are_rejected
@@ -72,6 +77,7 @@ class KaniCiContractTest < Minitest::Test
       "missing manual trigger" => ->(workflow) { workflow.fetch(true).delete("workflow_dispatch") },
       "filtered pull request trigger" => ->(workflow) { workflow.fetch(true)["pull_request"] = { "paths" => ["verification/**"] } },
       "missing setup" => ->(workflow) { workflow.dig("jobs", "kani", "steps").reject! { |step| step["run"] == "cargo kani setup" } },
+      "missing runner tests" => ->(workflow) { workflow.dig("jobs", "kani", "steps").reject! { |step| step["name"] == "test Kani runner" } },
       "version drift" => ->(workflow) { workflow.dig("jobs", "kani", "steps").find { |step| step["run"]&.include?("cargo install") }["run"] = "cargo install --locked kani-verifier --version 0.69.0" },
       "missing proof command" => ->(workflow) { workflow.dig("jobs", "kani", "steps").reject! { |step| step["run"] == "python3 verification/kani/run.py" } },
       "failure swallowing" => ->(workflow) { workflow.dig("jobs", "kani", "steps").find { |step| step["run"] == "python3 verification/kani/run.py" }["continue-on-error"] = true },

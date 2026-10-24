@@ -29,5 +29,7 @@ jobs:
         run: cargo install --locked kani-verifier --version 0.67.0
       - name: set up Kani
         run: cargo kani setup
+      - name: test Kani runner
+        run: python3 -m unittest discover -s verification/kani -p 'test_*.py'
       - name: run bounded proofs
         run: python3 verification/kani/run.py

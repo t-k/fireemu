@@ -1,0 +1,33 @@
+name: kani
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  kani:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.94.0"
+      - name: verify the pinned toolchain
+        run: >-
+          rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml)"
+      - name: install Kani
+        run: cargo install --locked kani-verifier --version 0.68.0
+      - name: set up Kani
+        run: cargo kani setup
+      - name: run bounded proofs
+        run: python3 verification/kani/run.py

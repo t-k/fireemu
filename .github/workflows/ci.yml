@@ -51,6 +51,8 @@ jobs:
           tool: cargo-deny
       - name: CI workflow topology and cache ownership
         run: ruby scripts/ci-workflow-contract.rb
+      - name: Kani workflow contract
+        run: ruby scripts/kani-ci-contract.test.rb
       - name: heavy-verification workflow contract and helpers
         run: |
           ruby scripts/heavy-verification-contract.rb

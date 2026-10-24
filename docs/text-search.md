@@ -53,6 +53,10 @@ The search stage accepts its own score sort and score projection. General pipeli
 
 Text indexes can also be managed through the session control API. A manual definition can set `xFirebaseTestd.buildPolicy` to `"manual"`; it starts in CREATING by default. An explicit state can override that default. Definitions with no build policy, synchronous builds, and legacy `validation-only` definitions default to READY. A READY index reconstructs postings from the query's captured source snapshot. CREATING and NEEDS_REPAIR indexes never serve queries, even when partial posting data exists.
 
+For the observed Native Admin invalid-language failure, correcting the same source document to a valid language left the same index in NEEDS_REPAIR and its original operation in FAILED throughout the recorded polling window. Source correction alone does not restart that failed local Native-compatible index. This finite observation does not establish behavior for every failure or an unlimited waiting period.
+
+Deleting and recreating a Native Admin index is a separate lifecycle from the Fireemu session control API's `:repair`. The control operation explicitly allocates a new local build generation in CREATING; it does not revive the failed generation or rewrite the original failed Native operation, and it does not imply that the managed service exposes an equivalent repair API.
+
 Manual lifecycle operations are available on `/v1/sessions/default/firestore/text-indexes/{id}`:
 
 - `POST :failBuild` accepts an optional `reason` and `generation`.
@@ -66,7 +70,7 @@ Manual lifecycle operations are available on `/v1/sessions/default/firestore/tex
 
 Local search selects the first READY definition in catalog load order that covers every field restriction created by the retained legacy qualified-quoted form, such as `body:"fox"`. It searches only that definition's fields. This qualified-quoted form is an unobserved native behavior retained as a development approximation. Unquoted colon forms are ordinary conjunctive terms and do not restrict fields. Use one definition containing all intended fields when a collection has several text indexes. This is a local planning policy, not a claim about production index selection.
 
-Backfill advances only through explicit control calls; advancing the virtual clock alone does not schedule background builds.
+Control-managed backfill advances only through explicit control calls; advancing the virtual clock alone does not schedule those builds.
 
 A query is limited to 8,192 UTF-8 bytes and 64 clauses. The current query language supports AND terms, quoted phrases that must occur in the same field, and exclusions using `-term` or `-phrase`. Queries with no positive searchable terms, including exclusions-only queries, match no documents. The retained legacy qualified-quoted development form applies field restrictions; unquoted colons delimit ordinary conjunctive terms.
 

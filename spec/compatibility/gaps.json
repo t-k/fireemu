@@ -74,15 +74,15 @@
       "id": "GAP-FS-002",
       "feature": "FS-TEXT",
       "kind": "unimplemented",
-      "scope": "Enterprise full-text search: text index definitions are validated only; backfill, posting data, search execution and scoring are not implemented.",
+      "scope": "Production-equivalent Enterprise full-text analysis, scoring, error semantics and advanced search remain unimplemented. Finite local lexical-v1 postings/search and explicit build controls are implemented separately without a parity claim. Empty/whole plain tokenless and exclusions-only queries match no documents. Bounded parser corrections cover unquoted colon delimiters, unmatched leading quotes, contextual OR and tokenless fragments alongside positive terms; these do not attest analysis, scoring or wider syntax equivalence. Purpose-specific scalar-local Latin folding is a development approximation; Greek distinctions and separate combining marks are retained, while native CJK segmentation, scoring and broader analysis remain unverified.",
       "implementationStatus": "unimplemented",
-      "localTestStatus": "none",
+      "localTestStatus": "passing",
       "productionObservationStatus": "none",
       "comparisonStatus": "none",
       "evidenceRefs": [
         "docs/compatibility/firestore-enterprise-native.md"
       ],
-      "nextAction": "Implement definition, build state, update tracking and search execution separately, each compared against an oracle.",
+      "nextAction": "Record and compare bounded production text-search cases before allowing matching shapes under productionExact; retain local lexical approximation limits.",
       "blockedReason": "",
       "requiresProductionChange": false
     },

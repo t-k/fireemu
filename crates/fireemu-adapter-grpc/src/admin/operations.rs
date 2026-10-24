@@ -7,8 +7,12 @@
 //! answered unfinished and never reports `done`, and `operations.get` of a delete answers under
 //! a shorter name than the one the delete returned.
 
+// Native build integration uses the transport's tonic status throughout the admitted callback.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
+use tonic::Status;
 
 use serde_json::{json, Value};
 
@@ -28,6 +32,8 @@ pub enum OperationKind {
     DeleteDatabase,
     /// `collectionGroups.indexes.create`: its answer follows the index it builds.
     CreateIndex,
+    /// A Native text index build, bound to one catalog generation.
+    CreateTextIndex,
     /// Export, import or bulk delete: finished by the time it is first polled.
     Managed,
     /// `collectionGroups.fields.patch`: its answer follows the patch it applies.
@@ -43,6 +49,13 @@ impl OperationKind {
             Self::CreateDatabase | Self::UpdateDatabase | Self::DeleteDatabase
         )
     }
+}
+
+/// Scheduling and generation linkage only; definitions live in the shared text catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NativeTextBuild {
+    pub index: String,
+    pub generation: u64,
 }
 
 /// One recorded operation.
@@ -61,6 +74,7 @@ pub struct StoredOperation {
     pub current: Value,
     /// The index an index operation builds.
     pub index: Option<String>,
+    pub(crate) native_text: Option<NativeTextBuild>,
 }
 
 /// The operations of every database of one backend.
@@ -69,8 +83,61 @@ pub struct OperationStore {
     by_database: Mutex<BTreeMap<(String, String), VecDeque<StoredOperation>>>,
     /// Ids an `operations.delete` removed: production answers them differently from ids it
     /// never issued.
-    deleted: Mutex<Vec<(String, String, String)>>,
+    deleted: Mutex<Vec<DeletedOperation>>,
     ordinal: std::sync::atomic::AtomicU64,
+}
+
+/// Deletion ownership is retained even after its bounded wire view is removed.
+#[derive(Debug, Clone, PartialEq)]
+struct DeletedOperation {
+    project: String,
+    database: String,
+    id: String,
+    native_text: bool,
+}
+
+/// A pure Native projection, or an exact transient queue preimage for CONTROL rollback.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextOperationSnapshot {
+    exact: bool,
+    queues: BTreeMap<(String, String), Vec<(usize, StoredOperation)>>,
+    deleted: Vec<(usize, DeletedOperation)>,
+}
+
+impl TextOperationSnapshot {
+    pub(crate) fn retained_bytes(&self) -> u64 {
+        self.queues
+            .iter()
+            .fold(0_u64, |total, ((p, d), queue)| {
+                queue.iter().fold(
+                    total
+                        .saturating_add(p.len() as u64)
+                        .saturating_add(d.len() as u64),
+                    |total, (_, op)| {
+                        total
+                            .saturating_add(op.id.len() as u64)
+                            .saturating_add(op.alias.as_ref().map_or(0, String::len) as u64)
+                            .saturating_add(op.initial.to_string().len() as u64)
+                            .saturating_add(op.current.to_string().len() as u64)
+                            .saturating_add(op.index.as_ref().map_or(0, String::len) as u64)
+                            .saturating_add(
+                                op.native_text
+                                    .as_ref()
+                                    .map_or(0, |target| target.index.len())
+                                    as u64,
+                            )
+                            .saturating_add(std::mem::size_of::<StoredOperation>() as u64)
+                    },
+                )
+            })
+            .saturating_add(self.deleted.iter().fold(0_u64, |total, (_, deleted)| {
+                total
+                    .saturating_add(deleted.project.len() as u64)
+                    .saturating_add(deleted.database.len() as u64)
+                    .saturating_add(deleted.id.len() as u64)
+                    .saturating_add(std::mem::size_of::<DeletedOperation>() as u64)
+            }))
+    }
 }
 
 fn opaque_id(seed: &[u8], length: usize) -> String {
@@ -97,6 +164,108 @@ impl OperationStore {
         self.by_database
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn capture_text(
+        &self,
+        owned: impl Fn(&str) -> bool,
+        exact: bool,
+    ) -> Result<TextOperationSnapshot, Status> {
+        let queues = self
+            .by_database
+            .lock()
+            .map_err(|_| Status::internal("operation store is poisoned"))?;
+        let deleted = self
+            .deleted
+            .lock()
+            .map_err(|_| Status::internal("operation deletion store is poisoned"))?;
+        Ok(TextOperationSnapshot {
+            exact,
+            queues: queues
+                .iter()
+                .filter(|((p, _), _)| owned(p))
+                .filter_map(|(key, queue)| {
+                    let records = queue
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, op)| exact || op.native_text.is_some())
+                        .map(|(slot, op)| (slot, op.clone()))
+                        .collect::<Vec<_>>();
+                    (exact || !records.is_empty()).then(|| (key.clone(), records))
+                })
+                .collect(),
+            deleted: deleted
+                .iter()
+                .enumerate()
+                .filter(|(_, marker)| owned(&marker.project) && (exact || marker.native_text))
+                .map(|(slot, marker)| (slot, marker.clone()))
+                .collect(),
+        })
+    }
+
+    pub(crate) fn validate_text(
+        &self,
+        owned: impl Fn(&str) -> bool,
+        captured: &TextOperationSnapshot,
+    ) -> Result<(), Status> {
+        self.replace_text(owned, captured, None::<fn()>)
+    }
+
+    /// Prepares the entire replacement before publishing either catalog or operation state.
+    /// Explicit CONTROL restore may rewind Native terminal views; ordinary observations cannot.
+    pub(crate) fn replace_text(
+        &self,
+        owned: impl Fn(&str) -> bool,
+        captured: &TextOperationSnapshot,
+        publish: Option<impl FnOnce()>,
+    ) -> Result<(), Status> {
+        let mut queues = self
+            .by_database
+            .lock()
+            .map_err(|_| Status::internal("operation store is poisoned"))?;
+        let mut deleted = self
+            .deleted
+            .lock()
+            .map_err(|_| Status::internal("operation deletion store is poisoned"))?;
+        let mut trial = queues.clone();
+        if captured.exact {
+            trial.retain(|(p, _), _| !owned(p));
+        } else {
+            for ((p, _), queue) in &mut trial {
+                if owned(p) {
+                    queue.retain(|op| op.native_text.is_none());
+                }
+            }
+        }
+        for (key, records) in &captured.queues {
+            if !owned(&key.0) {
+                continue;
+            }
+            let queue = trial.entry(key.clone()).or_default();
+            if queue.len().saturating_add(records.len()) > OPERATIONS_RETAINED_PER_DATABASE {
+                return Err(Status::failed_precondition(
+                    "CONTROL text restore exceeds operation retention capacity",
+                ));
+            }
+            for (slot, op) in records {
+                queue.insert((*slot).min(queue.len()), op.clone());
+            }
+        }
+        let mut markers = deleted.clone();
+        markers
+            .retain(|marker| !owned(&marker.project) || (!captured.exact && !marker.native_text));
+        for (slot, marker) in &captured.deleted {
+            if owned(&marker.project) {
+                markers.insert((*slot).min(markers.len()), marker.clone());
+            }
+        }
+        if let Some(publish) = publish {
+            // No fallible work remains: the failing hook must be internally atomic.
+            publish();
+            *queues = trial;
+            *deleted = markers;
+        }
+        Ok(())
     }
 
     /// Whether any operation of `project`/`database` is kept (a deleted database's are).
@@ -126,6 +295,7 @@ impl OperationStore {
             OperationKind::CreateDatabase
             | OperationKind::UpdateDatabase
             | OperationKind::CreateIndex
+            | OperationKind::CreateTextIndex
             | OperationKind::Managed
             | OperationKind::Field => {
                 let id = opaque_id(
@@ -172,6 +342,7 @@ impl OperationStore {
             initial,
             current,
             index: None,
+            native_text: None,
         };
         self.push(project, database, stored.clone());
         stored
@@ -218,6 +389,7 @@ impl OperationStore {
                 initial,
                 current,
                 index: None,
+                native_text: None,
             },
         );
     }
@@ -234,6 +406,7 @@ impl OperationStore {
                 current: initial.clone(),
                 initial,
                 index: None,
+                native_text: None,
             },
         );
     }
@@ -257,8 +430,88 @@ impl OperationStore {
                 current: initial.clone(),
                 initial,
                 index: Some(index.to_owned()),
+                native_text: None,
             },
         );
+    }
+
+    pub(crate) fn record_text(
+        &self,
+        project: &str,
+        database: &str,
+        id: &str,
+        target: NativeTextBuild,
+        initial: Value,
+    ) {
+        self.push(
+            project,
+            database,
+            StoredOperation {
+                id: id.to_owned(),
+                alias: None,
+                kind: OperationKind::CreateTextIndex,
+                current: initial.clone(),
+                initial,
+                index: None,
+                native_text: Some(target),
+            },
+        );
+    }
+
+    pub(crate) fn text_observation_current(
+        &self,
+        project: &str,
+        database: &str,
+        targets: &[(&str, &NativeTextBuild)],
+    ) -> bool {
+        text_targets_current(
+            self.lock().get(&(project.to_owned(), database.to_owned())),
+            targets,
+        )
+    }
+
+    /// Publish prepared catalog work and retained views only after validating every link.
+    /// Missing/deleted/evicted views remain absent; explicit CONTROL is the only audit rewind.
+    pub(crate) fn finish_text(
+        &self,
+        project: &str,
+        database: &str,
+        completions: &[(String, NativeTextBuild, Value)],
+        observed_targets: Option<&[(&str, &NativeTextBuild)]>,
+        publish: impl FnOnce(),
+    ) -> Result<(), Status> {
+        if completions.is_empty() {
+            return Ok(());
+        }
+        let mut all = self.lock();
+        let queue = all.get_mut(&(project.to_owned(), database.to_owned()));
+        if observed_targets.is_some_and(|targets| !text_targets_current(queue.as_deref(), targets))
+        {
+            return Ok(());
+        }
+        if let Some(queue) = queue {
+            let mut prepared = queue.clone();
+            for (id, expected, terminal) in completions {
+                let Some(operation) = prepared.iter_mut().find(|op| op.id == *id) else {
+                    continue;
+                };
+                if operation.native_text.as_ref() != Some(expected) {
+                    return Err(Status::unimplemented(
+                        "FS_TEXT_ADMIN_UNVERIFIED: incoherent Native operation generation",
+                    ));
+                }
+                if is_done(&operation.current) {
+                    return Err(Status::unimplemented("FS_TEXT_ADMIN_UNVERIFIED: partial catalog restore retained a terminal operation"));
+                }
+                operation.current = terminal.clone();
+            }
+            // All source work and every retained identity are validated before publication.
+            publish();
+            *queue = prepared;
+        } else {
+            publish();
+        }
+        Ok(())
     }
 
     /// The operation `id` (or its alias) names in a database.
@@ -284,6 +537,10 @@ impl OperationStore {
         let Some(queue) = all.get_mut(&(project.to_owned(), database.to_owned())) else {
             return false;
         };
+        let native_text = queue
+            .iter()
+            .find(|op| op.id == id || op.alias.as_deref() == Some(id))
+            .is_some_and(|op| op.native_text.is_some());
         let before = queue.len();
         queue.retain(|op| op.id != id && op.alias.as_deref() != Some(id));
         let removed = queue.len() != before;
@@ -292,7 +549,12 @@ impl OperationStore {
             self.deleted
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((project.to_owned(), database.to_owned(), id.to_owned()));
+                .push(DeletedOperation {
+                    project: project.to_owned(),
+                    database: database.to_owned(),
+                    id: id.to_owned(),
+                    native_text,
+                });
         }
         removed
     }
@@ -302,7 +564,9 @@ impl OperationStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .any(|(p, d, i)| p == project && d == database && i == id)
+            .any(|marker| {
+                marker.project == project && marker.database == database && marker.id == id
+            })
     }
 
     /// Forgets the operations of the projects `owned` selects (a session reset).
@@ -311,8 +575,19 @@ impl OperationStore {
         self.deleted
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|(project, _, _)| !owned(project));
+            .retain(|marker| !owned(&marker.project));
     }
+}
+
+fn text_targets_current(
+    queue: Option<&VecDeque<StoredOperation>>,
+    targets: &[(&str, &NativeTextBuild)],
+) -> bool {
+    targets.iter().all(|(id, target)| {
+        queue
+            .and_then(|queue| queue.iter().find(|op| op.id == *id))
+            .is_some_and(|op| op.native_text.as_ref() == Some(*target) && !is_done(&op.current))
+    })
 }
 
 /// A fresh operation id in the backend's store.
@@ -329,6 +604,8 @@ pub(crate) fn record_index(
     index: &str,
     initial: Value,
 ) {
+    let barrier = state.local.barrier();
+    let _admission = barrier.admit();
     state
         .local
         .admin()
@@ -400,6 +677,8 @@ pub(crate) fn record(
     metadata: &Value,
     response: Option<Value>,
 ) -> StoredOperation {
+    let barrier = state.local.barrier();
+    let _admission = barrier.admit();
     state
         .local
         .admin()
@@ -497,6 +776,48 @@ fn list(
     }
 }
 
+/// Prepares ordinary operation rendering before admission, then revalidates the retained
+/// identity. CONTROL may rewind an operation while preparation waits for its source snapshot.
+fn delete(state: &RestState, project: &str, database: &str, id: &str) -> RestResponse {
+    let store = state.local.admin().operations();
+    let barrier = state.local.barrier();
+    let name = format!("projects/{project}/databases/{database}/operations/{id}");
+    loop {
+        let seen = barrier.epoch();
+        let observed = store.get(project, database, id);
+        let field = state.local.field_operation(project, &name);
+        // Field and ordinary index rendering may admit their own database snapshot.
+        // Never retain the publication guard across those callbacks.
+        let running = observed.as_ref().map_or_else(
+            || {
+                field
+                    .as_ref()
+                    .is_some_and(|op| !is_done(&crate::rest::admin_fields::operation_json(op)))
+            },
+            |op| !is_done(&current(state, project, database, op)),
+        );
+        let admission = barrier.admit();
+        if admission.epoch() != seen
+            || store.get(project, database, id) != observed
+            || state.local.field_operation(project, &name) != field
+        {
+            continue;
+        }
+        if running {
+            return super::rest::error(
+                tonic::Code::FailedPrecondition,
+                "Precondition check failed.",
+                None,
+            );
+        }
+        return if store.remove(project, database, id) || field.is_some() {
+            ok(json!({}))
+        } else {
+            super::rest::error(tonic::Code::NotFound, "Operation does not exist", None)
+        };
+    }
+}
+
 /// `operations.list`, `operations.get`, `operations.delete` and `operations.cancel`.
 pub(crate) fn route(
     state: &RestState,
@@ -508,6 +829,36 @@ pub(crate) fn route(
     params: &BTreeMap<String, Vec<String>>,
 ) -> RestResponse {
     let store = state.local.admin().operations();
+    if method == "GET" {
+        // Resolve locally retained identities before admission. An absent view is a404;
+        // an ordinary or terminal operation reads its audit without touching catalog work.
+        let observed = match rest {
+            [] => store.list(project, database),
+            [id] => store.get(project, database, id).into_iter().collect(),
+            _ => Vec::new(),
+        };
+        let targets = observed
+            .iter()
+            .filter(|op| !is_done(&op.current))
+            .filter_map(|op| {
+                op.native_text
+                    .as_ref()
+                    .map(|target| (op.id.as_str(), target))
+            })
+            .collect::<Vec<_>>();
+        if !targets.is_empty() {
+            if let Err(status) = state.local.advance_native_text_builds(
+                project,
+                database,
+                super::index_rest::NativeTextSelection {
+                    operation_targets: Some(&targets),
+                    ..Default::default()
+                },
+            ) {
+                return crate::rest::error_response(&status);
+            }
+        }
+    }
     let field_operation = |id: &str| {
         let name = format!("projects/{project}/databases/{database}/operations/{id}");
         state.local.field_operation(project, &name)
@@ -526,25 +877,16 @@ pub(crate) fn route(
                 None => super::rest::error(tonic::Code::NotFound, "Operation does not exist", None),
             },
         },
-        ("DELETE", [id], None) => {
-            let running = match store.get(project, database, id) {
-                Some(op) => !is_done(&current(state, project, database, &op)),
-                None => field_operation(id)
-                    .is_some_and(|op| !is_done(&crate::rest::admin_fields::operation_json(&op))),
-            };
-            if running {
-                super::rest::error(
-                    tonic::Code::FailedPrecondition,
-                    "Precondition check failed.",
-                    None,
-                )
-            } else if store.remove(project, database, id) || field_operation(id).is_some() {
-                ok(json!({}))
-            } else {
-                super::rest::error(tonic::Code::NotFound, "Operation does not exist", None)
-            }
-        }
+        ("DELETE", [id], None) => delete(state, project, database, id),
         ("POST", [id], Some("cancel")) => {
+            if store
+                .get(project, database, id)
+                .is_some_and(|op| op.native_text.is_some())
+            {
+                return crate::rest::error_response(&Status::unimplemented(
+                    "FS_TEXT_ADMIN_UNVERIFIED: text build cancellation",
+                ));
+            }
             if store
                 .get(project, database, id)
                 .is_some_and(|op| op.kind == OperationKind::CreateIndex)
@@ -567,5 +909,183 @@ pub(crate) fn route(
             }
         }
         _ => crate::rest::not_found_text(),
+    }
+}
+
+#[cfg(test)]
+mod text_snapshot_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn append(store: &OperationStore, project: &str, id: &str, native: bool) {
+        let value = json!({"name":id,"done":true});
+        if native {
+            store.record_text(
+                project,
+                "db",
+                id,
+                NativeTextBuild {
+                    index: id.into(),
+                    generation: 1,
+                },
+                value,
+            );
+        } else {
+            store.record_views(project, "db", id, value.clone(), value);
+        }
+    }
+
+    #[test]
+    fn native_completion_rechecks_all_retained_identities_before_publication() {
+        let store = OperationStore::default();
+        append(&store, "p", "first", true);
+        append(&store, "p", "second", true);
+        let before = store.capture_text(|_| true, true).unwrap();
+        for terminal in [false, true] {
+            if terminal {
+                let mut all = store.lock();
+                all.get_mut(&("p".into(), "db".into())).unwrap()[1].current = json!({"done":true});
+            } else {
+                let mut all = store.lock();
+                for op in all.get_mut(&("p".into(), "db".into())).unwrap() {
+                    op.current = json!({});
+                }
+            }
+            let snapshot = store.capture_text(|_| true, true).unwrap();
+            let published = std::cell::Cell::new(false);
+            let completions = vec![
+                (
+                    "first".into(),
+                    NativeTextBuild {
+                        index: "first".into(),
+                        generation: 1,
+                    },
+                    json!({"done":true}),
+                ),
+                (
+                    "second".into(),
+                    NativeTextBuild {
+                        index: "second".into(),
+                        generation: if terminal { 1 } else { 2 },
+                    },
+                    json!({"done":true}),
+                ),
+            ];
+            assert!(store
+                .finish_text("p", "db", &completions, None, || published.set(true))
+                .is_err());
+            assert!(!published.get());
+            assert_eq!(store.capture_text(|_| true, true).unwrap(), snapshot);
+        }
+        store.replace_text(|_| true, &before, Some(|| {})).unwrap();
+    }
+
+    #[test]
+    fn native_completion_does_not_publish_an_observers_lost_retained_selection() {
+        for loss in ["evicted", "deleted", "terminal", "generation"] {
+            let store = OperationStore::default();
+            append(&store, "p", "first", true);
+            append(&store, "p", "second", true);
+            {
+                let mut all = store.lock();
+                for op in all.get_mut(&("p".into(), "db".into())).unwrap() {
+                    op.current = json!({});
+                }
+            }
+            let completions: Vec<(String, NativeTextBuild, Value)> = vec![
+                (
+                    "first".into(),
+                    NativeTextBuild {
+                        index: "first".into(),
+                        generation: 1,
+                    },
+                    json!({"done":true}),
+                ),
+                (
+                    "second".into(),
+                    NativeTextBuild {
+                        index: "second".into(),
+                        generation: 1,
+                    },
+                    json!({"done":true}),
+                ),
+            ];
+            match loss {
+                "deleted" => {
+                    assert!(store.remove("p", "db", "second"));
+                }
+                "evicted" => {
+                    for i in 0..128 {
+                        append(&store, "p", &format!("later-{i}"), false);
+                    }
+                }
+                _ => {
+                    let mut all = store.lock();
+                    let op = &mut all.get_mut(&("p".into(), "db".into())).unwrap()[1];
+                    if loss == "terminal" {
+                        op.current = json!({"done":true});
+                    } else {
+                        op.native_text.as_mut().unwrap().generation = 2;
+                    }
+                }
+            }
+            let before = store.capture_text(|_| true, true).unwrap();
+            let published = std::cell::Cell::new(false);
+            let targets = completions
+                .iter()
+                .map(|(id, target, _)| (id.as_str(), target))
+                .collect::<Vec<_>>();
+            store
+                .finish_text("p", "db", &completions, Some(&targets), || {
+                    published.set(true);
+                })
+                .unwrap();
+            assert!(
+                !published.get(),
+                "an operation observer cannot publish after {loss} changes its retained selection"
+            );
+            assert_eq!(store.capture_text(|_| true, true).unwrap(), before);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn native_projection_is_bounded_isolated_idempotent_and_exactly_compensated(
+            before in prop::collection::vec(any::<bool>(),0..130),
+            after in prop::collection::vec((any::<bool>(),any::<bool>()),0..150),
+        ) {
+            let store=OperationStore::default();
+            for (i,native) in before.into_iter().enumerate() {append(&store,"p",&format!("captured-{i}"),native);}
+            let captured=store.capture_text(|p|p=="p",false).unwrap();
+            for (i,(native,remove)) in after.into_iter().enumerate() {
+                let id=format!("live-{i}");
+                append(&store,"p",&id,native);
+                append(&store,"outside",&id,!native);
+                if remove {store.remove("p","db",&id);store.remove("outside","db",&id);}
+            }
+            let preimage=store.capture_text(|_|true,true).unwrap();
+            let own_preimage=store.capture_text(|p|p=="p",true).unwrap();
+            let unrelated=store.list("p","db").into_iter().filter(|op|op.native_text.is_none()).collect::<Vec<_>>();
+            let outside=store.capture_text(|p|p=="outside",true).unwrap();
+            let captured_count=captured.queues.values().map(Vec::len).sum::<usize>();
+            let outcome=store.replace_text(|p|p=="p",&captured,Some(||{}));
+            if captured_count+unrelated.len()>OPERATIONS_RETAINED_PER_DATABASE {
+                prop_assert!(outcome.is_err());
+                prop_assert_eq!(store.capture_text(|_|true,true).unwrap(),preimage);
+            } else {
+                prop_assert!(outcome.is_ok());
+                let restored=store.capture_text(|_|true,true).unwrap();
+                prop_assert!(store.list("p","db").len()<=OPERATIONS_RETAINED_PER_DATABASE);
+                prop_assert_eq!(store.list("p","db").into_iter().filter(|op|op.native_text.is_none()).collect::<Vec<_>>(),unrelated);
+                let actual_outside=store.capture_text(|p|p=="outside",true).unwrap();
+                prop_assert_eq!(actual_outside.queues,outside.queues);
+                prop_assert_eq!(actual_outside.deleted.into_iter().map(|(_,marker)|marker).collect::<Vec<_>>(),outside.deleted.into_iter().map(|(_,marker)|marker).collect::<Vec<_>>());
+                store.replace_text(|p|p=="p",&captured,Some(||{})).unwrap();
+                prop_assert_eq!(store.capture_text(|_|true,true).unwrap(),restored);
+                store.replace_text(|p|p=="p",&own_preimage,Some(||{})).unwrap();
+                prop_assert_eq!(store.capture_text(|_|true,true).unwrap(),preimage);
+            }
+        }
     }
 }

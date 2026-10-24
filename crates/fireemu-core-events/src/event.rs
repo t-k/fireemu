@@ -8,6 +8,8 @@ use fireemu_core_types::time::LogicalInstant;
 /// Where an event originates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventSource {
+    /// Realtime Database committed reference change.
+    Database,
     /// Firestore document change.
     Firestore,
     /// Cloud Storage object change.

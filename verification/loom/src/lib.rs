@@ -38,6 +38,47 @@ mod scenarios {
         }))
     }
 
+    /// Protocol model for the database admission guard and Functions epoch reservation.
+    /// The socket regression binds this lock ordering to the real REST entry point.
+    #[test]
+    fn database_source_and_event_remain_atomic_across_reset() {
+        loom::model(|| {
+            let admission = Arc::new(loom::sync::RwLock::new(()));
+            let source = Arc::new(Mutex::new(false));
+            let runtime = Arc::new(Mutex::new((0_u64, false)));
+            let writer = {
+                let admission = admission.clone();
+                let source = source.clone();
+                let runtime = runtime.clone();
+                thread::spawn(move || {
+                    let _admitted = admission.read().unwrap();
+                    let mut source = source.lock().unwrap();
+                    let reserved_epoch = runtime.lock().unwrap().0;
+                    *source = true;
+                    let mut runtime = runtime.lock().unwrap();
+                    if runtime.0 == reserved_epoch {
+                        runtime.1 = true;
+                    }
+                })
+            };
+            let resetter = thread::spawn({
+                let admission = admission.clone();
+                let source = source.clone();
+                let runtime = runtime.clone();
+                move || {
+                    let _exclusive = admission.write().unwrap();
+                    *source.lock().unwrap() = false;
+                    let mut runtime = runtime.lock().unwrap();
+                    runtime.0 += 1;
+                    runtime.1 = false;
+                }
+            });
+            writer.join().unwrap();
+            resetter.join().unwrap();
+            assert_eq!(*source.lock().unwrap(), runtime.lock().unwrap().1);
+        });
+    }
+
     /// INV-EPOCH-001: a worker that captured epoch 0 must not apply after a reset published
     /// epoch 1, regardless of interleaving. The check and the apply happen under one lock.
     #[test]

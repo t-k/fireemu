@@ -8,41 +8,119 @@ use fireemu_core_firestore::ttl::TtlCatalog;
 use fireemu_core_types::ids::CollectionId;
 use serde_json::{json, Value};
 
-/// Loads `firestore.text-indexes.json` when `firestore.textIndexDefinitionFile` is set:
-/// every entry must validate (FS-TEXT-VAL-1) and the edition must be Enterprise.
+/// Loads canonical definitions and supported native text definitions from the ordinary
+/// index files. Search definitions remain outside ordinary query planning.
 pub fn load_text_indexes(
     cfg: &crate::config::RuntimeConfig,
 ) -> Result<fireemu_core_firestore::text_index::TextIndexCatalog, String> {
-    let mut set = fireemu_core_firestore::text_index::TextIndexCatalog::default();
-    let Some(path) = &cfg.text_index_file else {
-        return Ok(set);
-    };
-    if cfg.edition != fireemu_core_types::edition::FirestoreEdition::Enterprise {
-        return Err(format!(
-            "{path}: text indexes need firestore.edition = enterprise"
-        ));
-    }
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    let json: Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
-    if json.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
-        return Err(format!("{path}: schemaVersion 1 is required"));
-    }
-    let entries = json
-        .get("indexes")
-        .and_then(Value::as_array)
-        .ok_or_else(|| format!("{path}: indexes must be an array"))?;
-    for (i, e) in entries.iter().enumerate() {
-        let (project, database, def) = fireemu_adapter_http::control::parse_text_index(e)
-            .map_err(|m| format!("{path}: indexes[{i}]: {m}"))?;
-        let id = def.id.clone();
-        let warnings = set
-            .add(&project, &database, def)
-            .map_err(|e| format!("{path}: indexes[{i}]: {e}"))?;
-        for w in warnings {
-            eprintln!("[firestore] text index {id}: {w}");
+    let mut catalog = fireemu_core_firestore::text_index::TextIndexCatalog::default();
+    if let Some(path) = &cfg.text_index_file {
+        if cfg.edition != fireemu_core_types::edition::FirestoreEdition::Enterprise {
+            return Err(format!(
+                "{path}: text indexes need firestore.edition = enterprise"
+            ));
+        }
+        let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+        let body: Value =
+            serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))?;
+        if body.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+            return Err(format!("{path}: schemaVersion 1 is required"));
+        }
+        let entries = body
+            .get("indexes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{path}: indexes must be an array"))?;
+        for (position, entry) in entries.iter().enumerate() {
+            add_text_definition(&mut catalog, path, position, entry)?;
         }
     }
-    Ok(set)
+    if cfg.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise {
+        let files = cfg
+            .index_file
+            .iter()
+            .map(|path| (fireemu_core_types::ids::DatabaseId::DEFAULT, path))
+            .chain(
+                cfg.firestore_databases
+                    .iter()
+                    .filter(|(database, _)| {
+                        database.as_str() != fireemu_core_types::ids::DatabaseId::DEFAULT
+                    })
+                    .filter_map(|(database, files)| {
+                        files.indexes.as_ref().map(|path| (database.as_str(), path))
+                    }),
+            );
+        for (database, path) in files {
+            let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+            // Preserve the existing file validation and keep search out of the ordinary planner.
+            parse_indexes_with_notes(path, &text, cfg.index_file_checks())?;
+            let body: Value =
+                serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))?;
+            for (position, index) in body
+                .get("indexes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let fields = index
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|field| {
+                        field
+                            .get("searchConfig")
+                            .is_some_and(|search| search.get("textSpec").is_some())
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if fields.is_empty() {
+                    continue;
+                }
+                let collection = ["collectionGroup", "collectionId"]
+                    .into_iter()
+                    .filter_map(|key| index.get(key).and_then(Value::as_str))
+                    .find(|value| !value.is_empty())
+                    .ok_or_else(|| format!("{path}: missing collectionGroup"))?;
+                let scope = index
+                    .get("queryScope")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("COLLECTION");
+                let options = index
+                    .get("searchIndexOptions")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let entry = json!({"index": {
+                    "name":format!("projects/{}/databases/{database}/collectionGroups/{collection}/indexes/file-text-{position}",cfg.auth_project),
+                    "queryScope":scope,
+                    "apiScope":index.get("apiScope").and_then(Value::as_str).unwrap_or("ANY_API"),
+                    "fields":fields,
+                    "searchIndexOptions":options,
+                },"xFirebaseTestd":{"state":"READY","buildPolicy":"synchronous","languageOverride":"disabled"}});
+                add_text_definition(&mut catalog, path, position, &entry)?;
+            }
+        }
+    }
+    Ok(catalog)
+}
+
+fn add_text_definition(
+    catalog: &mut fireemu_core_firestore::text_index::TextIndexCatalog,
+    path: &str,
+    position: usize,
+    entry: &Value,
+) -> Result<(), String> {
+    let (project, database, definition) = fireemu_adapter_http::control::parse_text_index(entry)
+        .map_err(|message| format!("{path}: indexes[{position}]: {message}"))?;
+    let id = definition.id.clone();
+    let warnings = catalog
+        .add(&project, &database, definition)
+        .map_err(|error| format!("{path}: indexes[{position}]: {error}"))?;
+    for warning in warnings {
+        eprintln!("[firestore] text index {id}: {warning}");
+    }
+    Ok(())
 }
 
 /// The Firestore gateway's missing-index reports, served by `/v1/firestore/missingIndexes`.
@@ -160,8 +238,8 @@ fn check_search_config(path: &str, config: &Value, checks: IndexFileChecks) -> R
 }
 
 /// One field of a composite index entry, in the current or the older (`mode`) format. A search
-/// field (`searchConfig`) is checked and answers `None`: fireemu neither plans nor executes text
-/// or geo search from this file.
+/// field (`searchConfig`) is checked and answers `None` to the ordinary planner.
+/// Supported text definitions are loaded separately by `load_text_indexes`; geo search is not executed.
 fn parse_index_field(f: &Value, checks: IndexFileChecks) -> Result<Option<IndexField>, String> {
     let path = f
         .get("fieldPath")
@@ -318,7 +396,7 @@ pub fn parse_indexes_with_notes(
     let notes = match search_indexes {
         0 => Vec::new(),
         count => vec![format!(
-            "{path}: {count} search {} (searchConfig) loaded but not used: fireemu does not run text or geo search from this file, and ordinary queries never use a search index",
+            "{path}: {count} search {} (searchConfig) loaded outside ordinary query planning: supported Enterprise text definitions are available to local lexical search; geo search remains unsupported",
             if count == 1 { "index" } else { "indexes" }
         )],
     };
@@ -571,6 +649,39 @@ pub fn capabilities_manifest(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn configured_text_indexes_reach_the_database_scoped_execution_catalog() {
+        let path =
+            std::env::temp_dir().join(format!("fireemu-text-catalog-{}.json", std::process::id()));
+        let input = serde_json::json!({"indexes":[{"collectionGroup":"products","queryScope":"COLLECTION","fields":[{"fieldPath":"title","searchConfig":{"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}}}]}]});
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, input.to_string().as_bytes()).unwrap();
+        drop(file);
+        let cfg = crate::config::RuntimeConfig {
+            auth_project: "demo-app".to_owned(),
+            edition: fireemu_core_types::edition::FirestoreEdition::Enterprise,
+            index_file: Some(path.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let loaded = super::load_text_indexes(&cfg);
+        std::fs::remove_file(&path).unwrap();
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.len(), 1);
+        let definition = loaded.get("demo-app", "(default)", "file-text-0").unwrap();
+        assert_eq!(definition.collection_id.as_str(), "products");
+        assert_eq!(
+            definition.state,
+            fireemu_core_firestore::text_index::TextIndexState::Ready
+        );
+        assert_eq!(
+            definition.language_override,
+            fireemu_core_firestore::text_index::LanguageOverridePolicy::Disabled
+        );
+    }
     use super::*;
 
     /// The route reads the gateway's list, what it dropped past its bound, and clears both.

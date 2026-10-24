@@ -258,3 +258,42 @@ fn the_inspect_route_can_require_the_owner() {
         200
     );
 }
+
+#[test]
+fn import_export_and_owner_data_clear_preserve_rules_coverage() {
+    let mut db = Database::new(RestOptions::default(), 1);
+    db.load_rules(
+        "coverage-import",
+        r#"{"rules":{".read":true,".write":false}}"#,
+        NOW,
+    )
+    .unwrap();
+    call(&mut db, "GET", "/.json?ns=coverage-import", &[], "");
+    let before = call(
+        &mut db,
+        "GET",
+        "/.inspect/coverage.json?ns=coverage-import",
+        &[],
+        "",
+    );
+    db.import_text("coverage-import", r#"{"sample":1}"#, NOW)
+        .unwrap();
+    assert_eq!(
+        db.export_texts(),
+        vec![("coverage-import".to_owned(), r#"{"sample":1}"#.to_owned())]
+    );
+    assert_eq!(
+        call(&mut db, "DELETE", "/.json?ns=coverage-import", OWNER, "").0,
+        200
+    );
+    assert_eq!(
+        call(
+            &mut db,
+            "GET",
+            "/.inspect/coverage.json?ns=coverage-import",
+            &[],
+            ""
+        ),
+        before
+    );
+}

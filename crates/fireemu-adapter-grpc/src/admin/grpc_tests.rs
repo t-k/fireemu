@@ -475,3 +475,124 @@ async fn a_field_name_with_special_characters_is_answered_over_grpc_as_over_rest
     assert_eq!(read.name, over_rest["name"]);
     assert_eq!(read.name, name);
 }
+
+#[tokio::test]
+async fn enterprise_native_index_page_size_reaches_rest_validation() {
+    let state = state();
+    let (status, _) = rest(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=entpages",
+        json!({"locationId":"us-central1", "type":"FIRESTORE_NATIVE", "databaseEdition":"ENTERPRISE"}),
+    );
+    assert_eq!(status, 200);
+    let service = AdminGrpc::new(state);
+    let request = |size| {
+        owner(admin::ListIndexesRequest {
+            parent: "projects/p/databases/entpages/collectionGroups/items".into(),
+            page_size: size,
+            ..admin::ListIndexesRequest::default()
+        })
+    };
+    let error = service.list_indexes(request(100)).await.unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert_eq!(error.message(), "Invalid page size. Only 0 is supported.");
+    assert!(service.list_indexes(request(0)).await.is_ok());
+}
+
+#[tokio::test]
+async fn configured_enterprise_native_text_index_wire_matches_rest() {
+    use admin::index::{index_field as field, SearchIndexOptions};
+    use field::search_config as search;
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Enterprise,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+        1_790_000_000_000_000_000,
+    ))));
+    let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+    local
+        .set_text_indexes(
+            Arc::new(Mutex::new(
+                fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+            )),
+            false,
+        )
+        .unwrap();
+    let state = Arc::new(RestState {
+        local,
+        gateway: Arc::new(gateway),
+        rules: None,
+        app_check: None,
+        control_token: None,
+    });
+    let service = AdminGrpc::new(Arc::clone(&state));
+    let parent = "projects/p/databases/(default)/collectionGroups/items";
+    let definition = admin::Index {
+        query_scope: admin::index::QueryScope::Collection as i32,
+        fields: ["title", "body"]
+            .into_iter()
+            .map(|path| admin::index::IndexField {
+                field_path: path.into(),
+                value_mode: Some(field::ValueMode::SearchConfig(field::SearchConfig {
+                    text_spec: Some(search::SearchTextSpec {
+                        index_specs: vec![search::SearchTextIndexSpec {
+                            index_type: search::TextIndexType::Tokenized as i32,
+                            match_type: search::TextMatchType::MatchGlobally as i32,
+                        }],
+                    }),
+                    geo_spec: None,
+                })),
+            })
+            .collect(),
+        search_index_options: Some(SearchIndexOptions {
+            text_language: "en".into(),
+            text_language_override_field_path: "language".into(),
+        }),
+        ..admin::Index::default()
+    };
+    let created = service
+        .create_index(owner(admin::CreateIndexRequest {
+            parent: parent.into(),
+            index: Some(definition.clone()),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(created.metadata.is_some());
+    let listed = service
+        .list_indexes(owner(admin::ListIndexesRequest {
+            parent: parent.into(),
+            ..admin::ListIndexesRequest::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(listed.indexes.len(), 1);
+    let index = &listed.indexes[0];
+    assert_eq!(index.fields, definition.fields);
+    assert_eq!(index.search_index_options, definition.search_index_options);
+    assert_eq!(index.density, admin::index::Density::SparseAny as i32);
+    let read = service
+        .get_index(owner(admin::GetIndexRequest {
+            name: index.name.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(read.fields, index.fields);
+    assert_eq!(read.search_index_options, index.search_index_options);
+    let (status, over_rest) = rest(&state, "GET", &format!("/v1/{}", index.name), Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(
+        over_rest["fields"][0]["searchConfig"]["textSpec"]["indexSpecs"][0]["indexType"],
+        "TOKENIZED"
+    );
+    assert_eq!(over_rest["searchIndexOptions"]["textLanguage"], "en");
+}

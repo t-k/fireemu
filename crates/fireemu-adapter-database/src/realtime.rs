@@ -447,6 +447,12 @@ impl Session {
                     self.become_(db, Access::Anonymous, context.now_millis);
                     return Err(unparsable_token());
                 };
+                let access = match arguments.get("authvar") {
+                    None => access,
+                    Some(Json::Null) => Access::AdminAsAnonymous,
+                    Some(auth @ Json::Object(_)) => Access::AdminAsUser(auth.clone()),
+                    Some(_) => return Err(Failure::Malformed),
+                };
                 self.become_(db, access, context.now_millis);
                 let expires = context.now_millis / 1000 + 3600;
                 Ok(Json::object([
@@ -706,11 +712,17 @@ impl Session {
                 ));
             }
         }
-        tree.set(&path, &value, context)
-            .map_err(|err| write_failure(&err))?;
+        db.commit_set(
+            &self.namespace,
+            &path,
+            &value,
+            context,
+            self.access.principal(),
+        )
+        .map_err(|err| change_failure(&err))?;
         // A transaction's answer carries the value it wrote.
         let data = if compare.is_some() {
-            wire_json(tree.get(&path))
+            wire_json(db.tree_mut(&self.namespace).get(&path))
         } else {
             Json::string("")
         };
@@ -767,9 +779,14 @@ impl Session {
         }
         let absolute: Vec<Path> = relative.iter().map(|(_, p)| path.join(p)).collect();
         let before = db.before_write(&self.namespace, &absolute);
-        db.tree_mut(&self.namespace)
-            .update(&path, &wire, context)
-            .map_err(|err| write_failure(&err))?;
+        db.commit_update(
+            &self.namespace,
+            &path,
+            &wire,
+            context,
+            self.access.principal(),
+        )
+        .map_err(|err| change_failure(&err))?;
         let effective = db.effective(&self.namespace, &absolute, before);
         let entries = relative
             .into_iter()
@@ -924,6 +941,15 @@ fn check_registered(
 
 /// A write the tree refused: a priority on an absent node is answered; bad data is a
 /// connection error, as the official emulator treats it.
+fn change_failure(err: &crate::changes::ChangeError) -> Failure {
+    match err {
+        crate::changes::ChangeError::Database(error) => write_failure(error),
+        crate::changes::ChangeError::Admission(error) => {
+            Failure::Status("unavailable", error.message().to_owned())
+        }
+    }
+}
+
 fn write_failure(err: &fireemu_core_database::DatabaseError) -> Failure {
     match err.kind {
         ErrorKind::PriorityOnAbsentNode => invalid("could not set priority on non-existent node"),

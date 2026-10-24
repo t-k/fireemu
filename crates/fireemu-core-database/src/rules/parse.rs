@@ -102,6 +102,9 @@ pub struct Expr {
     pub at: usize,
     /// What it is.
     pub kind: ExprKind,
+    pub(crate) diagnostic: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// The kinds of expression.
@@ -927,19 +930,34 @@ fn check_anchors(pattern: &str) -> Result<(), &'static str> {
 
 /// Parses one rule expression. An optional trailing `;` is allowed; a second expression
 /// after it is not.
+#[cfg(test)]
 pub fn parse(text: &str) -> Result<Expr, ExprError> {
-    let expr = parse_text(text, MAX_EXPRESSION_DEPTH).0?;
+    parse_with_diagnostics(text).map(|(expr, _)| expr)
+}
+
+pub(crate) fn parse_with_diagnostics(
+    text: &str,
+) -> Result<(Expr, Vec<super::coverage::Template>), ExprError> {
+    let (expr, _, templates) = parse_text(text, MAX_EXPRESSION_DEPTH);
+    let expr = expr?;
     // The counter above bounds the parser's own recursion; the tree it built is measured
     // too, since an operand read early can land deep (`1 - (…) - 0 - 0 …`, review r3 M6c).
     if expr.depth() > MAX_EXPRESSION_DEPTH {
         return Err(ExprError::new(0, "Rule expression may not be empty."));
     }
-    Ok(expr)
+    Ok((expr, templates))
 }
 
 /// Parses with the parser's own recursion bounded at `limit`; also answers the deepest it
 /// reached.
-fn parse_text(text: &str, limit: usize) -> (Result<Expr, ExprError>, usize) {
+fn parse_text(
+    text: &str,
+    limit: usize,
+) -> (
+    Result<Expr, ExprError>,
+    usize,
+    Vec<super::coverage::Template>,
+) {
     let chars: Vec<char> = text.chars().collect();
     let mut parser = Parser {
         lexer: Lexer {
@@ -951,9 +969,11 @@ fn parse_text(text: &str, limit: usize) -> (Result<Expr, ExprError>, usize) {
         depth: 0,
         limit,
         deepest: 0,
+        last_end: 0,
+        templates: Vec::new(),
     };
     let parsed = parser.statement();
-    (parsed, parser.deepest)
+    (parsed, parser.deepest, parser.templates)
 }
 
 impl Parser<'_> {
@@ -1006,6 +1026,8 @@ struct Parser<'a> {
     limit: usize,
     /// The deepest `depth` reached.
     deepest: usize,
+    last_end: usize,
+    templates: Vec<super::coverage::Template>,
 }
 
 impl Parser<'_> {
@@ -1022,6 +1044,7 @@ impl Parser<'_> {
             Some(token) => token,
             None => self.lexer.next(self.regex_next)?,
         };
+        self.last_end = self.lexer.at;
         // After an operand a `/` divides; after an operator or `(` it starts a regex.
         self.regex_next = !matches!(
             token.1,
@@ -1085,6 +1108,31 @@ impl Parser<'_> {
         }
     }
 
+    fn expression(
+        &mut self,
+        at: usize,
+        start: usize,
+        end: usize,
+        kind: ExprKind,
+        children: Vec<usize>,
+    ) -> Expr {
+        let diagnostic = self.template(start, end, children);
+        Expr {
+            at,
+            kind,
+            diagnostic,
+            start,
+            end,
+        }
+    }
+
+    fn template(&mut self, at: usize, end: usize, children: Vec<usize>) -> usize {
+        let id = self.templates.len();
+        self.templates
+            .push(super::coverage::Template { at, end, children });
+        id
+    }
+
     fn ternary(&mut self) -> Result<Expr, ExprError> {
         let condition = self.binary(0)?;
         if !self.eat("?")? {
@@ -1098,10 +1146,14 @@ impl Parser<'_> {
         }
         let otherwise = self.ternary()?;
         self.depth -= 1;
-        Ok(Expr {
-            at: condition.at,
-            kind: ExprKind::Ternary(Box::new(condition), Box::new(then), Box::new(otherwise)),
-        })
+        let children = vec![condition.diagnostic, then.diagnostic, otherwise.diagnostic];
+        Ok(self.expression(
+            condition.at,
+            condition.start,
+            otherwise.end,
+            ExprKind::Ternary(Box::new(condition), Box::new(then), Box::new(otherwise)),
+            children,
+        ))
     }
 
     fn binary(&mut self, min_level: u8) -> Result<Expr, ExprError> {
@@ -1144,7 +1196,11 @@ impl Parser<'_> {
             if associative {
                 if let ExprKind::Chain(chained, operands) = &mut left.kind {
                     if *chained == op {
+                        let end = right.end;
+                        let children = vec![left.diagnostic, right.diagnostic];
                         operands.push(right);
+                        left.diagnostic = self.template(left.start, end, children);
+                        left.end = end;
                         continue;
                     }
                 }
@@ -1152,14 +1208,20 @@ impl Parser<'_> {
             self.deeper()?;
             nested += 1;
             let at = left.at;
-            left = Expr {
+            let start = left.start;
+            let end = right.end;
+            let children = vec![left.diagnostic, right.diagnostic];
+            left = self.expression(
                 at,
-                kind: if associative {
+                start,
+                end,
+                if associative {
                     ExprKind::Chain(op, vec![left, right])
                 } else {
                     ExprKind::Binary(op, Box::new(left), Box::new(right))
                 },
-            };
+                children,
+            );
         };
         self.depth -= nested;
         result
@@ -1193,18 +1255,26 @@ impl Parser<'_> {
             Token::Punct("!") => {
                 self.next()?;
                 let operand = self.unary()?;
-                Ok(Expr {
+                let children = vec![operand.diagnostic];
+                Ok(self.expression(
                     at,
-                    kind: ExprKind::Not(Box::new(operand)),
-                })
+                    at,
+                    operand.end,
+                    ExprKind::Not(Box::new(operand)),
+                    children,
+                ))
             }
             Token::Punct("-") => {
                 self.next()?;
                 let operand = self.unary()?;
-                Ok(Expr {
+                let children = vec![operand.diagnostic];
+                Ok(self.expression(
                     at,
-                    kind: ExprKind::Neg(Box::new(operand)),
-                })
+                    at,
+                    operand.end,
+                    ExprKind::Neg(Box::new(operand)),
+                    children,
+                ))
             }
             Token::Punct(op @ ("--" | "++")) => {
                 // The JavaScript reader parses a prefix decrement or increment; the rules
@@ -1236,25 +1306,39 @@ impl Parser<'_> {
                 let Token::Name(name) = token else {
                     return Err(ExprError::new(at, "missing name after . operator"));
                 };
-                expr = Expr {
-                    at: expr.at,
-                    kind: ExprKind::Member(Box::new(expr), name),
-                };
+                let end = self.last_end;
+                let name_id = self.template(at, end, Vec::new());
+                let children = vec![expr.diagnostic, name_id];
+                expr = self.expression(
+                    expr.at,
+                    expr.start,
+                    end,
+                    ExprKind::Member(Box::new(expr), name),
+                    children,
+                );
             } else if self.eat("[")? {
                 let index = self.ternary()?;
                 self.close("]", "missing ] in index expression")?;
+                let end = self.last_end;
+                let children = vec![expr.diagnostic, index.diagnostic];
                 let mut index = index;
                 expr = match std::mem::replace(&mut index.kind, ExprKind::Null) {
-                    ExprKind::Str(name) => Expr {
-                        at: expr.at,
-                        kind: ExprKind::Member(Box::new(expr), name),
-                    },
+                    ExprKind::Str(name) => self.expression(
+                        expr.at,
+                        expr.start,
+                        end,
+                        ExprKind::Member(Box::new(expr), name),
+                        children,
+                    ),
                     kind => {
                         index.kind = kind;
-                        Expr {
-                            at: expr.at,
-                            kind: ExprKind::Index(Box::new(expr), Box::new(index)),
-                        }
+                        self.expression(
+                            expr.at,
+                            expr.start,
+                            end,
+                            ExprKind::Index(Box::new(expr), Box::new(index)),
+                            children,
+                        )
                     }
                 };
             } else if self.eat("(")? {
@@ -1268,10 +1352,16 @@ impl Parser<'_> {
                         }
                     }
                 }
-                expr = Expr {
-                    at: expr.at,
-                    kind: ExprKind::Call(Box::new(expr), arguments),
-                };
+                let children = std::iter::once(expr.diagnostic)
+                    .chain(arguments.iter().map(|item| item.diagnostic))
+                    .collect();
+                expr = self.expression(
+                    expr.at,
+                    expr.start,
+                    self.last_end,
+                    ExprKind::Call(Box::new(expr), arguments),
+                    children,
+                );
             } else {
                 self.depth -= steps;
                 // A postfix decrement or increment, refused as there; after a call the
@@ -1303,8 +1393,10 @@ impl Parser<'_> {
                 _ => ExprKind::Name(name),
             },
             Token::Punct("(") => {
-                let inner = self.ternary()?;
+                let mut inner = self.ternary()?;
                 self.close(")", "missing ) in parenthetical")?;
+                inner.start = at;
+                inner.end = self.last_end;
                 return Ok(inner);
             }
             Token::Punct("[") => {
@@ -1329,7 +1421,11 @@ impl Parser<'_> {
                 return Err(ExprError::new(self.rhino_end(at, &token), "syntax error"))
             }
         };
-        Ok(Expr { at, kind })
+        let children = match &kind {
+            ExprKind::Array(items) => items.iter().map(|item| item.diagnostic).collect(),
+            _ => Vec::new(),
+        };
+        Ok(self.expression(at, at, self.last_end, kind, children))
     }
 }
 
@@ -1407,7 +1503,7 @@ mod tests {
             let rule = format!("{text} < 0");
             let (accepted, measured) = on_big_stack(move || {
                 let accepted = parse(&rule).is_ok();
-                let (tree, deepest) = parse_text(&rule, usize::MAX);
+                let (tree, deepest, _) = parse_text(&rule, usize::MAX);
                 (accepted, tree.ok().map(|tree| (tree.depth(), deepest)))
             });
             if let Some((depth, deepest)) = measured {
@@ -1426,11 +1522,17 @@ mod tests {
         let mut expr = Expr {
             at: 0,
             kind: ExprKind::Number(1.0),
+            diagnostic: 0,
+            start: 0,
+            end: 1,
         };
         for _ in 0..1_000_000 {
             expr = Expr {
                 at: 0,
                 kind: ExprKind::Not(Box::new(expr)),
+                diagnostic: 0,
+                start: 0,
+                end: 1,
             };
         }
         std::thread::Builder::new()

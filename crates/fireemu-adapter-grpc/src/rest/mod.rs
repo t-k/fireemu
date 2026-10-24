@@ -1561,6 +1561,7 @@ impl RestState {
     /// executor as gRPC, over one snapshot of the input, and answers one array element per
     /// result (`[{executionTime}]` when there is none), each with the snapshot's read time as
     /// `executionTime`. A refusal answers no partial results.
+    #[allow(clippy::too_many_lines)] // Keep transport validation and refusal mapping in one entry point.
     fn execute_pipeline(
         &self,
         principal: &Caller,
@@ -1635,6 +1636,17 @@ impl RestState {
         )
         .map_err(refuse)?;
         let guard = self.read_guard(principal);
+        if compiled.search.is_some() {
+            let responses =
+                crate::text_search::execute(&self.local, &parent, compiled, &*guard, unrecorded)
+                    .map_err(refuse)?;
+            return Ok(ok(Value::Array(
+                responses
+                    .iter()
+                    .map(pipeline_json::response_to_json)
+                    .collect(),
+            )));
+        }
         let (responses, _warnings) = self
             .local
             .run_query(&compiled.input, &*guard)

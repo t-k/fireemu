@@ -179,6 +179,11 @@ pub(super) async fn answer(shared: &Arc<Shared>, request: &Request<Incoming>) ->
         },
         LpRequest::Disconnect { id, password } => {
             if let Some(connection) = find(shared, &id, &password) {
+                let _admitted = shared
+                    .config
+                    .admission
+                    .as_ref()
+                    .map(|barrier| barrier.admit());
                 let mut database = lock_database(shared);
                 close(shared, &mut database, &connection, &mut connection.lock());
             }
@@ -229,6 +234,11 @@ fn start(shared: &Arc<Shared>, target: &str, host: &str, callback: Option<i32>) 
     let Some(password) = draw_password() else {
         return full(refusal_response(&Refusal::new(503, "Service Unavailable")));
     };
+    let _admitted = shared
+        .config
+        .admission
+        .as_ref()
+        .map(|barrier| barrier.admit());
     let now = (shared.config.clock)();
     let mut database = lock_database(shared);
     let opened = match database.open_realtime(target, Some(host).filter(|h| !h.is_empty()), now) {
@@ -293,6 +303,11 @@ async fn poll(
     host: &str,
 ) -> Response<Body> {
     let mut receiver = {
+        let _admitted = shared
+            .config
+            .admission
+            .as_ref()
+            .map(|barrier| barrier.admit());
         let mut database = lock_database(shared);
         let mut state = connection.lock();
         if state.closed {
@@ -330,6 +345,11 @@ async fn poll(
         // An error: the connection was closed while the request waited.
         return script(answer.unwrap_or_default());
     }
+    let _admitted = shared
+        .config
+        .admission
+        .as_ref()
+        .map(|barrier| barrier.admit());
     let mut database = lock_database(shared);
     let mut state = connection.lock();
     match expiry(&mut receiver) {
@@ -414,6 +434,11 @@ async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
     ticks.tick().await;
     loop {
         ticks.tick().await;
+        let _admitted = shared
+            .config
+            .admission
+            .as_ref()
+            .map(|barrier| barrier.admit());
         let mut database = lock_database(&shared);
         let mut state = connection.lock();
         if state.closed || (state.held.is_none() && state.last_request.elapsed() >= hold * 2) {

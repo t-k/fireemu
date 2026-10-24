@@ -118,11 +118,19 @@ pub(crate) fn database_json(
     if record.edition == DatabaseEdition::Enterprise {
         resource.insert(
             "firestoreDataAccessMode".into(),
-            json!("DATA_ACCESS_MODE_DISABLED"),
+            json!(if record.native_data_access {
+                "DATA_ACCESS_MODE_ENABLED"
+            } else {
+                "DATA_ACCESS_MODE_DISABLED"
+            }),
         );
         resource.insert(
             "mongodbCompatibleDataAccessMode".into(),
-            json!("DATA_ACCESS_MODE_ENABLED"),
+            json!(if record.native_data_access {
+                "DATA_ACCESS_MODE_DISABLED"
+            } else {
+                "DATA_ACCESS_MODE_ENABLED"
+            }),
         );
     }
     resource.insert(
@@ -353,6 +361,24 @@ fn is_admin_path(segments: &[&str], action: Option<&str>) -> bool {
     }
 }
 
+/// The implemented Enterprise Native index and long-running operation methods.
+fn enterprise_native_route(method: &str, segments: &[&str], action: Option<&str>) -> bool {
+    matches!(
+        (method, segments, action),
+        (
+            "GET" | "POST",
+            [_, "databases", _, "collectionGroups", _, "indexes"],
+            None
+        ) | (
+            "GET" | "DELETE",
+            [_, "databases", _, "collectionGroups", _, "indexes", _]
+                | [_, "databases", _, "operations", _],
+            None
+        ) | ("GET", [_, "databases", _, "operations"], None)
+            | ("POST", [_, "databases", _, "operations", _], Some("cancel"))
+    )
+}
+
 /// Routes an Admin request, or returns `None` for a path this module does not serve.
 pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse> {
     let path = req.path.strip_prefix("/v1/projects/")?;
@@ -376,10 +402,10 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
             "Admin database inventory requires owner credentials",
         )));
     }
-    // The Admin API is served for Standard Native daemons; the Enterprise and MongoDB
-    // compatible configurations have their own, unimplemented, surfaces.
-    if state.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Standard
-        || state.gateway.ctx.api_mode != fireemu_core_types::edition::FirestoreApiMode::Native
+    // Enterprise Native currently shares only the index and operation contracts.
+    if state.gateway.ctx.api_mode != fireemu_core_types::edition::FirestoreApiMode::Native
+        || (state.gateway.ctx.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise
+            && !enterprise_native_route(&req.method, &segments, action))
     {
         return Some(crate::rest::error_response(&Status::unimplemented(
             "the Admin API is supported only for Standard Native databases",
@@ -419,7 +445,20 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
             None,
         ) => match live_native(state, project, database) {
             Ok(()) => {
-                super::index_rest::route(state, project, database, group, method, rest, &req.body)
+                if method == "GET"
+                    && rest.is_empty()
+                    && unsupported_index_page_size(state, project, database, &params)
+                {
+                    error(
+                        tonic::Code::InvalidArgument,
+                        "Invalid page size. Only 0 is supported.",
+                        None,
+                    )
+                } else {
+                    super::index_rest::route(
+                        state, project, database, group, method, rest, &req.body,
+                    )
+                }
             }
             Err(response) => response,
         },
@@ -908,7 +947,7 @@ pub(crate) fn database_exists(state: &RestState, project: &str, database: &str) 
 }
 
 /// Whether the Admin surface of a database's indexes, fields and documents is served: it must
-/// exist and be a Standard Native database.
+/// exist. The gateway edition and API mode are checked before dispatch.
 fn live_native(state: &RestState, project: &str, database: &str) -> Result<(), RestResponse> {
     match state.local.admin().get(
         project,
@@ -918,6 +957,30 @@ fn live_native(state: &RestState, project: &str, database: &str) -> Result<(), R
         None => Err(missing_database(project, database)),
         Some(_) => Ok(()),
     }
+}
+
+fn unsupported_index_page_size(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    params: &BTreeMap<String, Vec<String>>,
+) -> bool {
+    let nondefault = param(params, "pageSize")
+        .and_then(|size| size.parse::<i32>().ok())
+        .is_some_and(|size| size != 0);
+    nondefault
+        && state
+            .local
+            .admin()
+            .get(
+                project,
+                database,
+                exists_unprompted(state, project, database),
+            )
+            .is_some_and(|record| {
+                record.edition == DatabaseEdition::Enterprise
+                    && record.database_type == DatabaseType::FirestoreNative
+            })
 }
 
 fn enterprise_only(state: &RestState, project: &str, database: &str) -> RestResponse {

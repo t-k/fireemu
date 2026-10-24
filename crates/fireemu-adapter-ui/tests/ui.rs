@@ -113,6 +113,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         resource_hooks: Vec::new(),
     });
     Arc::new(UiState {
+        database: None,
         stream_limiter: Arc::new(fireemu_adapter_ui::sse::StreamLimiter::default()),
         control_token: TOKEN.to_owned(),
         info: RuntimeInfo {
@@ -2170,4 +2171,77 @@ async fn the_alerts_front_needs_a_runtime_and_refuses_a_get() {
     )
     .await;
     assert_eq!(status, 405);
+}
+
+#[tokio::test]
+async fn database_is_explicitly_unavailable_when_not_wired() {
+    let response = handle(
+        &state(),
+        &request(
+            "GET",
+            "/ui/api/database/instances?session=default&project=demo-app",
+            &Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 503);
+}
+
+#[tokio::test]
+async fn database_front_keeps_the_original_guard_before_disabled_or_network_handling() {
+    let s = state();
+    let path = "/ui/api/database/instances?session=default&project=demo-app";
+    for token in [None, Some("wrong-token")] {
+        assert_eq!(
+            call(&s, browser(request("GET", path, &Value::Null), token))
+                .await
+                .0,
+            403
+        );
+    }
+    let mut query_token = request("GET", &format!("{path}&token={TOKEN}"), &Value::Null);
+    query_token.headers.remove("authorization");
+    assert_eq!(call(&s, query_token).await.0, 403);
+    for (header, value) in [
+        ("origin", "https://attacker.example"),
+        ("host", "attacker.example"),
+    ] {
+        let mut req = request("GET", path, &Value::Null);
+        req.headers.insert(header.to_owned(), value.to_owned());
+        assert_eq!(call(&s, req).await.0, 403);
+    }
+}
+
+#[tokio::test]
+async fn database_front_rejects_stale_scope_and_credential_injection_before_connecting() {
+    let mut s = Arc::try_unwrap(state()).ok().unwrap();
+    s.database = Some(fireemu_adapter_ui::database::DatabaseEndpoint {
+        address: "127.0.0.1:1".parse().unwrap(),
+        project: "demo-app".to_owned(),
+        configured_instances: BTreeMap::new(),
+    });
+    let s = Arc::new(s);
+    for (target, expected) in [
+        ("instances?session=deleted&project=demo-app", 404),
+        ("instances?session=default&project=wrong", 404),
+        (
+            "data?session=default&project=demo-app&namespace=other-default-rtdb&path=%2F",
+            404,
+        ),
+        (
+            "data?session=default&project=demo-app&namespace=named&path=%2F&auth=owner",
+            400,
+        ),
+        (
+            "data?session=default&project=demo-app&namespace=named&path=%2F.settings%2Frules",
+            400,
+        ),
+    ] {
+        let response = handle(
+            &s,
+            &request("GET", &format!("/ui/api/database/{target}"), &Value::Null),
+        )
+        .await;
+        assert_eq!(response.status, expected, "{target}");
+    }
 }

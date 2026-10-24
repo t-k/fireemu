@@ -67,6 +67,8 @@ pub struct ServerConfig {
     /// held request runs out, or that sends no request for as long, is closed (the official
     /// emulator answers after about 90 s; the SDK sends a fresh request every 25 s).
     pub long_poll_hold: Duration,
+    /// The session admission shared with control reset. Standalone servers need no barrier.
+    pub admission: Option<Arc<fireemu_core_session::barrier::AdmissionBarrier>>,
     /// The server time.
     pub clock: Clock,
 }
@@ -82,6 +84,7 @@ impl Default for ServerConfig {
             stream_queue_bytes: 64 * 1024 * 1024,
             realtime_idle: Duration::from_secs(120),
             long_poll_hold: Duration::from_secs(90),
+            admission: None,
             clock: Arc::new(|| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -189,6 +192,11 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
     let wake = Arc::new(tokio::sync::Notify::new());
     {
         let wake = Arc::clone(&wake);
+        let _admitted = shared
+            .config
+            .admission
+            .as_ref()
+            .map(|barrier| barrier.admit());
         let mut database = shared
             .database
             .lock()
@@ -202,7 +210,15 @@ pub async fn serve(listener: TcpListener, database: Arc<Mutex<Database>>, config
         let shared = Arc::clone(&shared);
         tokio::spawn(async move {
             loop {
-                wake.notified().await;
+                tokio::select! {
+                    () = wake.notified() => {},
+                    () = tokio::time::sleep(Duration::from_secs(1)) => {},
+                }
+                let _admitted = shared
+                    .config
+                    .admission
+                    .as_ref()
+                    .map(|barrier| barrier.admit());
                 let mut database = shared
                     .database
                     .lock()
@@ -274,6 +290,11 @@ async fn answer(shared: &Arc<Shared>, request: Request<Incoming>, remote: bool) 
     };
     // Parsing can take long for a large body; it does not need the database.
     let parsed = parse_body(&request);
+    let _admitted = shared
+        .config
+        .admission
+        .as_ref()
+        .map(|barrier| barrier.admit());
     let now = (shared.config.clock)();
     let mut database = shared
         .database
@@ -357,6 +378,11 @@ fn spawn_keep_alive(shared: Arc<Shared>, id: u64, sender: mpsc::WeakSender<SseEv
                 return;
             };
             if sender.try_send(SseEvent::keep_alive()).is_err() {
+                let _admitted = shared
+                    .config
+                    .admission
+                    .as_ref()
+                    .map(|barrier| barrier.admit());
                 let mut database = shared
                     .database
                     .lock()
@@ -425,8 +451,13 @@ fn upgrade(shared: &Arc<Shared>, mut request: Request<Incoming>) -> Response<Bod
         |pq| pq.as_str().to_owned(),
     );
     let host = header(&request, "host").map(str::to_owned);
-    let now = (shared.config.clock)();
     let (opened, limit) = {
+        let _admitted = shared
+            .config
+            .admission
+            .as_ref()
+            .map(|barrier| barrier.admit());
+        let now = (shared.config.clock)();
         let mut database = shared
             .database
             .lock()
@@ -523,6 +554,11 @@ async fn serve_realtime<S: AsyncRead + AsyncWrite + Unpin>(
     run_realtime(shared, &mut socket, session, &mut pushes, limit).await;
     {
         // The database lock first, in the order `deliver` takes them.
+        let _admitted = shared
+            .config
+            .admission
+            .as_ref()
+            .map(|barrier| barrier.admit());
         let mut database = shared
             .database
             .lock()
@@ -563,6 +599,11 @@ fn answer_text(
     pushes: &mut Pushes,
     prepared: Prepared,
 ) -> Received {
+    let _admitted = shared
+        .config
+        .admission
+        .as_ref()
+        .map(|barrier| barrier.admit());
     let now = (shared.config.clock)();
     let mut database = shared
         .database

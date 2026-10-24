@@ -11,10 +11,13 @@
 //! (`__name__`, empty, dotted, quoted, reserved, long) and option names stay as written, since
 //! production's checks and texts depend on them. A map of two or more entries
 //! whose wire order the transport did not keep (gRPC, whose decoded maps are unordered) has no
-//! shape, so strict answers no refusal of such a request.
+//! generic shape, so strict answers no generic refusal of such a request. The finite TEXT
+//! namespace instead requires complete, literal-preserving request equality with its own
+//! transport-specific production evidence.
 //!
 //! The table of recorded shapes is derived from conformance/fs-ent-pipeline-requests.json and
-//! conformance/fs-ent-pipeline-production.json when first used.
+//! conformance/fs-ent-pipeline-production.json when first used. The separate TEXT table uses
+//! conformance/fs-ent-text-refusal-requests.json and conformance/fs-ent-text-production.json.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -63,8 +66,9 @@ impl RefusalGate {
         let traced = !own.contains("projects/")
             && shape.as_deref().is_some_and(|shape| {
                 let text = normalized_text(&own.replace(OWN_DATABASE, "projects/~/databases/~"));
-                recorded()
+                recorded_text()
                     .get(shape)
+                    .or_else(|| recorded().get(shape))
                     .is_some_and(|texts| texts.contains(&text))
             });
         if traced {
@@ -114,6 +118,12 @@ fn own_database(message: &str, database: &str) -> String {
 /// The shape of a REST `executePipeline` body, read with the wire order of its maps.
 #[must_use]
 pub fn shape_of_json(body: &Value, order: &KeyOrder) -> Option<String> {
+    if let Some(row) = text_requests()
+        .iter()
+        .find(|row| !row.grpc && row.body == *body)
+    {
+        return Some(row.key.clone());
+    }
     let body = body.as_object()?;
     let mut out = String::new();
     if let Some(structured) = body.get("structuredPipeline") {
@@ -161,6 +171,13 @@ pub fn shape_of_json(body: &Value, order: &KeyOrder) -> Option<String> {
 /// The shape of a gRPC request, whose maps carry no wire order.
 #[must_use]
 pub fn shape_of_request(request: &pb::ExecutePipelineRequest) -> Option<String> {
+    for row in text_requests().iter().filter(|row| row.grpc) {
+        let mut expected = row.request.clone();
+        expected.database.clone_from(&request.database);
+        if expected == *request {
+            return Some(row.key.clone());
+        }
+    }
     let mut out = String::new();
     if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         &request.pipeline_type
@@ -543,7 +560,108 @@ pub fn normalized_text(message: &str) -> String {
     }
 }
 
+const TEXT_REQUESTS: &str = include_str!("../../../conformance/fs-ent-text-refusal-requests.json");
+const TEXT_PRODUCTION: &str = include_str!("../../../conformance/fs-ent-text-production.json");
+
+struct TextRequest {
+    key: String,
+    grpc: bool,
+    body: Value,
+    request: pb::ExecutePipelineRequest,
+}
+
+fn text_key(program: &str, step: &Value) -> String {
+    let transport = if step["transport"] == "grpc" {
+        "grpc"
+    } else {
+        "rest"
+    };
+    format!(
+        "text-refusal-v1/{transport}/{program}/{}",
+        step["id"].as_str().unwrap_or_default()
+    )
+}
+
+/// The finite text namespace preserves every literal and the complete request envelope.
+fn text_requests() -> &'static Vec<TextRequest> {
+    static ROWS: LazyLock<Vec<TextRequest>> = LazyLock::new(|| {
+        let fixture: Value = serde_json::from_str(TEXT_REQUESTS).expect("text requests parse");
+        fixture["programs"]
+            .as_array()
+            .expect("text programs")
+            .iter()
+            .flat_map(|program| {
+                program["steps"]
+                    .as_array()
+                    .expect("text steps")
+                    .iter()
+                    .map(|step| TextRequest {
+                        key: text_key(program["id"].as_str().expect("text program id"), step),
+                        grpc: step["transport"] == "grpc",
+                        body: step["body"].clone(),
+                        request: crate::rest::pipeline_json::request_from_json("", &step["body"])
+                            .expect("text request decodes"),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    });
+    &ROWS
+}
+
+/// Each transport contributes only its own observed `INVALID_ARGUMENT` message.
+fn text_recorded_refusals(requests: &str, production: &str) -> HashMap<String, HashSet<String>> {
+    let requests: Value = serde_json::from_str(requests).expect("text requests parse");
+    let production: Value = serde_json::from_str(production).expect("text production parses");
+    let mut table = HashMap::new();
+    for program in requests["programs"].as_array().into_iter().flatten() {
+        let Some(id) = program["id"].as_str() else {
+            continue;
+        };
+        for step in program["steps"].as_array().into_iter().flatten() {
+            if step["rpc"] != "executePipeline" {
+                continue;
+            }
+            let Some(step_id) = step["id"].as_str() else {
+                continue;
+            };
+            let answer = &production["programs"][id]["steps"][step_id];
+            let message = if step["transport"] == "grpc" {
+                if answer["transport"] != "grpc" || answer["code"] != 3 {
+                    continue;
+                }
+                answer["message"].as_str()
+            } else {
+                if answer["status"] != 400 || !answer["transport"].is_null() {
+                    continue;
+                }
+                let body = answer["body"]
+                    .as_array()
+                    .and_then(|body| body.first())
+                    .unwrap_or(&answer["body"]);
+                if body["error"]["status"] != "INVALID_ARGUMENT" {
+                    continue;
+                }
+                body["error"]["message"].as_str()
+            };
+            if let Some(message) = message.filter(|message| !message.is_empty()) {
+                table
+                    .entry(text_key(id, step))
+                    .or_insert_with(HashSet::new)
+                    .insert(normalized_text(message));
+            }
+        }
+    }
+    table
+}
+
 /// The recorded refusals: each refused request's shape and its normalized texts.
+fn recorded_text() -> &'static HashMap<String, HashSet<String>> {
+    static RECORDED: LazyLock<HashMap<String, HashSet<String>>> =
+        LazyLock::new(|| text_recorded_refusals(TEXT_REQUESTS, TEXT_PRODUCTION));
+    &RECORDED
+}
+
 fn recorded() -> &'static HashMap<String, HashSet<String>> {
     static RECORDED: LazyLock<HashMap<String, HashSet<String>>> =
         LazyLock::new(|| recorded_refusals(REQUESTS, PRODUCTION));
@@ -599,3 +717,197 @@ fn recorded_refusals(requests: &str, production: &str) -> HashMap<String, HashSe
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod text_refusal_tests {
+    use super::*;
+    use serde_json::json;
+
+    const TEXT_REQUESTS: &str =
+        include_str!("../../../conformance/fs-ent-text-refusal-requests.json");
+    const DB: &str = "projects/local/databases/(default)";
+
+    #[test]
+    fn text_evidence_requires_each_matching_transport_status_and_message() {
+        let requests: Value = serde_json::from_str(TEXT_REQUESTS).unwrap();
+        let production: Value = serde_json::from_str(TEXT_PRODUCTION).unwrap();
+        let table = text_recorded_refusals(TEXT_REQUESTS, TEXT_PRODUCTION);
+        assert_eq!(table.len(), 8);
+        let program = &requests["programs"][0];
+        let id = program["id"].as_str().unwrap();
+        for step in program["steps"].as_array().unwrap() {
+            let key = text_key(id, step);
+            let step_id = step["id"].as_str().unwrap();
+            let grpc = step["transport"] == "grpc";
+            for field in if grpc {
+                vec!["code", "transport", "message"]
+            } else {
+                vec!["status", "error-status", "message"]
+            } {
+                let mut changed = production.clone();
+                let answer = &mut changed["programs"][id]["steps"][step_id];
+                match field {
+                    "code" => answer["code"] = json!(9),
+                    "transport" => answer["transport"] = json!("rest"),
+                    "status" => answer["status"] = json!(200),
+                    _ if grpc => answer["message"] = json!("different refusal"),
+                    _ => {
+                        let body = if answer["body"].is_array() {
+                            &mut answer["body"][0]
+                        } else {
+                            &mut answer["body"]
+                        };
+                        body["error"][if field == "message" {
+                            "message"
+                        } else {
+                            "status"
+                        }] = json!("different refusal");
+                    }
+                }
+                let changed_table = text_recorded_refusals(TEXT_REQUESTS, &changed.to_string());
+                assert!(
+                    !changed_table
+                        .get(&key)
+                        .is_some_and(|texts| texts == &table[&key]),
+                    "{step_id}: {field}"
+                );
+            }
+            let mut missing = production.clone();
+            missing["programs"][id]["steps"]
+                .as_object_mut()
+                .unwrap()
+                .remove(step_id);
+            assert!(!text_recorded_refusals(TEXT_REQUESTS, &missing.to_string()).contains_key(&key));
+            let mut missing = requests.clone();
+            missing["programs"][0]["steps"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|row| row["id"] != step["id"]);
+            assert!(
+                !text_recorded_refusals(&missing.to_string(), TEXT_PRODUCTION).contains_key(&key)
+            );
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn changed_query_literals_never_inherit_text_authority(query in "[a-z]{0,24}") {
+            let mut body = text_requests()[0].body.clone();
+            proptest::prop_assume!(query != "fox");
+            body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]["functionValue"]["args"][0]["stringValue"] = json!(query);
+            let (_, order) = json_syntax::parse_with_key_order(body.to_string().as_bytes()).unwrap();
+            proptest::prop_assert!(!shape_of_json(&body, &order).is_some_and(|key| key.starts_with("text-refusal-v1/")));
+            let request = crate::rest::pipeline_json::request_from_json(DB, &body).unwrap();
+            proptest::prop_assert!(!shape_of_request(&request).is_some_and(|key| key.starts_with("text-refusal-v1/")));
+        }
+    }
+
+    fn text_request_neighbors(body: &Value) -> Vec<Value> {
+        let mut neighbors = Vec::new();
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]["referenceValue"] =
+            json!("/other");
+        neighbors.push(changed);
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+            ["functionValue"]["args"][0]["stringValue"] = json!("different");
+        neighbors.push(changed);
+        for field in ["extra", "retrieval_depth", "language_code"] {
+            let mut changed = body.clone();
+            changed["structuredPipeline"]["pipeline"]["stages"][1]["options"][field] =
+                if field == "retrieval_depth" {
+                    json!({"integerValue":"1"})
+                } else {
+                    json!({"stringValue":"en"})
+                };
+            neighbors.push(changed);
+        }
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+            ["functionValue"]["options"] = json!({"extra":{"booleanValue":true}});
+        neighbors.push(changed);
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name":"limit","args":[{"integerValue":"1"}]}));
+        neighbors.push(changed);
+        let mut changed = body.clone();
+        changed["structuredPipeline"]["pipeline"]["stages"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        neighbors.push(changed);
+        for (field, value) in [
+            ("transaction", json!("AQ==")),
+            ("autoCommitTransaction", json!(true)),
+        ] {
+            let mut changed = body.clone();
+            changed[field] = value;
+            neighbors.push(changed);
+        }
+        neighbors
+    }
+
+    #[test]
+    fn exact_text_requests_and_neighbors() {
+        let fixture: Value = serde_json::from_str(TEXT_REQUESTS).unwrap();
+        let production: Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-text-production.json"
+        ))
+        .unwrap();
+        for program in fixture["programs"].as_array().unwrap() {
+            for step in program["steps"].as_array().unwrap() {
+                let grpc = step["transport"] == "grpc";
+                let shape = |body: &Value| {
+                    if grpc {
+                        let request =
+                            crate::rest::pipeline_json::request_from_json(DB, body).unwrap();
+                        shape_of_request(&request)
+                    } else {
+                        let (_, order) =
+                            json_syntax::parse_with_key_order(body.to_string().as_bytes()).unwrap();
+                        shape_of_json(body, &order)
+                    }
+                };
+                let body = &step["body"];
+                let key = shape(body).unwrap();
+                assert!(key.starts_with("text-refusal-v1/"), "{}: {key}", step["id"]);
+                let answer = &production["programs"][program["id"].as_str().unwrap()]["steps"]
+                    [step["id"].as_str().unwrap()];
+                let message = if grpc {
+                    answer["message"].as_str().unwrap()
+                } else {
+                    let body = if answer["body"].is_array() {
+                        &answer["body"][0]
+                    } else {
+                        &answer["body"]
+                    };
+                    body["error"]["message"].as_str().unwrap()
+                };
+                let gate = RefusalGate::Recorded(Some(key.clone()), DB.to_owned());
+                assert_eq!(
+                    gate.answer(Status::invalid_argument(message)).code(),
+                    tonic::Code::InvalidArgument
+                );
+                assert_eq!(
+                    gate.answer(Status::invalid_argument(format!("{message}!")))
+                        .code(),
+                    tonic::Code::Unimplemented
+                );
+                for neighbor in text_request_neighbors(body) {
+                    let neighbor_key = shape(&neighbor);
+                    assert_ne!(neighbor_key.as_ref(), Some(&key));
+                    assert_eq!(
+                        RefusalGate::Recorded(neighbor_key, DB.to_owned())
+                            .answer(Status::invalid_argument(message))
+                            .code(),
+                        tonic::Code::Unimplemented,
+                        "{}: {neighbor}",
+                        step["id"]
+                    );
+                }
+            }
+        }
+    }
+}

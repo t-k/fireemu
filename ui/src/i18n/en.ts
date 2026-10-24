@@ -1,6 +1,36 @@
 // English messages. Every user-visible string of the app lives here; components call
 // `t("key")`. Placeholders are `{name}`.
 export const en = {
+  "database.title": "Realtime Database",
+  "database.data": "Data",
+  "database.rules": "Realtime Database Rules",
+  "database.requests": "Rules request probe",
+  "database.instance": "Database instance",
+  "database.path": "Data path",
+  "database.open": "Open path",
+  "database.json": "JSON source",
+  "database.rulesSource": "Rules JSON source",
+  "database.replace": "Replace data",
+  "database.patch": "Patch data",
+  "database.replaceRules": "Replace Rules",
+  "database.deleteConfirm": "Delete all data at this path?",
+  "database.adminHint":
+    "Console data edits use the local administrator. They do not test client Rules permissions.",
+  "database.anonymousHint":
+    "This request uses no client credential and exercises Rules as an anonymous client. It does not represent a signed-in user.",
+  "database.invalidJson": "Enter valid JSON. The source has not been sent.",
+  "database.unknownOutcome":
+    "The write response was unavailable. Its outcome is unknown; inspect the data before trying again.",
+  "database.saved": "Database data saved",
+  "database.rulesSaved": "Database Rules saved",
+  "database.refreshing": "Refreshing; showing the last successful snapshot.",
+  "database.draft": "Realtime Database editor",
+  "database.method": "Request method",
+  "database.query": "Data query parameters",
+  "database.requestBody": "Request JSON body",
+  "database.run": "Run anonymous request",
+  "database.noInstances": "No database instance belongs to this project.",
+  "database.sessionMissing": "The selected session no longer exists. Select an available session.",
   "app.title": "fireemu",
   "app.subtitle": "Emulator UI",
   "app.loading": "Loading",

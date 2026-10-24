@@ -113,6 +113,22 @@ impl Projects {
 }
 
 impl ProjectHooks for Projects {
+    #[allow(clippy::result_large_err)] // Database handles use tonic::Status at the adapter boundary.
+    fn text_index_documents(
+        &self,
+        project: &str,
+        database: &str,
+    ) -> Result<Vec<fireemu_core_firestore::store::Document>, String> {
+        let parent = fireemu_adapter_grpc::decode::parse_parent(&format!(
+            "projects/{project}/databases/{database}/documents"
+        ))
+        .map_err(|error| error.to_string())?;
+        self.backend
+            .database_handle(&parent)
+            .and_then(|handle| handle.with(|state| Ok(state.documents())))
+            .map_err(|error| error.to_string())
+    }
+
     fn create(&self, project: &str) -> Result<(), String> {
         self.prepare(&Scope::Project(project.to_owned()))
             .map_err(|failure| failure.to_string())?;

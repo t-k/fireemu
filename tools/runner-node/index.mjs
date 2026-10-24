@@ -727,13 +727,6 @@ function ignoredBlocking(base, eventType) {
 // The event-type substring is matched the way `getServiceFromEventType` matches it.
 const DEFERRED_TRIGGER_PRODUCTS = [
   {
-    match: (type) =>
-      type.includes("firebase.database") || type.includes("google.firebase.database"),
-    triggerType: "database",
-    scope: "deferred",
-    reason: "deferred: the Realtime Database emulator is not in the active supported surface",
-  },
-  {
     match: (type) => type.includes("remoteconfig"),
     triggerType: "remoteConfig",
     scope: "deferred",
@@ -774,6 +767,16 @@ function deferredProduct(type) {
 // firebase-functions v1 triggers: legacy event types and a resource pattern.
 function describeV1Event(base, type, resource, schedule, retry) {
   const v1 = { v1: true };
+  const dbMatch = type.match(/^providers\/google\.firebase\.database\/eventTypes\/ref\.(create|update|delete|write)$/);
+  if (dbMatch) {
+    resource = triggerString(resource, "eventTrigger.resource", { optional: true, allowEmpty: true }) ?? "";
+    const match = resource.match(/^projects\/_\/instances\/([^/]+)\/refs(?:\/(.*))?$/s);
+    if (!match) return ignored(base, "database", "unsupported", "v1 Database resource has an unsupported shape");
+    return { ...base, ...v1, retry, trigger: {
+      type: "database", instance: match[1], ref: `/${match[2] || ""}`,
+      eventType: `google.firebase.database.ref.v1.${{create:"created",update:"updated",delete:"deleted",write:"written"}[dbMatch[1]]}`,
+    }};
+  }
   const fsMatch = type.match(
     /^providers\/cloud\.firestore\/eventTypes\/document\.(create|update|delete|write)$/,
   );
@@ -981,6 +984,17 @@ function describe(name, fn, instrumentation) {
       const et = ep.eventTrigger;
       const type = et.eventType || "";
       base.retry = resolvedBoolean(et.retry, "eventTrigger.retry") ?? false;
+      if (type.startsWith("google.firebase.database.ref.v1.")) {
+        const filters = triggerRecord(et.eventFilters, "eventFilters");
+        const patterns = triggerRecord(et.eventFilterPathPatterns, "eventFilterPathPatterns");
+        const reference = triggerString(patterns.ref, "eventFilterPathPatterns.ref", { optional: true }) ??
+          triggerString(filters.ref, "eventFilters.ref");
+        return { ...base, trigger: {
+          type: "database", eventType: type, ref: `/${reference.replace(/^\/+|\/+$/g, "")}`,
+          instance: triggerString(patterns.instance, "eventFilterPathPatterns.instance", { optional: true }) ??
+            triggerString(filters.instance, "eventFilters.instance", { optional: true }) ?? "*",
+        }};
+      }
       if (type.startsWith("google.cloud.firestore.")) {
         const filters = triggerRecord(et.eventFilters, "eventFilters");
         const patterns = triggerRecord(et.eventFilterPathPatterns, "eventFilterPathPatterns");
@@ -1140,6 +1154,19 @@ const strictProfile = () => process.env.FIREEMU_HTTP_PROFILE === "strict";
 function v1Context(msg) {
   const event = msg.event;
   switch (msg.trigger) {
+    case "database": {
+      const operation = {created:"create",updated:"update",deleted:"delete",written:"write"}[event.type.split(".").at(-1)];
+      const context = {
+        eventId: event.id, timestamp: event.time,
+        eventType: `providers/google.firebase.database/eventTypes/ref.${operation}`,
+        resource: `projects/_/instances/${event.instance}/refs/${event.ref}`,
+        domain: event.firebasedatabasehost,
+        authType: {admin:"ADMIN",app_user:"USER",unauthenticated:"UNAUTHENTICATED"}[event.authtype],
+      };
+      if (context.authType === "USER") context.auth = {variable:event.auth};
+      if (context.authType === "ADMIN") context.auth = {admin:true};
+      return context;
+    }
     case "firestore": {
       const legacy = {
         "google.cloud.firestore.document.v1.created":
@@ -1510,7 +1537,7 @@ async function invoke(functions, manifest, msg) {
     throw new Error("entry point does not match the function manifest");
   }
   if (msg.trigger !== spec.trigger?.type ||
-      !["schedule", "firestore", "storage", "pubsub", "eventarc", "auth"].includes(msg.trigger)) {
+      !["schedule", "database", "firestore", "storage", "pubsub", "eventarc", "auth"].includes(msg.trigger)) {
     throw new Error("trigger does not match the function manifest");
   }
   const fn = functions.get(spec.entryPoint);
@@ -1532,6 +1559,9 @@ async function invoke(functions, manifest, msg) {
         return;
       }
       switch (msg.trigger) {
+        case "database":
+          await fn(msg.event);
+          return;
         case "schedule": {
           // The strict profile calls the function the way production's Scheduler does, through its HTTP wrapper,
           // so the SDK builds the event from the scheduler headers (job id, Los Angeles time, `context` getter)

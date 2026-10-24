@@ -313,6 +313,9 @@ pub struct FieldOperation {
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
+    text_search: Mutex<Option<crate::text_search::Configuration>>,
+    text_build_origin: std::time::Instant,
+    text_build_epoch: Arc<()>,
     /// Reloadable index catalog used for every new query plan.
     indexes: RwLock<BTreeMap<(Option<String>, String), fireemu_core_firestore::index::IndexSet>>,
     /// Time-to-live field configuration per database, keyed like [`LocalBackend::indexes`]:
@@ -832,6 +835,28 @@ const MAX_ISSUED_TRANSACTIONS: usize = 65_536;
 /// Metadata key a `dropConnection` fault sets on its status: the server closes the
 /// connection (or resets the stream) instead of delivering the response.
 pub const DROP_CONNECTION_KEY: &str = "fireemu-drop-connection";
+
+/// A custom CONTROL snapshot of text definitions and their own Native operation views.
+/// Unlike ordinary Native observations, explicit CONTROL restore rewinds this owned state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeTextSnapshot {
+    catalog: fireemu_core_firestore::text_index::TextIndexCatalog,
+    operations: crate::admin::operations::TextOperationSnapshot,
+}
+
+impl NativeTextSnapshot {
+    /// Saturating retained-memory estimate, including the operation wire payloads.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.catalog
+            .retained_bytes()
+            .saturating_add(self.operations.retained_bytes())
+    }
+}
+
+/// A transient preimage of owned text state and exact operation queues, never exposed as a CONTROL snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeTextRollback(NativeTextSnapshot);
 
 /// A session's Firestore snapshot: its databases, and the auto-ID generator when the
 /// session owns it (the default one).
@@ -2616,12 +2641,25 @@ impl LocalBackend {
             .lock()
             .map(|clock| clock.now())
             .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH);
+        let configured_edition = match gateway.ctx.edition {
+            fireemu_core_types::edition::FirestoreEdition::Standard => {
+                crate::admin::catalog::DatabaseEdition::Standard
+            }
+            fireemu_core_types::edition::FirestoreEdition::Enterprise => {
+                crate::admin::catalog::DatabaseEdition::Enterprise
+            }
+        };
+        let configured_native_data_access =
+            gateway.ctx.api_mode == fireemu_core_types::edition::FirestoreApiMode::Native;
         Self {
             created_at,
             contention_wait: std::time::Duration::ZERO,
             virtual_contention: false,
             lock_lease: DEFAULT_LOCK_LEASE,
             gateway,
+            text_search: Mutex::new(None),
+            text_build_origin: std::time::Instant::now(),
+            text_build_epoch: Arc::new(()),
             indexes,
             ttl: RwLock::new(BTreeMap::new()),
             ttl_sweeps: Mutex::new(TtlSweepState::default()),
@@ -2642,7 +2680,10 @@ impl LocalBackend {
             declared_databases: RwLock::new(BTreeSet::new()),
             implicit_database_creation: false,
             database_incarnations: std::sync::atomic::AtomicU64::new(0),
-            admin: Arc::new(crate::admin::catalog::AdminCatalog::new(seed, created_at)),
+            admin: Arc::new(
+                crate::admin::catalog::AdminCatalog::new(seed, created_at)
+                    .with_configured_access(configured_edition, configured_native_data_access),
+            ),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
@@ -2858,6 +2899,274 @@ impl LocalBackend {
         }
     }
 
+    /// Attach the startup-bound text catalog used by both Pipeline transports.
+    pub fn set_text_indexes(
+        &self,
+        catalog: Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+        production_exact: bool,
+    ) -> Result<(), Status> {
+        let mut slot = self.text_search.lock().map_err(|_| lock_poisoned())?;
+        if slot.is_some() {
+            return Err(Status::failed_precondition(
+                "text catalog is already attached",
+            ));
+        }
+        *slot = Some(crate::text_search::Configuration {
+            catalog,
+            production_exact,
+            warned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn text_search_configuration(
+        &self,
+    ) -> Result<Option<crate::text_search::Configuration>, Status> {
+        self.text_search
+            .lock()
+            .map(|config| config.clone())
+            .map_err(|_| lock_poisoned())
+    }
+
+    fn check_text_catalog_attachment(
+        &self,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+    ) -> Result<(), Status> {
+        if self
+            .text_search_configuration()?
+            .is_some_and(|config| Arc::ptr_eq(&config.catalog, catalog))
+        {
+            return Ok(());
+        }
+        Err(Status::failed_precondition(
+            "CONTROL text catalog is not attached to this backend",
+        ))
+    }
+
+    /// Capture under CONTROL's exclusive barrier, without re-entering database admission.
+    pub fn capture_native_text(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+    ) -> Result<NativeTextSnapshot, Status> {
+        self.capture_native_text_inner(scope, catalog, false)
+    }
+
+    fn capture_native_text_inner(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+        exact: bool,
+    ) -> Result<NativeTextSnapshot, Status> {
+        self.check_text_catalog_attachment(catalog)?;
+        let catalog = catalog.lock().map_err(|_| lock_poisoned())?;
+        self.check_native_text_epoch(&catalog, |p, _, _| scope.owns_project(p))?;
+        Ok(NativeTextSnapshot {
+            catalog: if exact {
+                catalog.clone()
+            } else {
+                catalog.extract(|p| scope.owns_project(p))
+            },
+            operations: self
+                .admin()
+                .operations()
+                .capture_text(|p| scope.owns_project(p), exact)?,
+        })
+    }
+
+    /// Validate the Native projection and bounded merge before any CONTROL hook mutates.
+    pub fn validate_native_text(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+        captured: &NativeTextSnapshot,
+    ) -> Result<(), Status> {
+        self.check_text_catalog_attachment(catalog)?;
+        let _catalog = catalog.lock().map_err(|_| lock_poisoned())?;
+        self.check_native_text_epoch(&captured.catalog, |p, _, _| scope.owns_project(p))?;
+        self.admin()
+            .operations()
+            .validate_text(|p| scope.owns_project(p), &captured.operations)
+    }
+
+    /// Atomically publish a CONTROL world rewind of definitions and their own Native views.
+    pub fn restore_native_text(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+        captured: &NativeTextSnapshot,
+    ) -> Result<(), Status> {
+        self.replace_native_text(scope, catalog, captured)
+    }
+
+    /// Capture exact affected queues for compensation if a later CONTROL hook fails.
+    pub fn capture_native_text_rollback(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+    ) -> Result<NativeTextRollback, Status> {
+        self.capture_native_text_inner(scope, catalog, true)
+            .map(NativeTextRollback)
+    }
+
+    /// Restore the owned preimage, preserving queue interleaving and terminal wire payloads.
+    pub fn rollback_native_text(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+        captured: &NativeTextRollback,
+    ) -> Result<(), Status> {
+        self.replace_native_text(scope, catalog, &captured.0)
+    }
+
+    fn replace_native_text(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        catalog: &Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+        captured: &NativeTextSnapshot,
+    ) -> Result<(), Status> {
+        self.check_text_catalog_attachment(catalog)?;
+        let mut catalog = catalog.lock().map_err(|_| lock_poisoned())?;
+        self.check_native_text_epoch(&captured.catalog, |p, _, _| scope.owns_project(p))?;
+        let mut trial = catalog.clone();
+        // Another backend may publish unrelated generations while this barrier is exclusive.
+        trial.replace(|p| scope.owns_project(p), &captured.catalog);
+        self.admin().operations().replace_text(
+            |p| scope.owns_project(p),
+            &captured.operations,
+            Some(|| *catalog = trial),
+        )
+    }
+
+    pub(crate) fn with_native_text_snapshot<T>(
+        &self,
+        project: &str,
+        database: &str,
+        f: impl FnOnce(
+            &FirestoreState,
+            &mut fireemu_core_firestore::text_index::TextIndexCatalog,
+        ) -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let config = self.text_search_configuration()?.ok_or_else(|| {
+            Status::unimplemented("FS_TEXT_ADMIN_UNVERIFIED: no text catalog attached")
+        })?;
+        let parent = parse_parent(&format!(
+            "projects/{project}/databases/{database}/documents"
+        ))
+        .map_err(status)?;
+        self.read_db(&parent, |db| {
+            let mut catalog = config.catalog.lock().map_err(|_| lock_poisoned())?;
+            f(db, &mut catalog)
+        })
+    }
+
+    pub(crate) fn text_build_epoch(&self) -> &Arc<()> {
+        &self.text_build_epoch
+    }
+
+    pub(crate) fn check_native_text_epoch(
+        &self,
+        catalog: &fireemu_core_firestore::text_index::TextIndexCatalog,
+        selected: impl Fn(&str, &str, &fireemu_core_firestore::text_index::TextIndexDefinition) -> bool,
+    ) -> Result<(), Status> {
+        if catalog.entries().any(|(p, d, definition)| {
+            selected(p, d, definition)
+                && catalog
+                    .build(p, d, &definition.id)
+                    .and_then(|build| build.native.as_ref())
+                    .is_some_and(|native| !Arc::ptr_eq(&native.owner_epoch, &self.text_build_epoch))
+        }) {
+            return Err(Status::unimplemented(
+                "FS_TEXT_ADMIN_UNVERIFIED: text build belongs to another backend epoch",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn text_build_elapsed_nanos(&self) -> u128 {
+        self.text_build_origin.elapsed().as_nanos()
+    }
+
+    pub(crate) fn advance_native_text_builds(
+        &self,
+        project: &str,
+        database: &str,
+        selection: crate::admin::index_rest::NativeTextSelection<'_>,
+    ) -> Result<(), Status> {
+        let Some(config) = self.text_search_configuration()? else {
+            return Ok(());
+        };
+        let pending = {
+            let catalog = config.catalog.lock().map_err(|_| lock_poisoned())?;
+            let pending = catalog.entries().any(|(p, d, definition)| {
+                p == project
+                    && d == database
+                    && definition.state
+                        == fireemu_core_firestore::text_index::TextIndexState::Creating
+                    && catalog
+                        .build(p, d, &definition.id)
+                        .is_some_and(|build| build.native.is_some())
+            });
+            pending
+        };
+        if !pending {
+            return Ok(());
+        }
+        let result = self.with_native_text_snapshot(project, database, |db, catalog| {
+            self.advance_text_builds_at_snapshot(project, database, db, catalog, selection)
+        });
+        // A retained observer selected before admission may lose its view during preparation.
+        // Return the current audit/absence rather than attributing a source error to that view.
+        if result.is_err()
+            && selection.operation_targets.is_some_and(|targets| {
+                !self
+                    .admin()
+                    .operations()
+                    .text_observation_current(project, database, targets)
+            })
+        {
+            return Ok(());
+        }
+        result
+    }
+
+    pub(crate) fn advance_text_builds_at_snapshot(
+        &self,
+        project: &str,
+        database: &str,
+        db: &FirestoreState,
+        catalog: &mut fireemu_core_firestore::text_index::TextIndexCatalog,
+        selection: crate::admin::index_rest::NativeTextSelection<'_>,
+    ) -> Result<(), Status> {
+        crate::admin::index_rest::advance_text_builds(
+            self, project, database, db, catalog, selection,
+        )
+    }
+
+    fn forget_native_text_builds(&self, owned: impl Fn(&str, &str) -> bool) {
+        let Ok(Some(config)) = self.text_search_configuration() else {
+            return;
+        };
+        if let Ok(mut catalog) = config.catalog.lock() {
+            let targets: Vec<_> = catalog
+                .entries()
+                .filter(|(p, d, definition)| {
+                    owned(p, d)
+                        && catalog
+                            .build(p, d, &definition.id)
+                            .and_then(|build| build.native.as_ref())
+                            .is_some_and(|native| {
+                                Arc::ptr_eq(&native.owner_epoch, &self.text_build_epoch)
+                            })
+                })
+                .map(|(p, d, definition)| (p.to_owned(), d.to_owned(), definition.id.clone()))
+                .collect();
+            for (project, database, id) in targets {
+                catalog.remove(&project, &database, &id);
+            }
+        };
+    }
+
     /// The session's admission barrier (share it with every other mutable surface).
     #[must_use]
     pub fn barrier(&self) -> Arc<AdmissionBarrier> {
@@ -2945,6 +3254,7 @@ impl LocalBackend {
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         let cleared = self.take_scope(scope);
+        self.forget_native_text_builds(|project, _| scope.owns_project(project));
         self.admin.reset(|project| scope.owns_project(project));
         self.bump_generations(&cleared);
         self.announce_wipe(cleared);
@@ -2954,6 +3264,7 @@ impl LocalBackend {
     /// the wipe, and a later request is refused unless something creates it again.
     pub fn delete_database(&self, project: &str, database: &str) {
         let _exclusive = self.barrier.pause();
+        self.forget_native_text_builds(|p, d| p == project && d == database);
         let key = (project.to_owned(), database.to_owned());
         let removed = match self.databases.lock() {
             Ok(mut dbs) => dbs.remove(&key).map(DatabaseHandle),

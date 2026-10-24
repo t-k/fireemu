@@ -5,7 +5,7 @@ description: The Firebase Realtime Database with Security Rules, export and impo
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs). It has no parity claim yet: production has not been observed, and rules coverage reports and Functions triggers are not implemented, so the [compatibility contract](../../compatibility/) lists it as an open gap, and behavior copied from the official emulator may change once production is observed (see [Provisional behavior](#provisional-behavior)).
+Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs). It has no parity claim yet: production equivalence remains unverified and rules coverage reports are not implemented, so the [compatibility contract](../../compatibility/) lists it as an open gap, and behavior copied from the official emulator may change once production is observed (see [Provisional behavior](#provisional-behavior)).
 
 ## Start it
 
@@ -226,10 +226,15 @@ emulator-data/
 
 Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
 
+## Local Functions triggers
+
+Local v1 and v2 database handlers receive create, update, delete and write events scoped to their project, instance and reference pattern. The runner supplies the Firebase SDK snapshot objects. Unchanged writes do not emit a change event. Source mutations and their reserved event batch commit together; exhausting local event admission refuses the source mutation rather than silently dropping its events. Session reset excludes concurrent database mutation while clearing source data and retiring the Functions epoch.
+
+These are local resource and delivery guarantees, not a claim of native event compatibility. Native authentication, event metadata, regional delivery and retry behavior still require production verification.
+
 ## Not supported yet
 
 - Rules coverage reports (the official emulator's `/.inspect/coverage`).
-- Realtime Database triggers for Cloud Functions.
 - A view in the Emulator UI.
 - Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope.
 

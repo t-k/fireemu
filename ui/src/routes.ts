@@ -4,6 +4,7 @@ import type { RouteDefinition } from "@solidjs/router";
 export const routes: RouteDefinition[] = [
   { path: "/", component: lazy(() => import("./pages/Overview")) },
   { path: "/firestore/*path", component: lazy(() => import("./pages/Firestore")) },
+  { path: "/database/*path", component: lazy(() => import("./pages/Database")) },
   { path: "/auth", component: lazy(() => import("./pages/Auth")) },
   { path: "/storage/*path", component: lazy(() => import("./pages/Storage")) },
   { path: "/functions", component: lazy(() => import("./pages/Functions")) },

@@ -489,42 +489,56 @@ impl SnapshotHook for Faults {
     }
 }
 
-/// The session's text index definitions.
-pub struct TextIndexes(pub Arc<Mutex<TextIndexCatalog>>);
+/// Text definitions and their own Native operation views, captured under CONTROL admission.
+/// Explicit CONTROL restore is a local world rewind; ordinary Native terminal views stay sticky.
+pub struct TextIndexes(pub Arc<Mutex<TextIndexCatalog>>, pub Arc<LocalBackend>);
 
 impl SnapshotHook for TextIndexes {
     fn name(&self) -> &'static str {
         "text indexes"
     }
     fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
-        let catalog = self
-            .0
-            .lock()
-            .map_err(|_| poisoned(self.name(), "the text index catalog"))?;
-        Ok(Arc::new(catalog.extract(|p| scope.owns_project(p))))
+        self.1
+            .capture_native_text(scope, &self.0)
+            .map(|part| Arc::new(part) as SnapshotPart)
+            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))
     }
-    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
-        part.downcast_ref::<TextIndexCatalog>()
+    fn capture_rollback(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        self.1
+            .capture_native_text_rollback(scope, &self.0)
+            .map(|part| Arc::new(part) as SnapshotPart)
+            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))
+    }
+    fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let captured = part
+            .downcast_ref::<fireemu_adapter_grpc::local::NativeTextSnapshot>()
             .ok_or_else(|| wrong_shape(self.name()))?;
-        self.0
-            .lock()
-            .map(|_| ())
-            .map_err(|_| poisoned(self.name(), "the text index catalog"))
+        self.1
+            .validate_native_text(scope, &self.0, captured)
+            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))
     }
     fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let captured = part
-            .downcast_ref::<TextIndexCatalog>()
+            .downcast_ref::<fireemu_adapter_grpc::local::NativeTextSnapshot>()
             .ok_or_else(|| wrong_shape(self.name()))?;
-        let mut catalog = self
-            .0
-            .lock()
-            .map_err(|_| poisoned(self.name(), "the text index catalog"))?;
-        catalog.replace(|p| scope.owns_project(p), captured);
-        Ok(())
+        self.1
+            .restore_native_text(scope, &self.0, captured)
+            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))
+    }
+    fn rollback(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let captured = part
+            .downcast_ref::<fireemu_adapter_grpc::local::NativeTextRollback>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.1
+            .rollback_native_text(scope, &self.0, captured)
+            .map_err(|error| TransitionFailure::new(self.name(), error.to_string()))
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
-        part.downcast_ref::<TextIndexCatalog>()
-            .map_or(0, TextIndexCatalog::retained_bytes)
+        part.downcast_ref::<fireemu_adapter_grpc::local::NativeTextSnapshot>()
+            .map_or(
+                0,
+                fireemu_adapter_grpc::local::NativeTextSnapshot::retained_bytes,
+            )
     }
 }
 
@@ -746,6 +760,834 @@ mod tests {
             Arc::new(std::sync::Mutex::new(VirtualClock::new(AT))),
             7,
         ))
+    }
+
+    fn native_fixture() -> (
+        fireemu_adapter_grpc::rest::RestState,
+        Arc<std::sync::Mutex<fireemu_core_session::clock::VirtualClock>>,
+        Arc<std::sync::Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+    ) {
+        text_fixture(fireemu_core_types::edition::FirestoreEdition::Enterprise)
+    }
+
+    fn text_fixture(
+        edition: fireemu_core_types::edition::FirestoreEdition,
+    ) -> (
+        fireemu_adapter_grpc::rest::RestState,
+        Arc<std::sync::Mutex<fireemu_core_session::clock::VirtualClock>>,
+        Arc<std::sync::Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+    ) {
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::edition::FirestoreApiMode;
+        let gateway = fireemu_adapter_grpc::gateway::Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(AT)));
+        let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+        backend
+            .admin()
+            .indexes()
+            .set_build_duration(std::time::Duration::from_secs(3600));
+        let catalog = Arc::new(std::sync::Mutex::new(
+            fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+        ));
+        backend.set_text_indexes(catalog.clone(), false).unwrap();
+        (
+            fireemu_adapter_grpc::rest::RestState {
+                local: backend,
+                gateway: Arc::new(gateway),
+                rules: None,
+                app_check: None,
+                control_token: None,
+            },
+            clock,
+            catalog,
+        )
+    }
+
+    fn native_call(
+        state: &fireemu_adapter_grpc::rest::RestState,
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> serde_json::Value {
+        let response = state.handle(&fireemu_adapter_grpc::rest::RestRequest {
+            method: method.into(),
+            path: path.into(),
+            query: String::new(),
+            authorization: Some("Bearer owner".into()),
+            app_check: Vec::new(),
+            body,
+            origin: None,
+            remote_peer: false,
+            browser_metadata: false,
+            batch_field_order: Vec::new(),
+            key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
+        });
+        assert_eq!(response.status, 200, "{}", response.body);
+        response.body
+    }
+
+    fn native_create(state: &fireemu_adapter_grpc::rest::RestState) -> serde_json::Value {
+        native_call(
+            state,
+            "POST",
+            "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+            serde_json::json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"title","searchConfig":{"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}}}],"searchIndexOptions":{"textLanguage":"en","textLanguageOverrideFieldPath":"language"}}),
+        )
+    }
+
+    fn native_restore_creating(fail: bool) {
+        use fireemu_core_types::time::LogicalDuration;
+        let (state, clock, catalog) = native_fixture();
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let hook = super::TextIndexes(catalog.clone(), state.local.clone());
+        let firestore = super::Firestore(state.local.clone());
+        let clock_hook = super::SessionClock(clock.clone());
+        native_call(
+            &state,
+            "PATCH",
+            "/v1/projects/p/databases/(default)/documents/items/good",
+            serde_json::json!({"fields":{"title":{"stringValue":"captured"},"language":{"stringValue":"en"}}}),
+        );
+        let initial = native_create(&state);
+        let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+        let barrier = state.local.barrier();
+        let (captured, documents, time) = {
+            let _exclusive = barrier.exclusive();
+            (
+                hook.capture(&scope).unwrap(),
+                firestore.capture(&scope).unwrap(),
+                clock_hook.capture(&scope).unwrap(),
+            )
+        };
+        if fail {
+            native_call(
+                &state,
+                "PATCH",
+                "/v1/projects/p/databases/(default)/documents/items/good",
+                serde_json::json!({"fields":{"title":{"stringValue":"live"},"language":{"stringValue":"invalid language"}}}),
+            );
+        }
+        if !fail {
+            native_call(
+                &state,
+                "PATCH",
+                "/v1/projects/p/databases/(default)/documents/items/live-only",
+                serde_json::json!({"fields":{"title":{"stringValue":"live"},"language":{"stringValue":"en"}}}),
+            );
+        }
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(3600))
+            .unwrap();
+        let terminal = native_call(&state, "GET", &operation, serde_json::Value::Null);
+        assert_eq!(terminal["done"], true);
+        if !fail {
+            assert_eq!(
+                terminal["metadata"]["progressDocuments"]["completedWork"],
+                "2"
+            );
+        }
+        assert_eq!(
+            terminal["metadata"]["state"],
+            if fail { "FAILED" } else { "SUCCESSFUL" }
+        );
+        {
+            let _exclusive = barrier.exclusive();
+            firestore.restore(&scope, &documents).unwrap();
+            hook.validate(&scope, &captured).unwrap();
+            hook.restore(&scope, &captured).unwrap();
+            clock_hook.restore(&scope, &time).unwrap();
+        }
+        let pending = native_call(&state, "GET", &operation, serde_json::Value::Null);
+        assert!(
+            pending.get("done").is_none(),
+            "CONTROL rewind must restore the matching pending view: {pending}"
+        );
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(3600))
+            .unwrap();
+        let replay = native_call(&state, "GET", &operation, serde_json::Value::Null);
+        assert_eq!(replay["metadata"]["state"], "SUCCESSFUL");
+        assert_eq!(
+            replay["metadata"]["progressDocuments"]["completedWork"],
+            "1"
+        );
+        let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+        assert_eq!(
+            native_call(&state, "GET", &index, serde_json::Value::Null)["state"],
+            "READY"
+        );
+    }
+
+    #[test]
+    fn native_text_restore_rewinds_creating_and_operation_after_success() {
+        native_restore_creating(false);
+    }
+
+    #[test]
+    fn native_text_restore_valid_source_after_terminal_error() {
+        native_restore_creating(true);
+    }
+
+    #[test]
+    fn native_text_snapshot_capture_is_pure_and_counts_operations() {
+        use fireemu_adapter_grpc::local::NativeTextSnapshot;
+        let (state, _, catalog) = native_fixture();
+        let (control, _, _) = native_fixture();
+        let scope = Scope::Project("p".into());
+        let hook = super::TextIndexes(catalog.clone(), state.local.clone());
+        let initial = native_create(&state);
+        assert_eq!(initial, native_create(&control));
+        let barrier = state.local.barrier();
+        let _exclusive = barrier.exclusive();
+        let first = hook.capture(&scope).unwrap();
+        let before = catalog.lock().unwrap().clone();
+        let rollback = hook.capture_rollback(&scope).unwrap();
+        let second = hook.capture(&scope).unwrap();
+        assert_eq!(
+            first.downcast_ref::<NativeTextSnapshot>(),
+            second.downcast_ref::<NativeTextSnapshot>()
+        );
+        let bytes = hook.retained_bytes(&first);
+        assert_eq!(bytes, hook.retained_bytes(&second));
+        assert!(
+            bytes >= before.retained_bytes() + 2 * initial.to_string().len() as u64,
+            "operation payloads must contribute"
+        );
+        hook.validate(&scope, &first).unwrap();
+        hook.restore(&scope, &first).unwrap();
+        hook.rollback(&scope, &rollback).unwrap();
+        assert_eq!(*catalog.lock().unwrap(), before);
+        assert_eq!(
+            state.local.admin().operations().reserve("p", "(default)"),
+            control.local.admin().operations().reserve("p", "(default)"),
+            "capture, validation, restore and rollback never mint operation IDs"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_text_restore_rollback_restores_exact_terminal_preimage() {
+        use fireemu_core_types::time::LogicalDuration;
+        struct LaterFailure;
+        impl SnapshotHook for LaterFailure {
+            fn name(&self) -> &'static str {
+                "injected later hook"
+            }
+            fn capture(
+                &self,
+                _: &Scope,
+            ) -> Result<
+                fireemu_adapter_http::control::SnapshotPart,
+                fireemu_adapter_http::control::TransitionFailure,
+            > {
+                Ok(Arc::new(()))
+            }
+            fn validate(
+                &self,
+                _: &Scope,
+                _: &fireemu_adapter_http::control::SnapshotPart,
+            ) -> Result<(), fireemu_adapter_http::control::TransitionFailure> {
+                Ok(())
+            }
+            fn restore(
+                &self,
+                _: &Scope,
+                _: &fireemu_adapter_http::control::SnapshotPart,
+            ) -> Result<(), fireemu_adapter_http::control::TransitionFailure> {
+                Err(fireemu_adapter_http::control::TransitionFailure::new(
+                    self.name(),
+                    "injected failure",
+                ))
+            }
+        }
+        let (state, clock, catalog) = native_fixture();
+        let scope = Scope::Project("p".into());
+        let hook = super::TextIndexes(catalog.clone(), state.local.clone());
+        let store = state.local.admin().operations();
+        let managed = |id: &str| {
+            store.record_views(
+                "p",
+                "(default)",
+                id,
+                serde_json::json!({"done":true,"id":id}),
+                serde_json::json!({"done":true,"id":id}),
+            );
+        };
+        managed("before");
+        let initial = native_create(&state);
+        let captured = hook.capture(&scope).unwrap();
+        managed("middle");
+        let second = native_create_other(&state, "later");
+        managed("after");
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(3600))
+            .unwrap();
+        let terminal = native_call(
+            &state,
+            "GET",
+            &format!("/v1/{}", initial["name"].as_str().unwrap()),
+            serde_json::Value::Null,
+        );
+        native_call(
+            &state,
+            "GET",
+            &format!("/v1/{}", second["name"].as_str().unwrap()),
+            serde_json::Value::Null,
+        );
+        let second_id = second["name"].as_str().unwrap().rsplit('/').next().unwrap();
+        assert!(store.remove("p", "(default)", second_id));
+        assert!(store.remove("p", "(default)", "middle"));
+        store.record_views(
+            "outside",
+            "(default)",
+            "untouched",
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        );
+        let queues = store.list("p", "(default)");
+        let outside = store.list("outside", "(default)");
+        let definitions = catalog.lock().unwrap().clone();
+        let barrier = state.local.barrier();
+        let _exclusive = barrier.exclusive();
+        let rollback = hook.capture_rollback(&scope).unwrap();
+        hook.validate(&scope, &captured).unwrap();
+        hook.restore(&scope, &captured).unwrap();
+        // A later hook refuses. The broker invokes this override, not normal restore.
+        let later = LaterFailure;
+        assert!(later
+            .restore(&scope, &later.capture(&scope).unwrap())
+            .is_err());
+        hook.rollback(&scope, &rollback).unwrap();
+        assert_eq!(store.list("p", "(default)"), queues);
+        assert_eq!(store.list("outside", "(default)"), outside);
+        assert_eq!(*catalog.lock().unwrap(), definitions);
+        assert_eq!(
+            store
+                .get(
+                    "p",
+                    "(default)",
+                    initial["name"]
+                        .as_str()
+                        .unwrap()
+                        .rsplit('/')
+                        .next()
+                        .unwrap()
+                )
+                .unwrap()
+                .current,
+            terminal
+        );
+        assert_eq!(
+            *hook
+                .capture_rollback(&scope)
+                .unwrap()
+                .downcast_ref::<fireemu_adapter_grpc::local::NativeTextRollback>()
+                .unwrap(),
+            *rollback
+                .downcast_ref::<fireemu_adapter_grpc::local::NativeTextRollback>()
+                .unwrap()
+        );
+    }
+
+    fn native_create_other(
+        state: &fireemu_adapter_grpc::rest::RestState,
+        group: &str,
+    ) -> serde_json::Value {
+        let mut request = serde_json::json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"title","searchConfig":{"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}}}],"searchIndexOptions":{"textLanguage":"en","textLanguageOverrideFieldPath":"language"}});
+        native_call(
+            state,
+            "POST",
+            &format!("/v1/projects/p/databases/(default)/collectionGroups/{group}/indexes"),
+            request.take(),
+        )
+    }
+
+    #[test]
+    fn native_text_restore_keeps_unrelated_operation_records_and_refuses_overflow_atomically() {
+        let (state, _, catalog) = native_fixture();
+        let scope = Scope::Project("p".into());
+        let hook = super::TextIndexes(catalog.clone(), state.local.clone());
+        let store = state.local.admin().operations();
+        let initial = native_create(&state);
+        let captured = hook.capture(&scope).unwrap();
+        let id = initial["name"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        assert!(store.remove("p", "(default)", id));
+        for i in 0..128 {
+            store.record_views(
+                "p",
+                "(default)",
+                &format!("unrelated-{i}"),
+                serde_json::Value::Null,
+                serde_json::json!({"done":true}),
+            );
+        }
+        let queues = store.list("p", "(default)");
+        let definitions = catalog.lock().unwrap().clone();
+        let preimage = hook.capture_rollback(&scope).unwrap();
+        assert!(hook.validate(&scope, &captured).is_err());
+        assert!(
+            hook.restore(&scope, &captured).is_err(),
+            "failing hook cannot rely on broker rollback"
+        );
+        assert_eq!(store.list("p", "(default)"), queues);
+        assert_eq!(*catalog.lock().unwrap(), definitions);
+        assert_eq!(
+            hook.capture_rollback(&scope)
+                .unwrap()
+                .downcast_ref::<fireemu_adapter_grpc::local::NativeTextRollback>(),
+            preimage.downcast_ref::<fireemu_adapter_grpc::local::NativeTextRollback>()
+        );
+        assert!(store.remove("p", "(default)", "unrelated-0"));
+        hook.validate(&scope, &captured).unwrap();
+        hook.restore(&scope, &captured).unwrap();
+        let restored = store.list("p", "(default)");
+        assert_eq!(restored.len(), 128);
+        assert_eq!(restored[0].id, id, "captured slot is deterministic");
+        assert_eq!(restored[1..], queues[1..]);
+        hook.restore(&scope, &captured).unwrap();
+        assert_eq!(
+            store.list("p", "(default)"),
+            restored,
+            "repeated projection is stable"
+        );
+    }
+
+    #[test]
+    fn native_text_restore_preserves_absent_operation_views() {
+        use fireemu_core_types::time::LogicalDuration;
+        for deleted in [false, true] {
+            let (state, clock, catalog) = native_fixture();
+            let scope = Scope::Project("p".into());
+            let hook = super::TextIndexes(catalog, state.local.clone());
+            let initial = native_create(&state);
+            let id = initial["name"]
+                .as_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
+            let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+            let store = state.local.admin().operations();
+            if deleted {
+                assert!(store.remove("p", "(default)", id));
+            } else {
+                for i in 0..128 {
+                    store.record_views(
+                        "p",
+                        "(default)",
+                        &format!("evict-{i}"),
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                    );
+                }
+            }
+            let captured = hook.capture(&scope).unwrap();
+            let before = hook.capture_rollback(&scope).unwrap();
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(3600))
+                .unwrap();
+            let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+            assert_eq!(
+                native_call(&state, "GET", &index, serde_json::Value::Null)["state"],
+                "READY"
+            );
+            hook.restore(&scope, &captured).unwrap();
+            assert!(store.get("p", "(default)", id).is_none());
+            assert_eq!(
+                hook.capture_rollback(&scope)
+                    .unwrap()
+                    .downcast_ref::<fireemu_adapter_grpc::local::NativeTextRollback>(),
+                before.downcast_ref::<fireemu_adapter_grpc::local::NativeTextRollback>()
+            );
+            assert_eq!(
+                native_call(&state, "GET", &index, serde_json::Value::Null)["state"],
+                "READY"
+            );
+            assert!(store.get("p", "(default)", id).is_none());
+            let response = state.handle(&fireemu_adapter_grpc::rest::RestRequest {
+                method: "GET".into(),
+                path: operation,
+                query: String::new(),
+                authorization: Some("Bearer owner".into()),
+                app_check: Vec::new(),
+                body: serde_json::Value::Null,
+                origin: None,
+                remote_peer: false,
+                browser_metadata: false,
+                batch_field_order: Vec::new(),
+                key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
+            });
+            assert_eq!(response.status, 404);
+            assert_eq!(
+                response.body["error"]["message"],
+                if deleted {
+                    "Requested entity was not found."
+                } else {
+                    "Operation does not exist"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn native_text_restore_foreign_scope_and_epoch_are_isolated() {
+        let (owner, _, catalog) = native_fixture();
+        native_create(&owner);
+        let (other, _, _) = native_fixture();
+        // Reattachment uses the one catalog supplied to this backend at construction.
+        let gateway = other.gateway.clone();
+        let backend = Arc::new(LocalBackend::new(
+            (*gateway).clone(),
+            Arc::new(std::sync::Mutex::new(
+                fireemu_core_session::clock::VirtualClock::new(AT),
+            )),
+            9,
+        ));
+        backend.set_text_indexes(catalog.clone(), false).unwrap();
+        let foreign = super::TextIndexes(catalog.clone(), backend);
+        let selected = Scope::Project("p".into());
+        let unrelated = Scope::Project("other".into());
+        let own = super::TextIndexes(catalog.clone(), owner.local.clone());
+        let captured = own.capture(&selected).unwrap();
+        let before = catalog.lock().unwrap().clone();
+        assert!(foreign.validate(&selected, &captured).is_err());
+        assert!(foreign.restore(&selected, &captured).is_err());
+        assert!(foreign.capture(&selected).is_err());
+        let empty = foreign.capture(&unrelated).unwrap();
+        foreign.validate(&unrelated, &empty).unwrap();
+        foreign.restore(&unrelated, &empty).unwrap();
+        assert_eq!(*catalog.lock().unwrap(), before);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_text_restore_rollback_preserves_another_backends_accepted_index() {
+        use fireemu_adapter_grpc::rest::RestState;
+        use fireemu_core_firestore::text_index::TextIndexCatalog;
+        use fireemu_core_types::time::LogicalDuration;
+        use std::sync::Mutex;
+
+        struct PublishThenFail<'a> {
+            state: &'a RestState,
+            published: &'a Mutex<Option<(serde_json::Value, u64)>>,
+            catalog: &'a Arc<Mutex<TextIndexCatalog>>,
+        }
+        impl SnapshotHook for PublishThenFail<'_> {
+            fn name(&self) -> &'static str {
+                "other backend publication before failure"
+            }
+            fn capture(&self, _: &Scope) -> Result<super::SnapshotPart, super::TransitionFailure> {
+                Ok(Arc::new(()))
+            }
+            fn validate(
+                &self,
+                _: &Scope,
+                _: &super::SnapshotPart,
+            ) -> Result<(), super::TransitionFailure> {
+                Ok(())
+            }
+            fn restore(
+                &self,
+                _: &Scope,
+                _: &super::SnapshotPart,
+            ) -> Result<(), super::TransitionFailure> {
+                let accepted = native_call(
+                    self.state,
+                    "POST",
+                    "/v1/projects/other/databases/(default)/collectionGroups/local/indexes",
+                    serde_json::json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"title","searchConfig":{"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}}}],"searchIndexOptions":{"textLanguage":"en","textLanguageOverrideFieldPath":"language"}}),
+                );
+                let id = accepted["metadata"]["index"]
+                    .as_str()
+                    .unwrap()
+                    .rsplit('/')
+                    .next()
+                    .unwrap();
+                let generation = self
+                    .catalog
+                    .lock()
+                    .unwrap()
+                    .build("other", "(default)", id)
+                    .unwrap()
+                    .generation;
+                *self.published.lock().unwrap() = Some((accepted, generation));
+                Err(super::TransitionFailure::new(
+                    self.name(),
+                    "injected later hook failure",
+                ))
+            }
+        }
+
+        let (owner, clock, catalog) = native_fixture();
+        let (template, other_clock, _) = native_fixture();
+        let other_backend = Arc::new(LocalBackend::new(
+            (*template.gateway).clone(),
+            other_clock,
+            19,
+        ));
+        other_backend
+            .admin()
+            .indexes()
+            .set_build_duration(std::time::Duration::from_secs(3600));
+        other_backend
+            .set_text_indexes(catalog.clone(), false)
+            .unwrap();
+        let other = RestState {
+            local: other_backend,
+            ..template
+        };
+        let scope = Scope::Project("p".into());
+        let hook = super::TextIndexes(catalog.clone(), owner.local.clone());
+        let initial = native_create(&owner);
+        let captured = hook.capture(&scope).unwrap();
+        let before = native_call(
+            &other,
+            "POST",
+            "/v1/projects/other/databases/(default)/collectionGroups/before/indexes",
+            serde_json::json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"title","searchConfig":{"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}}}],"searchIndexOptions":{"textLanguage":"en","textLanguageOverrideFieldPath":"language"}}),
+        );
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(3600))
+            .unwrap();
+        native_call(
+            &owner,
+            "GET",
+            &format!("/v1/{}", initial["name"].as_str().unwrap()),
+            serde_json::Value::Null,
+        );
+        let owner_views = owner.local.admin().operations().list("p", "(default)");
+        let owned_before = {
+            let catalog = catalog.lock().unwrap();
+            catalog
+                .entries()
+                .filter(|(p, _, _)| *p == "p")
+                .map(|(p, d, definition)| {
+                    (
+                        p.to_owned(),
+                        d.to_owned(),
+                        definition.clone(),
+                        catalog.build(p, d, &definition.id).cloned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let published = Mutex::new(None);
+        let failure = PublishThenFail {
+            state: &other,
+            published: &published,
+            catalog: &catalog,
+        };
+        let barrier = owner.local.barrier();
+        assert!(!Arc::ptr_eq(&barrier, &other.local.barrier()));
+        let exclusive = barrier.exclusive();
+        let rollback = hook.capture_rollback(&scope).unwrap();
+        hook.restore(&scope, &captured).unwrap();
+        // B acknowledges its own unrelated request inside the actual later failing hook.
+        assert!(failure
+            .restore(&scope, &failure.capture(&scope).unwrap())
+            .is_err());
+        hook.rollback(&scope, &rollback).unwrap();
+        drop(exclusive);
+
+        let (accepted, generation) = published.into_inner().unwrap().unwrap();
+        assert_eq!(
+            native_call(
+                &other,
+                "GET",
+                &format!("/v1/{}", before["metadata"]["index"].as_str().unwrap()),
+                serde_json::Value::Null
+            )["state"],
+            "CREATING"
+        );
+        assert_eq!(
+            native_call(
+                &other,
+                "GET",
+                &format!("/v1/{}", before["name"].as_str().unwrap()),
+                serde_json::Value::Null
+            ),
+            before
+        );
+        let index = format!("/v1/{}", accepted["metadata"]["index"].as_str().unwrap());
+        let operation = format!("/v1/{}", accepted["name"].as_str().unwrap());
+        assert_eq!(
+            native_call(&other, "GET", &index, serde_json::Value::Null)["state"],
+            "CREATING",
+            "project p rollback must preserve B's acknowledged unrelated index"
+        );
+        assert_eq!(
+            native_call(&other, "GET", &operation, serde_json::Value::Null),
+            accepted
+        );
+        assert_eq!(
+            owner.local.admin().operations().list("p", "(default)"),
+            owner_views
+        );
+        let owned_after = {
+            let catalog = catalog.lock().unwrap();
+            catalog
+                .entries()
+                .filter(|(p, _, _)| *p == "p")
+                .map(|(p, d, definition)| {
+                    (
+                        p.to_owned(),
+                        d.to_owned(),
+                        definition.clone(),
+                        catalog.build(p, d, &definition.id).cloned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(owned_after, owned_before);
+        let next = native_create_other(&owner, "after-rollback");
+        let id = next["metadata"]["index"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        assert!(
+            catalog
+                .lock()
+                .unwrap()
+                .build("p", "(default)", id)
+                .unwrap()
+                .generation
+                > generation,
+            "rollback must not reuse B's accepted generation allocation"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_text_restore_blocks_native_and_ordinary_delete_until_rollback_finishes() {
+        use fireemu_core_types::edition::FirestoreEdition;
+        use fireemu_core_types::time::LogicalDuration;
+        use std::sync::mpsc;
+        use std::time::Duration;
+        for native in [true, false] {
+            let (state, clock, catalog) = text_fixture(if native {
+                FirestoreEdition::Enterprise
+            } else {
+                FirestoreEdition::Standard
+            });
+            let scope = Scope::Project("p".into());
+            let hook = super::TextIndexes(catalog, state.local.clone());
+            let initial = if native {
+                native_create(&state)
+            } else {
+                let value = serde_json::json!({"name":"projects/p/databases/(default)/operations/ordinary","done":true});
+                state.local.admin().operations().record_views(
+                    "p",
+                    "(default)",
+                    "ordinary",
+                    value.clone(),
+                    value.clone(),
+                );
+                value
+            };
+            let barrier = state.local.barrier();
+            let captured = {
+                let _exclusive = barrier.exclusive();
+                hook.capture(&scope).unwrap()
+            };
+            clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(3600))
+                .unwrap();
+            let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+            assert_eq!(
+                native_call(&state, "GET", &operation, serde_json::Value::Null)["done"],
+                true
+            );
+            let id = initial["name"]
+                .as_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
+            let exclusive = barrier.exclusive();
+            let rollback = hook.capture_rollback(&scope).unwrap();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            std::thread::scope(|threads| {
+                let state_ref = &state;
+                let operation_ref = &operation;
+                let worker = threads.spawn(move || {
+                    started_tx.send(()).unwrap();
+                    let answer =
+                        native_call(state_ref, "DELETE", operation_ref, serde_json::Value::Null);
+                    done_tx.send(answer).unwrap();
+                });
+                started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                let early = done_rx.recv_timeout(Duration::from_secs(2)).ok();
+                let completed_during_control = early.is_some();
+                hook.restore(&scope, &captured).unwrap();
+                // Compensate a later hook failure through the actual override.
+                hook.rollback(&scope, &rollback).unwrap();
+                let retained_after_rollback = state
+                    .local
+                    .admin()
+                    .operations()
+                    .get("p", "(default)", id)
+                    .is_some();
+                drop(exclusive);
+                let answer =
+                    early.unwrap_or_else(|| done_rx.recv_timeout(Duration::from_secs(10)).unwrap());
+                worker.join().unwrap();
+                assert!(!completed_during_control,"DELETE returned success inside CONTROL and rollback resurrected its view={retained_after_rollback}; native={native}");
+                assert_eq!(answer, serde_json::json!({}));
+            });
+            assert!(state
+                .local
+                .admin()
+                .operations()
+                .get("p", "(default)", id)
+                .is_none());
+            let response = state.handle(&fireemu_adapter_grpc::rest::RestRequest {
+                method: "GET".into(),
+                path: operation,
+                query: String::new(),
+                authorization: Some("Bearer owner".into()),
+                app_check: Vec::new(),
+                body: serde_json::Value::Null,
+                origin: None,
+                remote_peer: false,
+                browser_metadata: false,
+                batch_field_order: Vec::new(),
+                key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
+            });
+            assert_eq!(response.status, 404);
+            assert_eq!(
+                response.body["error"]["message"],
+                "Requested entity was not found."
+            );
+        }
     }
 
     fn group(name: &str) -> fireemu_core_types::ids::CollectionId {

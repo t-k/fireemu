@@ -354,6 +354,46 @@ fn database(v: &Value) -> admin::Database {
     }
 }
 
+fn search_enum<E>(value: &Value, key: &str, parse: fn(&str) -> Option<E>) -> i32
+where
+    E: Into<i32>,
+{
+    value[key]
+        .as_i64()
+        .and_then(|number| i32::try_from(number).ok())
+        .unwrap_or_else(|| enumeration(value, key, parse))
+}
+
+fn search_config(v: &Value) -> admin::index::index_field::SearchConfig {
+    use admin::index::index_field::{search_config as search, SearchConfig};
+    SearchConfig {
+        text_spec: v["textSpec"].as_object().map(|_| search::SearchTextSpec {
+            index_specs: v["textSpec"]["indexSpecs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|spec| search::SearchTextIndexSpec {
+                    index_type: search_enum(
+                        spec,
+                        "indexType",
+                        search::TextIndexType::from_str_name,
+                    ),
+                    match_type: search_enum(
+                        spec,
+                        "matchType",
+                        search::TextMatchType::from_str_name,
+                    ),
+                })
+                .collect(),
+        }),
+        geo_spec: v["geoSpec"].as_object().map(|_| search::SearchGeoSpec {
+            geo_json_indexing_disabled: v["geoSpec"]["geoJsonIndexingDisabled"]
+                .as_bool()
+                .unwrap_or(false),
+        }),
+    }
+}
+
 fn index(v: &Value) -> admin::Index {
     use admin::index as i;
     let fields = v["fields"]
@@ -380,6 +420,10 @@ fn index(v: &Value) -> admin::Index {
                         )),
                     },
                 ))
+            } else if f["searchConfig"].is_object() {
+                Some(i::index_field::ValueMode::SearchConfig(search_config(
+                    &f["searchConfig"],
+                )))
             } else {
                 None
             },
@@ -391,6 +435,16 @@ fn index(v: &Value) -> admin::Index {
         fields,
         state: enumeration(v, "state", i::State::from_str_name),
         density: enumeration(v, "density", i::Density::from_str_name),
+        api_scope: enumeration(v, "apiScope", i::ApiScope::from_str_name),
+        search_index_options: v["searchIndexOptions"]
+            .as_object()
+            .map(|_| i::SearchIndexOptions {
+                text_language: string(&v["searchIndexOptions"], "textLanguage"),
+                text_language_override_field_path: string(
+                    &v["searchIndexOptions"],
+                    "textLanguageOverrideFieldPath",
+                ),
+            }),
         ..admin::Index::default()
     }
 }
@@ -632,6 +686,26 @@ fn database_body(d: &admin::Database) -> Value {
     body
 }
 
+fn search_enum_body<E: TryFrom<i32>>(value: i32, name: fn(&E) -> &'static str) -> Value {
+    // Preserve unknown enum numbers so the REST validator can refuse them.
+    E::try_from(value).map_or_else(|_| json!(value), |known| json!(name(&known)))
+}
+
+fn search_config_body(config: &admin::index::index_field::SearchConfig) -> Value {
+    use admin::index::index_field::search_config as search;
+    let mut body = json!({});
+    if let Some(text) = &config.text_spec {
+        body["textSpec"] = json!({"indexSpecs": text.index_specs.iter().map(|spec| json!({
+            "indexType": search_enum_body(spec.index_type, search::TextIndexType::as_str_name),
+            "matchType": search_enum_body(spec.match_type, search::TextMatchType::as_str_name),
+        })).collect::<Vec<_>>()});
+    }
+    if let Some(geo) = &config.geo_spec {
+        body["geoSpec"] = json!({"geoJsonIndexingDisabled": geo.geo_json_indexing_disabled});
+    }
+    body
+}
+
 fn index_body(i: &admin::Index) -> Value {
     use admin::index as ix;
     let fields: Vec<Value> = i
@@ -649,12 +723,29 @@ fn index_body(i: &admin::Index) -> Value {
             Some(ix::index_field::ValueMode::VectorConfig(v)) => {
                 json!({"fieldPath": f.field_path, "vectorConfig": {"dimension": v.dimension, "flat": {}}})
             }
+            Some(ix::index_field::ValueMode::SearchConfig(config)) => json!({
+                "fieldPath": f.field_path, "searchConfig": search_config_body(config),
+            }),
             _ => json!({"fieldPath": f.field_path}),
         })
         .collect();
     let mut body = json!({"fields": fields});
     if let Some(scope) = enum_name(i.query_scope, ix::QueryScope::as_str_name) {
         body["queryScope"] = json!(scope);
+    }
+    if i.api_scope != 0 {
+        body["apiScope"] = search_enum_body(i.api_scope, ix::ApiScope::as_str_name);
+    }
+    if let Some(options) = &i.search_index_options {
+        let mut value = json!({});
+        if !options.text_language.is_empty() {
+            value["textLanguage"] = json!(options.text_language);
+        }
+        if !options.text_language_override_field_path.is_empty() {
+            value["textLanguageOverrideFieldPath"] =
+                json!(options.text_language_override_field_path);
+        }
+        body["searchIndexOptions"] = value;
     }
     body
 }
@@ -706,7 +797,12 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     ) -> R<admin::ListIndexesResponse> {
         let r = request.get_ref();
         let parent = resource(&r.parent, Kind::CollectionGroup)?;
-        let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
+        let page_size = r.page_size.to_string();
+        let query = encode_query(&[
+            ("filter", &r.filter),
+            ("pageToken", &r.page_token),
+            ("pageSize", &page_size),
+        ]);
         let path = format!("{parent}/indexes");
         let answer = self
             .call(&request, "GET", &path, &query, Value::Null)
@@ -1102,6 +1198,183 @@ where
         } else {
             let mut service = self.firestore.clone();
             Box::pin(async move { service.call(request).await })
+        }
+    }
+}
+
+#[cfg(test)]
+mod text_codec_tests {
+    use super::*;
+    use admin::index::index_field::{search_config as search, ValueMode};
+
+    // Independently assembled from googleapis Index protobuf field numbers.
+    const TEXT_WIRE: &[u8] = &[
+        0x10, 0x01, 0x1a, 0x11, 0x0a, 0x05, b't', b'i', b't', b'l', b'e', 0x2a, 0x08, 0x0a, 0x06,
+        0x0a, 0x04, 0x08, 0x01, 0x10, 0x01, 0x4a, 0x0e, 0x0a, 0x02, b'e', b'n', 0x12, 0x08, b'l',
+        b'a', b'n', b'g', b'u', b'a', b'g', b'e',
+    ];
+
+    fn native_body() -> Value {
+        json!({"queryScope":"COLLECTION", "fields":[{
+            "fieldPath":"title", "searchConfig":{"textSpec":{"indexSpecs":[{
+                "indexType":"TOKENIZED", "matchType":"MATCH_GLOBALLY"
+            }]}}
+        }], "searchIndexOptions":{"textLanguage":"en", "textLanguageOverrideFieldPath":"language"}})
+    }
+
+    #[test]
+    fn native_text_wire_preserves_search_config_and_language_in_request_json() {
+        let decoded = admin::Index::decode(TEXT_WIRE).unwrap();
+        assert_eq!(index_body(&decoded), native_body());
+    }
+
+    #[test]
+    fn native_text_json_encodes_independently_specified_wire_tags() {
+        assert_eq!(index(&native_body()).encode_to_vec(), TEXT_WIRE);
+        let mut ready = native_body();
+        ready["name"] =
+            json!("projects/p/databases/(default)/collectionGroups/items/indexes/textid");
+        ready["state"] = json!("READY");
+        ready["density"] = json!("SPARSE_ANY");
+        let decoded = index(&ready);
+        assert_eq!(decoded.name, ready["name"].as_str().unwrap());
+        assert_eq!(decoded.state, admin::index::State::Ready as i32);
+        assert_eq!(decoded.density, admin::index::Density::SparseAny as i32);
+        assert_eq!(decoded.api_scope, admin::index::ApiScope::AnyApi as i32);
+        assert_eq!(decoded.search_index_options.unwrap().text_language, "en");
+    }
+
+    #[test]
+    fn text_options_presence_and_proto3_defaults_remain_distinct() {
+        let absent = admin::Index::default();
+        assert!(index_body(&absent).get("searchIndexOptions").is_none());
+        assert!(index(&json!({})).search_index_options.is_none());
+        assert!(index(&json!({"searchIndexOptions":null}))
+            .search_index_options
+            .is_none());
+        let empty = admin::Index {
+            search_index_options: Some(admin::index::SearchIndexOptions::default()),
+            ..admin::Index::default()
+        };
+        assert_eq!(index_body(&empty)["searchIndexOptions"], json!({}));
+        assert_eq!(empty.encode_to_vec(), [0x4a, 0x00]);
+        assert!(index(&json!({"searchIndexOptions":{}}))
+            .search_index_options
+            .is_some());
+    }
+
+    #[test]
+    fn unspecified_and_unknown_text_enums_reach_rest_without_valid_defaults() {
+        let mut decoded = admin::Index::decode(TEXT_WIRE).unwrap();
+        let Some(ValueMode::SearchConfig(config)) = &mut decoded.fields[0].value_mode else {
+            panic!("search config missing");
+        };
+        let spec = &mut config.text_spec.as_mut().unwrap().index_specs[0];
+        spec.index_type = 99;
+        spec.match_type = 0;
+        let encoded = index_body(&decoded);
+        let spec = &encoded["fields"][0]["searchConfig"]["textSpec"]["indexSpecs"][0];
+        assert_eq!(spec["indexType"], 99);
+        assert_eq!(spec["matchType"], "TEXT_MATCH_TYPE_UNSPECIFIED");
+        let restored = index(&encoded);
+        let Some(ValueMode::SearchConfig(config)) = &restored.fields[0].value_mode else {
+            panic!("search config missing");
+        };
+        assert_eq!(
+            config.text_spec.as_ref().unwrap().index_specs[0].index_type,
+            99
+        );
+    }
+
+    #[test]
+    fn unsupported_geo_and_empty_text_shapes_are_not_silently_dropped() {
+        let mut decoded = admin::Index::decode(TEXT_WIRE).unwrap();
+        let Some(ValueMode::SearchConfig(config)) = &mut decoded.fields[0].value_mode else {
+            panic!("search config missing");
+        };
+        config.text_spec = Some(search::SearchTextSpec {
+            index_specs: Vec::new(),
+        });
+        config.geo_spec = Some(search::SearchGeoSpec {
+            geo_json_indexing_disabled: true,
+        });
+        let body = index_body(&decoded);
+        assert_eq!(
+            body["fields"][0]["searchConfig"],
+            json!({
+                "textSpec":{"indexSpecs":[]}, "geoSpec":{"geoJsonIndexingDisabled":true}
+            })
+        );
+        let restored = index(&body);
+        assert_eq!(restored.fields, decoded.fields);
+    }
+
+    #[test]
+    fn text_index_any_and_failed_operation_preserve_native_result_variants() {
+        let mut ready = native_body();
+        ready["@type"] = json!("type.googleapis.com/google.firestore.admin.v1.Index");
+        ready["state"] = json!("NEEDS_REPAIR");
+        let packed = pack(&ready).unwrap();
+        assert_eq!(
+            packed.type_url,
+            "type.googleapis.com/google.firestore.admin.v1.Index"
+        );
+        let decoded = admin::Index::decode(packed.value.as_slice()).unwrap();
+        assert_eq!(decoded.state, admin::index::State::NeedsRepair as i32);
+        assert_eq!(
+            decoded.fields[0].value_mode,
+            admin::Index::decode(TEXT_WIRE).unwrap().fields[0].value_mode
+        );
+        let failed = operation(&json!({"done":true, "error":{
+            "code":3, "message":"Invalid text language: not a language"
+        }}));
+        assert!(failed.done);
+        let Some(lro::operation::Result::Error(error)) = failed.result else {
+            panic!("failed operation must carry an error");
+        };
+        assert_eq!(error.code, 3);
+        assert_eq!(error.message, "Invalid text language: not a language");
+        ready["state"] = json!("READY");
+        let completed = operation(&json!({"done":true, "response":ready}));
+        let Some(lro::operation::Result::Response(response)) = completed.result else {
+            panic!("completed operation must carry an index response");
+        };
+        let decoded = admin::Index::decode(response.value.as_slice()).unwrap();
+        assert_eq!(decoded.state, admin::index::State::Ready as i32);
+        assert_eq!(
+            decoded.fields,
+            admin::Index::decode(TEXT_WIRE).unwrap().fields
+        );
+        assert_eq!(decoded.search_index_options.unwrap().text_language, "en");
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+        #[test]
+        fn text_codec_roundtrips_fields_options_and_enum_values(
+            paths in proptest::collection::vec("[a-z]{1,8}", 1..=3),
+            language in "[a-z]{0,8}",
+            override_path in "[a-z]{0,8}",
+            options_present in proptest::bool::ANY,
+            index_type in -2i32..5,
+            match_type in -2i32..5,
+        ) {
+            let mut original=admin::Index::decode(TEXT_WIRE).unwrap();
+            let mut field=original.fields[0].clone();
+            let Some(ValueMode::SearchConfig(config))=&mut field.value_mode else { unreachable!() };
+            let spec=&mut config.text_spec.as_mut().unwrap().index_specs[0];
+            spec.index_type=index_type;
+            spec.match_type=match_type;
+            original.fields=paths.into_iter().map(|path| {
+                let mut field=field.clone();
+                field.field_path=path;
+                field
+            }).collect();
+            original.search_index_options=options_present.then_some(admin::index::SearchIndexOptions {
+                text_language:language,
+                text_language_override_field_path:override_path,
+            });
+            proptest::prop_assert_eq!(index(&index_body(&original)),original);
         }
     }
 }

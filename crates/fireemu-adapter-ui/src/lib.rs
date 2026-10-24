@@ -3,12 +3,13 @@
 //! The API is a same-origin, privileged front to the runtime's own surfaces: Firestore
 //! requests go through the REST layer as `Bearer owner`, Auth requests through the Identity
 //! Toolkit admin routes, Storage through the JSON API, control-plane requests through the
-//! control API, so no logic is duplicated and every existing check (validation, budgets,
+//! control API, and RTDB through its fixed loopback listener, so no logic is duplicated and every existing check (validation, budgets,
 //! the admission barrier, fault plans) applies. Two server-sent event streams push Firestore
 //! commits and function logs.
 //!
 //! ```text
 //! GET  /ui, /ui/*                      the app (SPA fallback; index.html carries window.__FIREEMU__)
+//! ANY  /ui/api/database/*             scoped RTDB data/Rules and anonymous requests
 //! GET  /ui/api/config                  what this runtime is (project, edition, ports, sessions)
 //! ANY  /ui/api/firestore/v1/...        Firestore REST, as owner
 //! GET  /ui/api/firestore/watch         SSE: commits (project / database filters)
@@ -24,13 +25,13 @@
 //! ANY  /ui/api/control/v1/...          the control API
 //! ```
 //!
-//! Browser policy: a request carrying an `Origin` must come from a loopback origin and, for
-//! the API, present the control token (`Authorization: Bearer <token>` or `?token=`); a
-//! `Host` naming anything but this machine is refused (DNS rebinding). Requests without an
-//! `Origin` (curl, scripts) are trusted like the control API trusts them.
+//! Browser policy: a request carrying an `Origin` must come from a loopback origin. Every
+//! API request presents the control token in `Authorization: Bearer <token>`, even without
+//! `Origin`; token query parameters are not accepted. A non-local `Host` is refused.
 
 pub mod api;
 pub mod assets;
+pub mod database;
 pub mod functions_actions;
 pub mod server;
 pub mod sse;
@@ -94,6 +95,8 @@ pub struct RuntimeInfo {
 
 /// Shared state of the UI surface.
 pub struct UiState {
+    /// The selected RTDB listener and trusted instance ownership, absent when disabled.
+    pub database: Option<database::DatabaseEndpoint>,
     /// Connection budget shared by this runtime's event streams.
     pub stream_limiter: Arc<sse::StreamLimiter>,
     /// The control token browser pages must present.

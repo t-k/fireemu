@@ -46,7 +46,7 @@ impl DatabaseType {
 pub enum DatabaseEdition {
     /// `STANDARD`.
     Standard,
-    /// `ENTERPRISE`: created with the MongoDB-compatible data access mode only.
+    /// `ENTERPRISE`.
     Enterprise,
 }
 
@@ -104,6 +104,8 @@ pub struct DatabaseRecord {
     pub database_type: DatabaseType,
     /// Standard or Enterprise.
     pub edition: DatabaseEdition,
+    /// Whether Native API access is enabled, independently of the database edition.
+    pub native_data_access: bool,
     /// Transaction concurrency control.
     pub concurrency: ConcurrencyMode,
     /// Whether `databases.delete` is refused.
@@ -183,6 +185,8 @@ pub struct AdminCatalog {
     managed_storage: std::sync::OnceLock<super::managed::SharedManagedStorage>,
     /// When the backend's configured databases came into being.
     created_at: Mutex<LogicalInstant>,
+    configured_edition: DatabaseEdition,
+    configured_native_data_access: bool,
     /// How long a deleted database id stays unavailable ([`DELETED_ID_COOLDOWN_SECONDS`]).
     cooldown_seconds: std::sync::atomic::AtomicI64,
 }
@@ -234,8 +238,21 @@ impl AdminCatalog {
             fields: super::fields::FieldRegistry::default(),
             managed_storage: std::sync::OnceLock::new(),
             created_at: Mutex::new(created_at),
+            configured_edition: DatabaseEdition::Standard,
+            configured_native_data_access: true,
             cooldown_seconds: std::sync::atomic::AtomicI64::new(DELETED_ID_COOLDOWN_SECONDS),
         }
+    }
+
+    /// Configures the metadata of databases that exist without an Admin create call.
+    pub(crate) const fn with_configured_access(
+        mut self,
+        edition: DatabaseEdition,
+        native_data_access: bool,
+    ) -> Self {
+        self.configured_edition = edition;
+        self.configured_native_data_access = native_data_access;
+        self
     }
 
     /// Sets how long a deleted database id stays unavailable. Production's is
@@ -281,8 +298,12 @@ impl AdminCatalog {
             update_time: self.created_at(),
             location_id: "us-central1".to_owned(),
             database_type: DatabaseType::FirestoreNative,
-            edition: DatabaseEdition::Standard,
-            concurrency: ConcurrencyMode::Pessimistic,
+            edition: self.configured_edition,
+            native_data_access: self.configured_native_data_access,
+            concurrency: match self.configured_edition {
+                DatabaseEdition::Standard => ConcurrencyMode::Pessimistic,
+                DatabaseEdition::Enterprise => ConcurrencyMode::Optimistic,
+            },
             delete_protection: false,
             free_tier: database == fireemu_core_types::ids::DatabaseId::DEFAULT,
         }
@@ -389,6 +410,7 @@ impl AdminCatalog {
             location_id: request.location_id,
             database_type: request.database_type,
             edition: request.edition,
+            native_data_access: request.edition == DatabaseEdition::Standard,
             // Production answers OPTIMISTIC for an Enterprise database and PESSIMISTIC for
             // a Standard one when the request does not choose.
             concurrency: request.concurrency.unwrap_or(match request.edition {
@@ -479,7 +501,7 @@ impl AdminCatalog {
             Some(record) if record.database_type == DatabaseType::DatastoreMode => {
                 Some(DataPlaneRefusal::DatastoreMode)
             }
-            Some(record) if record.edition == DatabaseEdition::Enterprise => {
+            Some(record) if !record.native_data_access => {
                 Some(DataPlaneRefusal::NativeAccessDisabled)
             }
             None if exists_unprompted && Self::is_deleted(&state, project, database) => {
@@ -706,5 +728,36 @@ mod tests {
             catalog.data_plane_refusal("p", "entdb", false),
             Some(DataPlaneRefusal::NativeAccessDisabled)
         );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(48))]
+        #[test]
+        fn configured_access_is_stable_under_scoped_materialization(
+            enterprise in proptest::prelude::any::<bool>(),
+            native in proptest::prelude::any::<bool>(),
+            scopes in proptest::collection::vec((proptest::prelude::any::<bool>(), proptest::prelude::any::<bool>()), 1..24),
+        ) {
+            let edition = if enterprise { DatabaseEdition::Enterprise } else { DatabaseEdition::Standard };
+            let catalog = AdminCatalog::new(7, at(0)).with_configured_access(edition, native);
+            let mut materialized = std::collections::BTreeSet::new();
+            for (other_project, named) in scopes {
+                let project = if other_project { "other" } else { "p" };
+                let database = if named { "named" } else { "(default)" };
+                let before = catalog.data_plane_refusal(project, database, true);
+                proptest::prop_assert_eq!(before, if materialized.contains(&(project, database)) && !native {
+                    Some(DataPlaneRefusal::NativeAccessDisabled)
+                } else { None });
+                let record = catalog.get(project, database, true).unwrap();
+                materialized.insert((project, database));
+                proptest::prop_assert_eq!(record.edition, edition);
+                proptest::prop_assert_eq!(record.native_data_access, native);
+                proptest::prop_assert_eq!(record.concurrency, if enterprise { ConcurrencyMode::Optimistic } else { ConcurrencyMode::Pessimistic });
+                proptest::prop_assert_eq!(catalog.data_plane_refusal(project, database, true), if native { None } else { Some(DataPlaneRefusal::NativeAccessDisabled) });
+            }
+            let created = catalog.create(CreateRequest { edition: DatabaseEdition::Enterprise, ..request("created") }, false, at(1)).unwrap();
+            proptest::prop_assert!(!created.native_data_access);
+            proptest::prop_assert_eq!(catalog.data_plane_refusal("p", "created", false), Some(DataPlaneRefusal::NativeAccessDisabled));
+        }
     }
 }

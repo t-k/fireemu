@@ -1480,7 +1480,7 @@ fn allocation_bytes<T>(capacity: usize) -> u64 {
         .saturating_mul(u64::try_from(core::mem::size_of::<T>()).unwrap_or(u64::MAX))
 }
 
-fn document_path_retained_bytes(path: &DocumentPath) -> u64 {
+pub(crate) fn document_path_retained_bytes(path: &DocumentPath) -> u64 {
     let mut total = u64::try_from(core::mem::size_of::<DocumentPath>()).unwrap_or(u64::MAX);
     total = total
         .saturating_add(
@@ -7141,7 +7141,7 @@ fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> O
     }
 }
 
-fn fields_retained_bytes(fields: &BTreeMap<String, Value>) -> u64 {
+pub(crate) fn fields_retained_bytes(fields: &BTreeMap<String, Value>) -> u64 {
     fields.iter().fold(0u64, |total, (key, value)| {
         total
             .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))

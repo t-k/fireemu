@@ -1,0 +1,3723 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Firestore REST v1 and gRPC google.firestore.v1 text search, Enterprise Native, database entpipe1",
+    "project": "demo-fs-query-index",
+    "note": "Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as demo-fs-query-index in every lane. Missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed."
+  },
+  "programs": {
+    "fs-ent-text/v1/lexical": {
+      "corpusDigest": "0ee1bc81bb0434aba6f8e0860d2c95b887ab91443f37a1d2e4a9219e51b6df24",
+      "harnessDigest": "c832e6dc7075ee965947d78cb49cda7f6af22dc11d59c92ff0900dc542aa8136",
+      "recordedAt": "2026-10-23T12:46:24.622Z",
+      "gitSha": "5c9b1008631c7deb2f66e81767fd8c2a2c0e002b",
+      "steps": {
+        "term": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "term-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "case": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "case-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "conjunction": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "conjunction-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "phrase": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "phrase-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "phrase-reverse": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "phrase-reverse-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "phrase-cross-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "phrase-cross-field-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "exclusion": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "exclusion-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "excluded-phrase": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "excluded-phrase-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "negative-only": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "negative-only-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-title": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-title-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-body": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-body-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-missing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "field-missing-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "unicode-fold": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-fold-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-accent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "café"
+                    },
+                    "title": {
+                      "stringValue": "chevaux cheval mangent manger"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/french",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-accent-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "café"
+                    },
+                    "title": {
+                      "stringValue": "chevaux cheval mangent manger"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/french",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-combining": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "café"
+                    },
+                    "title": {
+                      "stringValue": "chevaux cheval mangent manger"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/french",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-combining-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "café"
+                    },
+                    "title": {
+                      "stringValue": "chevaux cheval mangent manger"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/french",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-width": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-width-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-turkish": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unicode-turkish-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "cjk": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "猫🐈と犬"
+                    },
+                    "title": {
+                      "stringValue": "東京都の猫と東京駅"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/japanese",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "cjk-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "猫🐈と犬"
+                    },
+                    "title": {
+                      "stringValue": "東京都の猫と東京駅"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/japanese",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "cjk-character": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "cjk-character-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "emoji-boundary": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "猫🐈と犬"
+                    },
+                    "title": {
+                      "stringValue": "東京都の猫と東京駅"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/japanese",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "emoji-boundary-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "猫🐈と犬"
+                    },
+                    "title": {
+                      "stringValue": "東京都の猫と東京駅"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/japanese",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "apostrophe": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "apostrophe-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "hyphen": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "hyphen-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "stemming": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "dogs jumped jumping"
+                    },
+                    "title": {
+                      "stringValue": "running runners run runs"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/inflected",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "stemming-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "dogs jumped jumping"
+                    },
+                    "title": {
+                      "stringValue": "running runners run runs"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/inflected",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "french-stemming": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "café"
+                    },
+                    "title": {
+                      "stringValue": "chevaux cheval mangent manger"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/french",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "french-stemming-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "café"
+                    },
+                    "title": {
+                      "stringValue": "chevaux cheval mangent manger"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/french",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "stopword": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "stopword-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "empty-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "punctuation": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "punctuation-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "unclosed-quote": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unclosed-quote-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "boolean-or": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "boolean-or-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "default-order": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "default-order-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "rank-desc": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.9093827605247498
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6081607341766357
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6081607341766357
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "rank-desc-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.9093827605247498
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6081607341766357
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6081607341766357
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "rank": {
+                      "doubleValue": 0.506682276725769
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "rank-asc": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "search(...) with a document_matches query only supports sorting by score() in descending order.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "rank-asc-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "search(...) with a document_matches query only supports sorting by score() in descending order.",
+          "messages": []
+        },
+        "multi-term-rank": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "rank": {
+                      "doubleValue": 0.8135255575180054
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6933689713478088
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6933689713478088
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "multi-term-rank-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "rank": {
+                      "doubleValue": 0.8135255575180054
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6933689713478088
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "rank": {
+                      "doubleValue": 0.6933689713478088
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "offset-limit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "offset-limit-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "retrieval-depth": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "retrieval-depth-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "retrieval-zero": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "search(...): 'retrievalDepth' must be at least 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "retrieval-zero-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "search(...): 'retrievalDepth' must be at least 1.",
+          "messages": []
+        },
+        "language-en": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "dogs jumped jumping"
+                    },
+                    "title": {
+                      "stringValue": "running runners run runs"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/inflected",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "language-en-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "dogs jumped jumping"
+                    },
+                    "title": {
+                      "stringValue": "running runners run runs"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/inflected",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "language-ja": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "猫🐈と犬"
+                    },
+                    "title": {
+                      "stringValue": "東京都の猫と東京駅"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/japanese",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "language-ja-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "猫🐈と犬"
+                    },
+                    "title": {
+                      "stringValue": "東京都の猫と東京駅"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/japanese",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "language-auto": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported language_code: auto",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "language-auto-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "Unsupported language_code: auto",
+          "messages": []
+        },
+        "language-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported language_code: not a language",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "language-invalid-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "Unsupported language_code: not a language",
+          "messages": []
+        },
+        "enhancement-disabled": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "enhancement-disabled-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "red fox"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/short",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "update": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "after-update": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "after-update-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "fox fox fox fox"
+                    },
+                    "title": {
+                      "stringValue": "fox fox fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/frequent",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "delete": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {}
+            ]
+          }
+        },
+        "after-delete": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "after-delete-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "a long quiet story about a fox in the green forest beside the river"
+                    },
+                    "title": {
+                      "stringValue": "fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/long",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "change-type": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "after-type-change": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "after-type-change-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "brown fox"
+                    },
+                    "title": {
+                      "stringValue": "quick"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/cross",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "waffles"
+                    },
+                    "title": {
+                      "stringValue": "brown quick fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/reverse",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "don't co-operate"
+                    },
+                    "title": {
+                      "stringValue": "Straße STRASSE İSTANBUL café café ＦＯＸ"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/fold",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "body": {
+                      "stringValue": "jumps over coffee"
+                    },
+                    "title": {
+                      "stringValue": "quick brown fox"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/textobs1/phrase",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

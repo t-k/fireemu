@@ -1,0 +1,41 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "textobs1",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "title",
+          "searchConfig": {
+            "textSpec": {
+              "indexSpecs": [
+                {
+                  "indexType": "TOKENIZED",
+                  "matchType": "MATCH_GLOBALLY"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "fieldPath": "body",
+          "searchConfig": {
+            "textSpec": {
+              "indexSpecs": [
+                {
+                  "indexType": "TOKENIZED",
+                  "matchType": "MATCH_GLOBALLY"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "searchIndexOptions": {
+        "textLanguage": "en",
+        "textLanguageOverrideFieldPath": "language"
+      }
+    }
+  ],
+  "fieldOverrides": []
+}

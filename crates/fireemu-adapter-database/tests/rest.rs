@@ -1644,3 +1644,344 @@ fn a_write_answers_what_was_written_even_when_it_keeps_the_stored_form() {
         (200, "5.0".to_owned())
     );
 }
+
+// Native production evidence: RTDB-PRODUCTION-UID-20261024-01, two causal rounds.
+// The local owner sentinel replaces the trusted production OAuth credential; it is not
+// a claim that production accepts that sentinel or verifies an end-user ID token.
+#[test]
+fn admin_auth_override_replays_two_native_uid_rounds() {
+    let cases = [
+        (
+            r"alice-put-own",
+            r"PUT",
+            r"/parity20261023/uidRules/alice.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22alice%22%7D",
+            true,
+            r#"{"value":1}"#,
+            200,
+            r#"{"value":1}"#,
+        ),
+        (
+            r"alice-get-own",
+            r"GET",
+            r"/parity20261023/uidRules/alice.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22alice%22%7D",
+            true,
+            r"",
+            200,
+            r#"{"value":1}"#,
+        ),
+        (
+            r"bob-get-alice",
+            r"GET",
+            r"/parity20261023/uidRules/alice.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22bob%22%7D",
+            true,
+            r"",
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"bob-put-alice-denied",
+            r"PUT",
+            r"/parity20261023/uidRules/alice.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22bob%22%7D",
+            true,
+            r#"{"value":999}"#,
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"admin-read-alice-after-bob-denial",
+            r"GET",
+            r"/parity20261023/uidRules/alice.json?ns=override",
+            true,
+            r"",
+            200,
+            r#"{"value":1}"#,
+        ),
+        (
+            r"override-null-get-alice",
+            r"GET",
+            r"/parity20261023/uidRules/alice.json?ns=override&auth_variable_override=null",
+            true,
+            r"",
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"override-null-put-alice-denied",
+            r"PUT",
+            r"/parity20261023/uidRules/alice.json?ns=override&auth_variable_override=null",
+            true,
+            r#"{"value":999}"#,
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"admin-read-alice-after-null-denial",
+            r"GET",
+            r"/parity20261023/uidRules/alice.json?ns=override",
+            true,
+            r"",
+            200,
+            r#"{"value":1}"#,
+        ),
+        (
+            r"anonymous-get-alice",
+            r"GET",
+            r"/parity20261023/uidRules/alice.json?ns=override",
+            false,
+            r"",
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"anonymous-put-alice-denied",
+            r"PUT",
+            r"/parity20261023/uidRules/alice.json?ns=override",
+            false,
+            r#"{"value":999}"#,
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"admin-read-alice-after-anonymous-denial",
+            r"GET",
+            r"/parity20261023/uidRules/alice.json?ns=override",
+            true,
+            r"",
+            200,
+            r#"{"value":1}"#,
+        ),
+        (
+            r"bob-put-own",
+            r"PUT",
+            r"/parity20261023/uidRules/bob.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22bob%22%7D",
+            true,
+            r#"{"value":2}"#,
+            200,
+            r#"{"value":2}"#,
+        ),
+        (
+            r"bob-get-own",
+            r"GET",
+            r"/parity20261023/uidRules/bob.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22bob%22%7D",
+            true,
+            r"",
+            200,
+            r#"{"value":2}"#,
+        ),
+        (
+            r"alice-get-bob",
+            r"GET",
+            r"/parity20261023/uidRules/bob.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22alice%22%7D",
+            true,
+            r"",
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"alice-put-bob-denied",
+            r"PUT",
+            r"/parity20261023/uidRules/bob.json?ns=override&auth_variable_override=%7B%22uid%22%3A%22alice%22%7D",
+            true,
+            r#"{"value":999}"#,
+            401,
+            r#"{
+  "error" : "Permission denied"
+}
+"#,
+        ),
+        (
+            r"admin-read-bob-after-alice-denial",
+            r"GET",
+            r"/parity20261023/uidRules/bob.json?ns=override",
+            true,
+            r"",
+            200,
+            r#"{"value":2}"#,
+        ),
+    ];
+    for round in 1..=2 {
+        let mut db = db();
+        db.load_rules("override", r#"{"rules":{".read":false,".write":false,"parity20261023":{"uidRules":{"$uid":{".read":"auth != null && auth.uid === $uid",".write":"auth != null && auth.uid === $uid"}}}}}"#, NOW).unwrap();
+        for (id, method, target, admin, body, status, expected) in cases {
+            let headers = if admin {
+                &[("Authorization", "Bearer owner")][..]
+            } else {
+                &[]
+            };
+            let response = send(&mut db, method, target, headers, body);
+            assert_eq!(
+                (response.status, String::from_utf8(response.body).unwrap()),
+                (status, expected.to_owned()),
+                "round {round}, {id}"
+            );
+        }
+    }
+}
+
+// Local safety policy, not observed malformed/nonadministrator production behavior.
+#[test]
+fn admin_auth_override_never_inherits_owner_bypass_or_rescues_invalid_credentials() {
+    use fireemu_adapter_database::rest::Credentials;
+    let mut db = Database::new(
+        RestOptions {
+            credentials: Credentials {
+                strict: true,
+                ..Credentials::default()
+            },
+            ..RestOptions::default()
+        },
+        1,
+    );
+    db.load_rules(
+        "override",
+        r#"{"rules":{".read":false,".write":false}}"#,
+        NOW,
+    )
+    .unwrap();
+    for modifier in [
+        "null",
+        "%7B%22uid%22:%22alice%22%7D",
+        "broken",
+        "1",
+        "true",
+        "%5B%5D",
+    ] {
+        for method in ["GET", "PUT"] {
+            let target = format!("/value.json?ns=override&auth_variable_override={modifier}");
+            assert_eq!(
+                send(
+                    &mut db,
+                    method,
+                    &target,
+                    &[("Authorization", "Bearer owner")],
+                    "1"
+                )
+                .status,
+                401,
+                "{method} {modifier}"
+            );
+            assert_eq!(
+                send(
+                    &mut db,
+                    method,
+                    &target,
+                    &[("Authorization", "Bearer invalid")],
+                    "1"
+                )
+                .status,
+                401,
+                "invalid credential {modifier}"
+            );
+        }
+    }
+    assert_eq!(
+        send(
+            &mut db,
+            "GET",
+            "/value.json?ns=override",
+            &[("Authorization", "Bearer owner")],
+            ""
+        )
+        .status,
+        200
+    );
+}
+
+// Local contract: arbitrary override fields are Rules input, not JWT claims.
+#[test]
+fn admin_auth_override_access_token_and_arbitrary_claims_are_preserved() {
+    let mut db = db();
+    db.load_rules("override", r#"{"rules":{".read":"auth.uid == 'charlie' && auth.token.role == 'writer' && auth.extra.enabled == true && auth.provider == 'custom'"}}"#, NOW).unwrap();
+    let object = "%7B%22uid%22:%22charlie%22,%22token%22:%7B%22role%22:%22writer%22%7D,%22extra%22:%7B%22enabled%22:true%7D,%22provider%22:%22custom%22%7D";
+    let target =
+        format!("/value.json?ns=override&access_token=owner&auth_variable_override={object}");
+    assert_eq!(call(&mut db, "GET", &target, "").0, 200);
+    let anonymous = format!("/value.json?ns=override&auth_variable_override={object}");
+    assert_eq!(call(&mut db, "GET", &anonymous, "").0, 401);
+}
+
+// SSE is a local adapter regression; the native oracle observed ordinary REST only.
+#[test]
+fn admin_auth_override_sse_keeps_scoped_context_through_revocation() {
+    let mut db = db();
+    db.load_rules("override", r#"{"rules":{"value":{".read":"auth.uid == 'alice' && data.child('enabled').val() == true",".write":false}}}"#, NOW).unwrap();
+    let owner = &[("Authorization", "Bearer owner")];
+    assert_eq!(
+        send(
+            &mut db,
+            "PUT",
+            "/value.json?ns=override",
+            owner,
+            r#"{"enabled":true}"#
+        )
+        .status,
+        200
+    );
+    let target = "/value.json?ns=override&auth_variable_override=%7B%22uid%22:%22alice%22%7D";
+    let stream = db.handle(
+        &request(
+            "GET",
+            target,
+            &[
+                ("Authorization", "Bearer owner"),
+                ("Accept", "text/event-stream"),
+            ],
+            "",
+        ),
+        NOW,
+    );
+    let id = match stream {
+        Handled::Stream { id, .. } => id,
+        other @ Handled::Response { .. } => panic!("expected scoped stream: {other:?}"),
+    };
+    let denied = "/value.json?ns=override&auth_variable_override=%7B%22uid%22:%22bob%22%7D";
+    assert_eq!(
+        send(
+            &mut db,
+            "GET",
+            denied,
+            &[
+                ("Authorization", "Bearer owner"),
+                ("Accept", "text/event-stream")
+            ],
+            ""
+        )
+        .status,
+        401
+    );
+    match db.handle(
+        &request(
+            "PUT",
+            "/value.json?ns=override",
+            owner,
+            r#"{"enabled":false}"#,
+        ),
+        NOW,
+    ) {
+        Handled::Response { events, .. } => assert!(events
+            .iter()
+            .any(|(subscription, event)| *subscription == id && event.is_cancel())),
+        other @ Handled::Stream { .. } => panic!("expected write response: {other:?}"),
+    }
+}

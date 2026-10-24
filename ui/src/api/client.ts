@@ -215,3 +215,31 @@ export const subscribe = (
   })();
   return () => controller.abort();
 };
+
+/** Raw JSON source and its native status/ETag, without a parse/stringify roundtrip. */
+export type TextReply = { status: number; body: string; etag: string | null };
+
+/** Authenticated text transport; only diagnostic probes may retain non-2xx answers. */
+export const requestText = (
+  method: string,
+  path: string,
+  body?: string,
+  inspectErrors = false,
+): ResultAsync<TextReply, ApiError> =>
+  ResultAsync.fromPromise(
+    (async (): Promise<Result<TextReply, ApiError>> => {
+      const response = await fetch(`${base}/${path}`, {
+        method,
+        headers: {
+          ...authHeaders(),
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        body: body ?? null,
+      });
+      const text = await response.text();
+      if (!response.ok && !inspectErrors)
+        return err({ status: response.status, message: text || `HTTP ${response.status}` });
+      return ok({ status: response.status, body: text, etag: response.headers.get("etag") });
+    })(),
+    (e): ApiError => ({ status: 0, message: e instanceof Error ? e.message : String(e) }),
+  ).andThen((r) => r);

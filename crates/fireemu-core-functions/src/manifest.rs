@@ -672,6 +672,15 @@ impl Default for TaskRateLimits {
 /// What invokes a function.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Trigger {
+    /// A Realtime Database reference change, scoped to an instance pattern.
+    Database {
+        /// Mutation family.
+        event: DocumentEvent,
+        /// Instance name or single-segment glob; v1 discovery resolves its default instance.
+        instance: String,
+        /// Reference pattern, including named single-segment captures.
+        reference: DatabasePattern,
+    },
     /// HTTP request (`onRequest`) or callable (`onCall`).
     Http {
         /// Callable protocol.
@@ -1304,5 +1313,127 @@ impl FunctionManifest {
             } => Some((f, schedule, time_zone.as_deref())),
             _ => None,
         })
+    }
+}
+
+/// An RTDB reference pattern. RTDB never accepts multi-segment wildcards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabasePattern {
+    source: String,
+    segments: Vec<(Option<String>, String)>,
+}
+
+impl DatabasePattern {
+    /// Validates captures and the single-segment wildcard grammar.
+    pub fn parse(source: &str) -> Result<Self, String> {
+        let trimmed = source.trim_matches('/');
+        let mut names = std::collections::BTreeSet::new();
+        let mut segments = Vec::new();
+        if !trimmed.is_empty() {
+            for part in trimmed.split('/') {
+                let (name, pattern) = if let Some(inner) = part.strip_prefix('{') {
+                    let inner = inner.strip_suffix('}').ok_or("unclosed database capture")?;
+                    let (name, pattern) = inner.split_once('=').unwrap_or((inner, "*"));
+                    if name.is_empty()
+                        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        || !names.insert(name.to_owned())
+                    {
+                        return Err("invalid or duplicate database capture".to_owned());
+                    }
+                    (Some(name.to_owned()), pattern)
+                } else {
+                    (None, part)
+                };
+                if pattern.is_empty()
+                    || pattern.contains("**")
+                    || pattern.matches('*').count() > 1
+                    || pattern.contains(['{', '}'])
+                {
+                    return Err("invalid database reference segment".to_owned());
+                }
+                segments.push((name, pattern.to_owned()));
+            }
+        }
+        Ok(Self {
+            source: format!("/{trimmed}"),
+            segments,
+        })
+    }
+
+    /// Canonical reference text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.source
+    }
+
+    /// Number of concrete segments represented by this reference.
+    #[must_use]
+    pub fn depth(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Captures a concrete reference; descendants are projected by the event adapter.
+    #[must_use]
+    pub fn matches(&self, path: &str) -> Option<BTreeMap<String, String>> {
+        let trimmed = path.trim_matches('/');
+        let parts: Vec<_> = if trimmed.is_empty() {
+            Vec::new()
+        } else {
+            trimmed.split('/').collect()
+        };
+        if parts.len() != self.segments.len() {
+            return None;
+        }
+        let mut params = BTreeMap::new();
+        for ((name, pattern), value) in self.segments.iter().zip(parts) {
+            if !database_glob_matches(pattern, value) {
+                return None;
+            }
+            if let Some(name) = name {
+                params.insert(name.clone(), value.to_owned());
+            }
+        }
+        Some(params)
+    }
+}
+
+/// Matches one instance/reference segment without interpreting slash or capture syntax.
+#[must_use]
+pub fn database_glob_matches(pattern: &str, value: &str) -> bool {
+    if pattern.contains('/') || pattern.contains("**") {
+        return false;
+    }
+    match pattern.split_once('*') {
+        Some((prefix, suffix)) => {
+            value.len() >= prefix.len() + suffix.len()
+                && value.starts_with(prefix)
+                && value.ends_with(suffix)
+        }
+        None => pattern == value,
+    }
+}
+
+impl DocumentEvent {
+    /// RTDB `CloudEvent` mutation family.
+    #[must_use]
+    pub const fn database_event_type(self) -> &'static str {
+        match self {
+            Self::Created => "google.firebase.database.ref.v1.created",
+            Self::Updated => "google.firebase.database.ref.v1.updated",
+            Self::Deleted => "google.firebase.database.ref.v1.deleted",
+            Self::Written => "google.firebase.database.ref.v1.written",
+        }
+    }
+
+    /// Parses an RTDB `CloudEvent` mutation family.
+    #[must_use]
+    pub fn from_database_event_type(value: &str) -> Option<Self> {
+        match value {
+            "google.firebase.database.ref.v1.created" => Some(Self::Created),
+            "google.firebase.database.ref.v1.updated" => Some(Self::Updated),
+            "google.firebase.database.ref.v1.deleted" => Some(Self::Deleted),
+            "google.firebase.database.ref.v1.written" => Some(Self::Written),
+            _ => None,
+        }
     }
 }

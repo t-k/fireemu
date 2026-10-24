@@ -12,6 +12,9 @@ use crate::{sse, UiBody, UiRequest, UiResponse, UiState, MAX_JSON_BODY_BYTES};
 
 /// Routes `rest` (the path after `/ui/api/`).
 pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiResponse {
+    if let Some(action) = rest.strip_prefix("database/") {
+        return crate::database::route(state, action, req).await;
+    }
     if let Some(path) = rest.strip_prefix("firestore/") {
         return if path == "watch" {
             sse::firestore_watch(state, req)
@@ -316,6 +319,16 @@ fn storage(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
 #[must_use]
 pub fn trigger_json(trigger: &Trigger) -> Value {
     match trigger {
+        Trigger::Database {
+            event,
+            instance,
+            reference,
+        } => json!({
+            "kind": "database",
+            "event": event.database_event_type(),
+            "instance": instance,
+            "ref": reference.as_str(),
+        }),
         Trigger::Http { callable, .. } => json!({"kind": "http", "callable": callable}),
         Trigger::Firestore {
             event,

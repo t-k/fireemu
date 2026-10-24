@@ -1,0 +1,340 @@
+{
+  "provenance": {
+    "observation": "genuine-auth03",
+    "closedReceiptSha256": "7d7d1bd83e1f3180c8f724da3d69bfac09f7690ac2fda7c866c187ba1b75d953",
+    "actualReviewSha256": "28117c03e186a2b7d07f129d275b32a6db11fc1b57580bc0a171baf4ba48560e",
+    "sanitizedEventsSha256": "99cb0de177a152a63ddf010c7a43e8db681a256839ac5461ddbe6c33148feace",
+    "runtimeSourceSha256": "773a20a7a2de032f994e439eb295a265c0bb2d658e84d6353db92312a9640772",
+    "normalization": "User, token and project identities are environment-specific; only actor/target roles and JSON outcomes are compared."
+  },
+  "cases": [
+    {
+      "id": "r1-a-put",
+      "round": 1,
+      "actor": "a",
+      "target": "a",
+      "method": "PUT",
+      "requestBody": {
+        "value": 1
+      },
+      "status": 200,
+      "body": {
+        "value": 1
+      },
+      "sourceLine": 33
+    },
+    {
+      "id": "r1-a-get",
+      "round": 1,
+      "actor": "a",
+      "target": "a",
+      "method": "GET",
+      "requestBody": null,
+      "status": 200,
+      "body": {
+        "value": 1
+      },
+      "sourceLine": 38
+    },
+    {
+      "id": "r1-b-put",
+      "round": 1,
+      "actor": "b",
+      "target": "b",
+      "method": "PUT",
+      "requestBody": {
+        "value": 2
+      },
+      "status": 200,
+      "body": {
+        "value": 2
+      },
+      "sourceLine": 43
+    },
+    {
+      "id": "r1-b-get",
+      "round": 1,
+      "actor": "b",
+      "target": "b",
+      "method": "GET",
+      "requestBody": null,
+      "status": 200,
+      "body": {
+        "value": 2
+      },
+      "sourceLine": 48
+    },
+    {
+      "id": "r1-a-cross-get",
+      "round": 1,
+      "actor": "a",
+      "target": "b",
+      "method": "GET",
+      "requestBody": null,
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 53
+    },
+    {
+      "id": "r1-a-cross-put",
+      "round": 1,
+      "actor": "a",
+      "target": "b",
+      "method": "PUT",
+      "requestBody": {
+        "value": 99
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 58,
+      "protectedReadback": {
+        "status": 200,
+        "body": {
+          "value": 2
+        },
+        "semanticSha256": "49c987621f206f09e5fbe23b516b55a36f838cb14867961f1d84a554d3a35b6b",
+        "sourceLine": 61
+      }
+    },
+    {
+      "id": "r1-b-cross-get",
+      "round": 1,
+      "actor": "b",
+      "target": "a",
+      "method": "GET",
+      "requestBody": null,
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 66
+    },
+    {
+      "id": "r1-b-cross-put",
+      "round": 1,
+      "actor": "b",
+      "target": "a",
+      "method": "PUT",
+      "requestBody": {
+        "value": 99
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 71,
+      "protectedReadback": {
+        "status": 200,
+        "body": {
+          "value": 1
+        },
+        "semanticSha256": "48208f9428d64634bd8e28ff345bf0eab60d53c18fa2fbdb0b9bc1e84df2b5f6",
+        "sourceLine": 74
+      }
+    },
+    {
+      "id": "r1-None-cross-get",
+      "round": 1,
+      "actor": "anonymous",
+      "target": "a",
+      "method": "GET",
+      "requestBody": null,
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 79
+    },
+    {
+      "id": "r1-None-cross-put",
+      "round": 1,
+      "actor": "anonymous",
+      "target": "a",
+      "method": "PUT",
+      "requestBody": {
+        "value": 99
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 84,
+      "protectedReadback": {
+        "status": 200,
+        "body": {
+          "value": 1
+        },
+        "semanticSha256": "48208f9428d64634bd8e28ff345bf0eab60d53c18fa2fbdb0b9bc1e84df2b5f6",
+        "sourceLine": 87
+      }
+    },
+    {
+      "id": "r2-a-put",
+      "round": 2,
+      "actor": "a",
+      "target": "a",
+      "method": "PUT",
+      "requestBody": {
+        "value": 1
+      },
+      "status": 200,
+      "body": {
+        "value": 1
+      },
+      "sourceLine": 98
+    },
+    {
+      "id": "r2-a-get",
+      "round": 2,
+      "actor": "a",
+      "target": "a",
+      "method": "GET",
+      "requestBody": null,
+      "status": 200,
+      "body": {
+        "value": 1
+      },
+      "sourceLine": 103
+    },
+    {
+      "id": "r2-b-put",
+      "round": 2,
+      "actor": "b",
+      "target": "b",
+      "method": "PUT",
+      "requestBody": {
+        "value": 2
+      },
+      "status": 200,
+      "body": {
+        "value": 2
+      },
+      "sourceLine": 108
+    },
+    {
+      "id": "r2-b-get",
+      "round": 2,
+      "actor": "b",
+      "target": "b",
+      "method": "GET",
+      "requestBody": null,
+      "status": 200,
+      "body": {
+        "value": 2
+      },
+      "sourceLine": 113
+    },
+    {
+      "id": "r2-a-cross-get",
+      "round": 2,
+      "actor": "a",
+      "target": "b",
+      "method": "GET",
+      "requestBody": null,
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 118
+    },
+    {
+      "id": "r2-a-cross-put",
+      "round": 2,
+      "actor": "a",
+      "target": "b",
+      "method": "PUT",
+      "requestBody": {
+        "value": 99
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 123,
+      "protectedReadback": {
+        "status": 200,
+        "body": {
+          "value": 2
+        },
+        "semanticSha256": "49c987621f206f09e5fbe23b516b55a36f838cb14867961f1d84a554d3a35b6b",
+        "sourceLine": 126
+      }
+    },
+    {
+      "id": "r2-b-cross-get",
+      "round": 2,
+      "actor": "b",
+      "target": "a",
+      "method": "GET",
+      "requestBody": null,
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 131
+    },
+    {
+      "id": "r2-b-cross-put",
+      "round": 2,
+      "actor": "b",
+      "target": "a",
+      "method": "PUT",
+      "requestBody": {
+        "value": 99
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 136,
+      "protectedReadback": {
+        "status": 200,
+        "body": {
+          "value": 1
+        },
+        "semanticSha256": "48208f9428d64634bd8e28ff345bf0eab60d53c18fa2fbdb0b9bc1e84df2b5f6",
+        "sourceLine": 139
+      }
+    },
+    {
+      "id": "r2-None-cross-get",
+      "round": 2,
+      "actor": "anonymous",
+      "target": "a",
+      "method": "GET",
+      "requestBody": null,
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 144
+    },
+    {
+      "id": "r2-None-cross-put",
+      "round": 2,
+      "actor": "anonymous",
+      "target": "a",
+      "method": "PUT",
+      "requestBody": {
+        "value": 99
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "sourceLine": 149,
+      "protectedReadback": {
+        "status": 200,
+        "body": {
+          "value": 1
+        },
+        "semanticSha256": "48208f9428d64634bd8e28ff345bf0eab60d53c18fa2fbdb0b9bc1e84df2b5f6",
+        "sourceLine": 152
+      }
+    }
+  ]
+}

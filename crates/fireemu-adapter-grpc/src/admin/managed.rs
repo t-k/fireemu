@@ -400,7 +400,7 @@ pub(crate) fn export(
 }
 
 /// Records an operation answered unfinished and finished on its first poll.
-fn finish(
+pub(crate) fn finish(
     state: &RestState,
     project: &str,
     database: &str,
@@ -408,6 +408,8 @@ fn finish(
     done_metadata: &Json,
     response: &Json,
 ) -> RestResponse {
+    let barrier = state.local.barrier();
+    let _admission = barrier.admit();
     let id = super::operations::reserve_id(state, project, database);
     let name = format!("projects/{project}/databases/{database}/operations/{id}");
     let initial = json!({"name": name, "metadata": initial_metadata});

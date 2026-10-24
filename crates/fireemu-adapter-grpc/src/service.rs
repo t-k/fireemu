@@ -692,6 +692,21 @@ impl Firestore for GatewayService {
             let compiled =
                 crate::pipeline::compile_pipeline(request.get_ref(), &parent, unrecorded)
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+            if compiled.search.is_some() {
+                let local = self
+                    .local_backend()
+                    .cloned()
+                    .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                let responses =
+                    blocking_read(local, self.rules.clone(), caller, move |local, guard| {
+                        crate::text_search::execute(local, &parent, compiled, guard, unrecorded)
+                    })
+                    .await
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                return Ok(Response::new(Box::pin(tokio_stream::iter(
+                    responses.into_iter().map(Ok),
+                ))));
+            }
             let response = self
                 .run_query_with_caller(caller, compiled.input)
                 .await

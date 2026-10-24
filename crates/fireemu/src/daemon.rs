@@ -597,6 +597,18 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         },
         cfg.seed ^ 0x5254_4442,
     )));
+    if let Some(runtime) = &functions_runtime {
+        // The local instance region and DNS suffix are trusted runtime defaults, never request input.
+        realtime_database
+            .lock()
+            .map_err(|_| "the Realtime Database state lock is poisoned".to_owned())?
+            .set_change_sink(functions::database_sink(
+                runtime,
+                &cfg.auth_project,
+                "us-central1",
+                "firebaseio.com",
+            ));
+    }
     // The rules files of `firebase.json`, each in its instance; one that does not load stops
     // the start, as firebase-tools does, and a change is loaded again.
     if !cfg.database_rules_resolved.is_empty() {
@@ -1598,6 +1610,7 @@ async fn serve_suite(
                 listener,
                 realtime_database.clone(),
                 fireemu_adapter_database::server::ServerConfig {
+                    admission: Some(backend.barrier()),
                     clock: Arc::new(move || clock_millis(&database_clock)),
                     ..fireemu_adapter_database::server::ServerConfig::default()
                 },
@@ -1681,6 +1694,29 @@ async fn serve_suite(
     }
     if let (Some(listener), Some(addr)) = (ui_listener, addrs.ui) {
         let state = ui::state(ui::Parts {
+            database: addrs.database.map(|address| {
+                let mut instances = cfg
+                    .database_rules_resolved
+                    .iter()
+                    .map(|(instance, _)| instance.clone())
+                    .collect::<std::collections::BTreeSet<_>>();
+                instances.insert(format!("{}-default-rtdb", cfg.auth_project));
+                fireemu_adapter_ui::database::DatabaseEndpoint {
+                    address,
+                    project: cfg.auth_project.clone(),
+                    configured_instances: instances
+                        .into_iter()
+                        .map(|instance| {
+                            let project = crate::database_rules::project_of_instance(
+                                &instance,
+                                &cfg.auth_project,
+                            )
+                            .to_owned();
+                            (instance, project)
+                        })
+                        .collect(),
+                }
+            }),
             cfg: &cfg,
             only: &only,
             control_token: control_token.clone(),
@@ -2018,6 +2054,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         }
         // Text Index definitions (FS-TEXT-VAL-1): validated at start, never executed.
         let text_indexes = Arc::new(Mutex::new(control::load_text_indexes(&cfg)?));
+        backend.set_text_indexes(text_indexes.clone(), cfg.production_exact).map_err(|error| error.to_string())?;
         // The sessions' fault plans (spec 18), shared by every adapter; empty until PUT.
         let faults: fireemu_core_session::fault::SharedFaultRegistry =
             Arc::new(fireemu_core_session::fault::FaultRegistry::new());

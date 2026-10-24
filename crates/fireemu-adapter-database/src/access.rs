@@ -18,7 +18,8 @@
 //!   a user. Any other value, `auth=owner` included, is anonymous under the emulator profile,
 //!   as on the official emulator, and refused with 401 under strict.
 //!
-//! The emulator's `owner` passes everywhere, `productionExact`'s locked default included.
+//! The emulator's `owner` passes everywhere, `productionExact`'s locked default included,
+//! unless a REST administrator explicitly supplies a Rules auth override.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -83,8 +84,12 @@ pub(crate) enum Access {
     Owner,
     /// Another administrator credential (an OAuth access token).
     Admin,
-    /// A signed-in user: the `auth` value rules see.
+    /// The Rules `auth` value from a user credential.
     User(Json),
+    /// Administrator origin with an exact object supplied only as Rules input.
+    AdminAsUser(Json),
+    /// Administrator origin with explicit null Rules input.
+    AdminAsAnonymous,
     /// No usable credential.
     Anonymous,
 }
@@ -101,7 +106,18 @@ impl Access {
     ) -> Result<Self, Refused> {
         let bearer = authorization.and_then(|v| v.strip_prefix("Bearer "));
         if let Some(token) = bearer.or_else(|| params.get("access_token").map(String::as_str)) {
-            return Self::administrator(token, credentials);
+            let administrator = Self::administrator(token, credentials)?;
+            let Some(override_text) = params.get("auth_variable_override") else {
+                return Ok(administrator);
+            };
+            // Only an already accepted administrator can supply Rules input. Preserve the
+            // exact object rather than interpreting it as ID-token claims. Malformed or
+            // scalar overrides fail closed as local policy, not an observed native error.
+            return match crate::json_parse::parse(override_text).map_err(|_| Refused)? {
+                Json::Null => Ok(Self::AdminAsAnonymous),
+                object @ Json::Object(_) => Ok(Self::AdminAsUser(object)),
+                _ => Err(Refused),
+            };
         }
         let Some(token) = params.get("auth") else {
             return Ok(Self::Anonymous);
@@ -127,8 +143,38 @@ impl Access {
     /// `auth` as rules see it.
     fn auth(&self) -> Json {
         match self {
-            Self::User(auth) => auth.clone(),
+            Self::User(auth) | Self::AdminAsUser(auth) => auth.clone(),
             _ => Json::Null,
+        }
+    }
+
+    /// The originating principal supplied to committed-change consumers.
+    pub(crate) fn principal(&self) -> crate::changes::Principal {
+        match self {
+            Self::Owner | Self::Admin | Self::AdminAsUser(_) | Self::AdminAsAnonymous => {
+                crate::changes::Principal {
+                    auth_type: "ADMIN".to_owned(),
+                    auth_id: None,
+                    auth: None,
+                }
+            }
+            Self::Anonymous => crate::changes::Principal {
+                auth_type: "UNAUTHENTICATED".to_owned(),
+                auth_id: None,
+                auth: None,
+            },
+            Self::User(auth) => {
+                let value: serde_json::Value = serde_json::from_str(&render(auth, Style::Compact))
+                    .expect("validated Rules auth is representable as JSON");
+                crate::changes::Principal {
+                    auth_type: "USER".to_owned(),
+                    auth_id: value
+                        .get("uid")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    auth: Some(value),
+                }
+            }
         }
     }
 }
@@ -358,6 +404,20 @@ impl Database {
         )
     }
 
+    /// Returns emulator-only coverage for the installed source, without evaluating rules.
+    pub(crate) fn rules_coverage(&self, namespace: &str) -> Json {
+        let text = self.rules_text(namespace);
+        let report = self.loaded_rules(namespace).map_or_else(
+            || {
+                rules_file::compile(&text)
+                    .expect("the default rules are valid")
+                    .coverage_report()
+            },
+            |loaded| loaded.rules.coverage_report(),
+        );
+        Json::object([("rules", Json::String(text)), ("report", report)])
+    }
+
     /// Loads `text` as the rules of `namespace`. Listens and event streams the new rules no
     /// longer allow are cancelled: the returned events go to the streams, the realtime
     /// cancellations wait among the pushes.
@@ -368,13 +428,18 @@ impl Database {
         now: i64,
     ) -> Result<Vec<(u64, SseEvent)>, RulesError> {
         let rules = rules_file::compile(text)?;
-        self.store_rules(
-            namespace,
-            LoadedRules {
-                text: text.to_owned(),
-                rules,
-            },
-        );
+        if self
+            .loaded_rules(namespace)
+            .is_none_or(|loaded| loaded.text != text)
+        {
+            self.store_rules(
+                namespace,
+                LoadedRules {
+                    text: text.to_owned(),
+                    rules,
+                },
+            );
+        }
         Ok(self.revoke(namespace, None, now))
     }
 
@@ -507,4 +572,141 @@ fn wire_query_text(q: &QueryParams) -> String {
         .map(|(name, value)| format!("\"{name}\":{value}"))
         .collect();
     format!("{{{}}}", body.join(","))
+}
+
+#[cfg(test)]
+mod admin_override_tests {
+    use super::*;
+
+    #[test]
+    fn originating_principal_is_not_replaced_by_admin_rules_override() {
+        for modifier in ["null", r#"{"uid":"impersonated","extra":true}"#] {
+            let params =
+                BTreeMap::from([("auth_variable_override".to_owned(), modifier.to_owned())]);
+            let access = Access::from_rest(
+                Some("Bearer owner"),
+                &params,
+                &Credentials::default(),
+                "ns",
+                0,
+            )
+            .unwrap();
+            let actor = access.principal();
+            assert_eq!(actor.auth_type, "ADMIN");
+            assert_eq!(actor.auth_id, None);
+            assert_eq!(actor.auth, None);
+            assert_eq!(access.auth(), crate::json_parse::parse(modifier).unwrap());
+        }
+    }
+
+    #[test]
+    fn originating_principal_keeps_verified_user_identity_and_anonymous_state() {
+        let credentials = Credentials {
+            strict: true,
+            id_tokens: Some(Arc::new(|_, _, _| {
+                Some(r#"{"sub":"genuine","iat":1}"#.to_owned())
+            })),
+        };
+        let params = BTreeMap::from([("auth".to_owned(), "verifier-input".to_owned())]);
+        let user = Access::from_rest(None, &params, &credentials, "ns", 0).unwrap();
+        let actor = user.principal();
+        assert_eq!(actor.auth_type, "USER");
+        assert_eq!(actor.auth_id.as_deref(), Some("genuine"));
+        assert_eq!(
+            actor
+                .auth
+                .as_ref()
+                .and_then(|auth| auth.get("uid"))
+                .and_then(serde_json::Value::as_str),
+            Some("genuine")
+        );
+        let anonymous = Access::from_rest(None, &BTreeMap::new(), &credentials, "ns", 0)
+            .unwrap()
+            .principal();
+        assert_eq!(anonymous.auth_type, "UNAUTHENTICATED");
+        assert!(anonymous.auth_id.is_none() && anonymous.auth.is_none());
+    }
+
+    // A finite total-function model of the local credential/modifier boundary. Malformed
+    // input policy and nonadministrator handling are local safety contracts, not oracle rows.
+    #[test]
+    fn admin_auth_override_total_function_model() {
+        for strict in [false, true] {
+            for credential in [None, Some("owner"), Some("other")] {
+                for modifier in [
+                    None,
+                    Some("null"),
+                    Some(r#"{"uid":"arbitrary","extra":{"n":3}}"#),
+                    Some("broken"),
+                    Some("1"),
+                    Some("[]"),
+                ] {
+                    for query_token in [false, true] {
+                        let mut params = BTreeMap::new();
+                        let authorization = credential.map(|token| format!("Bearer {token}"));
+                        if query_token {
+                            if let Some(token) = credential {
+                                params.insert("access_token".to_owned(), token.to_owned());
+                            }
+                        }
+                        if let Some(value) = modifier {
+                            params.insert("auth_variable_override".to_owned(), value.to_owned());
+                        }
+                        let config = Credentials {
+                            strict,
+                            ..Credentials::default()
+                        };
+                        let actual = Access::from_rest(
+                            if query_token {
+                                None
+                            } else {
+                                authorization.as_deref()
+                            },
+                            &params,
+                            &config,
+                            "ns",
+                            0,
+                        );
+                        let expected = match credential {
+                            None => Ok(Access::Anonymous),
+                            Some("other") if strict => Err(Refused),
+                            Some(token) => match modifier {
+                                None if token == "owner" => Ok(Access::Owner),
+                                None => Ok(Access::Admin),
+                                Some("null") => Ok(Access::AdminAsAnonymous),
+                                Some(value) if value.starts_with('{') => Ok(Access::AdminAsUser(
+                                    crate::json_parse::parse(value).unwrap(),
+                                )),
+                                Some(_) => Err(Refused),
+                            },
+                        };
+                        assert_eq!(actual, expected, "strict={strict}, credential={credential:?}, modifier={modifier:?}, query={query_token}");
+                        if credential.is_some() && modifier.is_some() && actual.is_ok() {
+                            assert!(!matches!(actual, Ok(Access::Owner | Access::Admin)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn admin_auth_override_does_not_modify_a_user_credential() {
+        let credentials = Credentials {
+            strict: true,
+            id_tokens: Some(Arc::new(|_, _, _| {
+                Some(r#"{"sub":"original","iat":1}"#.to_owned())
+            })),
+        };
+        let base = BTreeMap::from([("auth".to_owned(), "local-verifier-token".to_owned())]);
+        let expected = Access::from_rest(None, &base, &credentials, "ns", 0).unwrap();
+        for modifier in ["null", r#"{"uid":"replacement"}"#, "broken"] {
+            let mut params = base.clone();
+            params.insert("auth_variable_override".to_owned(), modifier.to_owned());
+            assert_eq!(
+                Access::from_rest(None, &params, &credentials, "ns", 0),
+                Ok(expected.clone())
+            );
+        }
+    }
 }

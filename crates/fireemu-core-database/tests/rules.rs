@@ -596,6 +596,42 @@ mod properties {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig {cases: 256, rng_seed: proptest::test_runner::RngSeed::Fixed(0xc012), ..ProptestConfig::default()})]
+
+        #[test]
+        fn coverage_trace_preserves_read_and_write_decisions(text in expression(), authenticated in any::<bool>()) {
+            let mut spec = read_rule_at_t(&text);
+            let at_t = spec.children.get_mut("t").unwrap();
+            at_t.write = at_t.read.clone();
+            if let Ok(rules) = Rules::compile(&spec) {
+                let before = seed();
+                let after = tree_with(serde_json::json!({"t":"changed"}));
+                let auth = if authenticated {auth()} else {Json::Null};
+                let requester = Requester {auth:&auth,now:123};
+                rules.set_coverage_enabled(false);
+                let read = rules.can_read(before.root(), &p("t"), None, &requester);
+                let write = rules.can_write(before.root(), after.root(), &[p("t")], &requester);
+                let empty = rules.coverage_report();
+                rules.set_coverage_enabled(true);
+                prop_assert_eq!(rules.can_read(before.root(), &p("t"), None, &requester),read);
+                prop_assert_eq!(rules.can_write(before.root(), after.root(), &[p("t")], &requester),write);
+                rules.set_coverage_enabled(false);
+                let recorded = rules.coverage_report();
+                rules.can_read(before.root(), &p("t"), None, &requester);
+                prop_assert_eq!(rules.coverage_report(),recorded);
+                prop_assert_ne!(empty, rules.coverage_report());
+            }
+        }
+
+        #[test]
+        fn coverage_decoded_utf16_ranges_select_their_text(parts in prop::collection::vec(prop::sample::select(vec!["a","é","😀"]),0..8)) {
+            let subject=parts.concat();
+            let text=format!("  '{subject}'.length >= 0 && (\ntrue || data.child('x').exists()) ");
+            assert_coverage_ranges(&text);
+        }
+    }
+
+    proptest! {
         #![proptest_config(ProptestConfig::with_cases(2048))]
 
         /// Loading and running any expression ends with a decision or a load error, never a
@@ -973,4 +1009,101 @@ fn chains_of_one_associative_operator_have_no_depth() {
         now: 0,
     };
     assert!(rules.can_read(tree.root(), &p("/t"), None, &requester));
+}
+
+#[test]
+fn coverage_observation_can_be_disabled_without_changing_authorization() {
+    let expressions = [
+        "true",
+        "false",
+        "true || data.val().contains('x')",
+        "data.val().contains('x')",
+        "'é😀'.length == 3",
+        "auth != null && auth.uid == 'u1'",
+    ];
+    for expression in expressions {
+        let rules = Rules::compile(&read_rule_at_t(expression)).unwrap();
+        rules.set_coverage_enabled(false);
+        let tree = seed();
+        let auth = auth();
+        let requester = Requester {
+            auth: &auth,
+            now: 123,
+        };
+        let expected = rules.can_read(tree.root(), &p("t"), None, &requester);
+        let empty = rules.coverage_report();
+        rules.set_coverage_enabled(true);
+        assert_eq!(
+            rules.can_read(tree.root(), &p("t"), None, &requester),
+            expected,
+            "{expression}"
+        );
+        assert_ne!(rules.coverage_report(), empty, "{expression}");
+    }
+}
+
+fn assert_coverage_ranges(text: &str) {
+    let spec = read_rule_at_t(text);
+    let rules = Rules::compile(&spec).unwrap();
+    let RuleSource::Expr(source) = spec.children["t"].read.as_ref().unwrap() else {
+        panic!("expression")
+    };
+    let (row, column) = source.positions[0];
+    let mut at = (row - 1, column - 1);
+    let mut positions = std::collections::BTreeMap::new();
+    let mut index = 0;
+    for character in text.chars() {
+        for unit in 0..character.len_utf16() {
+            positions.insert(format!("{}:{}", at.0, at.1 + unit), index + unit);
+        }
+        index += character.len_utf16();
+        if character == '\n' {
+            at = (at.0 + 1, 0);
+        } else {
+            at.1 += character.len_utf16();
+        }
+    }
+    let encoded: Vec<_> = text.encode_utf16().collect();
+    let report = rules.coverage_report();
+    let Json::Object(report) = report else {
+        panic!("object")
+    };
+    let Json::Object(level) = &report["t"] else {
+        panic!("object")
+    };
+    let mut pending = vec![&level[".read"]];
+    while let Some(node) = pending.pop() {
+        let Json::Object(node) = node else {
+            panic!("expression")
+        };
+        let Json::String(start) = &node["location-start"] else {
+            panic!("start")
+        };
+        let Json::String(end) = &node["location-end"] else {
+            panic!("end")
+        };
+        let Json::String(actual) = &node["text"] else {
+            panic!("text")
+        };
+        let first = positions[start];
+        let last = positions[end];
+        assert_eq!(String::from_utf16(&encoded[first..=last]).unwrap(), *actual);
+        if let Some(Json::Array(children)) = node.get("children") {
+            pending.extend(children);
+        }
+    }
+}
+
+#[test]
+fn coverage_keeps_local_escaped_literal_and_multiline_spans() {
+    for text in [
+        r"'a\\b'.length > 0",
+        r"'a\'b'.length > 0",
+        "('é😀'.length > 0) &&\n true",
+        "true && true && false || true",
+        "auth['uid'] == 'u1'",
+        "query.orderByChild == 'a/b'",
+    ] {
+        assert_coverage_ranges(text);
+    }
 }

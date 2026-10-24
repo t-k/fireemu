@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "source": "spec section 23.3 (single source of truth for Loom scenario names)",
   "scenarios": [
+    "database_source_and_event_remain_atomic_across_reset",
     "reset_races_with_commit",
     "await_idle_races_with_child_enqueue",
     "event_success_races_with_retry_timer",

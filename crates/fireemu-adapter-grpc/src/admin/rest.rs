@@ -419,7 +419,20 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
             None,
         ) => match live_native(state, project, database) {
             Ok(()) => {
-                super::index_rest::route(state, project, database, group, method, rest, &req.body)
+                if method == "GET"
+                    && rest.is_empty()
+                    && unsupported_index_page_size(state, project, database, &params)
+                {
+                    error(
+                        tonic::Code::InvalidArgument,
+                        "Invalid page size. Only 0 is supported.",
+                        None,
+                    )
+                } else {
+                    super::index_rest::route(
+                        state, project, database, group, method, rest, &req.body,
+                    )
+                }
             }
             Err(response) => response,
         },
@@ -918,6 +931,30 @@ fn live_native(state: &RestState, project: &str, database: &str) -> Result<(), R
         None => Err(missing_database(project, database)),
         Some(_) => Ok(()),
     }
+}
+
+fn unsupported_index_page_size(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    params: &BTreeMap<String, Vec<String>>,
+) -> bool {
+    let nondefault = param(params, "pageSize")
+        .and_then(|size| size.parse::<i32>().ok())
+        .is_some_and(|size| size != 0);
+    nondefault
+        && state
+            .local
+            .admin()
+            .get(
+                project,
+                database,
+                exists_unprompted(state, project, database),
+            )
+            .is_some_and(|record| {
+                record.edition == DatabaseEdition::Enterprise
+                    && record.database_type == DatabaseType::FirestoreNative
+            })
 }
 
 fn enterprise_only(state: &RestState, project: &str, database: &str) -> RestResponse {

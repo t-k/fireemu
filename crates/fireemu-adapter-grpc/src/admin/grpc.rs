@@ -706,7 +706,12 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     ) -> R<admin::ListIndexesResponse> {
         let r = request.get_ref();
         let parent = resource(&r.parent, Kind::CollectionGroup)?;
-        let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
+        let page_size = r.page_size.to_string();
+        let query = encode_query(&[
+            ("filter", &r.filter),
+            ("pageToken", &r.page_token),
+            ("pageSize", &page_size),
+        ]);
         let path = format!("{parent}/indexes");
         let answer = self
             .call(&request, "GET", &path, &query, Value::Null)

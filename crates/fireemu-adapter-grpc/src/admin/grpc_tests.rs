@@ -475,3 +475,27 @@ async fn a_field_name_with_special_characters_is_answered_over_grpc_as_over_rest
     assert_eq!(read.name, over_rest["name"]);
     assert_eq!(read.name, name);
 }
+
+#[tokio::test]
+async fn enterprise_native_index_page_size_reaches_rest_validation() {
+    let state = state();
+    let (status, _) = rest(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=entpages",
+        json!({"locationId":"us-central1", "type":"FIRESTORE_NATIVE", "databaseEdition":"ENTERPRISE"}),
+    );
+    assert_eq!(status, 200);
+    let service = AdminGrpc::new(state);
+    let request = |size| {
+        owner(admin::ListIndexesRequest {
+            parent: "projects/p/databases/entpages/collectionGroups/items".into(),
+            page_size: size,
+            ..admin::ListIndexesRequest::default()
+        })
+    };
+    let error = service.list_indexes(request(100)).await.unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert_eq!(error.message(), "Invalid page size. Only 0 is supported.");
+    assert!(service.list_indexes(request(0)).await.is_ok());
+}

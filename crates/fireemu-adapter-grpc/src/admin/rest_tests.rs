@@ -2229,3 +2229,57 @@ fn strict_import_applies_commit_route_limits_to_exported_documents() {
     );
     assert_eq!(status, 200);
 }
+
+#[test]
+fn enterprise_native_index_listing_requires_default_page_size() {
+    let (state, _) = state();
+    let mut database = native();
+    database["databaseEdition"] = json!("ENTERPRISE");
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=entpages",
+        database,
+    );
+    assert_eq!(status, 200);
+    let path = "/v1/projects/p/databases/entpages/collectionGroups/items/indexes";
+    let (status, body) = call(&state, "GET", &format!("{path}?pageSize=100"), Value::Null);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body,
+        json!({"error": {
+            "code": 400, "message": "Invalid page size. Only 0 is supported.",
+            "status": "INVALID_ARGUMENT"
+        }})
+    );
+    let with_page_size = call(
+        &state,
+        "GET",
+        &format!("{path}/missing?pageSize=100"),
+        Value::Null,
+    );
+    let without_page_size = call(&state, "GET", &format!("{path}/missing"), Value::Null);
+    assert_eq!(with_page_size, without_page_size);
+    assert_eq!(
+        without_page_size.1["error"]["message"],
+        "Invalid index resource id \"missing\"."
+    );
+    for suffix in ["", "?pageSize=0"] {
+        let (status, body) = call(&state, "GET", &format!("{path}{suffix}"), Value::Null);
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=stdpages",
+        native(),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/stdpages/collectionGroups/items/indexes?pageSize=100",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{body}");
+}

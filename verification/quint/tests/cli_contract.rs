@@ -940,6 +940,7 @@ fn authority_script_declares_all_models_and_ordered_gates() {
         "CompatibilitySelection",
         "EventDelivery",
         "FirestoreListenRefresh",
+        "LimitRejection",
         "RegexAuthorization",
         "RegexEvaluationCache",
         "RegexLinearRepeat",
@@ -1165,9 +1166,10 @@ fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied(
 }
 
 #[test]
-fn readme_declares_the_fourteen_model_authority_and_generated_conformance() {
+fn readme_declares_the_fifteen_model_authority_and_generated_conformance() {
     let readme = fs::read_to_string(readme_path()).expect("authority README must exist");
     assert!(readme.contains("repository's formal verification authority"));
+    assert!(readme.contains("`LimitRejection`"));
     assert!(readme.contains("`AwaitIdle`"));
     assert!(readme.contains("`CompatibilitySelection`"));
     assert!(readme.contains("`FirestoreListenRefresh`"));

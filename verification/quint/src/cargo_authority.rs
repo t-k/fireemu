@@ -16,7 +16,7 @@ const TARGET: &str = "x86_64-unknown-linux-gnu";
 pub struct CargoAuthority {
     /// Authority schema version.
     pub schema_version: u32,
-    /// Workspace package whose transitive graph is recorded.
+    /// Verification package anchoring the graph, including model source owners.
     pub root_package: String,
     /// Cargo target used while resolving target-specific dependencies.
     pub target: String,
@@ -38,13 +38,16 @@ pub struct AuthorityPackage {
     pub source: Option<String>,
     /// Repository-relative manifest for workspace packages.
     pub manifest: Option<String>,
+    /// Repository-relative custom build target, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_script: Option<String>,
     /// Enabled features for this resolved node.
     pub features: Vec<String>,
     /// Canonical identities of resolved normal and build dependencies.
     pub dependencies: Vec<String>,
 }
 
-/// Resolves the locked Quint dependency graph without accessing the network.
+/// Resolves locked verification and production-owner dependencies without network access.
 pub fn build_authority(repository_root: &Path) -> Result<CargoAuthority, String> {
     let repository_root = fs::canonicalize(repository_root).map_err(|error| {
         format!(
@@ -71,7 +74,10 @@ pub fn build_authority(repository_root: &Path) -> Result<CargoAuthority, String>
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    authority_from_metadata(&repository_root, &output.stdout)
+    let production_sources = crate::model::all_models()
+        .flat_map(|descriptor| descriptor.production_sources.iter().copied())
+        .collect::<Vec<_>>();
+    authority_from_metadata(&repository_root, &output.stdout, &production_sources)
 }
 
 /// Writes stable, newline-terminated authority JSON.
@@ -109,7 +115,11 @@ pub fn validate_authority_file(repository_root: &Path, path: &Path) -> Result<()
     }
 }
 
-fn authority_from_metadata(repository_root: &Path, bytes: &[u8]) -> Result<CargoAuthority, String> {
+fn authority_from_metadata(
+    repository_root: &Path,
+    bytes: &[u8],
+    production_sources: &[&str],
+) -> Result<CargoAuthority, String> {
     let metadata: serde_json::Value = serde_json::from_slice(bytes)
         .map_err(|error| format!("invalid cargo metadata JSON: {error}"))?;
     let package_values = metadata["packages"]
@@ -140,6 +150,9 @@ fn authority_from_metadata(repository_root: &Path, bytes: &[u8]) -> Result<Cargo
 
     let mut reachable = BTreeSet::new();
     let mut pending = vec![root_raw_id.to_owned()];
+    for source in production_sources {
+        pending.push(production_source_owner(repository_root, source, package_values)?.to_owned());
+    }
     while let Some(raw_id) = pending.pop() {
         if !reachable.insert(raw_id.clone()) {
             continue;
@@ -185,6 +198,7 @@ fn authority_from_metadata(repository_root: &Path, bytes: &[u8]) -> Result<Cargo
             version: string_field(package, "version")?.to_owned(),
             source,
             manifest,
+            build_script: build_script(repository_root, package)?,
             features,
             dependencies,
         });
@@ -197,6 +211,51 @@ fn authority_from_metadata(repository_root: &Path, bytes: &[u8]) -> Result<Cargo
         target: TARGET.to_owned(),
         packages,
     })
+}
+
+fn production_source_owner<'a>(
+    repository_root: &Path,
+    source: &str,
+    packages: &'a [serde_json::Value],
+) -> Result<&'a str, String> {
+    let source = repository_root.join(source);
+    packages
+        .iter()
+        .filter(|package| package["source"].is_null())
+        .filter_map(|package| {
+            let manifest = Path::new(package["manifest_path"].as_str()?);
+            let directory = manifest.parent()?;
+            source
+                .starts_with(directory)
+                .then_some((directory.components().count(), package))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, package)| string_field(package, "id"))
+        .transpose()?
+        .ok_or_else(|| {
+            format!(
+                "cargo metadata has no production source owner for {}",
+                source.display()
+            )
+        })
+}
+
+fn build_script(
+    repository_root: &Path,
+    package: &serde_json::Value,
+) -> Result<Option<String>, String> {
+    package["targets"]
+        .as_array()
+        .filter(|_| package["source"].is_null())
+        .and_then(|targets| {
+            targets.iter().find(|target| {
+                target["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind == "custom-build"))
+            })
+        })
+        .map(|target| relative_path(repository_root, string_field(target, "src_path")?))
+        .transpose()
 }
 
 fn canonical_id(repository_root: &Path, package: &serde_json::Value) -> Result<String, String> {
@@ -213,7 +272,11 @@ fn relative_manifest(
     repository_root: &Path,
     package: &serde_json::Value,
 ) -> Result<String, String> {
-    let manifest = PathBuf::from(string_field(package, "manifest_path")?);
+    relative_path(repository_root, string_field(package, "manifest_path")?)
+}
+
+fn relative_path(repository_root: &Path, value: &str) -> Result<String, String> {
+    let manifest = PathBuf::from(value);
     let relative = manifest.strip_prefix(repository_root).map_err(|_| {
         format!(
             "workspace manifest {} is outside repository {}",
@@ -245,29 +308,55 @@ fn string_array(value: &serde_json::Value, field: &str) -> Result<Vec<String>, S
 }
 
 fn authority_dependencies(node: &serde_json::Value) -> Result<Vec<String>, String> {
-    node["deps"]
+    let dependencies = node["deps"]
         .as_array()
-        .ok_or_else(|| "cargo metadata node has no deps array".to_owned())?
-        .iter()
-        .filter(|dependency| {
-            dependency["dep_kinds"].as_array().is_some_and(|kinds| {
-                kinds
-                    .iter()
-                    .any(|kind| kind["kind"].is_null() || kind["kind"].as_str() == Some("build"))
-            })
-        })
-        .map(|dependency| {
-            dependency["pkg"]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| "cargo metadata dependency has no package id".to_owned())
-        })
-        .collect()
+        .ok_or_else(|| "cargo metadata node has no deps array".to_owned())?;
+    let mut included = Vec::new();
+    for dependency in dependencies {
+        let kinds = dependency["dep_kinds"]
+            .as_array()
+            .filter(|kinds| !kinds.is_empty())
+            .ok_or_else(|| "cargo metadata dependency has no dependency kinds".to_owned())?;
+        let mut follows = false;
+        for kind in kinds {
+            match kind.get("kind") {
+                Some(serde_json::Value::Null) => follows = true,
+                Some(serde_json::Value::String(value)) if value == "build" => follows = true,
+                Some(serde_json::Value::String(value)) if value == "dev" => {}
+                _ => {
+                    return Err(
+                        "cargo metadata dependency has an invalid dependency kind".to_owned()
+                    )
+                }
+            }
+        }
+        let package = string_field(dependency, "pkg")?;
+        if follows {
+            included.push(package.to_owned());
+        }
+    }
+    Ok(included)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_dependency_kinds_are_rejected_instead_of_omitted() {
+        for kinds in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!([{}]),
+            serde_json::json!([{"kind": "unknown"}]),
+        ] {
+            let node = serde_json::json!({"deps": [{"pkg": "helper", "dep_kinds": kinds}]});
+            assert!(
+                authority_dependencies(&node).is_err(),
+                "malformed dependency disappeared: {node}"
+            );
+        }
+    }
 
     #[test]
     fn authority_follows_normal_and_build_edges_but_not_dev_edges() {
@@ -311,6 +400,7 @@ mod tests {
         let authority = authority_from_metadata(
             root,
             &serde_json::to_vec(&metadata).expect("metadata must serialize"),
+            &[],
         )
         .expect("synthetic metadata must produce an authority");
         let names = authority

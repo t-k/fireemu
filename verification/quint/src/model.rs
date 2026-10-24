@@ -158,7 +158,11 @@ const MODELS: &[ModelDescriptor] = &[
         ],
         driver: "verification/quint/src/atomic_commit_outbox.rs",
         connect_test: "verification/quint/tests/atomic_commit_outbox_connect.rs",
-        additional_evidence_inputs: &[],
+        additional_evidence_inputs: &[
+            "crates/fireemu-adapter-functions/tests/fake_runner.py",
+            "conformance/fs-ent-pipeline-requests.json",
+            "conformance/fs-ent-pipeline-production.json",
+        ],
     },
     ModelDescriptor {
         name: "AtomicExportPublication",
@@ -205,7 +209,12 @@ const MODELS: &[ModelDescriptor] = &[
         ],
         driver: "verification/quint/src/atomic_export_publication.rs",
         connect_test: "verification/quint/tests/atomic_export_publication_connect.rs",
-        additional_evidence_inputs: &[],
+        additional_evidence_inputs: &[
+            "conformance/fs-ent-pipeline-requests.json",
+            "conformance/fs-ent-pipeline-production.json",
+            "spec/config/fireemu.schema.json",
+            "tests/support/trusted_temp.rs",
+        ],
     },
     ModelDescriptor {
         name: "AuthTotp",
@@ -316,7 +325,10 @@ const MODELS: &[ModelDescriptor] = &[
         projection_fields: &["fence", "inFlight", "reservations", "returned"],
         driver: "verification/quint/src/await_idle.rs",
         connect_test: "verification/quint/tests/await_idle_connect.rs",
-        additional_evidence_inputs: &[],
+        additional_evidence_inputs: &[
+            "conformance/fs-ent-pipeline-requests.json",
+            "conformance/fs-ent-pipeline-production.json",
+        ],
     },
     ModelDescriptor {
         name: "CompatibilitySelection",
@@ -377,6 +389,9 @@ const MODELS: &[ModelDescriptor] = &[
         additional_evidence_inputs: &[
             "crates/fireemu-core-auth/tests/store.rs",
             "crates/fireemu-adapter-http/tests/auth_flows.rs",
+            "conformance/fs-ent-pipeline-requests.json",
+            "conformance/fs-ent-pipeline-production.json",
+            "spec/config/fireemu.schema.json",
         ],
     },
     ModelDescriptor {
@@ -565,7 +580,61 @@ const MODELS: &[ModelDescriptor] = &[
         ],
         driver: "verification/quint/src/firestore_listen_refresh.rs",
         connect_test: "verification/quint/tests/firestore_listen_refresh_connect.rs",
-        additional_evidence_inputs: &["crates/fireemu-core-firestore/src/query.rs"],
+        additional_evidence_inputs: &[
+            "crates/fireemu-core-firestore/src/query.rs",
+            "conformance/fs-ent-pipeline-requests.json",
+            "conformance/fs-ent-pipeline-production.json",
+        ],
+    },
+    ModelDescriptor {
+        name: "LimitRejection",
+        spec: "specs/LimitRejection.qnt",
+        main: "LimitRejectionProof",
+        config: "configs/LimitRejection.json",
+        mutation_manifest: "mutations/LimitRejection.json",
+        properties: &[
+            invariant("TypeOK"),
+            invariant("LimitRejectionAtomicity"),
+            invariant("NoPublicationDuringStaging"),
+            invariant("ValidCommitPublishesAllWrites"),
+        ],
+        actions: &["Seed", "Begin", "Stage", "Attempt", "Reset"],
+        production_sources: &[
+            "crates/fireemu-core-firestore/src/store.rs",
+            "crates/fireemu-adapter-grpc/src/local.rs",
+            "crates/fireemu-adapter-functions/src/runtime.rs",
+        ],
+        bounds: &[
+            BoundDescriptor {
+                name: "Docs",
+                value: "{d1,d2}",
+            },
+            BoundDescriptor {
+                name: "Fanout",
+                value: "2",
+            },
+            BoundDescriptor {
+                name: "MaxVersion",
+                value: "2",
+            },
+        ],
+        scenarios: &["sizeEmpty", "sizeSeeded", "transformsSeeded", "valid"],
+        projection_fields: &[
+            "documents",
+            "outbox",
+            "transactionState",
+            "reservedEvents",
+            "publishedEvents",
+            "eventGeneration",
+        ],
+        driver: "verification/quint/src/limit_rejection.rs",
+        connect_test: "verification/quint/tests/limit_rejection_connect.rs",
+        additional_evidence_inputs: &[
+            "crates/fireemu-adapter-functions/tests/fake_runner.py",
+            "verification/quint/src/atomic_commit_outbox.rs",
+            "conformance/fs-ent-pipeline-requests.json",
+            "conformance/fs-ent-pipeline-production.json",
+        ],
     },
     ModelDescriptor {
         name: "RegexAuthorization",

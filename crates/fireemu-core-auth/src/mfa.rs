@@ -564,13 +564,31 @@ pub fn match_code(
     if secret.is_detached() {
         return CodeMatch::NoMatch;
     }
-    let current = time_step(params, now);
+    match_step_window(
+        time_step(params, now),
+        window_steps,
+        last_accepted,
+        |step| hotp(secret.expose_for_enrollment(), step, params.digits) == code,
+    )
+}
+
+/// Selects the first fresh matching step in the inclusive, saturating TOTP window.
+///
+/// The matcher supplies the cryptographic comparison; production uses the actual HOTP code.
+/// Separating selection permits verification without assuming collision-free numeric codes.
+#[must_use]
+pub fn match_step_window(
+    current: u64,
+    window_steps: u8,
+    last_accepted: Option<u64>,
+    mut matches: impl FnMut(u64) -> bool,
+) -> CodeMatch {
     let window = u64::from(window_steps);
     let low = current.saturating_sub(window);
     let high = current.saturating_add(window);
     let mut replayed = false;
     for step in low..=high {
-        if hotp(secret.expose_for_enrollment(), step, params.digits) == code {
+        if matches(step) {
             match last_accepted {
                 Some(last) if step <= last => replayed = true,
                 _ => return CodeMatch::Accepted { step },

@@ -649,7 +649,7 @@ fn a_ttl_patch_beyond_the_catalog_bound_is_resource_exhausted() {
 }
 
 #[test]
-fn field_configuration_operations_are_not_served_for_a_non_standard_native_database() {
+fn enterprise_native_operation_inventory_is_available_without_enabling_fields() {
     let state = state_with(FirestoreEdition::Enterprise, FirestoreApiMode::Native);
     let (status, body) = call(
         &state,
@@ -657,8 +657,8 @@ fn field_configuration_operations_are_not_served_for_a_non_standard_native_datab
         "/v1/projects/demo/databases/(default)/operations",
         Value::Null,
     );
-    assert_eq!(status, 501, "{body}");
-    assert_eq!(body["error"]["status"], json!("UNIMPLEMENTED"));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, json!({}));
 }
 
 #[test]

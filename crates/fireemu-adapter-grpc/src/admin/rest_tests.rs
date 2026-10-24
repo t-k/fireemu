@@ -34,11 +34,25 @@ fn state_with(
     enforce_limits: bool,
     policy: IndexValidationPolicy,
 ) -> (RestState, Arc<Mutex<VirtualClock>>) {
+    state_with_context(
+        enforce_limits,
+        policy,
+        FirestoreEdition::Standard,
+        FirestoreApiMode::Native,
+    )
+}
+
+fn state_with_context(
+    enforce_limits: bool,
+    policy: IndexValidationPolicy,
+    edition: FirestoreEdition,
+    api_mode: FirestoreApiMode,
+) -> (RestState, Arc<Mutex<VirtualClock>>) {
     let gateway = Gateway {
         enforce_limits,
         ctx: PlanningContext {
-            edition: FirestoreEdition::Standard,
-            api_mode: FirestoreApiMode::Native,
+            edition,
+            api_mode,
             policy,
         },
         indexes: IndexSet::default(),
@@ -2282,4 +2296,218 @@ fn enterprise_native_index_listing_requires_default_page_size() {
         Value::Null,
     );
     assert_eq!(status, 200, "{body}");
+}
+
+fn enterprise_native_state(strict: bool) -> (RestState, Arc<Mutex<VirtualClock>>) {
+    let (state, clock) = state_with_context(
+        strict,
+        if strict {
+            IndexValidationPolicy::Production
+        } else {
+            IndexValidationPolicy::Emulator
+        },
+        FirestoreEdition::Enterprise,
+        FirestoreApiMode::Native,
+    );
+    state
+        .local
+        .replace_declared_databases(["entnamed".to_owned()]);
+    (state, clock)
+}
+
+#[test]
+fn configured_enterprise_native_admin_preserves_data_access() {
+    for strict in [true, false] {
+        let (state, _) = enterprise_native_state(strict);
+        for database in ["(default)", "entnamed"] {
+            let base = format!("/v1/projects/p/databases/{database}");
+            let index = format!("{base}/collectionGroups/items/indexes");
+            let pipeline = json!({"structuredPipeline":{"pipeline":{"stages":[
+                {"name":"collection","args":[{"referenceValue":"/items"}]}
+            ]}}});
+            for phase in ["before", "after"] {
+                let path = format!("{base}/documents/items/{phase}");
+                let (status, body) = call(
+                    &state,
+                    "PATCH",
+                    &path,
+                    json!({"fields":{"a":{"integerValue":"1"}}}),
+                );
+                assert_eq!(status, 200, "{strict} {database} {phase}: {body}");
+                let (status, body) = call(&state, "GET", &path, Value::Null);
+                assert_eq!(status, 200, "{body}");
+                let (status, body) = call(
+                    &state,
+                    "POST",
+                    &format!("{base}/documents:executePipeline"),
+                    pipeline.clone(),
+                );
+                assert_eq!(status, 200, "{strict} {phase}: {body}");
+                assert_eq!(
+                    body.as_array().unwrap().len(),
+                    if phase == "before" { 1 } else { 2 }
+                );
+                for suffix in ["", "?pageSize=0"] {
+                    let (status, body) =
+                        call(&state, "GET", &format!("{index}{suffix}"), Value::Null);
+                    assert_eq!(status, 200, "{strict} {database}: {body}");
+                }
+                let record = state.local.admin().get("p", database, true).unwrap();
+                let metadata = super::rest::database_json(&record, state.local.admin_now(), None);
+                assert_eq!(metadata["databaseEdition"], "ENTERPRISE");
+                assert_eq!(metadata["type"], "FIRESTORE_NATIVE");
+                assert_eq!(metadata["concurrencyMode"], "OPTIMISTIC");
+                assert_eq!(
+                    metadata["firestoreDataAccessMode"],
+                    "DATA_ACCESS_MODE_ENABLED"
+                );
+                assert_eq!(
+                    metadata["mongodbCompatibleDataAccessMode"],
+                    "DATA_ACCESS_MODE_DISABLED"
+                );
+                let (status, body) =
+                    call(&state, "GET", &format!("{index}?pageSize=100"), Value::Null);
+                assert_eq!(status, 400, "{body}");
+                assert_eq!(
+                    body["error"]["message"],
+                    "Invalid page size. Only 0 is supported."
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn configured_enterprise_native_indexes_and_operations_are_scoped() {
+    let (state, clock) = enterprise_native_state(true);
+    state
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::from_secs(60));
+    for database in ["(default)", "entnamed"] {
+        let group = format!("/v1/projects/p/databases/{database}/collectionGroups/items/indexes");
+        let (status, operation) = call(
+            &state,
+            "POST",
+            &group,
+            json!({"queryScope":"COLLECTION","fields":[
+                {"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}
+            ]}),
+        );
+        assert_eq!(status, 200, "{operation}");
+        let index = format!("/v1/{}", operation["metadata"]["index"].as_str().unwrap());
+        let operation_path = format!("/v1/{}", operation["name"].as_str().unwrap());
+        assert_eq!(
+            call(&state, "GET", &index, Value::Null).1["state"],
+            "CREATING"
+        );
+        assert_eq!(call(&state, "GET", &operation_path, Value::Null).0, 200);
+        let operations = format!("/v1/projects/p/databases/{database}/operations");
+        assert_eq!(
+            call(&state, "GET", &operations, Value::Null).1["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let foreign = operation_path.replacen("/projects/p/", "/projects/other/", 1);
+        assert_eq!(call(&state, "GET", &foreign, Value::Null).0, 404);
+        advance(&clock, 60);
+        assert_eq!(
+            call(&state, "GET", &operation_path, Value::Null).1["done"],
+            true
+        );
+        assert_eq!(call(&state, "GET", &index, Value::Null).1["state"], "READY");
+        assert_eq!(
+            call(&state, "DELETE", &index, Value::Null),
+            (200, json!({}))
+        );
+        assert_eq!(call(&state, "GET", &index, Value::Null).0, 404);
+    }
+}
+
+#[test]
+fn configured_admin_gate_preserves_unrelated_and_mongodb_refusals() {
+    for mode in [
+        FirestoreApiMode::Native,
+        FirestoreApiMode::MongoDbCompatible,
+    ] {
+        let (state, _) = state_with_context(
+            true,
+            IndexValidationPolicy::Production,
+            FirestoreEdition::Enterprise,
+            mode,
+        );
+        for (method, suffix) in [
+            ("GET", ""),
+            ("PATCH", ""),
+            ("DELETE", ""),
+            ("GET", "/changeStreams"),
+            ("GET", "/userCreds/u"),
+            ("POST", ":exportDocuments"),
+            ("POST", ":importDocuments"),
+            ("POST", ":bulkDeleteDocuments"),
+        ] {
+            let (status, body) = call(
+                &state,
+                method,
+                &format!("/v1/projects/p/databases/(default){suffix}"),
+                Value::Null,
+            );
+            assert_eq!(status, 501, "{mode:?} {suffix}: {body}");
+        }
+        if mode == FirestoreApiMode::MongoDbCompatible {
+            for suffix in ["collectionGroups/items/indexes", "operations"] {
+                assert_eq!(
+                    call(
+                        &state,
+                        "GET",
+                        &format!("/v1/projects/p/databases/(default)/{suffix}"),
+                        Value::Null
+                    )
+                    .0,
+                    501
+                );
+            }
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(48))]
+    #[test]
+    fn configured_enterprise_native_route_boundary(
+        strict in proptest::prelude::any::<bool>(),
+        named in proptest::prelude::any::<bool>(),
+        mongo in proptest::prelude::any::<bool>(),
+        route in 0_usize..16,
+    ) {
+        let mode = if mongo { FirestoreApiMode::MongoDbCompatible } else { FirestoreApiMode::Native };
+        let (state, _) = state_with_context(strict,
+            if strict { IndexValidationPolicy::Production } else { IndexValidationPolicy::Emulator },
+            FirestoreEdition::Enterprise, mode);
+        state.local.replace_declared_databases(["entnamed".to_owned()]);
+        let database = if named { "entnamed" } else { "(default)" };
+        let (method, suffix, allowed) = [
+            ("GET", "/collectionGroups/items/indexes", true),
+            ("GET", "/collectionGroups/items/indexes/missing", true),
+            ("GET", "/operations", true),
+            ("GET", "/operations/missing", true),
+            ("POST", "/collectionGroups/items/indexes", true),
+            ("DELETE", "/collectionGroups/items/indexes/missing", true),
+            ("DELETE", "/operations/missing", true),
+            ("POST", "/operations/missing:cancel", true),
+            ("DELETE", "/operations", false),
+            ("POST", "/operations/missing", false),
+            ("POST", "/collectionGroups/items/indexes/missing", false),
+            ("GET", "", false),
+            ("GET", "/userCreds", false),
+            ("POST", ":exportDocuments", false),
+            ("PATCH", "/collectionGroups/items/indexes/missing", false),
+            ("POST", "/operations", false),
+        ][route];
+        let (status, _) = call(&state, method, &format!("/v1/projects/p/databases/{database}{suffix}"), Value::Null);
+        proptest::prop_assert_eq!(status != 501, allowed && !mongo);
+    }
 }

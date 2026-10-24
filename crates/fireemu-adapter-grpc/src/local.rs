@@ -2617,6 +2617,16 @@ impl LocalBackend {
             .lock()
             .map(|clock| clock.now())
             .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH);
+        let configured_edition = match gateway.ctx.edition {
+            fireemu_core_types::edition::FirestoreEdition::Standard => {
+                crate::admin::catalog::DatabaseEdition::Standard
+            }
+            fireemu_core_types::edition::FirestoreEdition::Enterprise => {
+                crate::admin::catalog::DatabaseEdition::Enterprise
+            }
+        };
+        let configured_native_data_access =
+            gateway.ctx.api_mode == fireemu_core_types::edition::FirestoreApiMode::Native;
         Self {
             created_at,
             contention_wait: std::time::Duration::ZERO,
@@ -2644,7 +2654,10 @@ impl LocalBackend {
             declared_databases: RwLock::new(BTreeSet::new()),
             implicit_database_creation: false,
             database_incarnations: std::sync::atomic::AtomicU64::new(0),
-            admin: Arc::new(crate::admin::catalog::AdminCatalog::new(seed, created_at)),
+            admin: Arc::new(
+                crate::admin::catalog::AdminCatalog::new(seed, created_at)
+                    .with_configured_access(configured_edition, configured_native_data_access),
+            ),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),

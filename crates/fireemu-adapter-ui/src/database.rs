@@ -83,32 +83,15 @@ fn encode(value: &str) -> String {
         .collect()
 }
 fn decode(text: &str) -> Result<String, UiResponse> {
-    let bytes = text.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let value = u8::from_str_radix(&text[index + 1..index + 3], 16)
-                .map_err(|_| invalid("Malformed query escape"))?;
-            decoded.push(value);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(decoded).map_err(|_| invalid("Invalid UTF-8 in query"))
+    String::from_utf8(fireemu_core_types::codec::percent_decode_bytes(
+        text,
+        fireemu_core_types::codec::PlusMode::Literal,
+    ))
+    .map_err(|_| invalid("Invalid UTF-8 in query"))
 }
 fn parameters(query: &str) -> Result<BTreeMap<String, String>, UiResponse> {
-    let bytes = query.as_bytes();
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte == b'%'
-            && (index + 2 >= bytes.len()
-                || !bytes[index + 1].is_ascii_hexdigit()
-                || !bytes[index + 2].is_ascii_hexdigit())
-        {
-            return Err(invalid("Malformed query escape"));
-        }
+    if !fireemu_core_types::codec::percent_escapes_are_well_formed(query) {
+        return Err(invalid("Malformed query escape"));
     }
     let mut result = BTreeMap::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
@@ -404,5 +387,137 @@ mod tests {
         assert!(!member(&membership, "unknown", "demo-a"));
         assert!(!member(&membership, "named", "other"));
         assert!(!member(&membership, "other-default-rtdb", "demo-a"));
+    }
+
+    fn assert_query_error(query: &str, message: &str) {
+        let response = parameters(query).unwrap_err();
+        assert_eq!(response.status, 400, "{query}");
+        assert_eq!(
+            response.body_json(),
+            invalid(message).body_json(),
+            "{query}"
+        );
+    }
+
+    #[test]
+    fn query_codec_obeys_strict_utf8_for_every_single_byte_escape() {
+        for byte in 0..=u8::MAX {
+            let query = format!("key=%{byte:02X}");
+            let bytes = [byte];
+            match std::str::from_utf8(&bytes) {
+                Ok(value) if crate::has_control_chars(value) => {
+                    assert_query_error(&query, "Ambiguous or invalid query");
+                }
+                Ok(value) => assert_eq!(parameters(&query).unwrap()["key"], value),
+                Err(_) => assert_query_error(&query, "Invalid UTF-8 in query"),
+            }
+        }
+    }
+
+    #[test]
+    fn query_codec_preserves_generated_pairwise_contracts() {
+        // PICT pairwise rows, including all nine mandatory regression seeds.
+        let rows = "Content\tEscape\tPlus\tPosition\nascii\tvalid\tabsent\tvalue\nascii\tvalid\traw\tvalue\nascii\tvalid\tencoded\tvalue\nunicode\tvalid\tabsent\tvalue\ndelimiters\tvalid\tabsent\tvalue\nnested\tvalid\tabsent\tvalue\nascii\tmalformed\tabsent\tvalue\nascii\tinvalid_utf8\tabsent\tvalue\nascii\tprecedence\tabsent\tvalue\nnested\tinvalid_utf8\tencoded\tname\nnested\tmalformed\traw\tname\ndelimiters\tinvalid_utf8\traw\tname\nunicode\tinvalid_utf8\tencoded\tname\nunicode\tmalformed\traw\tname\nunicode\tprecedence\tencoded\tname\ndelimiters\tprecedence\tencoded\tname\nascii\tmalformed\tencoded\tname\ndelimiters\tmalformed\tabsent\tname\nnested\tprecedence\traw\tvalue\nascii\tvalid\tencoded\tname\n";
+        for row in rows.lines().skip(1) {
+            let columns: Vec<_> = row.split('\t').collect();
+            let (raw, decoded) = match columns[0] {
+                "ascii" => ("child", "child"),
+                "unicode" => ("%C3%A9", "é"),
+                "delimiters" => ("a%26b%3Dc%2fd", "a&b=c/d"),
+                "nested" => ("orderBy%3D%2522name%2522", "orderBy=%22name%22"),
+                other => panic!("Unknown generated content: {other}"),
+            };
+            let suffix = match columns[2] {
+                "absent" => "",
+                "raw" => "+",
+                "encoded" => "%2B",
+                other => panic!("Unknown generated plus mode: {other}"),
+            };
+            let raw = format!("{raw}{suffix}");
+            let decoded = format!("{decoded}{}", if suffix.is_empty() { "" } else { "+" });
+            let (query, expected) = match columns[3] {
+                "name" => (
+                    format!("{raw}=value"),
+                    BTreeMap::from([(decoded, "value".to_owned())]),
+                ),
+                "value" => (
+                    format!("key={raw}"),
+                    BTreeMap::from([("key".to_owned(), decoded)]),
+                ),
+                other => panic!("Unknown generated position: {other}"),
+            };
+            match columns[1] {
+                "valid" => assert_eq!(parameters(&query).unwrap(), expected, "{row}"),
+                "malformed" => assert_query_error(&format!("{query}%"), "Malformed query escape"),
+                "invalid_utf8" => {
+                    assert_query_error(&format!("{query}%80"), "Invalid UTF-8 in query");
+                }
+                "precedence" => {
+                    assert_query_error(&format!("early=%FF&{query}%"), "Malformed query escape");
+                }
+                other => panic!("Unknown generated escape class: {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn query_codec_refuses_malformed_utf8_duplicate_and_control_inputs() {
+        for escape in ["%", "%2", "%2G", "%+f", "%-1", "%é"] {
+            assert_query_error(&format!("path={escape}"), "Malformed query escape");
+        }
+        for escape in ["%80", "%FF", "%C3%28"] {
+            assert_query_error(&format!("path={escape}"), "Invalid UTF-8 in query");
+        }
+        for query in ["path=a&%70ath=b", "path=%00", "%0A=x"] {
+            assert_query_error(query, "Ambiguous or invalid query");
+        }
+    }
+
+    #[test]
+    fn query_codec_preserves_scoped_targets_and_exact_nested_decode_layers() {
+        let endpoint = DatabaseEndpoint {
+            address: "127.0.0.1:1".parse().unwrap(),
+            project: "demo-a".to_owned(),
+            configured_instances: BTreeMap::new(),
+        };
+        let sessions = BTreeMap::from([("main".to_owned(), "demo-a".to_owned())]);
+        let prefix = "session=main&project=demo-a&namespace=demo-a-default-rtdb";
+        for (extra, target) in [
+            ("", "/.json?ns=demo-a-default-rtdb"),
+            ("&path=a+b", "/a%2Bb.json?ns=demo-a-default-rtdb"),
+            ("&path=a%2Bb", "/a%2Bb.json?ns=demo-a-default-rtdb"),
+            (
+                "&path=%2fa%2Fb%20%C3%A9",
+                "/a/b%20%C3%A9.json?ns=demo-a-default-rtdb",
+            ),
+            (
+                "&query=orderBy%3D%2522a%252Bb%2522",
+                "/.json?ns=demo-a-default-rtdb&orderBy=%22a%2Bb%22",
+            ),
+            (
+                "&query=orderBy%3D%2522a%25252Bb%2522",
+                "/.json?ns=demo-a-default-rtdb&orderBy=%22a%252Bb%22",
+            ),
+        ] {
+            let request = UiRequest {
+                method: "GET".to_owned(),
+                path: String::new(),
+                query: format!("{prefix}{extra}"),
+                headers: BTreeMap::new(),
+                body: Vec::new(),
+            };
+            let plan = prepare(&endpoint, &sessions, "data", &request).unwrap();
+            assert_eq!(plan.target, target, "{extra}");
+            assert_eq!(plan.session, "main");
+            assert_eq!(plan.project, "demo-a");
+            assert_eq!(plan.namespace.as_deref(), Some("demo-a-default-rtdb"));
+            assert!(plan.administrator);
+            assert!(plan.body.is_empty());
+            assert!(
+                !prepare(&endpoint, &sessions, "request", &request)
+                    .unwrap()
+                    .administrator
+            );
+        }
     }
 }

@@ -554,7 +554,7 @@
     "crates/fireemu-adapter-ui/build.rs": "36dd3904f6ffce35691aff66ee004ae0e8547674a14920e2664302ab85094c2c",
     "crates/fireemu-adapter-ui/src/api.rs": "48dc059bbc259b658ee3d97d52dbe87afaa46bf6812af2d35e3e3d99bb662f3f",
     "crates/fireemu-adapter-ui/src/assets.rs": "65e6bc9da1adbc1eabb28ee8b33d73a514d65f13f4e253c67b00f0e6d0bda572",
-    "crates/fireemu-adapter-ui/src/database.rs": "b1763face028234ba0ff66ffe6d48198d27d0ee6e0053e6aa785841f82326554",
+    "crates/fireemu-adapter-ui/src/database.rs": "5acf2725c3c39cea12f6e4c01cfc8740e9d20210fd31ad1afbc92780e613621a",
     "crates/fireemu-adapter-ui/src/functions_actions.rs": "98bfc571d52c4f1ca8b0f8a9f5123d67bf1309648d317b67ee37508323111392",
     "crates/fireemu-adapter-ui/src/lib.rs": "6501e04944a7c2bae9f5395206f1900fa3f9576a0cd28fdf425bf89cb2eac2a9",
     "crates/fireemu-adapter-ui/src/server.rs": "363707967bead3636b7472c8a99e9abdff54d300ba13961e0015b8cb2f8d5495",

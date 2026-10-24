@@ -31,7 +31,7 @@ class KaniCiContractTest < Minitest::Test
           - name: verify the pinned toolchain
             run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \\"\\(.*\\)\\"/\\1/p' rust-toolchain.toml)"
           - name: install Kani
-            run: cargo install --locked kani-verifier --version 0.68.0
+            run: cargo install --locked kani-verifier --version 0.67.0
           - name: set up Kani
             run: cargo kani setup
           - name: run bounded proofs

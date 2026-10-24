@@ -7,7 +7,7 @@ module KaniCiContract
   CHECKOUT = "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   RUST_TOOLCHAIN = "dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec"
   TOOLCHAIN_VERSION = "1.94.0"
-  INSTALL_KANI = "cargo install --locked kani-verifier --version 0.68.0"
+  INSTALL_KANI = "cargo install --locked kani-verifier --version 0.67.0"
   SETUP_KANI = "cargo kani setup"
   RUN_PROOFS = "python3 verification/kani/run.py"
   VERIFY_TOOLCHAIN = %(rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \\"\\(.*\\)\\"/\\1/p' rust-toolchain.toml)")

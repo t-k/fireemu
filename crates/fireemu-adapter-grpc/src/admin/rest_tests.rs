@@ -3259,6 +3259,42 @@ fn native_text_admin_failed_operation_stays_terminal_after_source_and_index_dele
             .state,
         fireemu_core_firestore::text_index::TextIndexState::NeedsRepair
     );
+    let failed_index = call(&state, "GET", &index_path, Value::Null).1;
+    let (failed_generation, failed_postings) = {
+        let catalog = catalog.lock().unwrap();
+        let build = catalog.build("p", "(default)", id).unwrap();
+        (build.generation, build.indexed_documents())
+    };
+    let corrected_fields = json!({
+        "title":{"stringValue":"repairprobe-marker"},
+        "language":{"stringValue":"en"}
+    });
+    let (status, corrected) = call(&state, "PATCH", &bad, json!({"fields":corrected_fields}));
+    assert_eq!(status, 200, "{corrected}");
+    assert_eq!(corrected["name"], bad.strip_prefix("/v1/").unwrap());
+    assert_eq!(corrected["fields"], corrected_fields);
+    assert_eq!(
+        call(&state, "GET", &bad, Value::Null),
+        (200, corrected),
+        "the same source must contain the successfully corrected language"
+    );
+    advance(&clock, 3600);
+    assert_eq!(
+        call(&state, "GET", &index_path, Value::Null),
+        (200, failed_index),
+        "correcting the same source must not revive the failed index"
+    );
+    assert_eq!(
+        call(&state, "GET", &operation_path, Value::Null),
+        (200, failed.clone()),
+        "correcting the same source must preserve the terminal operation"
+    );
+    {
+        let catalog = catalog.lock().unwrap();
+        let build = catalog.build("p", "(default)", id).unwrap();
+        assert_eq!(build.generation, failed_generation);
+        assert_eq!(build.indexed_documents(), failed_postings);
+    }
     assert_eq!(call(&state, "DELETE", &bad, Value::Null).0, 200);
     advance(&clock, 3600);
     assert_eq!(call(&state, "GET", &operation_path, Value::Null).1, failed);

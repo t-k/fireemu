@@ -30,7 +30,7 @@ EXPECTED_HARNESSES = tuple("harnesses::" + name for name in (
 EXPECTED_COVERS = {
     "harnesses::limit_boundary_classification": 1,
     "harnesses::totp_window_boundary": 3,
-    "harnesses::production_index_never_false_accepts": 3,
+    "harnesses::production_index_never_false_accepts": 12,
 }
 
 def discover_harnesses():

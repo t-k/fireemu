@@ -20,7 +20,7 @@ SPEC = importlib.util.spec_from_file_location("kani_runner", Path(__file__).with
 COVER_COUNTS = {
     "harnesses::limit_boundary_classification": 1,
     "harnesses::totp_window_boundary": 3,
-    "harnesses::production_index_never_false_accepts": 3,
+    "harnesses::production_index_never_false_accepts": 12,
 }
 
 
@@ -43,7 +43,8 @@ def cover_output(names, mode, target="harnesses::totp_window_boundary"):
     if mode == "trailing_unsatisfied":
         return output + " ** 0 of 1 cover properties satisfied\n"
     if mode == "relocated_final":
-        cover = " ** 3 of 3 cover properties satisfied\n"
+        count = COVER_COUNTS["harnesses::production_index_never_false_accepts"]
+        cover = f" ** {count} of {count} cover properties satisfied\n"
         prefix, suffix = output.rsplit(cover, 1)
         return prefix + suffix + cover
     if mode.startswith("unexpected"):
@@ -170,6 +171,22 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
                     with self.assertRaises(ValueError):
                         self.runner.execute(receipt)
                     self.assertFalse(receipt.exists())
+        target = "harnesses::production_index_never_false_accepts"
+        marker = f"Checking harness {target}..."
+        prefix, index_output = successful_output(self.runner.EXPECTED_HARNESSES).split(marker, 1)
+        count = COVER_COUNTS[target]
+        original = f" ** {count} of {count} cover properties satisfied"
+        for satisfied in [11, 12]:
+            with self.subTest(index_covers=satisfied):
+                receipt.unlink(missing_ok=True)
+                changed = index_output.replace(original, f" ** {satisfied} of 12 cover properties satisfied", 1)
+                self.output.write_text(prefix + marker + changed)
+                if satisfied == 11:
+                    with self.assertRaises(ValueError):
+                        self.runner.execute(receipt)
+                else:
+                    self.runner.execute(receipt)
+                self.assertEqual(receipt.exists(), satisfied == 12)
         for mode in ["unexpected_unsatisfied", "unexpected_satisfied", "outside_unsatisfied"]:
             with self.subTest(mode=mode):
                 receipt.unlink(missing_ok=True)

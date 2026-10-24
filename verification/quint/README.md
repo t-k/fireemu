@@ -34,6 +34,7 @@ The registry in `src/model.rs` is the single inventory for these authority model
 - `CompatibilitySelection`
 - `EventDelivery`
 - `FirestoreListenRefresh`
+- `LimitRejection`
 - `RegexAuthorization`
 - `RegexEvaluationCache`
 - `RegexLinearRepeat`
@@ -58,4 +59,6 @@ Refresh the complete evidence set only after every baseline, deterministic scena
 QUINT_REAL_BIN="$PWD/verification/quint/node_modules/.bin/quint" PATH="$PWD/verification/quint/bin:$PATH" VERIFICATION_PASSES=1 verification/quint/run-verification.sh --refresh
 ```
 
-The refresh command generates the Cargo authority and all fourteen model documents in staging, validates traceability against that complete staged set, and replaces the checked-in evidence directory only after every gate passes. A failure or signal preserves the previous complete set. The JSON stores stable bounded classifications rather than checker timestamps or temporary paths. Any bound input change requires deliberate regeneration and review. When extracting or moving production semantics into a helper file, update every affected model's `production_sources` (or additional bound inputs) to include that helper and add a copied-input tamper regression. The inventory is explicit: it does not automatically follow Rust calls or imports. In particular, the Firestore commit, listener, and transaction models bind `value.rs` because storage normalization and stored-value equality determine document contents and change publication.
+The refresh command generates the Cargo authority and all fifteen model documents in staging, validates traceability against that complete staged set, and replaces the checked-in evidence directory only after every gate passes. A failure or signal preserves the previous complete set. The JSON stores stable bounded classifications rather than checker timestamps or temporary paths. Any bound input change requires deliberate regeneration and review. When extracting or moving production semantics into a helper file, update every affected model's `production_sources` (or additional bound inputs) to include that helper and add a copied-input tamper regression. The evidence inventory expands each declared production entrypoint to every regular file under its owning workspace crate source directory and the normal/build workspace dependencies, including manifests and build scripts. External compile-time include inputs are declared explicitly; optional generated UI distribution artifacts are outside the modeled bridge. In particular, the Firestore commit, listener, and transaction models bind `value.rs` because storage normalization and stored-value equality determine document contents and change publication.
+
+`LimitRejection` connects oversized-document and excessive-transform refusals to the actual Firestore adapter and Functions publication accounting. It checks preexisting documents, configured indexes, committed changes and reserved/published event records. Unique-index enforcement and general product quota state remain outside this bounded model; INV-LIMIT-001 remains partial.

@@ -4,24 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fireemu_verification_quint::model::all_models;
 use fireemu_verification_quint::publication::publish_evidence;
-
-const MODELS: [&str; 14] = [
-    "AtomicCommitOutbox",
-    "AtomicExportPublication",
-    "AuthTotp",
-    "AwaitIdle",
-    "CompatibilitySelection",
-    "EventDelivery",
-    "FirestoreListenRefresh",
-    "RegexAuthorization",
-    "RegexEvaluationCache",
-    "RegexLinearRepeat",
-    "RulesetActivation",
-    "SessionEpoch",
-    "StorageGeneration",
-    "TransactionConditionalLock",
-];
 
 #[test]
 fn publication_replaces_one_complete_snapshot_and_preserves_the_source() {
@@ -49,13 +33,15 @@ fn incomplete_publication_leaves_the_complete_target_unchanged() {
     let error = publish_evidence(&source, &target).expect_err("incomplete source must fail");
 
     assert!(error.contains("incomplete evidence source"));
+    assert!(error.contains("EventDelivery.json"), "{error}");
     assert_complete_set(&target, "old");
 }
 
 fn write_complete_set(directory: &Path, marker: &str) {
     fs::create_dir(directory).expect("create evidence directory");
     fs::write(directory.join("cargo-authority.json"), marker).expect("write Cargo authority");
-    for model in MODELS {
+    for descriptor in all_models() {
+        let model = descriptor.name;
         fs::write(
             directory.join(format!("{model}.json")),
             format!("{marker}:{model}"),
@@ -69,7 +55,8 @@ fn assert_complete_set(directory: &Path, marker: &str) {
         fs::read_to_string(directory.join("cargo-authority.json")).expect("read Cargo authority"),
         marker
     );
-    for model in MODELS {
+    for descriptor in all_models() {
+        let model = descriptor.name;
         assert_eq!(
             fs::read_to_string(directory.join(format!("{model}.json")))
                 .expect("read model evidence"),

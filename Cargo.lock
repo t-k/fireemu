@@ -953,7 +953,9 @@ dependencies = [
 name = "fireemu-verification-kani"
 version = "0.29.0"
 dependencies = [
+ "fireemu-core-auth",
  "fireemu-core-events",
+ "fireemu-core-firestore",
  "fireemu-core-limits",
  "fireemu-core-session",
  "fireemu-core-types",
@@ -1001,6 +1003,7 @@ dependencies = [
  "fireemu-core-types",
  "fireemu-export-publication",
  "fireemu-proto-firestore",
+ "proptest",
  "quint-connect",
  "rustix",
  "serde",

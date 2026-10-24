@@ -9,6 +9,8 @@ publish.workspace = true
 description = "Kani bounded model checking harnesses; run with `cargo kani`"
 
 [dependencies]
+fireemu-core-auth = { path = "../../crates/fireemu-core-auth" }
+fireemu-core-firestore = { path = "../../crates/fireemu-core-firestore" }
 fireemu-core-types = { path = "../../crates/fireemu-core-types" }
 fireemu-core-limits = { path = "../../crates/fireemu-core-limits" }
 fireemu-core-session = { path = "../../crates/fireemu-core-session" }

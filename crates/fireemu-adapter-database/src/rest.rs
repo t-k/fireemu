@@ -2254,67 +2254,6 @@ fn read_refused(streaming: bool) -> Refusal {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::realtime::Opened;
-
-    #[test]
-    fn unrelated_writes_rebuild_no_view() {
-        let mut db = Database::new(RestOptions::default(), 1);
-        let big: BTreeMap<String, Json> =
-            (0..50).map(|i| (format!("k{i}"), Json::int(i))).collect();
-        db.tree_mut("u")
-            .set(
-                &Path::from_keys(["big"]),
-                &Json::Object(big),
-                ServerValueContext { now_millis: 0 },
-            )
-            .unwrap();
-        let Ok(Opened::Session(mut session, _)) = db.open_realtime("/.ws?v=5&ns=u", Some("h"), 0)
-        else {
-            panic!("no session")
-        };
-        session.receive(
-            &mut db,
-            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/big","h":""}}}"#,
-            0,
-        );
-        let before = crate::listen::views_built();
-        for i in 0..10 {
-            session.receive(
-                &mut db,
-                &format!(
-                    r#"{{"t":"d","d":{{"r":{},"a":"p","b":{{"p":"/other","d":{i}}}}}}}"#,
-                    i + 2
-                ),
-                0,
-            );
-        }
-        assert_eq!(crate::listen::views_built(), before);
-        session.receive(
-            &mut db,
-            r#"{"t":"d","d":{"r":20,"a":"p","b":{"p":"/big/k1","d":7}}}"#,
-            0,
-        );
-        assert_eq!(crate::listen::views_built(), before + 1);
-        // A write of what is stored changes nothing, so it rebuilds nothing either.
-        session.receive(
-            &mut db,
-            r#"{"t":"d","d":{"r":21,"a":"p","b":{"p":"/big/k1","d":7.0}}}"#,
-            0,
-        );
-        assert_eq!(crate::listen::views_built(), before + 1);
-        // Neither does a merge whose only entry there changes nothing.
-        session.receive(
-            &mut db,
-            r#"{"t":"d","d":{"r":22,"a":"m","b":{"p":"/","d":{"other":99,"big/k1":7}}}}"#,
-            0,
-        );
-        assert_eq!(crate::listen::views_built(), before + 1);
-    }
-}
-
 /// A self-contained diagnostic viewer; source and values are always inserted as text.
 fn coverage_html(data: &Json) -> String {
     let data = render(data, Style::Compact)
@@ -2425,3 +2364,64 @@ for(let i=0;i<boundaries.length-1;i++) {
   container.append(span);
 }
 </script></html>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::realtime::Opened;
+
+    #[test]
+    fn unrelated_writes_rebuild_no_view() {
+        let mut db = Database::new(RestOptions::default(), 1);
+        let big: BTreeMap<String, Json> =
+            (0..50).map(|i| (format!("k{i}"), Json::int(i))).collect();
+        db.tree_mut("u")
+            .set(
+                &Path::from_keys(["big"]),
+                &Json::Object(big),
+                ServerValueContext { now_millis: 0 },
+            )
+            .unwrap();
+        let Ok(Opened::Session(mut session, _)) = db.open_realtime("/.ws?v=5&ns=u", Some("h"), 0)
+        else {
+            panic!("no session")
+        };
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/big","h":""}}}"#,
+            0,
+        );
+        let before = crate::listen::views_built();
+        for i in 0..10 {
+            session.receive(
+                &mut db,
+                &format!(
+                    r#"{{"t":"d","d":{{"r":{},"a":"p","b":{{"p":"/other","d":{i}}}}}}}"#,
+                    i + 2
+                ),
+                0,
+            );
+        }
+        assert_eq!(crate::listen::views_built(), before);
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":20,"a":"p","b":{"p":"/big/k1","d":7}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
+        // A write of what is stored changes nothing, so it rebuilds nothing either.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":21,"a":"p","b":{"p":"/big/k1","d":7.0}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
+        // Neither does a merge whose only entry there changes nothing.
+        session.receive(
+            &mut db,
+            r#"{"t":"d","d":{"r":22,"a":"m","b":{"p":"/","d":{"other":99,"big/k1":7}}}}"#,
+            0,
+        );
+        assert_eq!(crate::listen::views_built(), before + 1);
+    }
+}

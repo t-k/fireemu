@@ -39,7 +39,14 @@ fn authority_is_path_independent_and_excludes_unrelated_workspace_packages() {
     let authority = build_authority(&root).expect("Cargo metadata must resolve offline");
     let serialized = serde_json::to_string(&authority).expect("authority must serialize");
     assert!(!serialized.contains(root.to_string_lossy().as_ref()));
-    assert!(!serialized.contains("fireemu-adapter-ui"));
+    assert!(!serialized.contains("traceability-check"));
+    assert!(
+        authority
+            .packages
+            .iter()
+            .any(|package| package.name == "fireemu"),
+        "explicit CLI production sources must have graph owners"
+    );
     assert_eq!(authority.root_package, "fireemu-verification-quint");
     assert_eq!(authority.target, "x86_64-unknown-linux-gnu");
     assert!(authority

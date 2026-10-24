@@ -39,9 +39,19 @@ test("Realtime Database keyboard edits deliver real SSE changes and Rules cancel
           const block = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
           const event = /^event: (.+)$/m.exec(block)?.[1];
-          const data = /^data: (.+)$/m.exec(block)?.[1];
-          if (event && data && event !== "keep-alive")
-            return { event, data: JSON.parse(data) as unknown };
+          const data = /^data: (.*)$/m.exec(block)?.[1];
+          if (!event || data === undefined) throw new Error("Malformed RTDB SSE frame");
+          if (event === "keep-alive") {
+            expect(data).toBe("null");
+            continue;
+          }
+          if (event === "cancel") {
+            expect(data).toBe("Permission denied");
+            return { event, data };
+          }
+          if (event !== "put" && event !== "patch")
+            throw new Error(`Unexpected RTDB SSE event: ${event}`);
+          return { event, data: JSON.parse(data) as unknown };
         } else {
           const chunk = await reader!.read();
           expect(chunk.done).toBe(false);

@@ -75,6 +75,8 @@ pub struct Parts<'a> {
     pub auth: Arc<AuthState>,
     /// Storage.
     pub storage: Arc<StorageState>,
+    /// The actual RTDB listener and trusted instance ownership, when enabled.
+    pub database: Option<fireemu_adapter_ui::database::DatabaseEndpoint>,
     /// Control API.
     pub control: Arc<ControlState>,
     /// Functions runtime, when configured.
@@ -114,6 +116,7 @@ pub fn state(parts: Parts<'_>) -> Arc<UiState> {
         .collect(),
     });
     Arc::new(UiState {
+        database: parts.database,
         stream_limiter: Arc::new(fireemu_adapter_ui::sse::StreamLimiter::default()),
         control_token: parts.control_token,
         info: RuntimeInfo {

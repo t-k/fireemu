@@ -1681,6 +1681,29 @@ async fn serve_suite(
     }
     if let (Some(listener), Some(addr)) = (ui_listener, addrs.ui) {
         let state = ui::state(ui::Parts {
+            database: addrs.database.map(|address| {
+                let mut instances = cfg
+                    .database_rules_resolved
+                    .iter()
+                    .map(|(instance, _)| instance.clone())
+                    .collect::<std::collections::BTreeSet<_>>();
+                instances.insert(format!("{}-default-rtdb", cfg.auth_project));
+                fireemu_adapter_ui::database::DatabaseEndpoint {
+                    address,
+                    project: cfg.auth_project.clone(),
+                    configured_instances: instances
+                        .into_iter()
+                        .map(|instance| {
+                            let project = crate::database_rules::project_of_instance(
+                                &instance,
+                                &cfg.auth_project,
+                            )
+                            .to_owned();
+                            (instance, project)
+                        })
+                        .collect(),
+                }
+            }),
             cfg: &cfg,
             only: &only,
             control_token: control_token.clone(),

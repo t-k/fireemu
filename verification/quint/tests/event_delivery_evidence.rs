@@ -12,40 +12,6 @@ use fireemu_verification_quint::process::{
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 32] = [
-    ".github/workflows/quint.yml",
-    "rust-toolchain.toml",
-    "crates/fireemu-core-events/Cargo.toml",
-    "crates/fireemu-core-events/src/event.rs",
-    "crates/fireemu-core-events/src/retry.rs",
-    "crates/fireemu-core-events/src/state.rs",
-    "crates/fireemu-core-types/Cargo.toml",
-    "crates/fireemu-core-types/src/ids.rs",
-    "crates/fireemu-core-types/src/time.rs",
-    "verification/quint/apalache.lock.json",
-    "verification/quint/bin/install-apalache",
-    "verification/quint/bin/quint",
-    "verification/quint/bin/process-group",
-    "verification/quint/src/publication.rs",
-    "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java",
-    "verification/quint/run-verification.sh",
-    "verification/quint/evidence/cargo-authority.json",
-    "verification/quint/specs/EventDelivery.qnt",
-    "verification/quint/configs/EventDelivery.json",
-    "verification/quint/mutations/EventDelivery.json",
-    "verification/quint/package.json",
-    "verification/quint/pnpm-lock.yaml",
-    "verification/quint/src/event_delivery.rs",
-    "verification/quint/src/cargo_authority.rs",
-    "verification/quint/src/evidence.rs",
-    "verification/quint/src/lib.rs",
-    "verification/quint/src/main.rs",
-    "verification/quint/src/model.rs",
-    "verification/quint/src/process.rs",
-    "verification/quint/src/server.rs",
-    "verification/quint/tests/event_delivery_connect.rs",
-    "verification/quint/tests/event_delivery_evidence.rs",
-];
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -84,19 +50,36 @@ fn descriptor_binds_retry_timing_model_limits() {
 
 #[test]
 fn checked_in_evidence_rejects_each_bound_input_tamper() {
-    validate_evidence_json(EVIDENCE, descriptor(), Some(&repository_root()))
+    let evidence = validate_evidence_json(EVIDENCE, descriptor(), Some(&repository_root()))
         .expect("checked-in evidence");
 
-    for relative in BOUND_INPUTS {
-        let temporary = OwnedTestRepository::copy_bound_inputs().expect("copy bound inputs");
+    for relative in &evidence.bound_inputs {
+        let temporary = OwnedTestRepository::copy_bound_inputs(&evidence.bound_inputs)
+            .expect("copy complete derived bound inputs");
+        validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path))
+            .expect("copied evidence baseline must validate before each tamper");
         let path = temporary.path.join(relative);
         let mut bytes = fs::read(&path).expect("read copied bound input");
-        bytes.push(b'!');
+        bytes.push(
+            if relative.as_str() == "verification/quint/evidence/cargo-authority.json" {
+                b' '
+            } else {
+                b'!'
+            },
+        );
         fs::write(&path, bytes).expect("tamper copied bound input");
         let error = validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path))
             .expect_err("tampered input must invalidate evidence");
-        assert!(error.contains(relative), "{relative}: {error}");
-        if relative == ".github/workflows/quint.yml" {
+        assert!(error.contains(relative.as_str()), "{relative}: {error}");
+        if relative.as_str() == "verification/quint/evidence/cargo-authority.json" {
+            assert!(
+                error.contains(
+                    "digest mismatch for verification/quint/evidence/cargo-authority.json"
+                ),
+                "authority tampering must reach digest validation: {error}"
+            );
+        }
+        if relative.as_str() == ".github/workflows/quint.yml" {
             assert!(
                 error.contains("verification/quint/run-verification.sh --refresh"),
                 "missing refresh command: {error}"
@@ -246,7 +229,7 @@ struct OwnedTestRepository {
 }
 
 impl OwnedTestRepository {
-    fn copy_bound_inputs() -> std::io::Result<Self> {
+    fn copy_bound_inputs(bound_inputs: &[String]) -> std::io::Result<Self> {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(std::io::Error::other)?
@@ -256,7 +239,7 @@ impl OwnedTestRepository {
             std::process::id()
         ));
         fs::create_dir(&path)?;
-        for relative in BOUND_INPUTS {
+        for relative in bound_inputs {
             let destination = path.join(relative);
             fs::create_dir_all(destination.parent().unwrap_or(Path::new(".")))?;
             fs::copy(repository_root().join(relative), destination)?;

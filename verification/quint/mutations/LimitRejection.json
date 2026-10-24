@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "model": "LimitRejection",
+  "mutations": [
+    {
+      "id": "M-FORMAL-LIMIT-DOCUMENT-001",
+      "property": "LimitRejectionAtomicity",
+      "operator": "publish-rejected-document",
+      "from": "{ ...observable, transactionState: \"Aborted\" }",
+      "to": "{ ...observable, transactionState: \"Aborted\", documents: observable.documents.set(\"d1\", 2) }"
+    },
+    {
+      "id": "M-FORMAL-LIMIT-EVENT-001",
+      "property": "LimitRejectionAtomicity",
+      "operator": "publish-rejected-events",
+      "from": "{ ...observable, transactionState: \"Aborted\" }",
+      "to": "{ ...observable, transactionState: \"Aborted\", publishedEvents: observable.publishedEvents + 1 }"
+    },
+    {
+      "id": "M-FORMAL-LIMIT-STAGE-001",
+      "property": "NoPublicationDuringStaging",
+      "operator": "publish-before-limit-validation",
+      "from": "observable' = observable,\n    staged' = staged.union(Set(doc)),",
+      "to": "observable' = { ...observable, documents: observable.documents.set(doc, 1) },\n    staged' = staged.union(Set(doc)),"
+    }
+  ]
+}

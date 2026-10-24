@@ -7,6 +7,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod source_closure;
+
+use crate::cargo_authority::CargoAuthority;
 use crate::event_delivery::GENERATED_TRACE_SEEDS;
 use crate::model::{ModelDescriptor, PropertyKind};
 use crate::process::{
@@ -36,6 +39,7 @@ const COMMON_DIGEST_PATHS: &[&str] = &[
     CARGO_AUTHORITY_INPUT,
     "verification/quint/src/cargo_authority.rs",
     "verification/quint/src/evidence.rs",
+    "verification/quint/src/evidence/source_closure.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
@@ -152,7 +156,7 @@ fn build_evidence_with_cargo_authority(
     validate_apalache_distribution()?;
     let manifest = read_manifest(repository_root, descriptor)?;
     let mutations = normalize_mutations(&manifest, mutation_results)?;
-    let bound_inputs = expected_bound_inputs(descriptor);
+    let bound_inputs = expected_bound_inputs(repository_root, descriptor, cargo_authority)?;
     let evidence = Evidence {
         schema_version: 3,
         model: descriptor.name.to_owned(),
@@ -210,7 +214,10 @@ pub fn write_evidence(
         .map_err(|error| format!("cannot write evidence {}: {error}", path.display()))
 }
 
-/// Parses strict evidence and optionally validates its repository-bound contract.
+/// Parses strict evidence and validates its repository-bound contract.
+///
+/// A repository root is required because semantic source inventories cannot be
+/// reconstructed from an evidence document alone.
 pub fn validate_evidence_json(
     json: &str,
     descriptor: &'static ModelDescriptor,
@@ -270,7 +277,10 @@ fn validate_semantics(
         return Err("tool metadata mismatch".to_owned());
     }
 
-    let bound_inputs = expected_bound_inputs(descriptor);
+    let root = repository_root.ok_or_else(|| {
+        "repository root is required to validate semantic source closure".to_owned()
+    })?;
+    let bound_inputs = expected_bound_inputs(root, descriptor, cargo_authority)?;
     if evidence.bound_inputs != bound_inputs {
         return Err(format!(
             "evidence bound inputs mismatch: expected {bound_inputs:?}, found {:?}",
@@ -390,7 +400,11 @@ fn normalize_mutations(
     Ok(normalized)
 }
 
-fn expected_bound_inputs(descriptor: &ModelDescriptor) -> Vec<String> {
+fn expected_bound_inputs(
+    repository_root: &Path,
+    descriptor: &ModelDescriptor,
+    cargo_authority: Option<&Path>,
+) -> Result<Vec<String>, String> {
     let mut inputs = COMMON_DIGEST_PATHS
         .iter()
         .map(|path| (*path).to_owned())
@@ -409,7 +423,21 @@ fn expected_bound_inputs(descriptor: &ModelDescriptor) -> Vec<String> {
             .chain(descriptor.additional_evidence_inputs.iter().copied())
             .map(str::to_owned),
     );
-    inputs.into_iter().collect()
+    let authority_path = cargo_authority.map_or_else(
+        || repository_root.join(CARGO_AUTHORITY_INPUT),
+        Path::to_path_buf,
+    );
+    let authority: CargoAuthority = serde_json::from_slice(
+        &fs::read(&authority_path)
+            .map_err(|error| format!("cannot read source closure Cargo authority: {error}"))?,
+    )
+    .map_err(|error| format!("invalid source closure Cargo authority: {error}"))?;
+    inputs.extend(source_closure::production_inputs(
+        repository_root,
+        descriptor.production_sources,
+        &authority,
+    )?);
+    Ok(inputs.into_iter().collect())
 }
 
 fn expected_bounds(descriptor: &ModelDescriptor) -> Result<BTreeMap<String, String>, String> {
@@ -481,6 +509,9 @@ fn compute_digests(
             } else {
                 repository_root.join(relative)
             };
+            if relative != CARGO_AUTHORITY_INPUT || cargo_authority.is_none() {
+                source_closure::checked_path(repository_root, relative, false)?;
+            }
             let metadata = fs::symlink_metadata(&path).map_err(|error| {
                 format!("cannot inspect bound input {}: {error}", path.display())
             })?;
@@ -506,6 +537,58 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn production_roots_bind_previously_omitted_transitive_helpers() {
+        for (name, required) in [
+            ("SessionEpoch", "crates/fireemu-core-types/src/ids.rs"),
+            ("AuthTotp", "crates/fireemu-core-auth/src/sha1.rs"),
+            ("AuthTotp", "crates/fireemu-core-types/src/time.rs"),
+        ] {
+            let descriptor = crate::model::model(name).expect("registered model");
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            assert!(
+                expected_bound_inputs(&root, descriptor, None)
+                    .expect("closure")
+                    .iter()
+                    .any(|path| path == required),
+                "{name} omits transitive semantic source {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn all_model_production_roots_resolve_with_the_current_canonical_graph() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let temporary = tempfile::tempdir().expect("staged authority directory");
+        let authority_path = temporary.path().join("cargo-authority.json");
+        crate::cargo_authority::write_authority(&root, &authority_path).expect("current graph");
+        for descriptor in crate::model::all_models() {
+            let inputs = expected_bound_inputs(&root, descriptor, Some(&authority_path))
+                .unwrap_or_else(|error| panic!("{} closure failed: {error}", descriptor.name));
+            assert!(
+                descriptor
+                    .production_sources
+                    .iter()
+                    .all(|source| inputs.iter().any(|path| path == source)),
+                "{} omitted an explicit production source",
+                descriptor.name
+            );
+            assert!(
+                inputs.iter().any(|path| path.ends_with("/Cargo.toml")),
+                "{} omitted owning package manifests",
+                descriptor.name
+            );
+            if descriptor.name == "EventDelivery" {
+                assert!(
+                    !inputs
+                        .iter()
+                        .any(|path| path.starts_with("crates/fireemu-core-auth/")),
+                    "EventDelivery should not bind unrelated Auth sources"
+                );
+            }
+        }
+    }
 
     #[test]
     fn cargo_authority_digest_can_be_read_from_a_staged_override() {

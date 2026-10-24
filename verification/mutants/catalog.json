@@ -482,6 +482,21 @@
       "id": "M-EVENTARC-RELOAD-001",
       "fault": "a successful Functions source reload leaves the old Eventarc trigger generation live",
       "critical": false
+    },
+    {
+      "id": "M-FORMAL-LIMIT-DOCUMENT-001",
+      "fault": "a rejected limit batch publishes a staged document",
+      "critical": true
+    },
+    {
+      "id": "M-FORMAL-LIMIT-EVENT-001",
+      "fault": "a rejected limit batch publishes a logical event",
+      "critical": true
+    },
+    {
+      "id": "M-FORMAL-LIMIT-STAGE-001",
+      "fault": "a staged write becomes visible before limit validation",
+      "critical": true
     }
   ]
 }

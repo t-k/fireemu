@@ -339,6 +339,153 @@ impl AtomicCommitOutboxDriver {
         self.record_action("Abort")
     }
 
+    /// Opens a fresh bounded limit batch while preserving previously committed state.
+    pub(crate) fn begin_limit_batch(&mut self) -> Result {
+        if self.phase == "Staging" {
+            return Err(invalid_data("a limit batch is already staged"));
+        }
+        "Idle".clone_into(&mut self.phase);
+        self.begin()
+    }
+
+    /// Configures a real nonempty catalog only for the limit-rejection fixture.
+    pub(crate) fn configure_limit_index(&self) {
+        use fireemu_core_firestore::field_path::FieldPath;
+        use fireemu_core_firestore::index::{
+            IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope,
+        };
+        let mut indexes = IndexSet::default();
+        indexes.add_composite(IndexDefinition {
+            collection_group: fireemu_core_types::ids::CollectionId::try_new("items").unwrap(),
+            query_scope: IndexQueryScope::Collection,
+            fields: ["value", "other"]
+                .into_iter()
+                .map(|name| IndexField {
+                    path: FieldPath::from_segments([name]).unwrap(),
+                    mode: IndexFieldMode::Ascending,
+                })
+                .collect(),
+        });
+        self.backend.replace_indexes(indexes);
+    }
+
+    pub(crate) fn configured_limit_index_count(&self) -> usize {
+        self.backend.indexes().composites().len()
+    }
+
+    fn limit_query_documents(&self) -> Result<Vec<fireemu_core_firestore::store::Document>> {
+        use fireemu_core_firestore::query::{Query, QueryScope};
+        let query = Query::new(QueryScope::collection(
+            None,
+            fireemu_core_types::ids::CollectionId::try_new("items").unwrap(),
+        ));
+        self.firestore_state()
+            .run_query(&query, None)
+            .map_err(|error| invalid_data(&format!("limit query failed: {error}")))
+    }
+
+    /// Seeds a distinct real document value, so a later valid write is not a no-op.
+    pub(crate) fn seed_limit_state(&mut self) -> Result {
+        self.require_phase("Idle")?;
+        let mut write = set_write("d1", None);
+        if let WriteOp::Set { fields, .. } = &mut write.op {
+            fields.insert("value".to_owned(), Value::String("seed".to_owned()));
+        }
+        self.backend
+            .commit(&commit_request(&[write]))
+            .map_err(|error| invalid_data(&format!("seed commit failed: {error}")))?;
+        self.committed_changes.clone_from(
+            &*self
+                .published_changes
+                .lock()
+                .map_err(|_| invalid_data("published change projection is unavailable"))?,
+        );
+        Ok(())
+    }
+
+    /// Submits a real invalid batch and checks all observable publication roots before return.
+    pub(crate) fn reject_limit(&mut self, kind: &str) -> Result {
+        self.require_phase("Staging")?;
+        if self.staged.is_empty() {
+            return Err(invalid_data(
+                "a limit rejection requires a valid staged write",
+            ));
+        }
+        let before_documents = self.firestore_state().documents();
+        let before_query = self.limit_query_documents()?;
+        let before_indexes = self.backend.indexes();
+        let before_projection = self.project()?;
+        let before_published = self
+            .published_changes
+            .lock()
+            .map_err(|_| invalid_data("published change projection is unavailable"))?
+            .clone();
+        let writes = self
+            .staged
+            .iter()
+            .map(|doc| set_write(doc, None))
+            .collect::<Vec<_>>();
+        let mut request = commit_request(&writes);
+        let mut invalid = encode_set_write(&set_write("d2", None));
+        let expected_code = match kind {
+            "size" => {
+                if let Some(pb::write::Operation::Update(document)) = &mut invalid.operation {
+                    document.fields = [
+                        ("blob", "x".repeat(600_000)),
+                        ("other", "y".repeat(500_000)),
+                    ]
+                    .into_iter()
+                    .map(|(name, value)| {
+                        (
+                            name.to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(value)),
+                            },
+                        )
+                    })
+                    .collect();
+                }
+                tonic::Code::InvalidArgument
+            }
+            "transforms" => {
+                invalid.update_transforms = (0..501).map(|index| pb::document_transform::FieldTransform {
+                    field_path: format!("f{index}"),
+                    transform_type: Some(pb::document_transform::field_transform::TransformType::SetToServerValue(1)),
+                }).collect();
+                tonic::Code::InvalidArgument
+            }
+            _ => return Err(invalid_data("unknown bounded limit refusal")),
+        };
+        request.writes.push(invalid);
+        let error = self
+            .backend
+            .commit(&request)
+            .expect_err("invalid limit batch must refuse");
+        if error.code() != expected_code {
+            return Err(invalid_data(&format!("wrong limit refusal: {error}")));
+        }
+        let after = self.project()?;
+        if self.firestore_state().documents() != before_documents
+            || self.limit_query_documents()? != before_query
+            || self.backend.indexes() != before_indexes
+            || after.documents != before_projection.documents
+            || after.reserved_events != before_projection.reserved_events
+            || after.published_events != before_projection.published_events
+            || after.event_generation != before_projection.event_generation
+            || *self
+                .published_changes
+                .lock()
+                .map_err(|_| invalid_data("published change projection is unavailable"))?
+                != before_published
+        {
+            return Err(invalid_data(
+                "rejected limit batch changed a production publication root",
+            ));
+        }
+        "Aborted".clone_into(&mut self.phase);
+        Ok(())
+    }
+
     /// Projects real documents and commit changes, plus the declared harness phase.
     pub fn project(&self) -> Result<AtomicCommitOutboxState> {
         let mut projected = AtomicCommitOutboxState {

@@ -337,20 +337,25 @@
       "criticality": "critical",
       "owner": "core-limits",
       "status": "partial",
-      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E), and LimitRejection.qnt is pending with it.",
+      "note": "The bounded LimitRejection model and real adapter/runtime driver verify oversized-document and excessive-transform refusal against existing documents, configured indexes, published changes and reserved/published event records. Unique-index enforcement and general product quota state remain outside this model, so the broad requirement remains partial.",
       "artifacts": {
-        "quint": "pending:LimitRejection.qnt::LimitRejectionAtomicity",
+        "quint": "LimitRejection.qnt::LimitRejectionAtomicity",
         "kani": "limit_boundary_classification",
         "property": "prop_boundary_reject_precedes_warning",
         "mutation": [
           "M-LIMIT-001",
           "M-LIMIT-002",
           "M-LIMIT-004",
-          "M-LIMIT-006"
+          "M-LIMIT-006",
+          "M-FORMAL-LIMIT-DOCUMENT-001",
+          "M-FORMAL-LIMIT-EVENT-001",
+          "M-FORMAL-LIMIT-STAGE-001"
         ],
         "integration": [
           "crates/fireemu-core-limits/tests/evaluate.rs",
-          "crates/fireemu-core-limits/tests/properties.rs"
+          "crates/fireemu-core-limits/tests/properties.rs",
+          "verification/quint/tests/limit_rejection_connect.rs",
+          "crates/fireemu-core-firestore/tests/store.rs"
         ]
       }
     },
@@ -487,7 +492,7 @@
       "owner": "core-firestore",
       "status": "partial",
       "artifacts": {
-        "kani": "pending:production_index_never_false_accepts",
+        "kani": "production_index_never_false_accepts",
         "mutation": [
           "M-INDEX-001",
           "M-INDEX-002",
@@ -497,7 +502,7 @@
           "crates/fireemu-core-firestore/tests/index.rs"
         ]
       },
-      "note": "Production-rule validator implemented in fireemu-core-firestore (index merges verified against a real project on 2026-09-08); the Kani harness and reference-rule conformance fixtures are pending."
+      "note": "The Kani artifact verifies the shared production composite-support predicate against an independent scalar contract using borrowed field identities 0..=3 (3 is the document name, repetitions allowed), index lengths 0..=5, equality lengths 0..=2, order lengths 0..=3, an optional contains identity, independent collection/query/index scope factors, all four index modes (Vector dimension 3), and both order directions. It proves acceptance/rejection equivalence within these bounds. Runtime FieldPath/string identity adaptation, query normalization, automatic-index selection and merge coverage remain outside the formal proof; the 128-case native normalization/full-outcome bridge is separate evidence. The broader requirement remains partial."
     },
     {
       "id": "INV-RULES-001",
@@ -796,7 +801,7 @@
         "loom": [
           "totp_verify_races_with_clock_advance"
         ],
-        "kani": "pending:totp_window_boundary",
+        "kani": "totp_window_boundary",
         "property": "prop_same_step_same_code",
         "mutation": [
           "M-AUTH-001",
@@ -805,10 +810,11 @@
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs",
-          "crates/fireemu-core-auth/tests/totp.rs"
+          "crates/fireemu-core-auth/tests/totp.rs",
+          "crates/fireemu-core-auth/tests/totp_window.rs"
         ]
       },
-      "note": "The Kani harness is pending: the acceptance window is decided from HMAC-SHA1 codes and from a 128-bit division in time_step, which bounded model checking does not finish in usable time. The window and replay boundary are covered by AuthTotp.qnt, prop_same_step_same_code and the RFC 6238 vectors in crates/fireemu-core-auth/tests/totp.rs."
+      "note": "The Kani harness verifies the production window/replay selector with arbitrary u64 current and last steps and windows up to two, including saturating endpoints and arbitrary matching patterns. Full-u8-window properties, real HOTP wrapper regressions, AuthTotp Quint and RFC 6238 vectors cover the remaining arithmetic and cryptographic integration; the Kani proof does not establish HMAC-SHA1 security or collision-freedom."
     },
     {
       "id": "INV-AUTH-002",

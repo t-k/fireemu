@@ -151,6 +151,8 @@ fn every_bound_input_tamper_invalidates_evidence() {
             "missing tamper target {target}"
         );
         let temporary = OwnedTestRepository::copy_inputs(&bound_inputs).expect("copy bound inputs");
+        validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path))
+            .expect("untampered copied fixture must validate");
         let path = temporary.path.join(target);
         let mut bytes = fs::read(&path).expect("read copied bound input");
         bytes.push(b'!');
@@ -227,4 +229,74 @@ fn firestore_value_changes_invalidate_dependent_model_evidence() {
             "unexpected evidence failure: {error}"
         );
     }
+}
+
+#[test]
+fn transitive_helper_tampering_and_inventory_changes_stale_evidence() {
+    let root = repository_root();
+    for (name, target) in [
+        ("SessionEpoch", "crates/fireemu-core-types/src/ids.rs"),
+        ("AuthTotp", "crates/fireemu-core-auth/src/sha1.rs"),
+        ("AuthTotp", "crates/fireemu-core-types/src/time.rs"),
+    ] {
+        let descriptor = model(name).expect("registered model");
+        let json =
+            fs::read_to_string(root.join(format!("verification/quint/evidence/{name}.json")))
+                .expect("checked-in evidence");
+        let evidence: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let inputs: Vec<_> = evidence["boundInputs"]
+            .as_array()
+            .expect("bound inputs")
+            .iter()
+            .map(|path| path.as_str().expect("path"))
+            .collect();
+        assert!(inputs.contains(&target), "{name} must bind {target}");
+        for operation in ["edit", "add", "delete", "unrelated"] {
+            let fixture = OwnedTestRepository::copy_inputs(&inputs).expect("copy semantic inputs");
+            validate_evidence_json(&json, descriptor, Some(&fixture.path))
+                .expect("copied baseline must validate before any mutation");
+            let path = fixture.path.join(target);
+            match operation {
+                "edit" => {
+                    let mut bytes = fs::read(&path).expect("read helper");
+                    bytes.extend_from_slice(b"\n// Semantic source mutation.\n");
+                    fs::write(&path, bytes).expect("edit helper");
+                }
+                "add" => fs::write(
+                    path.with_file_name("new_semantic_helper.rs"),
+                    "pub fn helper() {}\n",
+                )
+                .expect("add source"),
+                "delete" => fs::remove_file(&path).expect("remove source"),
+                "unrelated" => {
+                    let unrelated = fixture.path.join("tools/unrelated/src/lib.rs");
+                    fs::create_dir_all(unrelated.parent().expect("unrelated parent"))
+                        .expect("unrelated directory");
+                    fs::write(unrelated, "pub fn unrelated() {}\n").expect("unrelated source");
+                }
+                _ => unreachable!(),
+            }
+            let result = validate_evidence_json(&json, descriptor, Some(&fixture.path));
+            if operation == "unrelated" {
+                result.expect("unrelated source must preserve evidence");
+            } else {
+                let error = result.expect_err("transitive helper mutation must stale evidence");
+                assert!(
+                    error.contains(if operation == "edit" {
+                        "digest mismatch"
+                    } else {
+                        "bound inputs mismatch"
+                    }),
+                    "unexpected failure for {name}/{operation}: {error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn evidence_validation_without_repository_inventory_fails_closed() {
+    let error = validate_evidence_json(EVIDENCE, descriptor(), None)
+        .expect_err("source-bound evidence requires repository inventory");
+    assert!(error.contains("repository root is required"), "{error}");
 }

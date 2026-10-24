@@ -47,7 +47,7 @@ An artifact that is decided but not written yet is marked with the `pending:` pr
 the intended name visible:
 
 ```json
-"kani": "pending:production_index_never_false_accepts"
+"kani": "pending:example_future_proof"
 ```
 
 A pending artifact:
@@ -79,10 +79,35 @@ at least one requirement.
 cargo run -p traceability-check              # the gate; exits non-zero on any problem
 cargo test -p traceability-check             # the checker's own fixtures
 cargo test -p fireemu-verification-property      # the property artifacts
-cargo kani -p fireemu-verification-kani          # the Kani harnesses
+python3 verification/kani/run.py                # executes every required Kani proof
 ```
 
 `tools/traceability-check/tests/artifact_references.rs` holds table-driven fixtures: for every
 category, a missing reference must fail with the requirement ID and the artifact name, and a real
 one must pass. The last fixture runs the checker over this repository, so `cargo nextest run`
 fails as soon as the ledger and the repository drift apart.
+
+The Kani CI gate runs the pinned supported verifier through `verification/kani/run.py` and requires actual successful execution of the exact proof inventory. Missing tools, source inventory drift, empty selections, incomplete output, timeouts and failed proofs fail the gate. Merely compiling the ordinary empty-under-`cfg(kani)` verification crate does not execute a proof.
+
+`totp_window_boundary` checks the actual production selector with arbitrary 64-bit current/replay steps and windows up to two, including saturating endpoints and arbitrary candidate match patterns. Full-window properties and real HOTP/RFC regressions cover the wrapper integration; the theorem does not prove HMAC-SHA1 security or exclude numeric code collisions.
+
+`production_index_never_false_accepts` verifies the shared production composite-support predicate, instantiated with borrowed scalar identities, against an independent scalar contract. Within the following domain, the predicate and contract agree on both acceptance and rejection.
+
+| Input | Checked domain |
+| --- | --- |
+| Field identity | IDs 0..=3, with 3 representing the document name; repeated identities are allowed |
+| Index fields | Length 0..=5 |
+| Equality fields | Length 0..=2 |
+| Ordered fields | Length 0..=3 |
+| Contains field | Absent or any identity in the domain |
+| Scope | Independent collection-match, query-group and index-scope factors |
+| Index field mode | Ascending, Descending, Contains or Vector with dimension 3 |
+| Order direction | Ascending or Descending |
+
+The proof uses fixed-capacity stack arrays with borrowed prefixes and unwind bound 8. It retains unwinding assertions and the default safety and automatic assertion-reachability checks. Twelve explicit covers exercise collection/scope refusal, equality-prefix membership and mode refusal, contains and suffix refusal, explicit/implicit-name refusal, and successful explicit-name, implicit-name, empty/default-name and contains cases.
+
+Runtime FieldPath/string identity adaptation, query normalization, automatic-index selection and merge coverage remain outside this formal claim. The 128-case native bridge checks normalization and full public outcomes separately; those checks do not establish a formal proof of these layers. INV-INDEX-001 therefore remains partial.
+
+`LimitRejection.qnt::LimitRejectionAtomicity` connects oversized-document and excessive-transform rejection to actual Firestore and Functions publication state, including a valid first write before a later oversized document fails. Unique-index enforcement and general product quota state remain outside its modeled scope; INV-LIMIT-001 remains partial.
+
+The LimitRejection index observation preserves a nonempty configured catalog and unfiltered query-visible documents. It does not establish preservation of materialized composite-index entries.

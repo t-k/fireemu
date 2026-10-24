@@ -877,81 +877,115 @@ fn composite_serves(
     collection: &CollectionId,
     group: bool,
 ) -> bool {
-    if &index.collection_group != collection {
+    composite_fields_serve(
+        &index.fields,
+        index.query_scope,
+        &index.collection_group == collection,
+        group,
+        &CompositeRequirementView {
+            equality: &req.equality,
+            contains: req.contains.as_ref(),
+            order: &req.order,
+            is_document_name: FieldPath::is_document_name,
+        },
+        |field| (&field.path, field.mode),
+        |order| (&order.field, order.direction),
+    )
+}
+
+/// Borrowed structural requirement used by the production composite predicate.
+/// Field identities need equality only; parsing and concrete identity representation are external.
+#[doc(hidden)]
+pub struct CompositeRequirementView<'a, F, O, N> {
+    /// Equality identities, preserving duplicate and prefix-length semantics.
+    pub equality: &'a [F],
+    /// Optional array-contains identity.
+    pub contains: Option<&'a F>,
+    /// Ordered fields, including any explicit document-name order.
+    pub order: &'a [O],
+    /// Identity-only document-name accessor; the runtime uses its existing path method.
+    pub is_document_name: N,
+}
+
+/// Actual production composite-serving predicate over borrowed field identities.
+/// Accessors expose identity and production enums without deciding acceptance or allocating views.
+#[doc(hidden)]
+pub fn composite_fields_serve<F: Eq, I, O>(
+    fields: &[I],
+    scope: IndexQueryScope,
+    collection_matches: bool,
+    group: bool,
+    req: &CompositeRequirementView<'_, F, O, impl Fn(&F) -> bool>,
+    index_field: impl for<'a> Fn(&'a I) -> (&'a F, IndexFieldMode),
+    order_field: impl for<'a> Fn(&'a O) -> (&'a F, Direction),
+) -> bool {
+    if !collection_matches || (scope == IndexQueryScope::Collection && group) {
         return false;
     }
-    // A collection-group index serves a collection query too (FS-QUERY-INDEX
-    // index-selection#group-scope-composite-for-collection); a collection index serves only
-    // its collection.
-    let scope_ok = match index.query_scope {
-        IndexQueryScope::CollectionGroup => true,
-        IndexQueryScope::Collection => !group,
-    };
-    if !scope_ok {
-        return false;
-    }
-    let fields = &index.fields;
     let n_eq = req.equality.len();
     if fields.len() < n_eq {
         return false;
     }
-    let prefix: BTreeSet<&FieldPath> = fields[..n_eq].iter().map(|f| &f.path).collect();
-    let wanted: BTreeSet<&FieldPath> = req.equality.iter().collect();
-    if prefix != wanted || fields[..n_eq].iter().any(|f| !f.mode.is_ordered()) {
+    let prefix = &fields[..n_eq];
+    // Two-way membership is set equality, including the original treatment of duplicates.
+    if prefix
+        .iter()
+        .any(|field| !req.equality.contains(index_field(field).0))
+        || req
+            .equality
+            .iter()
+            .any(|path| !prefix.iter().any(|field| index_field(field).0 == path))
+        || prefix
+            .iter()
+            .any(|field| !index_field(field).1.is_ordered())
+    {
         return false;
     }
     let mut pos = n_eq;
-    if let Some(c) = &req.contains {
-        match fields.get(pos) {
-            Some(f) if &f.path == c && f.mode == IndexFieldMode::Contains => pos += 1,
+    if let Some(contains) = req.contains {
+        match fields.get(pos).map(&index_field) {
+            Some((path, IndexFieldMode::Contains)) if path == contains => pos += 1,
             _ => return false,
         }
     }
-    // Remaining ordered fields, ignoring a trailing implicit __name__ on both sides.
-    let order: Vec<&OrderClause> = req
+    let mut order = req
         .order
         .iter()
-        .filter(|o| !o.field.is_document_name())
-        .collect();
-    let rest: Vec<&IndexField> = fields[pos..]
+        .filter(|field| !(req.is_document_name)(order_field(field).0));
+    let mut last_ordered = None;
+    for field in fields[pos..]
         .iter()
-        .filter(|f| !f.path.is_document_name())
-        .collect();
-    if rest.len() != order.len() {
+        .filter(|field| !(req.is_document_name)(index_field(field).0))
+    {
+        let Some(wanted) = order.next() else {
+            return false;
+        };
+        let (path, mode) = index_field(field);
+        let (wanted_path, direction) = order_field(wanted);
+        if path != wanted_path || mode != mode_for_direction(direction) {
+            return false;
+        }
+        last_ordered = Some(mode);
+    }
+    if order.next().is_some() {
         return false;
     }
-    for (f, o) in rest.iter().zip(order.iter()) {
-        if f.path != o.field || f.mode == IndexFieldMode::Contains {
-            return false;
-        }
-        if mode_for_direction(o.direction) != f.mode {
-            return false;
-        }
+    let wanted_name = req
+        .order
+        .iter()
+        .find(|field| (req.is_document_name)(order_field(field).0))
+        .map_or(Direction::Ascending, |field| order_field(field).1);
+    // Preserve the first explicit name, including malformed duplicate-name shapes.
+    if let Some(name) = fields[pos..]
+        .iter()
+        .find(|field| (req.is_document_name)(index_field(field).0))
+    {
+        index_field(name).1 == mode_for_direction(wanted_name)
+    } else if let Some(mode) = last_ordered {
+        mode == mode_for_direction(wanted_name)
+    } else {
+        true
     }
-
-    // An explicit `__name__` uses its own direction. Without one, Firestore derives the implicit
-    // name direction from the last ordered field, or ASCENDING when this index has no ordered
-    // field after its equality/contains prefix.
-    if let Some(name_field) = fields[pos..].iter().find(|f| f.path.is_document_name()) {
-        let wanted = req
-            .order
-            .iter()
-            .find(|o| o.field.is_document_name())
-            .map_or(Direction::Ascending, |o| o.direction);
-        if name_field.mode != mode_for_direction(wanted) {
-            return false;
-        }
-    } else if let Some(last_ordered) = rest.last() {
-        let wanted = req
-            .order
-            .iter()
-            .find(|o| o.field.is_document_name())
-            .map_or(Direction::Ascending, |o| o.direction);
-        if last_ordered.mode != mode_for_direction(wanted) {
-            return false;
-        }
-    }
-    true
 }
 
 /// How one DNF disjunct of a served query reads its index entries.
@@ -1418,6 +1452,586 @@ mod performance_tests {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod normalized_core_bridge_tests {
+    use super::*;
+    use crate::query::QueryScope;
+    use crate::value::Value;
+
+    // Keep the full normalization and complete-decision bridge visible together.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn normalized_requirement_and_full_outcomes_match_public_planner_in_all_128_cells() {
+        let collection = CollectionId::try_new("i").unwrap();
+        let fields = ["a", "b", "c"].map(|name| FieldPath::from_segments([name]).unwrap());
+        for mask in 0..8 {
+            for group in [false, true] {
+                for index_group in [false, true] {
+                    for descending in [false, true] {
+                        for index_descending in [false, true] {
+                            let direction = if descending {
+                                Direction::Descending
+                            } else {
+                                Direction::Ascending
+                            };
+                            let mut query = Query::new(if group {
+                                QueryScope::collection_group(collection.clone())
+                            } else {
+                                QueryScope::collection(None, collection.clone())
+                            });
+                            query.production_refusals = true;
+                            query.filter = Some(FilterExpr::And(
+                                [0, 1]
+                                    .map(|position| FilterExpr::Field {
+                                        field: fields[position].clone(),
+                                        op: FieldOp::Equal,
+                                        value: Value::Integer(1),
+                                    })
+                                    .to_vec(),
+                            ));
+                            query.order_by = vec![OrderClause {
+                                field: fields[2].clone(),
+                                direction,
+                            }];
+                            let equality = vec![fields[0].clone(), fields[1].clone()];
+                            let order = vec![
+                                OrderClause {
+                                    field: fields[2].clone(),
+                                    direction,
+                                },
+                                OrderClause {
+                                    field: FieldPath::document_name(),
+                                    direction,
+                                },
+                            ];
+                            let disjunctions = query.dnf();
+                            assert_eq!(disjunctions.len(), 1);
+                            let derived =
+                                requirement_for(&disjunctions[0], &query.effective_order_by());
+                            assert_eq!(derived.equality, equality);
+                            assert_eq!(derived.contains, None);
+                            assert_eq!(derived.order, order);
+                            assert!(!derived.equality_ordered);
+                            let mut indexes = IndexSet::default();
+                            for (bit, positions) in
+                                [(1, &[0, 1, 2][..]), (2, &[0, 2][..]), (4, &[1, 2][..])]
+                            {
+                                if mask & bit != 0 {
+                                    indexes.add_composite(IndexDefinition {
+                                        collection_group: collection.clone(),
+                                        query_scope: scope_for(index_group),
+                                        fields: positions
+                                            .iter()
+                                            .map(|position| IndexField {
+                                                path: fields[*position].clone(),
+                                                mode: if *position == 2 && index_descending {
+                                                    IndexFieldMode::Descending
+                                                } else {
+                                                    IndexFieldMode::Ascending
+                                                },
+                                            })
+                                            .collect(),
+                                    });
+                                }
+                            }
+                            let mapping = [
+                                fields[0].clone(),
+                                fields[1].clone(),
+                                fields[2].clone(),
+                                FieldPath::document_name(),
+                            ];
+                            for index in &indexes.composites {
+                                composite_kernel_tests::compare_real_and_scalar(
+                                    index,
+                                    &derived,
+                                    &collection,
+                                    group,
+                                    &mapping,
+                                );
+                            }
+                            let ctx = PlanningContext {
+                                edition: FirestoreEdition::Standard,
+                                api_mode: FirestoreApiMode::Native,
+                                policy: IndexValidationPolicy::Production,
+                            };
+                            let complete = match decide_disjunct(
+                                &derived,
+                                &indexes,
+                                &collection,
+                                group,
+                                ctx,
+                            ) {
+                                DisjunctDecision::Scan(PlannedScan::Index(index)) => {
+                                    IndexDecision::UseIndex { index }
+                                }
+                                DisjunctDecision::Scan(PlannedScan::Merge(indexes)) => {
+                                    IndexDecision::MergeIndexes { indexes }
+                                }
+                                DisjunctDecision::Missing(requirement) => {
+                                    IndexDecision::MissingRequired { requirement }
+                                }
+                                DisjunctDecision::Assumed(_) => {
+                                    panic!("Production selection must not assume an index")
+                                }
+                            };
+                            assert_eq!(complete, decide(&query, &indexes, &ctx), "mask={mask}, group={group}, index_group={index_group}, descending={descending}, index_descending={index_descending}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod composite_kernel_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    pub(super) fn original_composite_serves(
+        index: &IndexDefinition,
+        req: &Requirement,
+        collection: &CollectionId,
+        group: bool,
+    ) -> bool {
+        if &index.collection_group != collection {
+            return false;
+        }
+        // A collection-group index serves a collection query too (FS-QUERY-INDEX
+        // index-selection#group-scope-composite-for-collection); a collection index serves only
+        // its collection.
+        let scope_ok = match index.query_scope {
+            IndexQueryScope::CollectionGroup => true,
+            IndexQueryScope::Collection => !group,
+        };
+        if !scope_ok {
+            return false;
+        }
+        let fields = &index.fields;
+        let n_eq = req.equality.len();
+        if fields.len() < n_eq {
+            return false;
+        }
+        let prefix: BTreeSet<&FieldPath> = fields[..n_eq].iter().map(|f| &f.path).collect();
+        let wanted: BTreeSet<&FieldPath> = req.equality.iter().collect();
+        if prefix != wanted || fields[..n_eq].iter().any(|f| !f.mode.is_ordered()) {
+            return false;
+        }
+        let mut pos = n_eq;
+        if let Some(c) = &req.contains {
+            match fields.get(pos) {
+                Some(f) if &f.path == c && f.mode == IndexFieldMode::Contains => pos += 1,
+                _ => return false,
+            }
+        }
+        // Remaining ordered fields, ignoring a trailing implicit __name__ on both sides.
+        let order: Vec<&OrderClause> = req
+            .order
+            .iter()
+            .filter(|o| !o.field.is_document_name())
+            .collect();
+        let rest: Vec<&IndexField> = fields[pos..]
+            .iter()
+            .filter(|f| !f.path.is_document_name())
+            .collect();
+        if rest.len() != order.len() {
+            return false;
+        }
+        for (f, o) in rest.iter().zip(order.iter()) {
+            if f.path != o.field || f.mode == IndexFieldMode::Contains {
+                return false;
+            }
+            if mode_for_direction(o.direction) != f.mode {
+                return false;
+            }
+        }
+
+        // An explicit `__name__` uses its own direction. Without one, Firestore derives the implicit
+        // name direction from the last ordered field, or ASCENDING when this index has no ordered
+        // field after its equality/contains prefix.
+        if let Some(name_field) = fields[pos..].iter().find(|f| f.path.is_document_name()) {
+            let wanted = req
+                .order
+                .iter()
+                .find(|o| o.field.is_document_name())
+                .map_or(Direction::Ascending, |o| o.direction);
+            if name_field.mode != mode_for_direction(wanted) {
+                return false;
+            }
+        } else if let Some(last_ordered) = rest.last() {
+            let wanted = req
+                .order
+                .iter()
+                .find(|o| o.field.is_document_name())
+                .map_or(Direction::Ascending, |o| o.direction);
+            if last_ordered.mode != mode_for_direction(wanted) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn path(id: u8) -> FieldPath {
+        match id {
+            0 => FieldPath::from_segments(["a"]).unwrap(),
+            1 => FieldPath::from_segments(["b"]).unwrap(),
+            2 => FieldPath::from_segments(["c"]).unwrap(),
+            3 => FieldPath::document_name(),
+            4 => FieldPath::from_segments(["a", "b"]).unwrap(),
+            5 => FieldPath::from_segments(["a.b`c"]).unwrap(),
+            _ => FieldPath::from_segments(["日本語"]).unwrap(),
+        }
+    }
+
+    fn mode(id: u8) -> IndexFieldMode {
+        match id {
+            0 => IndexFieldMode::Ascending,
+            1 => IndexFieldMode::Descending,
+            2 => IndexFieldMode::Contains,
+            _ => IndexFieldMode::Vector { dimension: 3 },
+        }
+    }
+
+    pub(super) fn compare_real_and_scalar(
+        index: &IndexDefinition,
+        req: &Requirement,
+        collection: &CollectionId,
+        group: bool,
+        mapping: &[FieldPath],
+    ) -> bool {
+        for (i, left) in mapping.iter().enumerate() {
+            for (j, right) in mapping.iter().enumerate() {
+                assert_eq!(left == right, i == j);
+            }
+        }
+        let id = |path: &FieldPath| {
+            u8::try_from(
+                mapping
+                    .iter()
+                    .position(|candidate| candidate == path)
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let fields: Vec<_> = index
+            .fields
+            .iter()
+            .map(|field| (id(&field.path), field.mode))
+            .collect();
+        let equality: Vec<_> = req.equality.iter().map(id).collect();
+        let contains = req.contains.as_ref().map(id);
+        let order: Vec<_> = req
+            .order
+            .iter()
+            .map(|order| (id(&order.field), order.direction))
+            .collect();
+        let name = id(&FieldPath::document_name());
+        let scalar = composite_fields_serve(
+            &fields,
+            index.query_scope,
+            &index.collection_group == collection,
+            group,
+            &CompositeRequirementView {
+                equality: &equality,
+                contains: contains.as_ref(),
+                order: &order,
+                is_document_name: |identity: &u8| *identity == name,
+            },
+            |field| (&field.0, field.1),
+            |field| (&field.0, field.1),
+        );
+        let actual = composite_serves(index, req, collection, group);
+        assert_eq!(
+            actual,
+            original_composite_serves(index, req, collection, group)
+        );
+        assert_eq!(actual, scalar);
+        actual
+    }
+
+    fn variant_paths(variant: &str) -> [FieldPath; 4] {
+        let segments: [&[&str]; 3] = match variant {
+            "ordinary" => [&["a"], &["b"], &["c"]],
+            "multisegment" => [&["a", "x"], &["a", "y"], &["a", "z"]],
+            "literal_dot" => [&["a.b"], &["a", "b"], &["a.b", "c"]],
+            "backtick" => [&["a`x"], &["a`y"], &["a`z"]],
+            "common_prefix" => [&["abc"], &["abcd"], &["abce"]],
+            "unicode" => [&["猫"], &["犬"], &["鳥"]],
+            other => panic!("unknown path variant: {other}"),
+        };
+        [
+            FieldPath::from_segments(segments[0].iter().copied()).unwrap(),
+            FieldPath::from_segments(segments[1].iter().copied()).unwrap(),
+            FieldPath::from_segments(segments[2].iter().copied()).unwrap(),
+            FieldPath::document_name(),
+        ]
+    }
+
+    // Keep the structural factor-to-fixture mapping in one place for required seeds and PICT.
+    #[allow(clippy::too_many_lines)]
+    fn structural_case(row: &[&str]) -> bool {
+        let [scope, collection_match, prefix, prefix_mode, contains, suffix, name, paths]: [&str;
+            8] = row.try_into().unwrap();
+        let paths = variant_paths(paths);
+        let (equality, prefix): (&[usize], &[usize]) = match prefix {
+            "empty" => (&[], &[]),
+            "ordered" => (&[0, 1], &[0, 1]),
+            "permuted" => (&[0, 1], &[1, 0]),
+            "duplicate" => (&[0, 0], &[0, 0]),
+            "missing" => (&[0, 1], &[0, 0]),
+            "unexpected" => (&[0, 0], &[0, 1]),
+            "short" => (&[0, 1, 2], &[0, 1]),
+            "extra" => (&[0, 1], &[0, 1, 2]),
+            other => panic!("unknown prefix: {other}"),
+        };
+        let prefix_mode = match prefix_mode {
+            "asc" => mode(0),
+            "desc" => mode(1),
+            "contains" => mode(2),
+            "vector" => mode(3),
+            other => panic!("unknown mode: {other}"),
+        };
+        let mut fields: Vec<_> = prefix
+            .iter()
+            .map(|identity| IndexField {
+                path: paths[*identity].clone(),
+                mode: prefix_mode,
+            })
+            .collect();
+        let wanted_contains = if contains == "absent" {
+            None
+        } else {
+            Some(paths[2].clone())
+        };
+        match contains {
+            "absent" | "missing" => {}
+            "match" => fields.push(IndexField {
+                path: paths[2].clone(),
+                mode: IndexFieldMode::Contains,
+            }),
+            "wrong_path" => fields.push(IndexField {
+                path: paths[0].clone(),
+                mode: IndexFieldMode::Contains,
+            }),
+            "wrong_mode" => fields.push(IndexField {
+                path: paths[2].clone(),
+                mode: IndexFieldMode::Ascending,
+            }),
+            other => panic!("unknown contains: {other}"),
+        }
+        let direction = if suffix == "desc" {
+            Direction::Descending
+        } else {
+            Direction::Ascending
+        };
+        let mut order = Vec::new();
+        if suffix != "empty" {
+            order.push(OrderClause {
+                field: paths[2].clone(),
+                direction,
+            });
+        }
+        match suffix {
+            "empty" | "missing" => {}
+            "asc" | "desc" => fields.push(IndexField {
+                path: paths[2].clone(),
+                mode: mode_for_direction(direction),
+            }),
+            "wrong_path" => fields.push(IndexField {
+                path: paths[0].clone(),
+                mode: IndexFieldMode::Ascending,
+            }),
+            "wrong_mode" => fields.push(IndexField {
+                path: paths[2].clone(),
+                mode: IndexFieldMode::Vector { dimension: 3 },
+            }),
+            "extra" => {
+                fields.push(IndexField {
+                    path: paths[2].clone(),
+                    mode: IndexFieldMode::Ascending,
+                });
+                fields.push(IndexField {
+                    path: paths[1].clone(),
+                    mode: IndexFieldMode::Ascending,
+                });
+            }
+            other => panic!("unknown suffix: {other}"),
+        }
+        let inverse = if direction == Direction::Ascending {
+            Direction::Descending
+        } else {
+            Direction::Ascending
+        };
+        if name != "default" {
+            order.push(OrderClause {
+                field: paths[3].clone(),
+                direction: if name == "implicit_wrong" {
+                    inverse
+                } else {
+                    direction
+                },
+            });
+        }
+        match name {
+            "default" | "implicit_match" | "implicit_wrong" => {}
+            "explicit_match" => fields.push(IndexField {
+                path: paths[3].clone(),
+                mode: mode_for_direction(direction),
+            }),
+            "explicit_wrong" => fields.push(IndexField {
+                path: paths[3].clone(),
+                mode: mode_for_direction(inverse),
+            }),
+            "duplicate_first_match" | "duplicate_first_wrong" => {
+                let first = if name == "duplicate_first_match" {
+                    direction
+                } else {
+                    inverse
+                };
+                let second = if name == "duplicate_first_match" {
+                    inverse
+                } else {
+                    direction
+                };
+                for value in [first, second] {
+                    fields.push(IndexField {
+                        path: paths[3].clone(),
+                        mode: mode_for_direction(value),
+                    });
+                }
+            }
+            other => panic!("unknown name: {other}"),
+        }
+        let collection = CollectionId::try_new("i").unwrap();
+        let index = IndexDefinition {
+            collection_group: CollectionId::try_new(if collection_match == "match" {
+                "i"
+            } else {
+                "other"
+            })
+            .unwrap(),
+            query_scope: if scope == "group_index" {
+                IndexQueryScope::CollectionGroup
+            } else {
+                IndexQueryScope::Collection
+            },
+            fields,
+        };
+        let req = Requirement {
+            equality: equality
+                .iter()
+                .map(|identity| paths[*identity].clone())
+                .collect(),
+            contains: wanted_contains,
+            order,
+            equality_ordered: false,
+        };
+        compare_real_and_scalar(&index, &req, &collection, scope != "collection", &paths)
+    }
+
+    #[test]
+    fn structural_required_examples_preserve_name_duplicates_and_path_identity() {
+        let baseline = [
+            "collection",
+            "match",
+            "ordered",
+            "asc",
+            "absent",
+            "asc",
+            "implicit_match",
+            "ordinary",
+        ];
+        assert!(structural_case(&baseline));
+        for (axis, value, expected) in [
+            (0, "group_mismatch", false),
+            (1, "mismatch", false),
+            (2, "permuted", true),
+            (2, "duplicate", true),
+            (2, "missing", false),
+            (2, "unexpected", false),
+            (3, "vector", false),
+            (3, "contains", false),
+            (4, "match", true),
+            (4, "missing", false),
+            (4, "wrong_mode", false),
+            (4, "wrong_path", false),
+            (5, "wrong_path", false),
+            (5, "wrong_mode", false),
+            (6, "explicit_match", true),
+            (6, "explicit_wrong", false),
+            (6, "implicit_wrong", false),
+            (6, "duplicate_first_match", true),
+            (6, "duplicate_first_wrong", false),
+            (7, "literal_dot", true),
+            (7, "multisegment", true),
+            (7, "backtick", true),
+            (7, "unicode", true),
+        ] {
+            let mut row = baseline;
+            row[axis] = value;
+            assert_eq!(structural_case(&row), expected, "{row:?}");
+        }
+        let mut vector_suffix = baseline;
+        vector_suffix[5] = "wrong_mode";
+        vector_suffix[6] = "explicit_match";
+        assert!(!structural_case(&vector_suffix));
+        let mut empty = baseline;
+        empty[2] = "empty";
+        empty[5] = "empty";
+        empty[6] = "default";
+        assert!(structural_case(&empty));
+        let mut short = empty;
+        short[2] = "short";
+        assert!(!structural_case(&short));
+    }
+
+    #[test]
+    #[ignore = "requires FIREEMU_COMPOSITE_KERNEL_MATRIX generated PICT rows"]
+    fn structural_pict_rows_match_original_and_scalar_adapter() {
+        let table =
+            std::fs::read_to_string(std::env::var("FIREEMU_COMPOSITE_KERNEL_MATRIX").unwrap())
+                .unwrap();
+        assert_eq!(
+            table.lines().next().unwrap(),
+            "Scope\tCollection\tPrefix\tMode\tContains\tSuffix\tName\tPaths"
+        );
+        let mut rows = 0;
+        for row in table.lines().skip(1) {
+            structural_case(&row.split('\t').collect::<Vec<_>>());
+            rows += 1;
+        }
+        assert!(rows >= 23);
+    }
+
+    proptest! {
+        #[test]
+        fn original_composite_predicate_matches_borrowed_extraction(
+            fields in prop::collection::vec((0u8..7, 0u8..4), 0..7),
+            equality in prop::collection::vec(0u8..7, 0..4),
+            order in prop::collection::vec((0u8..7, any::<bool>()), 0..5),
+            contains in prop::option::of(0u8..7),
+            collection_matches in any::<bool>(),
+            group in any::<bool>(),
+            index_group in any::<bool>(),
+        ) {
+            let collection = CollectionId::try_new("i").unwrap();
+            let index = IndexDefinition {
+                collection_group: CollectionId::try_new(if collection_matches { "i" } else { "other" }).unwrap(),
+                query_scope: scope_for(index_group),
+                fields: fields.into_iter().map(|(id, m)| IndexField { path: path(id), mode: mode(m) }).collect(),
+            };
+            let req = Requirement {
+                equality: equality.into_iter().map(path).collect(),
+                contains: contains.map(path),
+                order: order.into_iter().map(|(id, descending)| OrderClause { field: path(id), direction: if descending { Direction::Descending } else { Direction::Ascending } }).collect(),
+                equality_ordered: false,
+            };
+            let mapping = (0..7).map(path).collect::<Vec<_>>();
+            compare_real_and_scalar(&index, &req, &collection, group, &mapping);
         }
     }
 }

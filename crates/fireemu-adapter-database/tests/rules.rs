@@ -1007,7 +1007,10 @@ fn realtime_credentials_follow_the_profile() {
         let mut session = open(&mut db, "demo-default-rtdb");
         let other = send(&mut db, &mut session, 1, "gauth", r#"{"cred":"ya29.x"}"#);
         if strict {
-            assert_eq!(other, vec![unparsable.clone()]);
+            assert_eq!(
+                other,
+                vec![reply(1, "permission_denied", r#""Permission denied""#)]
+            );
         } else {
             assert!(other[0].contains(r#""s":"ok""#), "{other:?}");
         }
@@ -1441,7 +1444,7 @@ fn a_refused_gauth_signs_the_connection_out_under_strict() {
     let unparsable = |r| reply(r, "invalid_token", r#""Could not parse auth token.""#);
     assert_eq!(
         send(&mut db, &mut session, 2, "gauth", r#"{"cred":"ya29.x"}"#),
-        vec![unparsable(2)]
+        vec![reply(2, "permission_denied", r#""Permission denied""#)]
     );
     assert_eq!(
         send(&mut db, &mut session, 3, "g", r#"{"p":"/anon"}"#),
@@ -3071,4 +3074,119 @@ fn coverage_html_preserves_prototype_named_rule_children_as_json_data() {
     }
     assert!(html.contains("JSON.parse(document.getElementById('coverage-data').textContent)"));
     assert!(html.contains("Object.hasOwn(report,key)"));
+}
+
+#[test]
+fn gauth_refusal_profile_shape_and_prior_access_matrix() {
+    let mut cases = Vec::new();
+    for profile in ["strict", "emulator"] {
+        for prior in ["anonymous", "owner", "user"] {
+            for shape in ["fixed", "other", "owner", "scalar", "missing"] {
+                cases.push((profile.to_owned(), prior.to_owned(), shape.to_owned()));
+            }
+        }
+    }
+    if let Ok(path) = std::env::var("FIREEMU_GAUTH_PICT_TABLE") {
+        let table = std::fs::read_to_string(path).unwrap();
+        for row in table.lines().skip(1) {
+            let cells: Vec<_> = row.split('\t').collect();
+            assert_eq!(cells.len(), 3);
+            cases.push((
+                cells[0].to_owned(),
+                cells[1].to_owned(),
+                cells[2].to_owned(),
+            ));
+        }
+    }
+    for (profile, prior, shape) in cases {
+        let strict = profile == "strict";
+        let mut db = with_credentials(strict, true);
+        load(
+            &mut db,
+            "demo-default-rtdb",
+            r#"{"rules":{"private":{".read":"auth != null && auth.uid === 'ok-1'"},"anonymous":{".read":"auth == null"},"closed":{".read":false}}}"#,
+        );
+        let mut session = open(&mut db, "demo-default-rtdb");
+        match prior.as_str() {
+            "owner" => {
+                send(&mut db, &mut session, 1, "gauth", r#"{"cred":"owner"}"#);
+            }
+            "user" => {
+                send(
+                    &mut db,
+                    &mut session,
+                    1,
+                    "auth",
+                    &format!(r#"{{"cred":"{}"}}"#, token(r#"{"sub":"ok-1","iat":1}"#)),
+                );
+            }
+            "anonymous" => {}
+            _ => panic!("unexpected prior access"),
+        }
+        let credential = match shape.as_str() {
+            "fixed" => r#"{"cred":"cv11-portless-fixed-invalid-nonsecret"}"#,
+            "other" => r#"{"cred":"ya29.x"}"#,
+            "owner" => r#"{"cred":"owner"}"#,
+            "scalar" => r#"{"cred":7}"#,
+            "missing" => "{}",
+            _ => panic!("unexpected credential shape"),
+        };
+        let answer = send(&mut db, &mut session, 3, "gauth", credential);
+        let refused_string = strict && matches!(shape.as_str(), "fixed" | "other");
+        let refused_scalar = strict && shape == "scalar";
+        if shape == "missing" {
+            assert!(answer.is_empty());
+        } else if refused_string {
+            assert_eq!(
+                answer,
+                vec![reply(3, "permission_denied", r#""Permission denied""#)],
+                "{profile}/{prior}/{shape}"
+            );
+        } else if refused_scalar {
+            assert_eq!(
+                answer,
+                vec![reply(
+                    3,
+                    "invalid_token",
+                    r#""Could not parse auth token.""#
+                )]
+            );
+        } else {
+            assert_eq!(
+                answer,
+                vec![reply(
+                    3,
+                    "ok",
+                    &format!(r#"{{"auth":null,"expires":{}}}"#, NOW / 1000 + 3600)
+                )]
+            );
+        }
+        let expected_owner = if shape == "missing" {
+            prior == "owner"
+        } else {
+            !refused_string && !refused_scalar
+        };
+        let expected_user = shape == "missing" && prior == "user";
+        for (request, path, allowed) in [
+            (4, "/closed", expected_owner),
+            (5, "/private", expected_owner || expected_user),
+            (6, "/anonymous", !expected_user),
+        ] {
+            assert_eq!(
+                send(
+                    &mut db,
+                    &mut session,
+                    request,
+                    "g",
+                    &format!(r#"{{"p":"{path}"}}"#)
+                ),
+                vec![if allowed {
+                    reply(request, "ok", "null")
+                } else {
+                    refused(request)
+                }],
+                "{profile}/{prior}/{shape}/{path}"
+            );
+        }
+    }
 }

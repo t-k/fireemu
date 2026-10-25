@@ -64,9 +64,13 @@ pub struct ServerConfig {
     /// 45 s).
     pub realtime_idle: Duration,
     /// How long a long-polling request is held waiting for messages; a connection whose
-    /// held request runs out, or that sends no request for as long, is closed (the official
-    /// emulator answers after about 90 s; the SDK sends a fresh request every 25 s).
+    /// held request runs out is closed (the official emulator answers after about 90 s; the
+    /// SDK sends a fresh request every 25 s).
     pub long_poll_hold: Duration,
+    /// How long a long-polling connection with no live held request may go without a
+    /// request before it is closed. Production closed connections whose held request the
+    /// browser had aborted about 100 to 104 s after their last request.
+    pub long_poll_idle_close: Duration,
     /// The session admission shared with control reset. Standalone servers need no barrier.
     pub admission: Option<Arc<fireemu_core_session::barrier::AdmissionBarrier>>,
     /// The server time.
@@ -84,6 +88,7 @@ impl Default for ServerConfig {
             stream_queue_bytes: 64 * 1024 * 1024,
             realtime_idle: Duration::from_secs(120),
             long_poll_hold: Duration::from_secs(90),
+            long_poll_idle_close: Duration::from_secs(100),
             admission: None,
             clock: Arc::new(|| {
                 SystemTime::now()

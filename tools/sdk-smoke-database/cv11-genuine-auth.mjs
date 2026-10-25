@@ -259,6 +259,9 @@ export function verifyPacket(file, expected) {
   return packet;
 }
 
+// Long polling opens no WebSocket; any WebSocket means the SDK used that transport.
+export const transportOf = (counts) => (counts.ws > 0 ? 'ws' : 'lp');
+
 // One profile in headless Chromium. The page and SDK bundles are served from loopback; only the
 // allowed hosts are reached, and HTTP requests and WebSockets are counted against the caps.
 export function browserRunner({ modules, allowHost, page: pageConfig }) {
@@ -294,8 +297,8 @@ export function browserRunner({ modules, allowHost, page: pageConfig }) {
       await page.waitForFunction(() => typeof window.__cv11Run === 'function');
       const timeout = new Promise((_, reject) => setTimeout(() => reject(Error('profile timeout')), 150000).unref());
       await Promise.race([page.evaluate((c) => window.__cv11Run(c), { ...pageConfig, ...prof }), capped, timeout]);
-      // Evidence of the transport the SDK actually used (long polling opens no WebSocket).
-      const transport = { step: 'runner', type: 'transport', code: counts.ws > 0 ? 'ws' : 'lp' };
+      // Evidence of the transport the SDK actually used.
+      const transport = { step: 'runner', type: 'transport', code: transportOf(counts) };
       journal.push(transport);
       hooks.event(prof.name, transport);
       return { journal, counts };

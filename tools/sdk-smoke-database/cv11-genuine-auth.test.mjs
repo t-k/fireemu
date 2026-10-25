@@ -6,12 +6,13 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { adminClient, rulesFor, runScenario, compareJournals, assertNoSecrets, verifyPacket, SOURCES, CAPS } from './cv11-genuine-auth.mjs';
+import { adminClient, rulesFor, runScenario, compareJournals, assertNoSecrets, verifyPacket, transportOf, SOURCES, CAPS } from './cv11-genuine-auth.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
 
-// A fake of the production APIs. A fault {method, path (regexp), kind, applied} fires once.
+// A fake of the production APIs. A fault {method, path (regexp), kind, applied, skip} fires once, on the
+// (skip+1)th match; kind 'lie' answers 200 with a plausible body without applying the request.
 function fakeWorld(faults = []) {
   const w = { api: 'DISABLED', inst: 'DELETED', rules: BASE, data: {}, users: new Map(), ops: 0, sent: [] };
   const inst = (state) => ({ name: `projects/${N}/locations/us-central1/instances/fireemu-q-rtdb2`, type: 'USER_DATABASE', state });
@@ -24,7 +25,7 @@ function fakeWorld(faults = []) {
       return json(200, { name: `operations/op${++w.ops}`, done: w.ops % 2 === 0 });
     }
     if (u.host === 'firebasedatabase.googleapis.com') {
-      if (p.endsWith('/-/instances')) return json(200, w.inst === 'DELETED' ? {} : { instances: [inst(w.inst)] });
+      if (p.endsWith('/-/instances')) return json(200, { instances: [...(w.inst === 'DELETED' ? [] : [inst(w.inst)]), ...(w.foreign ? [{ name: 'other' }] : [])] });
       const verb = p.split(':')[1];
       if (method === 'DELETE') w.inst = 'DELETED';
       else if (verb) w.inst = { undelete: 'DISABLED', reenable: 'ACTIVE', disable: 'DISABLED' }[verb];
@@ -45,9 +46,10 @@ function fakeWorld(faults = []) {
   w.fetch = async (url, init) => {
     const u = new URL(url), body = init.body === undefined ? undefined : /rules/.test(u.pathname) ? init.body : JSON.parse(init.body);
     w.sent.push(`${init.method} ${u.pathname}`);
-    const f = faults.find((x) => !x.used && x.method === init.method && x.path.test(u.pathname));
+    const f = faults.find((x) => !x.used && x.method === init.method && x.path.test(u.pathname) && !(x.skip-- > 0));
     if (!f) return apply(init.method, u, body);
     f.used = true;
+    if (f.kind === 'lie') return json(200, /rules/.test(u.pathname) ? { status: 'ok' } : init.method === 'DELETE' ? null : {});
     const answer = f.applied ? apply(init.method, u, body) : undefined;
     if (f.kind === 'timeout') throw new Error('timeout');
     return json(f.kind === '5xx' ? 503 : f.kind === '3xx' ? 302 : f.kind === '4xx' ? 400 : 199, answer ? await answer.text() : '');
@@ -80,12 +82,14 @@ test('admin client: only complete 2xx and 4xx answers are known; caps refuse bef
   const thrown = adminClient({ fetchImpl: async () => { throw new Error('t'); }, headers: {}, log: () => {} });
   assert.equal((await thrown.call('s', 'GET', 'https://x/a')).outcome, 'unknown');
   let sent = 0;
-  const c = adminClient({ fetchImpl: async () => (sent++, json(200, '{}')), headers: {}, log: () => {}, caps: { ...CAPS, observe: 2, cleanup: 1, mutations: 1 } });
+  const c = adminClient({ fetchImpl: async () => (sent++, json(200, '{}')), headers: {}, log: () => {}, caps: { ...CAPS, observe: 3, cleanup: 1, mutations: 1 } });
   await c.call('a', 'GET', 'https://x/a'); await c.call('b', 'PUT', 'https://x/a', {});
   await assert.rejects(c.call('c', 'PUT', 'https://x/a', {}), /cap/);
+  await c.call('c2', 'GET', 'https://x/a');
+  await assert.rejects(c.call('c3', 'GET', 'https://x/a'), /cap/);
   c.cleanup(); await c.call('d', 'GET', 'https://x/a');
   await assert.rejects(c.call('e', 'GET', 'https://x/a'), /cap/);
-  assert.equal(sent, 3);
+  assert.equal(sent, 4);
 });
 
 test('production dry run: four profiles, exact request list, world back at baseline, closed', async () => {
@@ -119,20 +123,26 @@ test('local dry run uses no management API and restores the baseline Rules text'
 
 // Unknown-answer rules (checklist §3): a fault on one request, then the run's final status.
 const unknowns = [
-  ['unknown user create that never reads back stays open', { method: 'POST', path: /\/accounts$/, kind: 'timeout', applied: false }, 'needs-recovery'],
+  ['unknown user create that never reads back stays open', { method: 'POST', path: /\/accounts$/, kind: 'timeout', applied: false }, 'needs-recovery', 'r1-ws:a-create'],
   ['unknown user create settled by own positive lookup', { method: 'POST', path: /\/accounts$/, kind: '5xx', applied: true }, 'closed'],
-  ['unknown user delete is sticky and never re-sent', { method: 'POST', path: /:delete$/, kind: 'timeout', applied: true }, 'needs-recovery'],
-  ['unknown undelete stops before data and keeps the API enabled', { method: 'POST', path: /:undelete$/, kind: '5xx', applied: true }, 'needs-recovery'],
-  ['unknown instance DELETE is sticky; API stays enabled', { method: 'DELETE', path: /instances\/fireemu-q-rtdb2$/, kind: 'timeout', applied: true }, 'needs-recovery'],
-  ['unknown prefix DELETE is sticky', { method: 'DELETE', path: /^\/parity1\/run1\.json$/, kind: '3xx', applied: true }, 'needs-recovery'],
-  ['sub-200 API disable is unknown', { method: 'POST', path: /googleapis\.com:disable$/, kind: 'sub200', applied: true }, 'needs-recovery'],
+  ['unknown user delete is sticky and never re-sent', { method: 'POST', path: /:delete$/, kind: 'timeout', applied: true }, 'needs-recovery', 'r1-ws:a-delete'],
+  ['unknown undelete stops before data and keeps the API enabled', { method: 'POST', path: /:undelete$/, kind: '5xx', applied: true }, 'needs-recovery', 'instance-undelete'],
+  ['unknown instance DELETE is sticky; API stays enabled', { method: 'DELETE', path: /instances\/fireemu-q-rtdb2$/, kind: 'timeout', applied: true }, 'needs-recovery', 'instance-delete'],
+  ['unknown prefix DELETE is sticky', { method: 'DELETE', path: /^\/parity1\/run1\.json$/, kind: '3xx', applied: true }, 'needs-recovery', 'prefix-delete'],
+  ['sub-200 API disable is unknown', { method: 'POST', path: /googleapis\.com:disable$/, kind: 'sub200', applied: true }, 'needs-recovery', 'api-disable'],
   ['unknown Rules install is settled by the restored baseline read-back', { method: 'PUT', path: /rules/, kind: '5xx', applied: true }, 'closed'],
   ['refused (4xx) undelete is known: nothing changed, API disabled again', { method: 'POST', path: /:undelete$/, kind: '4xx', applied: false }, 'closed'],
+  ['a 200 user delete that did not delete keeps the run open', { method: 'POST', path: /accounts:delete$/, kind: 'lie' }, 'needs-recovery'],
+  ['a 200 prefix DELETE that did not delete keeps the run open', { method: 'DELETE', path: /^\/parity1\/run1\.json$/, kind: 'lie' }, 'needs-recovery'],
+  ['a 200 Rules restore that did not restore keeps the run open', { method: 'PUT', path: /rules/, kind: 'lie', skip: 1 }, 'needs-recovery'],
+  ['an unrestored Rules text keeps the instance (no retirement)', { method: 'PUT', path: /rules/, kind: '5xx', applied: false, skip: 1 }, 'needs-recovery'],
 ];
-for (const [name, fault, status] of unknowns) {
+for (const [name, fault, status, unresolved] of unknowns) {
   test(name, async () => {
     const w = fakeWorld([fault]), r = await prod(w);
     assert.equal(r.status, status, JSON.stringify(r.unresolved));
+    if (unresolved) assert.equal(r.unresolved[0]?.step, unresolved);
+    if (/keeps the instance/.test(name)) assert.ok(!w.sent.some((x) => x.endsWith('fireemu-q-rtdb2:disable')));
     if (status === 'closed') assert.ok(w.baseline());
     const deletes = w.sent.filter((s) => s.startsWith('POST') && s.endsWith(':delete') || s.startsWith('DELETE'));
     assert.ok(w.sent.filter((s) => s.endsWith('accounts:delete')).length <= 8, 'no user delete re-sent');
@@ -140,6 +150,28 @@ for (const [name, fault, status] of unknowns) {
     if (/undelete|instance DELETE/.test(name) && status !== 'closed') assert.ok(!w.sent.some((s) => s.endsWith('googleapis.com:disable')));
   });
 }
+
+test('an operation done with an error, or a poll naming another operation, is unknown', async () => {
+  for (const answer of [(name) => ({ name, done: true, error: { code: 9 } }), () => ({ name: 'operations/other', done: true })]) {
+    const w = fakeWorld(), base = w.fetch;
+    w.fetch = async (url, init) => (url.includes('/operations/') ? json(200, answer(new URL(url).pathname.slice(4))) : base(url, init));
+    const r = await prod(w);
+    assert.equal(r.status, 'needs-recovery'); assert.equal(r.unresolved[0].step, 'api-enable'); assert.ok(!w.sent.some((x) => x.includes(':undelete')));
+  }
+});
+
+test('an API already enabled, a Rules read-back that differs, or a foreign instance appearing stops safely', async () => {
+  const w1 = fakeWorld();
+  w1.api = 'ENABLED';
+  await prod(w1);
+  assert.deepEqual(w1.sent, ['GET /v1/projects/000000000000/services/firebasedatabase.googleapis.com']);
+  const w2 = fakeWorld(), base = w2.fetch;
+  w2.fetch = async (url, init) => (init.method === 'GET' && url.includes('rules') && w2.rules !== BASE ? json(200, '{"rules":{}}') : base(url, init));
+  const r2 = await prod(w2);
+  assert.ok(!w2.sent.some((x) => x.includes('/accounts'))); assert.ok(!r2.observationComplete);
+  const w3 = fakeWorld(), r3 = await prod(w3, { browser: async (c, h) => { w3.foreign = true; return fakeBrowser(c, h); } });
+  assert.equal(r3.status, 'needs-recovery'); assert.equal(w3.api, 'ENABLED');
+});
 
 test('operation that never reads done leaves the run needs-recovery within the poll cap', async () => {
   const w = fakeWorld(), base = w.fetch;
@@ -188,6 +220,7 @@ test('journal comparison ignores timing and reports the first differing event', 
   assert.ok(compareJournals(x, [{ name: 'p', journal: [ev('w', 'admin'), ev('w', 'value'), ev('z', 'cancel')] }]).match);
   assert.ok(!compareJournals(x, [{ name: 'p', journal: [ev('w', 'admin'), ev('w', 'value'), ev('w', 'cancel')] }]).match);
   assert.ok(!compareJournals(x, [{ name: 'p', journal: [ev('w', 'admin'), ev('w', 'value')] }]).match);
+  assert.ok(!compareJournals([{ name: 'p', journal: [ev('w', 'value')] }], [{ name: 'p', journal: [ev('w', 'value'), ev('z', 'cancel')] }]).match);
 });
 
 test('outputs refuse API keys, ID tokens, emails and passwords', () => {
@@ -202,4 +235,8 @@ test('production refuses without a packet whose SHA-256 and source pins match', 
   const sha = createHash('sha256').update(JSON.stringify({ sources: Object.fromEntries(SOURCES.map((s) => [s, '0'.repeat(64)])) })).digest('hex');
   assert.throws(() => verifyPacket(file, 'f'.repeat(64)), /packet SHA-256/);
   assert.throws(() => verifyPacket(file, sha), /source pin/);
+});
+
+test('the transport is read from what the browser opened, not from the profile', () => {
+  assert.equal(transportOf({ ws: 1 }), 'ws'); assert.equal(transportOf({ ws: 0 }), 'lp');
 });

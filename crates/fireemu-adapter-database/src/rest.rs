@@ -2349,14 +2349,15 @@ value(undefined,true);
 const boundaries=Array.from(new Set([0,source.length,...ranges.flatMap(range=>[range.start,range.end])])).sort((a,b)=>a-b);
 const container=document.getElementById('rules'),details=document.getElementById('details');
 function description(node) {
-  return node.text+'\n'+(node.values.length?node.values.map(item=>JSON.stringify(item.value)+' × '+item.count).join('\n'):'No recorded result');
+  const omitted=node['values-omitted']?'\n'+node['values-omitted']+' more result(s) with other values (not kept)':'';
+  return node.text+'\n'+(node.values.length?node.values.map(item=>JSON.stringify(item.value)+' × '+item.count).join('\n'):'No recorded result')+omitted;
 }
 for(let i=0;i<boundaries.length-1;i++) {
   const start=boundaries[i],end=boundaries[i+1];
   const matches=ranges.filter(range=>range.start<=start && range.end>=end).sort((a,b)=>(a.end-a.start)-(b.end-b.start));
   if(!matches.length) { container.append(document.createTextNode(source.slice(start,end)));continue; }
   const node=matches[0].node,span=document.createElement('span');
-  span.className='expression '+(node.values.length?'observed':'unrecorded');
+  span.className='expression '+(node.values.length||node['values-omitted']?'observed':'unrecorded');
   span.textContent=source.slice(start,end);span.title=description(node);span.tabIndex=0;
   span.dataset.start=String(start);span.dataset.end=String(end);
   span.addEventListener('mouseenter',()=>{details.textContent=description(node);});

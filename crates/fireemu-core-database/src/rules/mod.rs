@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub use check::RuleKind;
+pub use coverage::COVERAGE_VALUES_PER_EXPRESSION;
 pub use eval::{ReadKind, Snapshot};
 pub use parse::ExprError;
 

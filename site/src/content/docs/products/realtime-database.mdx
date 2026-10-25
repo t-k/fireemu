@@ -226,6 +226,10 @@ emulator-data/
 
 Session snapshots and resets include the instances of the session's project. A restore or reset is seen by open listeners and event streams, cancels those the rules no longer allow on the restored data, and drops the `onDisconnect` writes registered for those instances. In [test worlds](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md), select `database` in `services`; `world.endpoints.database` and `FIREBASE_DATABASE_EMULATOR_HOST` route to it, and its data survives export, import and reset.
 
+## Rules coverage
+
+`/.inspect/coverage?ns=<instance>` (an HTML viewer) and `/.inspect/coverage.json?ns=<instance>` report, for each expression of the loaded rules, the results it produced, as the official emulator does. Collection is always on and costs one hash lookup per recorded result. So that a long run stays fast and small, each expression keeps its first 64 distinct results (and at most 64 KiB of string values); later new results are counted in `values-omitted` instead of being listed. Snapshot values such as `data` and `root` are a new identity on every evaluation, so their lists fill quickly. Loading changed rules starts a new report; loading the same text again keeps it.
+
 ## Local Functions triggers
 
 Local v1 and v2 database handlers receive create, update, delete and write events scoped to their project, instance and reference pattern. The runner supplies the Firebase SDK snapshot objects. Unchanged writes do not emit a change event. Source mutations and their reserved event batch commit together; exhausting local event admission refuses the source mutation rather than silently dropping its events. Session reset excludes concurrent database mutation while clearing source data and retiring the Functions epoch.
@@ -234,7 +238,6 @@ These are local resource and delivery guarantees, not a claim of native event co
 
 ## Not supported yet
 
-- Rules coverage reports (the official emulator's `/.inspect/coverage`).
 - A view in the Emulator UI.
 - Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope.
 

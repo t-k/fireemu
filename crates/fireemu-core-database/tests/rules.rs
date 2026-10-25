@@ -1107,3 +1107,69 @@ fn coverage_keeps_local_escaped_literal_and_multiline_spans() {
         assert_coverage_ranges(text);
     }
 }
+
+/// Review M1 (2026-10-25): coverage is collected for every evaluation of a long-lived daemon,
+/// so it must stay bounded. Opaque snapshot identities are fresh on every evaluation and `now`
+/// differs on every request; neither may grow a histogram past its cap, and every recording
+/// is still counted, either under a kept value or as omitted.
+#[test]
+#[allow(clippy::cast_possible_truncation)]
+fn coverage_histograms_stay_bounded_over_many_evaluations() {
+    const EVALUATIONS: i64 = 5_000;
+    let rules = Rules::compile(&read_rule_at_t("data.child('x').exists() || now > 0")).unwrap();
+    let tree = seed();
+    let auth = auth();
+    for now in 1..=EVALUATIONS {
+        let requester = Requester { auth: &auth, now };
+        assert!(rules.can_read(tree.root(), &p("t"), None, &requester));
+    }
+    let report = rules.coverage_report();
+    let Json::Object(report) = &report else {
+        panic!("object")
+    };
+    let Json::Object(level) = &report["t"] else {
+        panic!("object")
+    };
+    let mut pending = vec![(&level[".read"], true)];
+    let mut largest = 0;
+    while let Some((node, top)) = pending.pop() {
+        let Json::Object(node) = node else {
+            panic!("expression")
+        };
+        let Json::Array(values) = &node["values"] else {
+            panic!("values")
+        };
+        largest = largest.max(values.len());
+        assert!(
+            values.len() <= fireemu_core_database::rules::COVERAGE_VALUES_PER_EXPRESSION,
+            "{} kept values for {:?}",
+            values.len(),
+            node["text"]
+        );
+        let kept: i64 = values
+            .iter()
+            .map(|value| match value {
+                Json::Object(entry) => match &entry["count"] {
+                    Json::Number(count) => count.as_f64() as i64,
+                    other => panic!("count {other:?}"),
+                },
+                other => panic!("entry {other:?}"),
+            })
+            .sum();
+        let omitted = match node.get("values-omitted") {
+            Some(Json::Number(count)) => count.as_f64() as i64,
+            None => 0,
+            Some(other) => panic!("omitted {other:?}"),
+        };
+        if top {
+            assert_eq!(kept + omitted, EVALUATIONS, "{:?}", node["text"]);
+        }
+        if let Some(Json::Array(children)) = node.get("children") {
+            pending.extend(children.iter().map(|child| (child, false)));
+        }
+    }
+    assert_eq!(
+        largest,
+        fireemu_core_database::rules::COVERAGE_VALUES_PER_EXPRESSION
+    );
+}

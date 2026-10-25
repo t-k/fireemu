@@ -353,10 +353,13 @@ fn rebuild_reconciles_updates_and_deletes() {
 }
 #[test]
 fn retrieval_depth_precedes_score_ranking_and_pagination() {
+    // Padding no longer lowers a score (production ignores document length), so the ranking
+    // inside the retrieval window comes from occurrence counts: the oldest `a` would rank
+    // first without the depth limit, which would make the second hit `c` instead of `b`.
     let docs = [
-        document("a", "fox", "", 1),
+        document("a", "fox fox fox", "", 1),
         document("b", "fox extra extra extra extra", "", 3),
-        document("c", "fox", "", 2),
+        document("c", "fox fox", "", 2),
     ];
     let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
     let query = SearchQuery::parse("fox", tokenize_query).unwrap();

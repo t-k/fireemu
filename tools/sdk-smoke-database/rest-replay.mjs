@@ -46,7 +46,7 @@ const ROOT_MASK = '{root}';
 export function pythonJsonDumps(value) {
   if (Array.isArray(value)) return `[${value.map(pythonJsonDumps).join(', ')}]`;
   if (value !== null && typeof value === 'object') return `{${Object.entries(value).map(([k, v]) => `${pythonJsonDumps(k)}: ${pythonJsonDumps(v)}`).join(', ')}}`;
-  if (typeof value === 'string') return JSON.stringify(value).replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  if (typeof value === 'string') return JSON.stringify(value).replace(/[\u0080-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   if (typeof value === 'number' && !Number.isInteger(value)) throw Error('only integers are serialized');
   return JSON.stringify(value);
 }
@@ -69,7 +69,8 @@ export function localRequests(fixture) {
 }
 
 const parse = (text) => { try { return { json: JSON.parse(text) }; } catch { return { text }; } };
-const memberOrderOnly = (a, b) => a !== b && 'json' in parse(a) && isDeepStrictEqual(parse(a), parse(b));
+// Called only when the bytes differ: equal parsed JSON then means another member order.
+const memberOrderOnly = (a, b) => isDeepStrictEqual(parse(a), parse(b));
 
 export function judgeRow(round, production, local) {
   const expected = production.bodyText.includes(ROOT_MASK) ? production.bodyText.replaceAll(ROOT_MASK, DATA_ROOT) : production.bodyText;

@@ -57,7 +57,7 @@ test('fireDelays measures from writer-offline to the next callback of the same f
 test('timingJudgement accepts WS within 2 s and LP within the tolerance around production', () => {
   const ok = { [PREFIXES[0]]: 0.1, [PREFIXES[1]]: 105.0, [PREFIXES[2]]: 0.0, [PREFIXES[3]]: 104.9 };
   assert.deepEqual(timingJudgement(ok, fixture.onDisconnectFireSeconds), { within: true, outside: [] });
-  for (const [prefix, seconds] of [[PREFIXES[0], 2.1], [PREFIXES[1], 94.0], [PREFIXES[3], 110.0], [PREFIXES[1], null]]) {
+  for (const [prefix, seconds] of [[PREFIXES[0], 2.1], [PREFIXES[1], 94.0], [PREFIXES[3], 110.0], [PREFIXES[1], null], [PREFIXES[0], null], [PREFIXES[2], undefined], [PREFIXES[0], -0.1]]) {
     const judged = timingJudgement({ ...ok, [prefix]: seconds }, fixture.onDisconnectFireSeconds);
     assert.equal(judged.within, false, `${prefix} ${seconds}`);
     assert.deepEqual(judged.outside.map((o) => o.prefix), [prefix]);
@@ -65,6 +65,9 @@ test('timingJudgement accepts WS within 2 s and LP within the tolerance around p
 });
 
 test('sanitizeResult drops raw millisecond timings and keeps the projection', () => {
+  const crashed = sanitizeResult({ local: [{ type: 'sdk-ack', step: 'x', ms: 1 }, { type: 'page-error', message: 'boom', ms: 2 }, { type: 'ws-open', ms: 3 }], native: [{ type: 'sdk-ack', step: 'x' }], fire: {}, nativeFire: {} });
+  assert.equal(crashed.localEvents, 2);
+  assert.deepEqual(crashed.mismatches, [{ index: 1, native: null, local: { type: 'page-error', message: 'boom' } }]);
   const result = sanitizeResult({ local: [{ type: 'sdk-ack', step: 'x', prefix: 'p', transport: 'ws', ms: 3 }], native: [{ type: 'sdk-ack', step: 'x', prefix: 'p', transport: 'ws' }], fire: { p: 0.1 }, nativeFire: { p: 0.2 } });
   assert.doesNotMatch(JSON.stringify(result), /"ms"/);
   assert.equal(result.matched, true);

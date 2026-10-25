@@ -34,6 +34,11 @@ test('a row equal in status, bytes and ETag is MATCH; any other difference is a 
   assert.equal(judgeRow(1, r, answer(r, { etag: null })).verdict, 'MISMATCH');
   assert.equal(judgeRow(1, r, answer(r, { bodyText: '{"x":2}' })).verdict, 'MISMATCH');
   assert.equal(judgeRow(1, r, answer(r, { bodyText: '{"x": 1}' })).verdict, 'MISMATCH');
+  const text = row('validation-put-bad-json');
+  assert.equal(judgeRow(1, text, answer(text, { bodyText: 'not json' })).verdict, 'MISMATCH');
+  const plain = { id: 'patch-update-nested-and-add', status: 200, bodyText: 'plain a', etag: null };
+  assert.deepEqual(judgeRow(1, plain, answer(plain, { bodyText: 'plain b' })).differences, ['body']);
+  assert.equal(judgeRow(1, plain, answer(plain, { bodyText: 'plain b' })).verdict, 'MISMATCH');
 });
 
 test('only the two recorded key-order rows may differ in bytes, and only in key order', () => {
@@ -69,6 +74,8 @@ test('M14 rows match on status and bytes', () => {
 test('summarize counts verdicts and passes only without a mismatch', () => {
   assert.deepEqual(summarize([{ verdict: 'MATCH' }, { verdict: 'KNOWN_DIFFERENCE' }], [{ verdict: 'MATCH' }]), { rows: 2, m14Rows: 1, verdicts: { MATCH: 1, KNOWN_DIFFERENCE: 1 }, m14Verdicts: { MATCH: 1 }, pass: true });
   assert.equal(summarize([{ verdict: 'MISMATCH' }], []).pass, false);
+  assert.equal(summarize([{ verdict: 'MATCH' }, { verdict: 'MISMATCH' }], [{ verdict: 'MATCH' }]).pass, false);
+  assert.equal(summarize([{ verdict: 'MATCH' }], [{ verdict: 'MATCH' }, { verdict: 'MISMATCH' }]).pass, false);
   assert.equal(summarize([], [{ verdict: 'MISMATCH' }]).pass, false);
   assert.equal(summarize([], []).pass, false);
 });

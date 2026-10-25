@@ -11,9 +11,10 @@
 //! (`__name__`, empty, dotted, quoted, reserved, long) and option names stay as written, since
 //! production's checks and texts depend on them. A map of two or more entries
 //! whose wire order the transport did not keep (gRPC, whose decoded maps are unordered) has no
-//! generic shape, so strict answers no generic refusal of such a request. The finite TEXT
-//! namespace instead requires complete, literal-preserving request equality with its own
-//! transport-specific production evidence.
+//! generic shape, so strict answers no generic refusal of such a request. The TEXT namespace
+//! instead compares the decoded request with a recorded one of the same transport, apart from
+//! the database, the collection and the `document_matches` literal, which production's
+//! search-option checks never read; every option value is kept.
 //!
 //! The table of recorded shapes is derived from conformance/fs-ent-pipeline-requests.json and
 //! conformance/fs-ent-pipeline-production.json when first used. The separate TEXT table uses
@@ -118,11 +119,11 @@ fn own_database(message: &str, database: &str) -> String {
 /// The shape of a REST `executePipeline` body, read with the wire order of its maps.
 #[must_use]
 pub fn shape_of_json(body: &Value, order: &KeyOrder) -> Option<String> {
-    if let Some(row) = text_requests()
-        .iter()
-        .find(|row| !row.grpc && row.body == *body)
+    if let Some(key) = crate::rest::pipeline_json::request_from_json("", body)
+        .ok()
+        .and_then(|request| text_key_of(&request, false))
     {
-        return Some(row.key.clone());
+        return Some(key);
     }
     let body = body.as_object()?;
     let mut out = String::new();
@@ -171,12 +172,8 @@ pub fn shape_of_json(body: &Value, order: &KeyOrder) -> Option<String> {
 /// The shape of a gRPC request, whose maps carry no wire order.
 #[must_use]
 pub fn shape_of_request(request: &pb::ExecutePipelineRequest) -> Option<String> {
-    for row in text_requests().iter().filter(|row| row.grpc) {
-        let mut expected = row.request.clone();
-        expected.database.clone_from(&request.database);
-        if expected == *request {
-            return Some(row.key.clone());
-        }
+    if let Some(key) = text_key_of(request, true) {
+        return Some(key);
     }
     let mut out = String::new();
     if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
@@ -566,6 +563,7 @@ const TEXT_PRODUCTION: &str = include_str!("../../../conformance/fs-ent-text-pro
 struct TextRequest {
     key: String,
     grpc: bool,
+    #[cfg(test)]
     body: Value,
     request: pb::ExecutePipelineRequest,
 }
@@ -582,7 +580,64 @@ fn text_key(program: &str, step: &Value) -> String {
     )
 }
 
-/// The finite text namespace preserves every literal and the complete request envelope.
+/// The recorded text row of `request`'s transport whose request equals it apart from the
+/// literals production's search-option checks never read (review S7): the database, the
+/// collection a `collection` stage names and the string a top-level `document_matches` query
+/// searches for. Every other part, the offending option value included, must be equal.
+fn text_key_of(request: &pb::ExecutePipelineRequest, grpc: bool) -> Option<String> {
+    let skeleton = text_skeleton(request);
+    text_requests()
+        .iter()
+        .find(|row| row.grpc == grpc && text_skeleton(&row.request) == skeleton)
+        .map(|row| row.key.clone())
+}
+
+/// `request` with its database, collection references and `document_matches` literal cleared.
+fn text_skeleton(request: &pb::ExecutePipelineRequest) -> pb::ExecutePipelineRequest {
+    use pb::value::ValueType as V;
+    let mut request = request.clone();
+    request.database.clear();
+    if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &mut request.pipeline_type
+    {
+        for stage in structured
+            .pipeline
+            .iter_mut()
+            .flat_map(|pipeline| &mut pipeline.stages)
+        {
+            match stage.name.as_str() {
+                "collection" => {
+                    if let [pb::Value {
+                        value_type: Some(V::ReferenceValue(collection)),
+                    }] = stage.args.as_mut_slice()
+                    {
+                        collection.clear();
+                    }
+                }
+                "search" => {
+                    if let Some(pb::Value {
+                        value_type: Some(V::FunctionValue(query)),
+                    }) = stage.options.get_mut("query")
+                    {
+                        if let (
+                            "document_matches",
+                            [pb::Value {
+                                value_type: Some(V::StringValue(text)),
+                            }],
+                        ) = (query.name.as_str(), query.args.as_mut_slice())
+                        {
+                            text.clear();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    request
+}
+
+/// The recorded text requests of each transport, decoded as the server reads them.
 fn text_requests() -> &'static Vec<TextRequest> {
     static ROWS: LazyLock<Vec<TextRequest>> = LazyLock::new(|| {
         let fixture: Value = serde_json::from_str(TEXT_REQUESTS).expect("text requests parse");
@@ -598,6 +653,7 @@ fn text_requests() -> &'static Vec<TextRequest> {
                     .map(|step| TextRequest {
                         key: text_key(program["id"].as_str().expect("text program id"), step),
                         grpc: step["transport"] == "grpc",
+                        #[cfg(test)]
                         body: step["body"].clone(),
                         request: crate::rest::pipeline_json::request_from_json("", &step["body"])
                             .expect("text request decodes"),
@@ -789,28 +845,49 @@ mod text_refusal_tests {
         }
     }
 
+    /// The recorded body with another collection and, for a `document_matches` query, another
+    /// query literal: production's option checks read neither (review S7).
+    fn with_literals(body: &Value, collection: &str, query: &str) -> Value {
+        let mut body = body.clone();
+        body["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]["referenceValue"] =
+            json!(format!("/{collection}"));
+        let root = &mut body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+            ["functionValue"];
+        if root["name"] == "document_matches" {
+            root["args"][0]["stringValue"] = json!(query);
+        }
+        body
+    }
+
     proptest::proptest! {
         #[test]
-        fn changed_query_literals_never_inherit_text_authority(query in "[a-z]{0,24}") {
-            let mut body = text_requests()[0].body.clone();
-            proptest::prop_assume!(query != "fox");
-            body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]["functionValue"]["args"][0]["stringValue"] = json!(query);
-            let (_, order) = json_syntax::parse_with_key_order(body.to_string().as_bytes()).unwrap();
-            proptest::prop_assert!(!shape_of_json(&body, &order).is_some_and(|key| key.starts_with("text-refusal-v1/")));
-            let request = crate::rest::pipeline_json::request_from_json(DB, &body).unwrap();
-            proptest::prop_assert!(!shape_of_request(&request).is_some_and(|key| key.starts_with("text-refusal-v1/")));
+        fn changed_collection_and_query_literals_keep_text_authority(
+            collection in "[a-z][a-z0-9_]{0,11}", query in "[a-z]{1,24}"
+        ) {
+            for row in text_requests() {
+                let body = with_literals(&row.body, &collection, &query);
+                let key = if row.grpc {
+                    shape_of_request(&crate::rest::pipeline_json::request_from_json(DB, &body).unwrap())
+                } else {
+                    let (_, order) = json_syntax::parse_with_key_order(body.to_string().as_bytes()).unwrap();
+                    shape_of_json(&body, &order)
+                };
+                proptest::prop_assert_eq!(key.as_deref(), Some(row.key.as_str()));
+            }
         }
     }
 
     fn text_request_neighbors(body: &Value) -> Vec<Value> {
         let mut neighbors = Vec::new();
+        // The collection may be any reference, never another kind of value.
         let mut changed = body.clone();
-        changed["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]["referenceValue"] =
-            json!("/other");
+        changed["structuredPipeline"]["pipeline"]["stages"][0]["args"][0] =
+            json!({"stringValue":"/textobs1"});
         neighbors.push(changed);
+        // The query stays a document_matches call with one string argument.
         let mut changed = body.clone();
         changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
-            ["functionValue"]["args"][0]["stringValue"] = json!("different");
+            ["functionValue"]["name"] = json!("document_matches_x");
         neighbors.push(changed);
         for field in ["extra", "retrieval_depth", "language_code"] {
             let mut changed = body.clone();

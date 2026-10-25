@@ -649,7 +649,17 @@ fn strict_search_root_or_neighbors_remain_unobserved() {
         .as_object_mut()
         .unwrap()
         .remove("query_enhancement");
-    for body in [changed_terms, changed_collection, changed_options] {
+    // Review S7: the refusal does not read the collection, so another collection keeps the
+    // production answer.
+    let response = request(
+        &state,
+        "POST",
+        &format!("{DB}/documents:executePipeline"),
+        changed_collection,
+    );
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(response.body[0]["error"]["status"], "INVALID_ARGUMENT");
+    for body in [changed_terms, changed_options] {
         let response = request(
             &state,
             "POST",
@@ -663,4 +673,51 @@ fn strict_search_root_or_neighbors_remain_unobserved() {
             .unwrap()
             .contains("not observed locally"));
     }
+}
+
+/// Review S7: strict answers a recorded search-option refusal for any collection and query
+/// literal, and keeps an unrecorded option value unobserved.
+#[test]
+fn strict_text_option_refusals_follow_the_recorded_shape_not_its_literals() {
+    let state = fixture_with_policy(IndexValidationPolicy::Production);
+    let _catalog = install(&state, true);
+    let path = format!("{DB}/documents:executePipeline");
+    let refused = |collection: &str, query: &str, options: Value| {
+        let mut body = search_query(query);
+        body["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]["referenceValue"] =
+            json!(format!("/{collection}"));
+        for (key, value) in options.as_object().unwrap() {
+            body["structuredPipeline"]["pipeline"]["stages"][1]["options"][key] = value.clone();
+        }
+        request(&state, "POST", &path, body)
+    };
+    for (collection, query) in [("products", "cedar"), ("orders", "東京")] {
+        let response = refused(
+            collection,
+            query,
+            json!({"retrieval_depth":{"integerValue":"0"}}),
+        );
+        assert_eq!(response.status, 400, "{}", response.body);
+        assert_eq!(
+            response.body[0]["error"]["message"],
+            "search(...): 'retrievalDepth' must be at least 1."
+        );
+        let response = refused(
+            collection,
+            query,
+            json!({"language_code":{"stringValue":"auto"}}),
+        );
+        assert_eq!(response.status, 400, "{}", response.body);
+        assert_eq!(
+            response.body[0]["error"]["status"], "INVALID_ARGUMENT",
+            "{}",
+            response.body
+        );
+    }
+    let unrecorded = refused(
+        "products",
+        "cedar",
+        json!({"language_code":{"stringValue":"xx yy"}}),
+    );
+    assert_eq!(unrecorded.status, 501, "{}", unrecorded.body);
 }

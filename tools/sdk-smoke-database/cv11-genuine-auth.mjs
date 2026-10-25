@@ -294,6 +294,10 @@ export function browserRunner({ modules, allowHost, page: pageConfig }) {
       await page.waitForFunction(() => typeof window.__cv11Run === 'function');
       const timeout = new Promise((_, reject) => setTimeout(() => reject(Error('profile timeout')), 150000).unref());
       await Promise.race([page.evaluate((c) => window.__cv11Run(c), { ...pageConfig, ...prof }), capped, timeout]);
+      // Evidence of the transport the SDK actually used (long polling opens no WebSocket).
+      const transport = { step: 'runner', type: 'transport', code: counts.ws > 0 ? 'ws' : 'lp' };
+      journal.push(transport);
+      hooks.event(prof.name, transport);
       return { journal, counts };
     } catch (e) {
       journal.push({ step: 'runner', type: 'error', code: e.message.slice(0, 80) });

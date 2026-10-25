@@ -100,6 +100,17 @@ test('production dry run: four profiles, exact request list, world back at basel
   assert.ok(r.counts.observe <= CAPS.observe && r.counts.cleanup <= CAPS.cleanup && r.counts.mutations <= CAPS.mutations);
 });
 
+test('a different baseline Rules text or a non-empty prefix stops before any Rules or data write', async () => {
+  for (const tweak of [(w) => { w.rules = `${BASE} `; }, (w) => { w.data['parity1/run1/x'] = 1; }]) {
+    const w = fakeWorld();
+    tweak(w);
+    const r = await prod(w);
+    assert.ok(!r.observationComplete);
+    assert.ok(!w.sent.some((s) => s.startsWith('PUT') || s.includes('/accounts')), w.sent.join());
+    assert.equal(w.api, 'DISABLED'); assert.equal(w.inst, 'DELETED');
+  }
+});
+
 test('local dry run uses no management API and restores the baseline Rules text', async () => {
   const w = fakeWorld(), r = await scenario('local', w);
   assert.equal(r.status, 'closed'); assert.equal(w.rules, BASE); assert.equal(w.users.size, 0);

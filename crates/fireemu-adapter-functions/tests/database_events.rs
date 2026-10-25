@@ -336,6 +336,63 @@ async fn database_fanout_of_exactly_the_whole_budget_is_reserved() {
     runtime.shutdown().await;
 }
 
+/// Merge review S1 (2026-10-26): whether a fanout can ever fit is decided before the current
+/// queue is consulted, so an oversized fanout is dropped at once even while the queue is busy,
+/// never refused with a 503 that only a later retry turns into a drop.
+#[tokio::test]
+async fn an_oversized_fanout_is_dropped_even_while_the_queue_is_busy() {
+    let (runtime, _) = runtime(false).await;
+    let holding = runtime.reserve_database_events(&commit()).unwrap();
+    let mut change = commit();
+    change.data = user_changes(MAX_ACTIVE_EVENT_RECORDS + 1);
+    drop(
+        runtime
+            .reserve_database_events(&change)
+            .expect("a fanout that can never fit is dropped whatever the queue holds"),
+    );
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        2,
+        "only the held reservation remains"
+    );
+    drop(holding);
+    runtime.shutdown().await;
+}
+
+/// Merge review S2: an event larger than an invocation frame is dropped alone; the write's other
+/// events are still delivered, as production delivers them.
+#[tokio::test]
+async fn only_the_event_larger_than_a_frame_is_dropped() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    let (runtime, _) = runtime(false).await;
+    let mut change = commit();
+    change.data = DatabaseChangeData::References(vec![
+        DatabaseReferenceChange {
+            reference: "/users/big".to_owned(),
+            before: json!("a".repeat(8 * 1024 * 1024)),
+            after: json!("b".repeat(8 * 1024 * 1024)),
+        },
+        DatabaseReferenceChange {
+            reference: "/users/small".to_owned(),
+            before: serde_json::Value::Null,
+            after: json!(1),
+        },
+    ]);
+    let reservation = runtime.reserve_database_events(&change).unwrap();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        1
+    );
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    reservation.publish();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().published_records,
+        1
+    );
+    runtime.shutdown().await;
+}
+
 #[tokio::test]
 async fn only_the_first_dropped_fanout_of_a_session_is_printed() {
     let (runtime, _) = runtime(false).await;

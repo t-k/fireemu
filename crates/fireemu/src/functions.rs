@@ -3036,25 +3036,23 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
         Option<Vec<fireemu_adapter_database::changes::Path>>,
         fireemu_core_types::admission::EventAdmissionError,
     > {
-        use fireemu_adapter_functions::runtime::{
-            MAX_ACTIVE_EVENT_BYTES, MAX_ACTIVE_EVENT_RECORDS,
-        };
+        use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS;
         match capture_database_references(
             &self.patterns(namespace),
             before,
             after,
             scope,
             MAX_ACTIVE_EVENT_RECORDS,
-            MAX_ACTIVE_EVENT_BYTES as u64,
         ) {
             Ok(references) => Ok(Some(references)),
-            // The capture budget is the whole local event budget, so this write's events can
-            // never be admitted; production accepts the write (review S4), so it proceeds
-            // without them.
+            // Every changed reference yields at least one event, so more references than the
+            // whole event budget can never be admitted; production accepts the write (review
+            // S4), so it proceeds without them. Byte sizes are not judged here: the runtime
+            // measures the serialized events (merge review M1, 2026-10-26).
             Err(fireemu_core_types::admission::EventAdmissionError::Capacity(_)) => {
                 let _ = self.runtime.drop_database_fanout(
                     namespace,
-                    "the changed trigger references exceed the whole local event budget",
+                    "its changed trigger references outnumber the whole local event budget",
                 );
                 Ok(Some(Vec::new()))
             }
@@ -3117,41 +3115,31 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
     }
 }
 
-// Only selected snapshots are charged. A byte can expand to six JSON bytes (\\u0000);
-// this conservative pre-export estimate is local capacity, not a namespace or native quota.
+// Bounds the references one write selects. Every changed reference yields at least one event,
+// so the record budget is a proof that the events can never fit. Byte sizes are left to the
+// runtime, which measures the serialized events: a heap-size estimate here dropped events that
+// fit (merge review M1, 2026-10-26). The snapshots exported for the selected references are
+// bounded by the namespace already in memory times the pattern depth.
 struct DatabaseReferenceCapture {
     references: BTreeSet<fireemu_adapter_database::changes::Path>,
-    retained_bytes: u64,
     record_limit: usize,
-    byte_limit: u64,
 }
 
 impl DatabaseReferenceCapture {
     fn insert(
         &mut self,
         path: &fireemu_adapter_database::changes::Path,
-        before: Option<&fireemu_adapter_database::changes::Node>,
-        after: Option<&fireemu_adapter_database::changes::Node>,
     ) -> Result<(), fireemu_core_types::admission::EventAdmissionError> {
         if self.references.contains(path) {
             return Ok(());
         }
-        let bytes = before
-            .map_or(0, fireemu_adapter_database::changes::Node::retained_bytes)
-            .checked_add(after.map_or(0, fireemu_adapter_database::changes::Node::retained_bytes))
-            .and_then(|bytes| bytes.checked_add(path.byte_len() as u64))
-            .and_then(|bytes| bytes.checked_mul(6))
-            .and_then(|bytes| self.retained_bytes.checked_add(bytes));
-        if self.references.len() >= self.record_limit
-            || bytes.is_none_or(|bytes| bytes > self.byte_limit)
-        {
+        if self.references.len() >= self.record_limit {
             return Err(
                 fireemu_core_types::admission::EventAdmissionError::Capacity(
-                    "Functions RTDB capture exceeds the local event-resource budget".to_owned(),
+                    "Functions RTDB capture exceeds the local event-record budget".to_owned(),
                 ),
             );
         }
-        self.retained_bytes = bytes.expect("the checked capture charge exists");
         self.references.insert(path.clone());
         Ok(())
     }
@@ -3175,16 +3163,13 @@ fn capture_database_references(
     after: &fireemu_adapter_database::changes::Tree,
     scope: &fireemu_adapter_database::changes::Path,
     record_limit: usize,
-    byte_limit: u64,
 ) -> Result<
     Vec<fireemu_adapter_database::changes::Path>,
     fireemu_core_types::admission::EventAdmissionError,
 > {
     let mut capture = DatabaseReferenceCapture {
         references: BTreeSet::new(),
-        retained_bytes: 0,
         record_limit,
-        byte_limit,
     };
     for pattern in patterns {
         let parts: Vec<_> = pattern
@@ -3230,7 +3215,7 @@ fn walk_database_references(
         return Ok(());
     }
     if path.depth() == prefixes.len() {
-        return capture.insert(path, before, after);
+        return capture.insert(path);
     }
     let prefix = &prefixes[path.depth()];
     let segment = prefix
@@ -6530,15 +6515,14 @@ while True:
         );
         let patterns = ["/users", "/users/{uid=*-test}", "/users/{uid=*-test}"]
             .map(|pattern| DatabasePattern::parse(pattern).unwrap());
-        // The selected small subtree fits this test budget even while both unrelated branches
-        // exceed it by orders of magnitude. Duplicate patterns must not charge twice.
+        // Three references fit a budget of three records although the unrelated branches are
+        // large. Duplicate patterns must not charge twice.
         let references = super::capture_database_references(
             &patterns,
             &before,
             &after,
             &fireemu_adapter_database::changes::Path::root(),
             3,
-            100_000,
         )
         .unwrap();
         assert_eq!(
@@ -6553,7 +6537,6 @@ while True:
             &before,
             &before,
             &fireemu_adapter_database::changes::Path::root(),
-            0,
             0
         )
         .unwrap()
@@ -6561,35 +6544,23 @@ while True:
     }
 
     #[test]
-    fn database_bridge_capture_byte_refusal_is_atomic_before_export() {
+    fn database_bridge_capture_refuses_only_more_references_than_the_record_budget() {
         use fireemu_core_functions::manifest::DatabasePattern;
         use fireemu_core_types::admission::EventAdmissionError;
-        let before = database_bridge_tree(&json!({"users":{"a":"before"}}));
-        let after = database_bridge_tree(&json!({"users":{"a":"after"}}));
+        let root = fireemu_adapter_database::changes::Path::root();
+        let before = database_bridge_tree(&json!({"users":{"a":"before","b":1}}));
+        // Large values do not count against the capture: the runtime measures the real events.
+        let after = database_bridge_tree(&json!({"users":{"a":"x".repeat(4 * 1024 * 1024),"b":2}}));
         let patterns = [DatabasePattern::parse("/users/{uid}").unwrap()];
         assert!(matches!(
-            super::capture_database_references(
-                &patterns,
-                &before,
-                &after,
-                &fireemu_adapter_database::changes::Path::root(),
-                1,
-                1
-            ),
+            super::capture_database_references(&patterns, &before, &after, &root, 1),
             Err(EventAdmissionError::Capacity(_))
         ));
         assert_eq!(
-            super::capture_database_references(
-                &patterns,
-                &before,
-                &after,
-                &fireemu_adapter_database::changes::Path::root(),
-                1,
-                10_000
-            )
-            .unwrap()
-            .len(),
-            1
+            super::capture_database_references(&patterns, &before, &after, &root, 2)
+                .unwrap()
+                .len(),
+            2
         );
     }
 
@@ -6668,9 +6639,16 @@ while True:
             }
             let patterns = ["/users", "/users/{uid}", "/{top}/{uid=*-test}", "/a/b/v", "/"]
                 .map(|pattern| DatabasePattern::parse(pattern).unwrap());
-            let whole = super::capture_database_references(&patterns, &before, &after, &Path::root(), usize::MAX, u64::MAX).unwrap();
-            let scoped = super::capture_database_references(&patterns, &before, &after, &scope, usize::MAX, u64::MAX).unwrap();
-            proptest::prop_assert_eq!(scoped, whole);
+            let whole = super::capture_database_references(&patterns, &before, &after, &Path::root(), usize::MAX).unwrap();
+            let scoped = super::capture_database_references(&patterns, &before, &after, &scope, usize::MAX).unwrap();
+            proptest::prop_assert_eq!(&scoped, &whole);
+            // A write no pattern overlaps (the sink's `affects` is false) changes no reference.
+            // ("/" overlaps everything, so the check leaves it out.)
+            let narrow = &patterns[..4];
+            if !narrow.iter().any(|pattern| pattern.overlaps(&scope.to_string())) {
+                let unaffected = super::capture_database_references(narrow, &before, &after, &Path::root(), usize::MAX).unwrap();
+                proptest::prop_assert!(unaffected.is_empty(), "{unaffected:?}");
+            }
         }
     }
 
@@ -6919,6 +6897,68 @@ root	unchanged	small	firstGen";
             assert_eq!(dropped, u64::from(firing && oversized), "{row}");
             runtime.shutdown().await;
         }
+    }
+
+    /// Merge review M1 (2026-10-26): a chat room of 20,000 small messages under one trigger
+    /// reference (about 0.94 MB of JSON) passed the old heap-size estimate times six and lost
+    /// its event; the real event (about 1.9 MB) fits the frame and the budget and is delivered.
+    #[tokio::test]
+    async fn database_bridge_delivers_a_large_room_event_that_fits() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::runtime::DATABASE_FANOUT_DROPPED;
+        let runtime = database_bridge_runtime_with(
+            &json!({"functions":[{"name":"roomChanged","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/rooms/{roomId}"
+            }}]}),
+        )
+        .await;
+        let mut database = Database::new(RestOptions::default(), 1);
+        let messages: serde_json::Map<_, _> = (0..20_000)
+            .map(|n| {
+                (
+                    format!("m{n:05}"),
+                    json!({"text":"hello","uid":"u1","ts":123}),
+                )
+            })
+            .collect();
+        assert_eq!(
+            database_bridge_write(
+                &mut database,
+                &json!({"rooms":{"r1":{"messages":messages}}})
+            ),
+            200
+        );
+        database.set_change_sink(super::database_sink(
+            &runtime,
+            "demo-app",
+            "us-central1",
+            "firebaseio.com",
+        ));
+        let Handled::Response { response, .. } = database.handle(
+            &HttpRequest {
+                method: "PUT".to_owned(),
+                target: "/rooms/r1/messages/new.json?ns=demo-app-default-rtdb".to_owned(),
+                headers: Vec::new(),
+                body: br#"{"text":"hi"}"#.to_vec(),
+            },
+            100_000,
+        ) else {
+            panic!("a PUT must not create a stream")
+        };
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().published_records,
+            1
+        );
+        let dropped = runtime
+            .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+            .unwrap()
+            .refusals
+            .into_iter()
+            .find(|refusal| refusal.reason == format!("admission.{DATABASE_FANOUT_DROPPED}"))
+            .map_or(0, |refusal| refusal.count);
+        assert_eq!(dropped, 0);
+        runtime.shutdown().await;
     }
 
     #[tokio::test]

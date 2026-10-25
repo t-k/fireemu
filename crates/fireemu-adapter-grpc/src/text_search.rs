@@ -650,7 +650,7 @@ mod snapshot_tests {
                 checked += 1;
             }
         }
-        assert_eq!(checked, 8);
+        assert_eq!(checked, 9);
     }
 
     #[test]

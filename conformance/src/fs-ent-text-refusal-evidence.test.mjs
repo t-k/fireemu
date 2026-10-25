@@ -5,21 +5,77 @@ import { PROGRAMS } from "./fs-ent-pipeline/text-corpus.mjs";
 
 const cases = ["rank-asc", "retrieval-zero", "language-auto", "language-invalid"];
 const ids = new Set(cases.flatMap((id) => [id, `${id}-grpc`]));
+const fn = (name, ...args) => ({ functionValue: { name, args } });
+const score = () => fn("score");
+const rootOr = {
+  id: "fs-ent-text/v1/search-root-or-refusal",
+  source:
+    "A single recorded Enterprise Native REST search-root OR refusal; the original synthetic collection and all query options are preserved.",
+  steps: [
+    {
+      id: "root-or",
+      rpc: "executePipeline",
+      body: {
+        structuredPipeline: {
+          pipeline: {
+            stages: [
+              {
+                name: "collection",
+                args: [{ referenceValue: "/score-boolean-a-20261025" }],
+              },
+              {
+                name: "search",
+                args: [],
+                options: {
+                  add_fields: { mapValue: { fields: { rank: score() } } },
+                  query: fn(
+                    "or",
+                    fn("document_matches", { stringValue: "cedar" }),
+                    fn("document_matches", { stringValue: "mango" }),
+                  ),
+                  query_enhancement: { stringValue: "disabled" },
+                  sort: {
+                    arrayValue: {
+                      values: [
+                        {
+                          mapValue: {
+                            fields: {
+                              expression: score(),
+                              direction: { stringValue: "descending" },
+                            },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  ],
+};
 export const projection = {
   schema: "text-refusal-requests/v1",
   source: "src/fs-ent-pipeline/text-corpus.mjs",
-  programs: PROGRAMS.map(({ id, steps }) => ({
-    id,
-    steps: steps.filter((step) => ids.has(step.id)),
-  })),
+  programs: [
+    ...PROGRAMS.map(({ id, steps }) => ({
+      id,
+      steps: steps.filter((step) => ids.has(step.id)),
+    })),
+    rootOr,
+  ],
 };
-test("text refusal projection preserves the eight complete corpus requests", async () => {
+test("text refusal projection preserves the original eight requests and the exact root OR request", async () => {
   const bytes = await readFile(
     new URL("../fs-ent-text-refusal-requests.json", import.meta.url),
     "utf8",
   );
-  assert.equal(bytes, `${JSON.stringify(projection)}\n`);
-  assert.equal(projection.programs.flatMap(({ steps }) => steps).length, 8);
+  assert.deepEqual(JSON.parse(bytes), projection);
+  assert.equal(projection.programs[0].steps.length, 8);
+  assert.equal(projection.programs.flatMap(({ steps }) => steps).length, 9);
   const production = JSON.parse(
     await readFile(new URL("../fs-ent-text-production.json", import.meta.url), "utf8"),
   );

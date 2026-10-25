@@ -732,7 +732,7 @@ mod text_refusal_tests {
         let requests: Value = serde_json::from_str(TEXT_REQUESTS).unwrap();
         let production: Value = serde_json::from_str(TEXT_PRODUCTION).unwrap();
         let table = text_recorded_refusals(TEXT_REQUESTS, TEXT_PRODUCTION);
-        assert_eq!(table.len(), 8);
+        assert_eq!(table.len(), 9);
         let program = &requests["programs"][0];
         let id = program["id"].as_str().unwrap();
         for step in program["steps"].as_array().unwrap() {

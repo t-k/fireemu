@@ -145,6 +145,49 @@ fn ids(body: &Value) -> Vec<String> {
         })
         .collect()
 }
+
+#[test]
+fn production_boundary_membership_reaches_core_through_a_ready_english_index() {
+    let state = fixture();
+    let _catalog = install(&state, false);
+    let observed: Value = serde_json::from_str(include_str!(
+        "../../fireemu-core-firestore/tests/fixtures/production_text_boundary.json"
+    ))
+    .unwrap();
+    for doc in observed["documents"].as_array().unwrap() {
+        put(
+            &state,
+            doc["id"].as_str().unwrap(),
+            doc["title"].as_str().unwrap(),
+            doc["body"].as_str().unwrap(),
+        );
+    }
+    for round in observed["rounds"].as_array().unwrap() {
+        for row in round.as_array().unwrap() {
+            let query = row["query"].as_str().unwrap();
+            let mut body = search_query(query);
+            body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["language_code"] =
+                json!({"stringValue":"en"});
+            let found = request(
+                &state,
+                "POST",
+                &format!("{DB}/documents:executePipeline"),
+                body,
+            );
+            assert_eq!(found.status, 200, "{}", found.body);
+            let mut actual = ids(&found.body);
+            actual.sort();
+            let expected: Vec<_> = row["members"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|member| member.as_str().unwrap())
+                .collect();
+            assert_eq!(actual, expected, "query={query:?}");
+        }
+    }
+}
+
 #[test]
 fn ready_search_sees_updates_inserts_and_deletes_and_preserves_source_metadata() {
     let state = fixture();
@@ -552,7 +595,11 @@ fn search_root_classification_covers_pairwise_terms_and_policies() {
             response.body
         );
         if root == "or" && policy == IndexValidationPolicy::Emulator {
-            let message = format!("search(...) only supports 'document_matches' or distance based searches like lte(geo_distance(field(STRING), GEO_POINT), NUMBER) but got or(document_matches({}), document_matches({}))", serde_json::to_string(left).unwrap(), serde_json::to_string(right).unwrap());
+            let message = format!(
+                "search(...) only supports 'document_matches' or distance based searches like lte(geo_distance(field(STRING), GEO_POINT), NUMBER) but got or(document_matches({}), document_matches({}))",
+                serde_json::to_string(left).unwrap(),
+                serde_json::to_string(right).unwrap()
+            );
             assert_eq!(response.body[0]["error"]["message"], message);
         }
     }

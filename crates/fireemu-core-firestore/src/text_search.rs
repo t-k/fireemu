@@ -60,6 +60,7 @@ struct Clause {
     field: Option<FieldPath>,
     tokens: Vec<String>,
     excluded: bool,
+    quoted: bool,
 }
 struct QueryFragment {
     clause: Option<Clause>,
@@ -89,6 +90,7 @@ impl QueryFragment {
                 field,
                 tokens,
                 excluded,
+                quoted,
             })
         };
         Ok(Self { clause, connector })
@@ -125,10 +127,27 @@ fn searchable_clauses(fragments: Vec<QueryFragment>) -> Result<Vec<Clause>, Sear
         })
         .collect())
 }
-/// A bounded conjunction of terms and same-field positional phrases, optionally excluded or field-restricted. Queries without positive clauses match no documents.
+fn plain_query_terms(input: &str, fragments: &[QueryFragment]) -> Option<Vec<String>> {
+    (!input.contains(':')
+        && fragments.iter().all(|fragment| {
+            !fragment.connector
+                && fragment.clause.as_ref().is_none_or(|clause| {
+                    !clause.quoted && !clause.excluded && clause.field.is_none()
+                })
+        }))
+    .then(|| {
+        fragments
+            .iter()
+            .filter_map(|fragment| fragment.clause.as_ref())
+            .flat_map(|clause| clause.tokens.iter().cloned())
+            .collect()
+    })
+}
+/// A bounded lexical query with plain-term composition and same-field positional phrases, optionally excluded or field-restricted. Queries without positive clauses match no documents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchQuery {
     clauses: Vec<Clause>,
+    plain_terms: Option<Vec<String>>,
 }
 impl SearchQuery {
     /// Whether every explicit field restriction is covered by this definition.
@@ -146,6 +165,7 @@ impl SearchQuery {
     /// Plain tokenless fragments are ignored; no positive searchable clauses means no matches. Quoted, restricted, and excluded tokenless fragments remain invalid.
     /// Unquoted colons delimit conjunctive terms. A leading unmatched quote leaves an ordinary conjunction; balanced phrases remain positional.
     /// OR is a conjunctive connector between positive operands and a searchable term alone. Legacy `field:"phrase"` restrictions are development approximations; grouping, escapes, and wildcards remain unsupported.
+    /// Plain positive unquoted queries use cross-field term conjunction or an input-order concatenation equal to one whole indexed token. Quoted, mixed, excluded, colon, OR, and unmatched-quote forms keep their legacy matching behavior.
     pub fn parse(input: &str, analyze: fn(&str) -> Vec<String>) -> Result<Self, SearchError> {
         if input.len() > MAX_QUERY_BYTES {
             return Err(invalid("query byte limit exceeded"));
@@ -155,7 +175,9 @@ impl SearchQuery {
             .strip_prefix('"')
             .filter(|remainder| !remainder.contains('"'))
         {
-            return Self::parse(remainder, analyze);
+            let mut query = Self::parse(remainder, analyze)?;
+            query.plain_terms = None;
+            return Ok(query);
         }
         let mut chars = input.char_indices().peekable();
         let mut fragments = Vec::new();
@@ -232,8 +254,10 @@ impl SearchQuery {
                 return Err(invalid("invalid query"));
             }
         }
+        let plain_terms = plain_query_terms(input, &fragments);
         Ok(Self {
             clauses: searchable_clauses(fragments)?,
+            plain_terms,
         })
     }
 }
@@ -452,6 +476,21 @@ impl SearchIndex {
             })
         })
     }
+    fn matches_query(&self, id: usize, query: &SearchQuery, concatenated: Option<&str>) -> bool {
+        if let Some(terms) = &query.plain_terms {
+            let contains = |term: &str| {
+                self.postings
+                    .get(term)
+                    .is_some_and(|documents| documents.contains_key(&id))
+            };
+            terms.iter().all(|term| contains(term)) || concatenated.is_some_and(contains)
+        } else {
+            query
+                .clauses
+                .iter()
+                .all(|clause| self.matches(id, clause) != clause.excluded)
+        }
+    }
     /// Evaluate conjunction/exclusion, select retrieval depth by creation order, rank, then paginate.
     #[allow(clippy::cast_precision_loss)] // BM25 is explicitly an approximate floating-point score.
     pub fn search(
@@ -469,13 +508,13 @@ impl SearchIndex {
         if !query.clauses.iter().any(|clause| !clause.excluded) {
             return Ok(Vec::new());
         }
+        let concatenated = query
+            .plain_terms
+            .as_ref()
+            .filter(|terms| terms.len() >= 2)
+            .map(|terms| terms.concat());
         let mut candidates: Vec<usize> = (0..self.documents.len())
-            .filter(|id| {
-                query
-                    .clauses
-                    .iter()
-                    .all(|c| self.matches(*id, c) != c.excluded)
-            })
+            .filter(|id| self.matches_query(*id, query, concatenated.as_deref()))
             .collect();
         candidates.sort_by(|a, b| {
             self.documents[*b]

@@ -61,6 +61,250 @@ fn names(index: &SearchIndex, query: &str) -> Vec<String> {
         .map(|h| h.path.relative())
         .collect()
 }
+
+#[test]
+fn production_text_boundary_membership_matches_both_finite_rounds() {
+    use fireemu_core_types::json::{parse, JsonValue};
+    fn array(value: &JsonValue) -> &[JsonValue] {
+        let JsonValue::Array(values) = value else {
+            panic!("expected fixture array");
+        };
+        values
+    }
+    fn string<'a>(value: &'a JsonValue, key: &str) -> &'a str {
+        value.get(key).unwrap().as_str().unwrap()
+    }
+    // Only synthetic text and Boolean membership are observed here; scores and rank are unresolved.
+    let fixture = parse(include_str!("fixtures/production_text_boundary.json")).unwrap();
+    let docs: Vec<_> = array(fixture.get("documents").unwrap())
+        .iter()
+        .map(|row| {
+            document(
+                string(row, "id"),
+                string(row, "title"),
+                string(row, "body"),
+                1,
+            )
+        })
+        .collect();
+    assert_eq!(docs.len(), 9);
+    let mut definition = definition();
+    definition.language = DefaultTextLanguage::Tag("en".into());
+    let index = SearchIndex::build(&definition, &docs, tokenize).unwrap();
+    let rounds = array(fixture.get("rounds").unwrap());
+    assert_eq!(rounds.len(), 2);
+    let mut cells = 0;
+    for round in rounds {
+        let queries = array(round);
+        assert_eq!(queries.len(), 13);
+        for row in queries {
+            let query = string(row, "query");
+            let actual = names(&index, query);
+            let expected = array(row.get("members").unwrap());
+            for doc in &docs {
+                let id = doc.path.relative();
+                let expected_member = expected
+                    .iter()
+                    .any(|member| format!("docs/{}", member.as_str().unwrap()) == id);
+                assert_eq!(
+                    actual.contains(&id),
+                    expected_member,
+                    "query={query:?}, doc={id}"
+                );
+                cells += 1;
+            }
+        }
+    }
+    assert_eq!(cells, 234);
+}
+
+fn composition_corpus(first: &str, second: &str, in_body: bool) -> Vec<SearchDocument> {
+    [
+        ("forward", format!("{first}{second}"), String::new()),
+        ("reverse", format!("{second}{first}"), String::new()),
+        ("repeated", format!("{first}{second}{first}"), String::new()),
+        ("separated", format!("{first} {second}"), String::new()),
+        ("backwards", format!("{second} {first}"), String::new()),
+        ("gap", format!("{first} spacer {second}"), String::new()),
+        ("cross", first.into(), second.into()),
+        (
+            "substring",
+            format!("prefix{first}{second}suffix"),
+            String::new(),
+        ),
+        ("single", first.into(), String::new()),
+    ]
+    .into_iter()
+    .map(|(id, title, body)| {
+        if in_body {
+            document(id, &body, &title, 1)
+        } else {
+            document(id, &title, &body, 1)
+        }
+    })
+    .collect()
+}
+
+fn composition_case(syntax: &str, order: &str, placement: &str) {
+    let terms = match order {
+        "forward" => "larch quartz",
+        "reverse" => "quartz larch",
+        "repeated" => "larch quartz larch",
+        _ => panic!("unknown order"),
+    };
+    let query = match syntax {
+        "plain" => terms.to_owned(),
+        "punctuation" => terms.replace(' ', ","),
+        "quoted" => format!("\"{terms}\""),
+        "excluded" => format!("{terms} -absent"),
+        "mixed" => {
+            let (first, rest) = terms.split_once(' ').unwrap();
+            format!("\"{first}\" {rest}")
+        }
+        "colon" => terms.replace(' ', ":"),
+        "contextual_or" => terms.replace(' ', " OR "),
+        "unmatched_quote" => format!("\"{terms}"),
+        _ => panic!("unknown syntax"),
+    };
+    let index = SearchIndex::build(
+        &definition(),
+        &composition_corpus("larch", "quartz", placement == "body"),
+        tokenize,
+    )
+    .unwrap();
+    let mut expected = if syntax == "quoted" {
+        match order {
+            "forward" => vec!["docs/separated"],
+            "reverse" => vec!["docs/backwards"],
+            _ => vec![],
+        }
+    } else {
+        vec!["docs/backwards", "docs/cross", "docs/gap", "docs/separated"]
+    };
+    if matches!(syntax, "plain" | "punctuation") {
+        expected.push(match order {
+            "forward" => "docs/forward",
+            "reverse" => "docs/reverse",
+            _ => "docs/repeated",
+        });
+    }
+    expected.sort_unstable();
+    assert_eq!(
+        names(&index, &query),
+        expected,
+        "{syntax}/{order}/{placement}: {query}"
+    );
+}
+
+#[test]
+fn plain_composition_and_legacy_grammar_follow_the_membership_table() {
+    // A private PICT table can select rows; the default covers the entire finite grammar table.
+    if let Ok(path) = std::env::var("FIREEMU_TEXT_MEMBERSHIP_CASES") {
+        let table = std::fs::read_to_string(path).unwrap();
+        for line in table.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            assert_eq!(cells.len(), 3);
+            composition_case(cells[0], cells[1], cells[2]);
+        }
+    } else {
+        for syntax in [
+            "plain",
+            "punctuation",
+            "quoted",
+            "excluded",
+            "mixed",
+            "colon",
+            "contextual_or",
+            "unmatched_quote",
+        ] {
+            for order in ["forward", "reverse", "repeated"] {
+                for placement in ["title", "body"] {
+                    composition_case(syntax, order, placement);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn composition_candidates_precede_depth_and_pagination_without_new_score_rules() {
+    let docs = [
+        document("old", "larch quartz", "", 1),
+        document("new", "larchquartz", "", 2),
+        document("partial", "larchquartz", "larch", 0),
+    ];
+    let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+    let query = SearchQuery::parse("larch quartz", tokenize_query).unwrap();
+    let hits = index
+        .search(
+            &query,
+            &SearchOptions {
+                retrieval_depth: Some(1),
+                order: SearchOrder::ScoreDescending,
+                ..SearchOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].path.relative(), "docs/new");
+    assert_eq!(hits[0].score.to_bits(), 0.0_f64.to_bits());
+    let partial_score = |query| {
+        index
+            .search(
+                &SearchQuery::parse(query, tokenize_query).unwrap(),
+                &SearchOptions::default(),
+            )
+            .unwrap()
+            .into_iter()
+            .find(|hit| hit.path.relative() == "docs/partial")
+            .unwrap()
+            .score
+    };
+    assert!(partial_score("larch quartz") > 0.0);
+    assert_eq!(
+        partial_score("larch quartz").to_bits(),
+        partial_score("larch").to_bits()
+    );
+    let page = index
+        .search(
+            &query,
+            &SearchOptions {
+                offset: 1,
+                limit: Some(1),
+                ..SearchOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(page[0].path.relative(), "docs/old");
+    assert!(index
+        .search(
+            &query,
+            &SearchOptions {
+                retrieval_depth: Some(0),
+                ..SearchOptions::default()
+            }
+        )
+        .unwrap()
+        .is_empty());
+    assert!(names(&index, "larch").iter().all(|id| id != "docs/new"));
+    assert!(SearchQuery::parse(&"larch ".repeat(MAX_QUERY_CLAUSES + 1), tokenize_query).is_err());
+    assert!(SearchQuery::parse(
+        &format!("larch {}", "q".repeat(MAX_QUERY_BYTES)),
+        tokenize_query
+    )
+    .is_err());
+}
+
+proptest::proptest! {
+    #[test]
+    fn composition_is_independent_of_word_spelling(first in "[a-n]{2,6}", second in "[p-z]{2,6}", in_body in proptest::bool::ANY) {
+        let index = SearchIndex::build(&definition(), &composition_corpus(&first, &second, in_body), tokenize).unwrap();
+        let expected = vec!["docs/backwards", "docs/cross", "docs/forward", "docs/gap", "docs/separated"];
+        proptest::prop_assert_eq!(names(&index, &format!("{first} {second}")), expected);
+        proptest::prop_assert_eq!(names(&index, &format!("\"{first} {second}\"")), vec!["docs/separated"]);
+        proptest::prop_assert_eq!(names(&index, &format!("{first} {first}")), vec!["docs/backwards", "docs/cross", "docs/gap", "docs/separated", "docs/single"]);
+    }
+}
 #[test]
 fn positional_phrases_do_not_cross_fields_and_exclusions_apply() {
     let docs = [

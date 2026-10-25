@@ -1,0 +1,269 @@
+{
+  "documents": [
+    {
+      "id": "concatenated",
+      "body": "neutral boundary marker",
+      "title": "ヌヘソメラピ"
+    },
+    {
+      "id": "cross-field",
+      "body": "メラピ",
+      "title": "ヌヘソ"
+    },
+    {
+      "id": "latin-concat",
+      "body": "neutral boundary marker",
+      "title": "alphabeta"
+    },
+    {
+      "id": "latin-separated",
+      "body": "neutral boundary marker",
+      "title": "alpha beta"
+    },
+    {
+      "id": "repeat",
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ メラピ ヌヘソ"
+    },
+    {
+      "id": "reverse",
+      "body": "neutral boundary marker",
+      "title": "メラピ ヌヘソ"
+    },
+    {
+      "id": "separated",
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ メラピ"
+    },
+    {
+      "id": "u",
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ"
+    },
+    {
+      "id": "v",
+      "body": "neutral boundary marker",
+      "title": "メラピ"
+    }
+  ],
+  "rounds": [
+    [
+      {
+        "query": "ヌヘソ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated",
+          "u"
+        ]
+      },
+      {
+        "query": "メラピ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated",
+          "v"
+        ]
+      },
+      {
+        "query": "ヌヘソ・メラピ",
+        "members": [
+          "concatenated",
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "ヌヘソ・ﾒﾗﾋﾟ",
+        "members": [
+          "concatenated",
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "ヌヘソ ﾒﾗﾋﾟ",
+        "members": [
+          "concatenated",
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "\"ヌヘソ ﾒﾗﾋﾟ\"",
+        "members": [
+          "repeat",
+          "separated"
+        ]
+      },
+      {
+        "query": "ﾒﾗﾋﾟ ヌヘソ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "ヌヘソメラピ",
+        "members": [
+          "concatenated"
+        ]
+      },
+      {
+        "query": "\"ヌヘソメラピ\"",
+        "members": [
+          "concatenated"
+        ]
+      },
+      {
+        "query": "ヌヘソ ﾒﾗﾋﾟ ヌヘソ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "\"メラピ ヌヘソ\"",
+        "members": [
+          "repeat",
+          "reverse"
+        ]
+      },
+      {
+        "query": "alpha beta",
+        "members": [
+          "latin-concat",
+          "latin-separated"
+        ]
+      },
+      {
+        "query": "\"alpha beta\"",
+        "members": [
+          "latin-separated"
+        ]
+      }
+    ],
+    [
+      {
+        "query": "ヌヘソ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated",
+          "u"
+        ]
+      },
+      {
+        "query": "メラピ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated",
+          "v"
+        ]
+      },
+      {
+        "query": "ヌヘソ・メラピ",
+        "members": [
+          "concatenated",
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "ヌヘソ・ﾒﾗﾋﾟ",
+        "members": [
+          "concatenated",
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "ヌヘソ ﾒﾗﾋﾟ",
+        "members": [
+          "concatenated",
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "\"ヌヘソ ﾒﾗﾋﾟ\"",
+        "members": [
+          "repeat",
+          "separated"
+        ]
+      },
+      {
+        "query": "ﾒﾗﾋﾟ ヌヘソ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "ヌヘソメラピ",
+        "members": [
+          "concatenated"
+        ]
+      },
+      {
+        "query": "\"ヌヘソメラピ\"",
+        "members": [
+          "concatenated"
+        ]
+      },
+      {
+        "query": "ヌヘソ ﾒﾗﾋﾟ ヌヘソ",
+        "members": [
+          "cross-field",
+          "repeat",
+          "reverse",
+          "separated"
+        ]
+      },
+      {
+        "query": "\"メラピ ヌヘソ\"",
+        "members": [
+          "repeat",
+          "reverse"
+        ]
+      },
+      {
+        "query": "alpha beta",
+        "members": [
+          "latin-concat",
+          "latin-separated"
+        ]
+      },
+      {
+        "query": "\"alpha beta\"",
+        "members": [
+          "latin-separated"
+        ]
+      }
+    ]
+  ]
+}

@@ -680,6 +680,7 @@ test("the waived fixtures are exactly these, so a new waiver is a visible edit h
     "auth-federation-production.json",
     "auth-federation-saml-production.json",
     "auth-tenant-blocking-production.json",
+    "fs-ent-text-production.json",
   ]);
   assert.deepEqual(Object.keys(HARNESS_LANES).toSorted(), [
     "auth-account",

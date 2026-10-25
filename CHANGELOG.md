@@ -15,6 +15,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Firestore Enterprise full-text search has its own production closure record (FS-TEXT-SEARCH) and a comparison that replays every recorded production search response; the known differences are listed in `docs/text-search.md`.
 - Text search queries keep the combining mark that case folding splits off a Latin letter such as `İ`, as recorded in production: the query `İstanbul` matches no document, while `istanbul` matches a document holding `İstanbul`. Every recorded production search response, including those with zero or one result, is now replayed offline for membership.
 
 ## [0.29.0] - 2026-10-23

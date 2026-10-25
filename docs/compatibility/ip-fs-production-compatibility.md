@@ -21,6 +21,16 @@ These frozen inventories declare future production observations; they do not add
 
 Both parents are now `COMPAT_VERIFIED`. Each closure record names its final artifact, its comparison, its known differences and the independent closure approval; PUBSUB carries a per-case adjudication of its 122 cases (2026-10-12).
 
+## Firestore Enterprise full-text search parent (2026-10-26)
+
+Enterprise full-text search was outside the original goal (acceptance class B). On 2026-10-25 the owner added it as a parent of its own (owner decision ledger 1777), with two acceptance rules: numeric `score()` values may differ from production, but the result order by score must match production on every recorded query (ledger 1778); and the recorded CJK membership cases that need a dictionary segmenter are known differences (ledger 1785, 2026-10-26).
+
+| Parent | Status | Scope |
+| --- | --- | --- |
+| [FS-TEXT-SEARCH](../../spec/compatibility/closure/FS-TEXT-SEARCH.json) | `IN_PROGRESS` | Enterprise Native search stage of ExecutePipeline over REST and gRPC: membership, result order by score and by creation time, recorded refusals and response frames; the Native Admin text index lifecycle, failed builds and the terminal NEEDS_REPAIR state. Geo search, query enhancement other than `disabled`, transactions and `readTime`, general Boolean search-expression trees and language-specific analysis are outside the parent. |
+
+The [comparison](../../spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json) replays every recorded production search response (531 responses, 233 distinct cases, and the Boundary03 rounds) through the local engine. It is produced and checked by a test on every commit, so the committed rows always describe the current engine. The closure record lists the known differences: numeric score values, twenty CJK dictionary-segmentation cases, two `İpek` cases, the transient conflict production answers when a deleted text index is created again at once, and the orders the recordings do not separate.
+
 ## FS-DATA-WRITE current closure correction (2026-09-24)
 
 The [closure inventory](../../spec/compatibility/closure/FS-DATA-WRITE.json) now contains 33 conditions, including four list operation conditions proposed by the FS-QUERY-INDEX lane. Those four retain the proposal's production recording, fixture, artifact and comparison references but are `PENDING_INTEGRATION`: their implementation branch has not merged into the FS-DATA-WRITE source, so the referenced artifact is not the current FS-DATA-WRITE artifact and none of the four conditions is `VERIFIED`. The near-index-limit delete refusal remains `PENDING_CORPUS` and requires an adjacent accepted/refused pair, two production recordings and route-specific comparison. The Write-stream half-close condition is `VERIFIED` against the current source-bound comparison, which includes stable `content-disposition: attachment` trailer metadata and excludes only the recording-varying tracking ID. Twelve of 33 FS-DATA-WRITE conditions are `VERIFIED`; the parent remains `WAITING_ORACLE`. After the list implementation branch merges, compare all four conditions against the FS-DATA-WRITE final artifact before promoting them.
@@ -128,7 +138,7 @@ Current verification boundary: the fixed Rust result at `28e90c0b3` is 3,165 pas
 | Class | Meaning | Current decision |
 | --- | --- | --- |
 | A | Required for this production-compatibility goal | Every target feature group below must reach `COMPAT_VERIFIED` on the final artifact. Existing bounded results may satisfy only their recorded conditions. |
-| B | Outside this goal | Firestore Enterprise-only Pipeline, Enterprise full-text search and MongoDB-compatible product surfaces. Existing implementation remains and shared regressions are prevented. Datastore-mode variants remain an explicit product boundary. |
+| B | Outside this goal | Firestore Enterprise-only Pipeline and MongoDB-compatible product surfaces. Existing implementation remains and shared regressions are prevented. Datastore-mode variants remain an explicit product boundary. Enterprise full-text search was in this class until 2026-10-25, when the owner added it as its own parent (owner decision ledger 1777); see [Firestore Enterprise full-text search parent](#firestore-enterprise-full-text-search-parent-2026-10-26). |
 | C | Owner decision | Production campaign identity, project/database/tenant profiles, permission window, fresh nonce, accepted settings and cost limits, recovery responsibility, and any shared-setting changes. Missing decisions block only their production operations, not local work. |
 
 No target feature is moved to class B merely because it is unimplemented, unobserved, preview, available in Enterprise too, or dependent on an adjacent service. A scope change requires an explicit owner decision.

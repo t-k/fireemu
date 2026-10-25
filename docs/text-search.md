@@ -100,6 +100,15 @@ The current implementation does not support stemming, synonyms, typo tolerance, 
 For the managed service's text-search concepts and query syntax, see [Cloud Firestore Enterprise text search](https://firebase.google.com/docs/firestore/enterprise/text-search). That documentation describes the product; this emulator's lexical behavior remains approximate and should not be treated as proof of parity.
 
 
+## Production comparison
+
+Every recorded production search response is replayed through the local engine (the FS-TEXT-SEARCH closure, [`spec/compatibility/closure/FS-TEXT-SEARCH.json`](../spec/compatibility/closure/FS-TEXT-SEARCH.json)): 531 responses, 233 distinct queries on their recorded corpora, and both rounds of the Boundary03 cells. Result order matches production on all 64 score-sorted cases and on all 104 unsorted cases (in 8 of them for the documents both sides return). The membership differences that remain are listed by name in `crates/fireemu-core-firestore/tests/text_membership_replay.rs`:
+
+- Unspaced Han and Katakana text. Production segments it with a dictionary: `京` does not match `京都` or `東京`, `都` and `東京都` do not match `京都東京駅東京都京都東京駅`, `吉` does not match `吉野家`, and `ネムラ・ﾈﾑﾗ` matches only `ネムラネムラ`. Local analysis makes each Han ideograph a token and keeps a Katakana run whole (20 recorded cases).
+- `İpek`. Production matched it against both `İpek` and `ipek`, while `İstanbul`, `İzmir`, `İnci` and `İzunex` matched nothing; the local query analysis follows the second group (2 recorded cases).
+
+The Native Admin lifecycle and the recorded refusals are compared over REST. Production answered 409 `ALREADY_EXISTS` for a short time when a deleted text index was created again; local creates it at once.
+
 ## Verify SDK interoperability locally
 
 After installing the pinned conformance dependencies and building fireemu, run `FIREEMU_BINARY=/absolute/path/to/fireemu pnpm -C conformance text-search:local`. The check creates a disposable Enterprise world, compares Admin gRPC and Web Lite searches, exercises backfill failure and repair, and verifies updates and deletes. It refuses non-loopback endpoints and never selects a production project. This is a local interoperability check, not a production-equivalence observation.

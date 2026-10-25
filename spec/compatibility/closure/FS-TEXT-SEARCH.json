@@ -1,0 +1,411 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-TEXT-SEARCH",
+  "parentStatus": "IN_PROGRESS",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-query",
+    "database": "entpipe1",
+    "edition": "ENTERPRISE",
+    "apiMode": "NATIVE",
+    "location": "us-central1"
+  },
+  "scopeAuthority": "docs.local/instructions/owner-decisions.md (2026-10-25 Claude coordinator resumes after Codex, ledger 1777: full-text search COMPAT_VERIFIED is a goal; 1778 score acceptance; 1785 CJK known difference)",
+  "closureReview": {
+    "decision": "PENDING",
+    "note": "The coordinator fills this after an independent closure review. Prepared by the text-closure lane on work/text-closure."
+  },
+  "scopeDecisions": [
+    {
+      "id": "T1",
+      "decision": "Firestore Enterprise Native full-text search through the search stage of ExecutePipeline (REST and gRPC), the Native Admin text index lifecycle (REST; gRPC is checked against the local REST answers) and the text index file configuration. Out of scope: geo search, query enhancement other than disabled, search with transactions or readTime, search-stage select and nested score aliases, general Boolean search-expression trees (the composition experiment TEXT-BOOLEAN-COMPOSITION-20261025-01 stopped after its search-root OR refusal; only that refusal is in scope), language-specific analysis (stemming, synonyms, typo tolerance, morphology, autodetection) and index build performance.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-10-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1777)"
+    },
+    {
+      "id": "T2",
+      "decision": "Numeric score() values are approximate; the result ORDER by score must match production on every recorded query, from a general scoring model.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-10-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1778, Text search score acceptance)"
+    },
+    {
+      "id": "T3",
+      "decision": "The six recorded CJK membership cases that need a dictionary segmenter are known differences; Japanese segmentation is future work.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-10-26",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1785, Text search CJK segmentation known difference)"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-TEXT-SEARCH/membership",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-text-search/replay/order",
+        "fs-text-search/replay/sparse"
+      ],
+      "status": "VERIFIED",
+      "note": "Which documents a search returns, for every recorded production search response: 531 responses (233 distinct cases, each on its corpus reconstructed from the recorded writes) from the calibration, continuation, lexical, proof (C4), discriminator (C5, English and Japanese index languages), score-twins, fresh-database, enhancement, OR-composition, language-held and boundary runs. Plain terms, quoted phrases, exclusions, exclusions-only and empty queries, contextual OR, unquoted colons, Latin diacritic and width folding, dotted capital I, Greek, CJK ideographs and Katakana. 211 distinct cases match exactly; the 22 that differ are the knownDifferences cjkDictionarySegmentation and dottedCapitalIpek, each pinned by name so a change in either direction fails.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
+        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "orderFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_order.json",
+        "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
+        "sparseFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_sparse.json",
+        "sparseFixtureSha256": "da8b8e291c9851ca36ade362a850dbe96be58328536fae157e7833ce4291dd45",
+        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures, and the sparse fixture is the same builder restricted to responses with zero or one result.",
+        "tests": [
+          "crates/fireemu-core-firestore/tests/text_membership_replay.rs#recorded_production_memberships_replay_exactly",
+          "crates/fireemu-core-firestore/tests/text_membership_replay.rs#recorded_sparse_production_memberships_replay_exactly",
+          "crates/fireemu-core-firestore/tests/text_closure_comparison.rs#committed_closure_comparison_equals_the_replay"
+        ],
+        "rows": {
+          "MATCH": 211,
+          "KNOWN_DIFFERENCE": 22
+        }
+      }
+    },
+    {
+      "conditionId": "FS-TEXT-SEARCH/boundary-membership",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-text-search/boundary03"
+      ],
+      "status": "VERIFIED",
+      "note": "Boundary03: nine documents on one English index, thirteen queries in two rounds (234 document/query cells) about Katakana, half-width and Latin token boundaries inside and across fields. Every cell matches in both rounds.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
+        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "fixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_boundary.json",
+        "fixtureSha256": "68ff627d6d38d5de2799f752dc00fe1692e65f124e77040975c9c88aa69309ad",
+        "tests": [
+          "crates/fireemu-core-firestore/tests/text_search.rs#production_text_boundary_membership_matches_both_finite_rounds",
+          "crates/fireemu-adapter-grpc/tests/text_search.rs#production_boundary_membership_reaches_core_through_a_ready_english_index",
+          "crates/fireemu-core-firestore/tests/text_closure_comparison.rs#score_sorted_and_boundary_rows_all_match"
+        ],
+        "rows": {
+          "MATCH": 26
+        },
+        "productionReceipts": [
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-boundary-final-verify01-v1-actual-review.md",
+            "sha256": "6490a082ecb1f276ad2f7b8ce8301a86938ed3e6a4e1566246d456dc20eeda5f",
+            "run": "text-boundary-final-verify01-v1",
+            "verdict": "APPROVE, closed"
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-TEXT-SEARCH/score-order",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-text-search/replay/order#scoreSort"
+      ],
+      "status": "VERIFIED",
+      "note": "Result ORDER of search(sort: score().descending()) on every recorded score-sorted response with two or more results: 64 of 64 distinct cases (146 responses) in production order, with exact membership. Ties keep the newest creation time first. Owner decision 2026-10-25 (ledger 1778): the order must match production on every recorded query, implemented as a general scoring model with no per-query lookup; numeric score() values are the knownDifference scoreValues.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
+        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "orderFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_order.json",
+        "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
+        "sparseFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_sparse.json",
+        "sparseFixtureSha256": "da8b8e291c9851ca36ade362a850dbe96be58328536fae157e7833ce4291dd45",
+        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures, and the sparse fixture is the same builder restricted to responses with zero or one result.",
+        "tests": [
+          "crates/fireemu-core-firestore/tests/text_score_order.rs#recorded_production_score_orders_replay_exactly",
+          "crates/fireemu-core-firestore/tests/text_score_order.rs#equal_scores_keep_newest_first_then_path_order",
+          "crates/fireemu-core-firestore/tests/text_score_order.rs#adjacency_counts_only_in_query_order_within_one_field",
+          "crates/fireemu-core-firestore/tests/text_closure_comparison.rs#score_sorted_and_boundary_rows_all_match"
+        ],
+        "rows": {
+          "MATCH": 64
+        },
+        "laneReport": {
+          "path": "docs.local/logs/2026-10-25/2026-10-25-021-text-score-order-lane.md",
+          "sha256": "a01989d5b1c33c5751e37fb0e9af0a9bf2e0926e6d056b647723065ce012ed68",
+          "run": "work/text-score-order 09497aa71",
+          "verdict": "lane report; merged into work/review-text-fixes"
+        }
+      }
+    },
+    {
+      "conditionId": "FS-TEXT-SEARCH/default-order",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-text-search/replay/order#default"
+      ],
+      "status": "VERIFIED",
+      "note": "Result order without a sort, on every recorded response with two or more results: newest creation time first. 96 of 104 distinct cases (245 responses) match exactly; in the 8 cases whose membership is a known difference, the members both sides return are in production order.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
+        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "orderFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_order.json",
+        "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
+        "sparseFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_sparse.json",
+        "sparseFixtureSha256": "da8b8e291c9851ca36ade362a850dbe96be58328536fae157e7833ce4291dd45",
+        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures, and the sparse fixture is the same builder restricted to responses with zero or one result.",
+        "tests": [
+          "crates/fireemu-core-firestore/tests/text_score_order.rs#recorded_production_default_orders_replay_exactly"
+        ],
+        "rows": {
+          "MATCH": 96,
+          "MATCH_COMMON_MEMBERS": 8
+        }
+      }
+    },
+    {
+      "conditionId": "FS-TEXT-SEARCH/search-refusals",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-ent-text/v1/lexical",
+        "search-root-or-refusal"
+      ],
+      "status": "VERIFIED",
+      "note": "The strict profile answers the recorded search refusals with production's status and text, keyed on the request shape (collection and query literals aside): score sort ascending, retrieval_depth 0, language_code auto and an invalid tag (REST and gRPC, two recordings), and a search-root or(document_matches, document_matches) answered 400 INVALID_ARGUMENT with production's one-element array (REST, one recording). A refusal of any other shape answers UNIMPLEMENTED in strict, never an invented production error. The emulator profile answers the locally computed refusals and is not closure evidence.",
+      "evidence": {
+        "productionPath": "conformance/fs-ent-text-production.json",
+        "productionSha256": "f43c5ed2fbd98ecde6f1709195581383387e06a1f873ada91601f9b5683325eb",
+        "requestsPath": "conformance/fs-ent-text-refusal-requests.json",
+        "requestsSha256": "c258f9ed2a567e15cd95e46d4d029b6fc1e20d51723aa5bcb93b2420b1f725d5",
+        "tests": [
+          "crates/fireemu-adapter-grpc/tests/text_search.rs#strict_enterprise_search_root_or_matches_the_production_error",
+          "crates/fireemu-adapter-grpc/tests/text_search.rs#strict_search_root_or_neighbors_remain_unobserved",
+          "crates/fireemu-adapter-grpc/tests/text_search.rs#strict_text_option_refusals_follow_the_recorded_shape_not_its_literals",
+          "crates/fireemu-adapter-grpc/src/text_search.rs#production_option_refusals_match_recorded_rest_and_grpc_contracts",
+          "crates/fireemu-adapter-grpc/src/pipeline_shape.rs#exact_text_requests_and_neighbors",
+          "conformance/src/fs-ent-text-refusal-evidence.test.mjs"
+        ],
+        "productionReceipts": [
+          {
+            "path": "docs.local/logs/2026-10-23/2026-10-23-009-production-parity/text-refusal-final-review.md",
+            "sha256": "f12f06fbc505b30a98468c939767daf3b9031a3d16aa7b4868b57e7766df730f",
+            "run": "TEXT-PRODUCTION-LEXICAL-20261023-02",
+            "verdict": "APPROVE"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-boolean-composition01-v1-failed-actual-review.md",
+            "sha256": "e00f8b94367bc3c61bfd00aefe0ca7c9b71446a85986cd64714dd024106870a5",
+            "run": "TEXT-BOOLEAN-COMPOSITION-20261025-01",
+            "verdict": "run FAILED after query 2; only the complete query-2 refusal is cited"
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-TEXT-SEARCH/response-shape",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-ent-text/v1/lexical"
+      ],
+      "status": "VERIFIED",
+      "note": "Response frames of a search: each result is the full stored document (name, fields, createTime, updateTime) and carries a finite double when the search projects score(); small result sets come back in one frame with an executionTime timestamp; an empty search is one frame holding only executionTime, with no results, as recorded.",
+      "evidence": {
+        "productionPath": "conformance/fs-ent-text-production.json",
+        "productionSha256": "f43c5ed2fbd98ecde6f1709195581383387e06a1f873ada91601f9b5683325eb",
+        "tests": [
+          "crates/fireemu-adapter-grpc/tests/text_search.rs#empty_searches_answer_the_recorded_execution_time_only_body",
+          "crates/fireemu-adapter-grpc/src/text_search.rs#production_search_batches_all_hits_in_one_response",
+          "crates/fireemu-adapter-grpc/tests/text_search.rs#score_projection_paging_and_downstream_select_keep_unprojected_search_fields"
+        ],
+        "productionReceipts": [
+          {
+            "path": "docs.local/logs/2026-10-23/2026-10-23-009-production-parity/text02-actual-review.md",
+            "sha256": "a3479a4cd12417a38e14b82e1c32fe756449ffeee9c4579bb59a3e6a6b6df1f2",
+            "run": "TEXT-PRODUCTION-LEXICAL-20261023-02",
+            "verdict": "APPROVE"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-score-twins01-v1-actual-review.md",
+            "sha256": "06835075e3c3ca0c3af14a45dcfc9a7bf3de61363c9d11c84fcecc370555d7bb",
+            "run": "TEXT-SCORE-TWINS-20261024-01",
+            "verdict": "APPROVE, closed"
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-TEXT-SEARCH/index-lifecycle",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-text-search/admin/create-get-list-delete"
+      ],
+      "status": "VERIFIED",
+      "note": "Native Admin text index lifecycle over REST: CreateIndex answers an operation in INITIALIZING without done; the index reads CREATING then READY with its searchConfig.textSpec fields (TOKENIZED, MATCH_GLOBALLY, one or several fields) and searchIndexOptions; the finished operation is done with SUCCESSFUL and the READY index as its response; an omitted textLanguageOverrideFieldPath reads back as language; a text index is listed under every collection group URL of its database; DELETE answers 200 {} and a later GET 404. The expected values in the tests are transcribed from the receipts, not loaded from a committed recording.",
+      "evidence": {
+        "tests": [
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_success_shares_catalog_wire_schema_and_terminal_operation",
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_multiple_fields_preserve_definition_and_search_both_fields",
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_cross_group_list_is_database_scoped_and_keeps_item_scope",
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_omitted_override_defaults_to_observed_language_field",
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_schema_roundtrips_fields_and_refuses_unknown_options",
+          "crates/fireemu-adapter-grpc/src/admin/grpc_tests.rs#configured_enterprise_native_text_index_wire_matches_rest"
+        ],
+        "productionReceipts": [
+          {
+            "path": "docs.local/logs/2026-10-23/2026-10-23-009-production-parity/text02-actual-review.md",
+            "sha256": "a3479a4cd12417a38e14b82e1c32fe756449ffeee9c4579bb59a3e6a6b6df1f2",
+            "run": "TEXT-PRODUCTION-LEXICAL-20261023-02",
+            "verdict": "APPROVE"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-repair-held04-v1-actual-review.md",
+            "sha256": "318d50fcafab84e3219507622f27dfa6f14b047a3b25bc6f19af87e7015d0cdb",
+            "run": "TEXT-REPAIR-HELD-20261024-04",
+            "verdict": "APPROVE, closed"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-language-held03-v1-actual-review.md",
+            "sha256": "27c9b9872ceccfd78ec3a6458d3c8e7e3982e962e2af81ae37457a561f999d96",
+            "run": "TEXT-LANGUAGE-HELD-20261024-03",
+            "verdict": "APPROVE, closed"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-language-controlled01-v1-actual-halt-review.md",
+            "sha256": "5eebc1f2195387c1cb45644d40902391617c8e2af36871baca1e3a0cda7c0df7",
+            "run": "TEXT-LANGUAGE-CONTROLLED-20261024-01",
+            "verdict": "HALT; the override normalization is its approved classification"
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-TEXT-SEARCH/failed-build-needs-repair",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
+      "recipeIds": [
+        "fs-text-search/admin/invalid-language",
+        "fs-text-search/admin/same-source-correction"
+      ],
+      "status": "VERIFIED",
+      "note": "A document whose language override holds an invalid tag fails the build: the operation is done, FAILED, with error code 3 \"Invalid text language: <value>\" and no response, and the index reads NEEDS_REPAIR. NEEDS_REPAIR is terminal after a failed creation: correcting the same source document to a valid language leaves the same index NEEDS_REPAIR and the same operation FAILED (12 follow-up reads over about 81 s in production). Deleting the failed index and creating a new one builds a new index that reaches READY.",
+      "evidence": {
+        "tests": [
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_failed_operation_stays_terminal_after_source_and_index_deletion",
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_language_failures_use_the_actual_typed_source_value",
+          "crates/fireemu-adapter-grpc/src/admin/rest_tests.rs#native_text_admin_language_values_never_poison_the_database"
+        ],
+        "productionReceipts": [
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-repair-inplace01-v1-actual-review.md",
+            "sha256": "b31793280d4a29b2d558dee24cce457eb9f6c737a9a4b00c415159e66fec87a1",
+            "run": "TEXT-REPAIR-INPLACE-20261024-01",
+            "verdict": "APPROVE, closed (same-index-persistent-needs-repair-within-bound)"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-repair-inplace01-v1-closed.json",
+            "sha256": "b2498e1495ee043e7b9ca90d102f87bc209c3ea93285c8b232e4e16cae3cafb2",
+            "run": "TEXT-REPAIR-INPLACE-20261024-01",
+            "verdict": "closed row"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-repair-probe02-v2-actual-halt-review.md",
+            "sha256": "e8c90af160f90a0638daa188f8f4b0615ca58bb511e7ffd423faa42bcec91e2a",
+            "run": "TEXT-REPAIR-PROBE-20261024-02",
+            "verdict": "HALT; the failed-build observations are its approved classification"
+          },
+          {
+            "path": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/text-repair-held04-v1-actual-review.md",
+            "sha256": "318d50fcafab84e3219507622f27dfa6f14b047a3b25bc6f19af87e7015d0cdb",
+            "run": "TEXT-REPAIR-HELD-20261024-04",
+            "verdict": "APPROVE, closed"
+          }
+        ]
+      }
+    }
+  ],
+  "perCaseAdjudication": {
+    "mode": "replay-comparison",
+    "path": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
+    "sha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+    "summary": {
+      "rows": 259,
+      "MATCH": 237,
+      "KNOWN_DIFFERENCE": 22,
+      "MISMATCH": 0,
+      "scoreSortedOrderRows": 64,
+      "scoreSortedOrderMatch": 64,
+      "defaultOrderRows": 104,
+      "defaultOrderMatch": 96,
+      "defaultOrderMatchCommonMembers": 8,
+      "recordings": 557
+    }
+  },
+  "knownDifferences": {
+    "scoreValues": {
+      "statement": "Numeric score() values are an approximation (0.6 x occurrences^(1/3) per positive token plus 0.3 x adjacencies^(3/4) per consecutive token pair) and differ from production, which also weighs terms by a term-specific factor. Only the order is compared.",
+      "rules": [
+        "1778"
+      ]
+    },
+    "cjkDictionarySegmentation": {
+      "statement": "Production segments unspaced Han and Katakana text with a dictionary; local analysis makes each Han ideograph a token and keeps Katakana runs whole. Twenty recorded distinct cases differ in membership: the six of ledger 1785 (京都, 都 and 東京都 in textlex20261024; 𠮷野家 in textproof20261024; 𠮷ミナ and 𠮷野家 in textdisc20261024) and fourteen zero- or one-result cases found when every recorded response was replayed on 2026-10-26 (京 twice, 京都東京駅, 東京駅京都, \"京 都\", 生物研究所, \"生物 研究所\", \"生 物\", 吉, カタカナ・ｶﾀｶﾅ twice, and three spellings of ネムラ・ﾈﾑﾗ). The fourteen are the same kind of difference but were not named in ledger 1785.",
+      "rules": [
+        "1785"
+      ],
+      "pendingOwnerAcceptance": [
+        "the fourteen zero- or one-result cases"
+      ],
+      "pinnedBy": [
+        "crates/fireemu-core-firestore/tests/text_membership_replay.rs#UNEXPLAINED",
+        "crates/fireemu-core-firestore/tests/text_membership_replay.rs#SPARSE_UNEXPLAINED"
+      ]
+    },
+    "dottedCapitalIpek": {
+      "statement": "A query term holding İ keeps the mark case folding splits off, so İstanbul, İzmir, İnci and İzunex match no document, as production recorded. Production nevertheless matched İpek against both İpek and ipek (textproof20261024 and textdisc20261024); no per-character rule reproduces both groups, and the query analysis follows the larger one.",
+      "pendingOwnerAcceptance": [
+        "İpek in textproof20261024",
+        "İpek in textdisc20261024"
+      ],
+      "pinnedBy": [
+        "crates/fireemu-core-firestore/tests/text_membership_replay.rs#UNEXPLAINED"
+      ]
+    },
+    "recreateAfterDeleteConflict": {
+      "statement": "Production answered 409 ALREADY_EXISTS (index already exists with the deleted index ID) to a create of the same definition right after deleting a failed text index, and accepted it with a new index ID later (TEXT-REPAIR-PROBE-20261024-02, TEXT-REPAIR-HELD-20261024-03/04). Local creates the new index at once; the transient window is not emulated.",
+      "pendingOwnerAcceptance": [
+        "transient 409 after delete"
+      ]
+    },
+    "operationProgressWhileReady": {
+      "statement": "Production can still report an operation PROCESSING while its index already reads READY (the two reads are not atomic). Local finishes the operation and the index together; no test covers the production interleaving.",
+      "pendingOwnerAcceptance": [
+        "non-atomic operation and index reads"
+      ]
+    },
+    "unverifiedOrderingContrasts": {
+      "statement": "Not claimed: orders the recordings do not separate. Term-specific weights (A x2, B x1 against A x1, B x2); where extra occurrences overtake one adjacency; three-token queries (skip pairs or a whole-sequence bonus); mixed clauses such as \"a b\" c and a -x b; creation time against document name as the tie-break; scores of documents that match only through CJK concatenation; adjacency across punctuation or stop words and field-restricted forms. Local answers follow the documented model."
+    },
+    "unrecordedLocalBehaviour": {
+      "statement": "Not claimed: local behaviour with no production recording. Operation reads after the index is deleted and operation DELETE; non-string and other valid language tags (fr builds language-neutral; non-string fails like a malformed tag); ja as a per-document override value under productionExact (only the index-level ja was recorded); errors for an invalid query_enhancement, an unknown option or a negative limit; the FS_TEXT_INDEX refusal of a search on a CREATING or NEEDS_REPAIR index; the session control lifecycle (:failBuild, :repair, :advanceBackfill, :completeBackfill); response splitting above 1 MiB."
+    },
+    "transports": {
+      "statement": "The Admin lifecycle and the search-root OR refusal were observed over REST only; their gRPC answers are checked against the local REST answers, not against production."
+    },
+    "productionExactSearch": {
+      "statement": "productionExact: true still refuses every text search with FS_TEXT_UNOBSERVED (501). The conditions are verified on the strict profile without productionExact, where text search runs by default.",
+      "pendingCoordinatorDecision": [
+        "whether productionExact should serve text search once the parent is verified"
+      ]
+    }
+  },
+  "integratedRegression": {
+    "integrationCommit": "PENDING (the final commit of work/text-closure)",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
+        "sha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "rows": 259,
+        "summary": {
+          "MATCH": 237,
+          "KNOWN_DIFFERENCE": 22,
+          "MISMATCH": 0
+        }
+      }
+    ],
+    "productionRequests": 0,
+    "result": "COMPARED_PER_CASE",
+    "releaseBindingNote": "The comparison is produced by a Rust test over committed public fixtures (crates/fireemu-core-firestore/tests/text_closure_comparison.rs), run by nextest on every commit, and the test fails when the committed comparison differs from the engine. It exercises the core engine, not an installed release binary; the adapter path is covered by the REST and gRPC tests named in each condition."
+  }
+}

@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use fireemu_adapter_support::entropy;
 use hyper::body::Incoming;
@@ -73,6 +73,10 @@ impl Connection {
 }
 
 impl State {
+    fn is_stale(&self, hold: Duration, elapsed: Duration) -> bool {
+        self.held.as_ref().is_none_or(oneshot::Sender::is_closed) && elapsed >= hold * 2
+    }
+
     /// The next answer, carrying every waiting message.
     fn take_packet(&mut self) -> String {
         let body = packet(self.next_packet, &std::mem::take(&mut self.outbox));
@@ -441,7 +445,7 @@ async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
             .map(|barrier| barrier.admit());
         let mut database = lock_database(&shared);
         let mut state = connection.lock();
-        if state.closed || (state.held.is_none() && state.last_request.elapsed() >= hold * 2) {
+        if state.closed || state.is_stale(hold, state.last_request.elapsed()) {
             close(&shared, &mut database, &connection, &mut state);
             return;
         }
@@ -450,7 +454,257 @@ async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{expiry, extend_password, oneshot, Expiry};
+    use super::*;
+    use crate::rest::RestOptions;
+    use fireemu_core_database::{Format, Json, Path};
+    use proptest::prelude::*;
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    fn fixture() -> (Arc<Shared>, Arc<Connection>) {
+        let shared = Arc::new(Shared {
+            database: Arc::new(Mutex::new(Database::new(RestOptions::default(), 1))),
+            streams: Arc::new(Mutex::new(BTreeMap::new())),
+            listeners: Mutex::new(BTreeMap::new()),
+            long_polls: Connections::default(),
+            config: super::super::ServerConfig {
+                long_poll_hold: Duration::from_millis(5),
+                ..super::super::ServerConfig::default()
+            },
+        });
+        let connection = connect(&shared);
+        (shared, connection)
+    }
+
+    fn connect(shared: &Shared) -> Arc<Connection> {
+        let Opened::Session(session, _) = lock_database(shared)
+            .open_realtime("/.ws?v=5&ns=o", Some("h"), 0)
+            .unwrap()
+        else {
+            panic!("expected a realtime session")
+        };
+        let connection = Arc::new(Connection {
+            client: session.client(),
+            password: "test".to_owned(),
+            queue: 16,
+            state: Mutex::new(State {
+                session: session.for_long_polling(),
+                segments: Reassembler::new(1024),
+                outbox: Vec::new(),
+                outbox_bytes: 0,
+                next_packet: 1,
+                held: None,
+                last_request: Instant::now(),
+                closed: false,
+            }),
+        });
+        shared
+            .listeners
+            .lock()
+            .unwrap()
+            .insert(connection.client, Sink::LongPoll(Arc::clone(&connection)));
+        shared
+            .long_polls
+            .lock()
+            .insert(connection.client, Arc::clone(&connection));
+        connection
+    }
+
+    fn send(shared: &Shared, connection: &Connection, message: &str) -> String {
+        let mut database = lock_database(shared);
+        let mut state = connection.lock();
+        assert!(answer_message(shared, &mut database, &mut state, message));
+        state.take_packet()
+    }
+
+    fn ready_once<F: Future>(future: std::pin::Pin<&mut F>) -> Poll<F::Output> {
+        future.poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    #[derive(Clone, Copy)]
+    enum Receiver {
+        None,
+        Live,
+        Cancelled,
+    }
+
+    fn held(
+        receiver: Receiver,
+    ) -> (
+        Option<oneshot::Sender<String>>,
+        Option<oneshot::Receiver<String>>,
+    ) {
+        let (sender, channel) = oneshot::channel();
+        match receiver {
+            Receiver::None => (None, None),
+            Receiver::Live => (Some(sender), Some(channel)),
+            Receiver::Cancelled => (Some(sender), None),
+        }
+    }
+
+    #[test]
+    fn idle_expiry_covers_receiver_age_and_lifecycle_combinations() {
+        use Receiver::{Cancelled, Live, None as Absent};
+        // Pairwise rows include mandatory default, cancellation, boundary and live-poll cases.
+        let rows = [
+            (Absent, 19, false),
+            (Cancelled, 20, false),
+            (Live, 21, false),
+            (Absent, 20, false),
+            (Cancelled, 19, false),
+            (Absent, 19, true),
+            (Cancelled, 21, true),
+            (Live, 20, true),
+            (Absent, 21, false),
+            (Live, 19, true),
+        ];
+        let (_, connection) = fixture();
+        for (receiver, age, closed) in rows {
+            let (sender, _channel) = held(receiver);
+            let mut state = connection.lock();
+            state.held = sender;
+            state.closed = closed;
+            let expected = closed || (!matches!(receiver, Live) && age >= 20);
+            assert_eq!(
+                state.closed || state.is_stale(Duration::from_secs(10), Duration::from_secs(age)),
+                expected,
+                "age={age}, closed={closed}"
+            );
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn idle_expiry_matches_receiver_liveness_and_elapsed_time(
+            receiver in 0u8..3,
+            hold in 1u64..1_000_000,
+            elapsed in 0u64..2_000_001,
+        ) {
+            let (_, connection) = fixture();
+            let kind = match receiver {
+                0 => Receiver::None,
+                1 => Receiver::Live,
+                _ => Receiver::Cancelled,
+            };
+            let (sender, _channel) = held(kind);
+            let mut state = connection.lock();
+            state.held = sender;
+            prop_assert_eq!(
+                state.is_stale(Duration::from_nanos(hold), Duration::from_nanos(elapsed)),
+                receiver != 1 && elapsed >= hold * 2
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_poll_expires_and_delivers_disconnect_increment_once() {
+        let (shared, connection) = fixture();
+        let observer = connect(&shared);
+        let initial = send(
+            &shared,
+            &observer,
+            r#"{"t":"d","d":{"r":1,"a":"q","b":{"p":"/state"}}}"#,
+        );
+        assert!(
+            initial.contains(r#""s":"ok"#),
+            "initial observer answer: {initial}"
+        );
+        let acknowledged = send(
+            &shared,
+            &connection,
+            r#"{"t":"d","d":{"r":1,"a":"o","b":{"p":"/state","d":{".sv":{"increment":1}}}}}"#,
+        );
+        assert!(acknowledged.contains(r#""s":"ok"#));
+        let mut request = Box::pin(poll(&shared, &connection, Vec::new(), "h"));
+        assert!(ready_once(request.as_mut()).is_pending());
+        assert!(!connection.lock().held.as_ref().unwrap().is_closed());
+        drop(request);
+        assert!(connection.lock().held.as_ref().unwrap().is_closed());
+        connection.lock().last_request = Instant::now()
+            .checked_sub(shared.config.long_poll_hold * 3)
+            .unwrap();
+        let mut reaper = Box::pin(reap(Arc::clone(&shared), Arc::clone(&connection)));
+        assert!(ready_once(reaper.as_mut()).is_pending());
+        tokio::time::sleep(shared.config.long_poll_hold * 2).await;
+        assert!(
+            ready_once(reaper.as_mut()).is_ready(),
+            "cancelled held poll must be reaped"
+        );
+        assert!(connection.lock().closed);
+        assert!(!shared.long_polls.lock().contains_key(&connection.client));
+        assert!(!shared
+            .listeners
+            .lock()
+            .unwrap()
+            .contains_key(&connection.client));
+        let mut database = lock_database(&shared);
+        let events = database.drain_events();
+        deliver_events(&shared, &mut database, events);
+        let delivered = observer.lock().take_packet();
+        assert_eq!(
+            delivered,
+            "pRTLPCB(2,[{\"t\":\"d\",\"d\":{\"b\":{\"p\":\"state\",\"d\":1},\"a\":\"d\"}}]);\n"
+        );
+        close(&shared, &mut database, &connection, &mut connection.lock());
+        let events = database.drain_events();
+        deliver_events(&shared, &mut database, events);
+        assert!(observer.lock().outbox.is_empty());
+        assert_eq!(
+            database
+                .tree("o")
+                .unwrap()
+                .get_json(&Path::root(), Format::Export),
+            Json::object([("state", Json::int(1))]),
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_poll_renews_age_and_retains_unsent_packet_order() {
+        let (shared, connection) = fixture();
+        let mut abandoned = Box::pin(poll(&shared, &connection, Vec::new(), "h"));
+        assert!(ready_once(abandoned.as_mut()).is_pending());
+        drop(abandoned);
+        {
+            let mut state = connection.lock();
+            state.last_request = Instant::now()
+                .checked_sub(shared.config.long_poll_hold * 3)
+                .unwrap();
+            state.outbox = vec!["first".to_owned(), "second".to_owned()];
+            state.outbox_bytes = 11;
+        }
+        let renewed_at = Instant::now();
+        let response = poll(&shared, &connection, Vec::new(), "h").await;
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(body.as_ref(), b"pRTLPCB(1,[first,second]);\n");
+        {
+            let state = connection.lock();
+            assert!(state.last_request >= renewed_at);
+            assert_eq!(state.next_packet, 2);
+            assert_eq!(state.outbox_bytes, 0);
+            assert!(!state.is_stale(shared.config.long_poll_hold, Duration::ZERO));
+        }
+        let mut replacement = Box::pin(poll(&shared, &connection, Vec::new(), "h"));
+        assert!(ready_once(replacement.as_mut()).is_pending());
+        {
+            let mut state = connection.lock();
+            assert!(!state.held.as_ref().unwrap().is_closed());
+            assert!(!state.is_stale(
+                shared.config.long_poll_hold,
+                shared.config.long_poll_hold * 3
+            ));
+            state.last_request = Instant::now()
+                .checked_sub(shared.config.long_poll_hold * 3)
+                .unwrap();
+        }
+        let mut reaper = Box::pin(reap(Arc::clone(&shared), Arc::clone(&connection)));
+        assert!(ready_once(reaper.as_mut()).is_pending());
+        tokio::time::sleep(shared.config.long_poll_hold * 2).await;
+        assert!(ready_once(reaper.as_mut()).is_pending());
+        assert!(!connection.lock().closed);
+    }
 
     #[test]
     fn password_bytes_map_to_letters_and_digits_evenly() {

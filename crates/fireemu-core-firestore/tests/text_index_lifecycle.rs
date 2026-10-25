@@ -307,7 +307,7 @@ fn latin_purpose_lifecycle_keeps_index_analysis_across_batches_and_completion() 
     }
     assert_eq!(hits(&catalog, "iris"), ["products/copper"]);
     assert_eq!(hits(&catalog, "creme"), ["products/silver"]);
-    assert!(hits(&catalog, "İris").is_empty());
+    assert_eq!(hits(&catalog, "İris"), ["products/copper"]);
     catalog
         .lifecycle(
             "demo-app",
@@ -322,5 +322,5 @@ fn latin_purpose_lifecycle_keeps_index_analysis_across_batches_and_completion() 
         )
         .unwrap();
     assert_eq!(hits(&catalog, "iris"), ["products/copper"]);
-    assert!(hits(&catalog, "İris").is_empty());
+    assert_eq!(hits(&catalog, "İris"), ["products/copper"]);
 }

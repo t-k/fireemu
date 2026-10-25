@@ -35,25 +35,26 @@ fn segment(normalized: &str) -> Vec<String> {
     result
 }
 
-/// Analyze indexed text using the bounded development index profile.
+/// Analyze indexed text using the bounded development profile: NFKC, precomposed Latin folded
+/// to its base, full case fold, NFKC.
 #[must_use]
 pub fn tokenize_index(input: &str) -> Vec<String> {
-    let normalized: String = input
-        .nfkc()
-        .map(fold_precomposed_latin)
-        .case_fold()
-        .nfkc()
-        .collect();
-    segment(&normalized)
+    analyze(input)
 }
 
-/// Analyze query text using the bounded development query profile.
+/// Analyze query text. It is the index analysis, so any indexed text matches a query of itself
+/// (a fold applied after case folding on one side only kept the mark that case folding splits
+/// off `İ`, so `İSTANBUL` stopped matching itself).
 #[must_use]
 pub fn tokenize_query(input: &str) -> Vec<String> {
+    analyze(input)
+}
+
+fn analyze(input: &str) -> Vec<String> {
     let normalized: String = input
         .nfkc()
-        .case_fold()
         .map(fold_precomposed_latin)
+        .case_fold()
         .nfkc()
         .collect();
     segment(&normalized)
@@ -108,13 +109,12 @@ mod tests {
     }
 
     #[test]
-    fn dotted_capital_latin_base_is_directional_and_query_keeps_its_mark() {
+    fn dotted_capital_latin_base_folds_the_same_way_for_index_and_query() {
         assert_eq!(tokenize_index("İris İSTANBUL"), ["iris", "istanbul"]);
-        assert_eq!(
-            tokenize_query("İris İSTANBUL"),
-            ["i\u{307}ris", "i\u{307}stanbul"]
-        );
+        assert_eq!(tokenize_query("İris İSTANBUL"), ["iris", "istanbul"]);
         assert_eq!(tokenize_query("iris istanbul"), ["iris", "istanbul"]);
+        // Case folding that expands into a Latin base and a mark (U+1E96, U+01F0) folds alike.
+        assert_eq!(tokenize_query("ẖ ǰ"), tokenize_index("ẖ ǰ"));
     }
 
     #[test]
@@ -151,6 +151,16 @@ mod tests {
         fn ascii_purposes_retain_legacy_tokens(input in "[ -~]{0,80}") {
             proptest::prop_assert_eq!(tokenize_index(&input), tokenize(&input));
             proptest::prop_assert_eq!(tokenize_query(&input), tokenize(&input));
+        }
+        #[test]
+        fn query_analysis_equals_index_analysis(input in ".{0,100}") {
+            proptest::prop_assert_eq!(tokenize_query(&input), tokenize_index(&input));
+        }
+        #[test]
+        fn query_analysis_equals_index_analysis_on_expanding_case_folds(
+            input in "[a-zA-Z İıẖẗẘẙǰÉéßẞŉΐΰ\u{0300}-\u{0310}]{0,40}"
+        ) {
+            proptest::prop_assert_eq!(tokenize_query(&input), tokenize_index(&input));
         }
         #[test]
         fn arbitrary_unicode_has_no_empty_tokens_or_panics(input in ".{0,100}") {

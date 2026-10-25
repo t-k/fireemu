@@ -668,7 +668,7 @@ proptest::proptest! {
 }
 
 #[test]
-fn latin_purpose_search_keeps_direction_greek_and_phrase_positions() {
+fn latin_purpose_search_keeps_greek_and_phrase_positions() {
     let docs = [
         document("copper", "İris", "", 1),
         document("silver", "Crème brûlée", "", 2),
@@ -677,7 +677,8 @@ fn latin_purpose_search_keeps_direction_greek_and_phrase_positions() {
     ];
     let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
     assert_eq!(names(&index, "iris"), ["docs/copper"]);
-    assert!(names(&index, "İris").is_empty());
+    // Review S8: the indexed text matches a query of itself.
+    assert_eq!(names(&index, "İris"), ["docs/copper"]);
     assert_eq!(names(&index, "\"creme brulee\""), ["docs/silver"]);
     assert_eq!(names(&index, "ά"), ["docs/jade"]);
     assert_eq!(names(&index, "α"), ["docs/opal"]);
@@ -692,6 +693,21 @@ proptest::proptest! {
         let docs = [document(&first, if in_body { "" } else { "İris" }, if in_body { "İris" } else { "" }, 1), document(&second, "unrelated", "", 2)];
         let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
         proptest::prop_assert_eq!(names(&index, "iris"), vec![format!("docs/{first}")]);
-        proptest::prop_assert!(names(&index, "İris").is_empty());
+        proptest::prop_assert_eq!(names(&index, "İris"), vec![format!("docs/{first}")]);
+    }
+
+    /// Review S8: any indexed word matches a query that repeats it, including Latin letters
+    /// whose case folding expands into a base letter and a combining mark.
+    #[test]
+    fn any_indexed_text_matches_a_query_of_itself(
+        letters in proptest::collection::vec(proptest::sample::select(vec![
+            "a", "z", "İ", "I", "i", "ẖ", "ǰ", "É", "é", "ß", "ẞ", "Ω", "ά", "東", "ﬁ", "Å", "Ǆ",
+        ]), 1..8)
+    ) {
+        let word: String = letters.concat();
+        proptest::prop_assume!(!tokenize(&word).is_empty());
+        let docs = [document("self", &word, "", 1), document("other", "unrelated", "", 2)];
+        let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
+        proptest::prop_assert_eq!(names(&index, &format!("\"{word}\"")), vec!["docs/self".to_owned()]);
     }
 }

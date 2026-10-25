@@ -468,7 +468,7 @@ fn latin_purpose_adapter_queries_use_query_analysis_and_rebuild_with_index_analy
     let path = format!("{DB}/documents:executePipeline");
     for (query, expected) in [
         ("iris", vec!["copper"]),
-        ("İris", vec![]),
+        ("İris", vec!["copper"]),
         ("\"creme brulee\"", vec!["silver"]),
         ("ά", vec!["jade"]),
         ("α", vec!["opal"]),

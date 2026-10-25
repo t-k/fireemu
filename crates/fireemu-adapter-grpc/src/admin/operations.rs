@@ -829,7 +829,9 @@ pub(crate) fn route(
     params: &BTreeMap<String, Vec<String>>,
 ) -> RestResponse {
     let store = state.local.admin().operations();
-    if method == "GET" {
+    // Review S9: a DELETE observes its operation as a GET does, so a build past its deadline
+    // completes before the done check instead of waiting for a read.
+    if method == "GET" || (method == "DELETE" && rest.len() == 1 && action.is_none()) {
         // Resolve locally retained identities before admission. An absent view is a404;
         // an ordinary or terminal operation reads its audit without touching catalog work.
         let observed = match rest {
@@ -852,6 +854,7 @@ pub(crate) fn route(
                 database,
                 super::index_rest::NativeTextSelection {
                     operation_targets: Some(&targets),
+                    direct: rest.len() == 1,
                     ..Default::default()
                 },
             ) {

@@ -32,7 +32,7 @@ A text index entry lists its searchable fields using `TOKENIZED` and `MATCH_GLOB
 }
 ```
 
-Each supported text definition becomes a READY index named `file-text-<entry>` (the zero-based index-file position) for the daemon's project and database. These indexes serve text search only; ordinary query planning does not use them.
+Each supported text definition becomes a READY index named `file-text-<entry>` (the zero-based index-file position) for the daemon's project and database. These indexes serve text search only; ordinary query planning does not use them. Editing the index file replaces these definitions while the daemon runs; definitions added through the control or Admin API stay. The `*_UNSPECIFIED` enum values read as `TOKENIZED` and `MATCH_GLOBALLY`. An entry that `firebase deploy` accepts but local search cannot serve (an empty or repeated `indexSpecs`, or a field with both `textSpec` and `geoSpec`) is skipped with a note; with `productionExact: true` it stops the daemon instead.
 
 ## Run a search
 
@@ -52,6 +52,8 @@ const results = await db.pipeline()
 The search stage accepts its own score sort and score projection. General pipeline `.sort(...)` and `.addFields(...)` after `.search(...)` are not supported. Search currently supports collection pipelines only.
 
 Text indexes can also be managed through the session control API. A manual definition can set `xFirebaseTestd.buildPolicy` to `"manual"`; it starts in CREATING by default. An explicit state can override that default. Definitions with no build policy, synchronous builds, and legacy `validation-only` definitions default to READY. A READY index reconstructs postings from the query's captured source snapshot. CREATING and NEEDS_REPAIR indexes never serve queries, even when partial posting data exists.
+
+A Native Admin build reads each document's language override value. A malformed tag fails the build with `Invalid text language: <value>`, as recorded in production. Any valid tag builds the index, with the same language-neutral analysis; a non-string value fails the build like a malformed tag (a development approximation). With `productionExact: true`, only `en` and `ja`, whose search production has recorded, complete a build. Another valid tag or a non-string value leaves that one build pending: a request that names the index or its operation answers `FS_TEXT_ADMIN_UNVERIFIED`, while index and operation listings and other builds are unaffected. A finished operation can be deleted without reading it first.
 
 For the observed Native Admin invalid-language failure, correcting the same source document to a valid language left the same index in NEEDS_REPAIR and its original operation in FAILED throughout the recorded polling window. Source correction alone does not restart that failed local Native-compatible index. This finite observation does not establish behavior for every failure or an unlimited waiting period.
 

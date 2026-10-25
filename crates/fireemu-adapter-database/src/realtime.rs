@@ -441,10 +441,16 @@ impl Session {
                     }
                     Some(_) => Access::administrator("", &db.options().credentials),
                 };
-                // Provisional: the strict profile refuses another credential as a bad token,
-                // and the connection is signed out, as after a refused `auth` (review S1b).
+                // Refused string credentials use the production gauth error; malformed
+                // credential values retain the token parsing error.
                 let Ok(access) = access else {
                     self.become_(db, Access::Anonymous, context.now_millis);
+                    if matches!(arguments.get("cred"), Some(Json::String(_))) {
+                        return Err(Failure::Status(
+                            "permission_denied",
+                            "Permission denied".to_owned(),
+                        ));
+                    }
                     return Err(unparsable_token());
                 };
                 let access = match arguments.get("authvar") {

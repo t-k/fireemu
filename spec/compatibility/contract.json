@@ -2813,7 +2813,7 @@
         "useEmulator"
       ],
       "state": "gap",
-      "decision": "Served, without a parity claim yet. `--only database`, `emulators.database` and `--database-port` start it on 9000; the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, onDisconnect writes, and namespace routing are implemented and compared with the official emulator (firebase-database-emulator v4.11.2) through the pinned SDKs in tools/sdk-smoke-database. Behaviour taken from that emulator where production has not been observed (number forms, equal-value writes, priorities, refusal texts, long-polling framing, how onDisconnect writes combine) is provisional. Export and import use the firebase-tools database_export format. Security rules are evaluated as that emulator evaluates them and loaded from firebase.json as firebase-tools loads them. Rules coverage reports and Functions triggers are open, so the surface stays a gap until they land and production is observed.",
+      "decision": "Served, without an official-emulator parity claim yet (an open gap in this contract). `--only database`, `emulators.database` and `--database-port` start it on 9000; the REST `.json` transport with event streams, the realtime protocol over WebSocket and long polling, listens and queries, transactions, onDisconnect writes, namespace routing, Rules coverage reports (`/.inspect/coverage`, `/.inspect/coverage.json`), local v1 and v2 Functions database triggers and the Emulator UI database view are implemented and compared with the official emulator (firebase-database-emulator v4.11.2) through the pinned SDKs in tools/sdk-smoke-database. Production behaviour is recorded for the scope of the RTDB parent closure (spec/compatibility/closure/RTDB.json): REST values, queries, ETags and errors, Rules loading and owner/UID evaluation, anonymous event streams, the web SDK's onDisconnect, transactions and email/password Auth over WebSocket and long polling. Behaviour production has not been observed for (reconnect and event ordering, onDisconnect cancel and re-register, Functions trigger delivery) follows the official emulator and is provisional. Export and import use the firebase-tools database_export format. Security rules are loaded from firebase.json as firebase-tools loads them.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_rtdb"
       ],
@@ -2826,8 +2826,8 @@
         "credentials: under the emulator profile any Bearer or access_token is an administrator, as on the official emulator; under strict only the owner credential is, auth= must be a token fireemu's Auth verifies, and other credentials are refused with 401 (the refusal body is provisional)"
       ],
       "gaps": [
-        "security rules coverage reports (/.inspect/coverage) are not served",
-        "Realtime Database Functions triggers and the Emulator UI database view are not wired",
+        "no official-emulator parity claim is registered for the surface yet; production parity is recorded only for the scope of spec/compatibility/closure/RTDB.json",
+        "reconnect/resume event ordering, onDisconnect cancel and re-register, and Realtime Database Functions trigger delivery are not observed in production",
         "Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope"
       ],
       "prohibitedClaimTerms": [

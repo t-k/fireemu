@@ -23,19 +23,24 @@
    "id": "R1",
    "decision": "RTDB covers the REST .json transport (CRUD, queries, ETag and conditional writes, export format, error texts, number forms, priorities), Security Rules evaluation and loading, SSE event streams, the Firebase JS web SDK over WebSocket and long polling (listen, onDisconnect, transactions, genuine email/password Auth), and the emulator-only management surfaces (Rules coverage inspection, import/export/reset/namespaces, the Emulator UI database view).",
    "rationale": "These are the surfaces fireemu serves for RTDB (contract.json surface database) and the ones the RTDB coverage ledger rows CV01-CV07, CV09, CV11-CV13 and CV15 define.",
-   "status": "PROPOSED",
-   "decidedBy": "coordinator (assignment 2026-10-26)",
+   "status": "FROZEN",
+   "decidedBy": "coordinator",
    "decidedOn": "2026-10-26",
-   "decisionRef": "docs.local/runs/rtdb-closure/status.md (assignment); owner decision pending in the closure review"
+   "decisionRef": "docs.local/runs/rtdb-closure/coordinator-rulings.md (2026-10-26 ruling Q1)"
   },
   {
    "id": "R2",
-   "decision": "Not claimed, outside this closure: reconnect/resume and child-event and query-window ordering across goOffline/goOnline (CV08); onDisconnect register/cancel/re-register and a Rules change between registration and firing (CV10); RTDB-triggered Cloud Functions v1/v2 delivery (CV14, implemented locally but never observed in production); Firebase ID token expiry, tampered signatures, revocation, tenants and wrong-project tokens; latency, throughput, quotas, billing, multi-region and instance management APIs; Android, Apple, Unity and the Java/Python Admin SDKs (owner 1471 Q8); the Node Admin SDK beyond the official-emulator smokes in tools/sdk-smoke-database.",
-   "rationale": "No production observation of these exists (CV08/CV10 local gap actors never produced a result; CV14 was never deployed). They stay open rows of the coverage ledger and need their own observations before they can be claimed.",
-   "status": "PROPOSED",
-   "decidedBy": "coordinator (assignment 2026-10-26: unknown or unverified areas stated as out of scope)",
+   "decision": "UNVERIFIED and outside this closure (not observed in production): reconnect/resume and child-event and query-window ordering across goOffline/goOnline (CV08); onDisconnect register/cancel/re-register and a Rules change between registration and firing (CV10); RTDB-triggered Cloud Functions v1/v2 delivery (CV14, implemented locally but never observed in production); Firebase ID token expiry, tampered signatures, revocation, tenants and wrong-project tokens; latency, throughput, quotas, billing, multi-region and instance management APIs; Android, Apple, Unity and the Java/Python Admin SDKs (owner 1471 Q8); the Node Admin SDK beyond the official-emulator smokes in tools/sdk-smoke-database.",
+   "rationale": "None of these was observed in production: the CV08/CV10 local gap actors never produced a result and no RTDB trigger was ever deployed (CV14). fireemu's behaviour there follows the official emulator and is provisional. Each needs its own production observation before it can join the closure.",
+   "followUp": [
+    "docs.local/issues/open/rtdb-reconnect-ordering-production-observation.md (CV08)",
+    "docs.local/issues/open/rtdb-ondisconnect-cancel-reregister-production-observation.md (CV10)",
+    "docs.local/issues/open/rtdb-functions-trigger-delivery-production-observation.md (CV14)"
+   ],
+   "status": "FROZEN",
+   "decidedBy": "coordinator",
    "decidedOn": "2026-10-26",
-   "decisionRef": "docs.local/runs/rtdb-closure/status.md (Questions for the coordinator Q1)"
+   "decisionRef": "docs.local/runs/rtdb-closure/coordinator-rulings.md (2026-10-26 ruling Q1)"
   },
   {
    "id": "R3",
@@ -222,7 +227,11 @@
      "assertions": 30,
      "failed": 0
     },
-    "bindingNote": "The local SSE run predates the closure binary. Between df744e06 and the tool commit the RTDB crates changed in the Rules coverage diagnostics (9657292d8), the strict gauth refusal (4182586a9) and the long-polling reaper and idle close (be84ba321, 4f82d12bb); none of them touches the REST event-stream path. The SSE stream and cancel tests in the adapter suite pass on the closure source (closureRun of RTDB/rules-uid-owner)."
+    "test": "crates/fireemu-adapter-database/tests/server.rs#production_sse_round_replays_the_recorded_events_and_refusal",
+    "testNote": "Replays round 1 with the recorded event bytes, production's 401 body and the unchanged readback; it runs in the per-crate nextest on the closure commit. The earlier browser run is kept as history.",
+    "knownDifferences": [
+     "/knownDifferences/sseFraming"
+    ]
    }
   },
   {
@@ -320,11 +329,17 @@
      "cells": 4,
      "verdict": "PASS"
     },
-    "test": "crates/fireemu-adapter-database/tests/realtime.rs#transactions_compare_the_current_hash",
+    "tests": [
+     "crates/fireemu-adapter-database/tests/realtime.rs#production_stale_transaction_rows_replay_as_recorded",
+     "crates/fireemu-adapter-database/tests/realtime.rs#transactions_compare_the_current_hash"
+    ],
+    "testNote": "production_stale_transaction_rows_replay_as_recorded replays the recorded WebSocket frames of cells r1_ws and r2_ws (recorded hashes of 0 and 10, production's datastale frame, the commit of 11 and the observer's read) and runs in the per-crate nextest on the closure commit.",
     "rows": {
      "MATCH": 4
     },
-    "bindingNote": "The four-cell CAS harness is private and was not rerun on the closure binary. Since 72f67f1f the RTDB crates changed only in the strict gauth refusal (4182586a9, an Auth refusal shape) and the long-polling reaper and 100 s idle close (be84ba321, 4f82d12bb); the CAS cells finish within seconds, well before the idle close. The hash-comparison tests pass on the closure source. Whether a rerun on the closure binary is required is Q2 for the closure review."
+    "knownGaps": [
+     "/knownGaps/cv09LongPollingCells"
+    ]
    }
   },
   {
@@ -450,6 +465,9 @@
      "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-cv12-public-source-review.md",
      "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/combined-product-cv12-placement-review.md"
     ],
+    "knownGaps": [
+     "/knownGaps/browserRunsOnOlderBinaries"
+    ],
     "limitations": "Emulator-only management surface: no production counterpart. Opaque hash@ ids are process-local; positions for multiline expressions, bare CR, tabs, combining and astral characters were not observed in the jar; coverage across restarts and under concurrency is not claimed; no byte parity of the HTML template is claimed. No independent review file exists for the browser attempt 7 itself."
    }
   },
@@ -516,7 +534,17 @@
      "sourceCommit": "df744e06ce6deb35e028d9970c2d7e5faf888658",
      "assertions": 30
     },
-    "limitations": "One anonymous scenario; signed-in UI, stale UI and identity switching are not claimed. The browser run predates the closure binary (see the bindingNote of RTDB/sse-anonymous-lifecycle)."
+    "tests": [
+     "crates/fireemu-adapter-ui/tests/database.rs",
+     "ui/src/pages/Database.test.tsx",
+     "ui/src/api/database.test.ts",
+     "ui/e2e/database.spec.ts"
+    ],
+    "testNote": "The adapter-ui database tests run in nextest; the page and API tests run in the ui unit suite; the browser scenario (ui/e2e) runs under Playwright, not nextest. The production-recorded bytes this view shows (SSE events and cancel) are checked by RTDB/sse-anonymous-lifecycle's test.",
+    "knownGaps": [
+     "/knownGaps/browserRunsOnOlderBinaries"
+    ],
+    "limitations": "One anonymous scenario; signed-in UI, stale UI and identity switching are not claimed."
    }
   }
  ],
@@ -576,14 +604,25 @@
   "cv11WriteAfterDeleteRace": {
    "statement": "After user A is deleted, the admin write's acknowledgement and the listener's value event race in both production and fireemu; the comparison judges the events of that step unordered. Transport request counts (long-polling HTTP requests per profile) and millisecond timings are not compared."
   },
+  "sseFraming": {
+   "statement": "Production sends event streams with Connection: close and closes the socket after the cancel event; fireemu uses chunked transfer encoding, ends the chunked body after cancel and keeps the connection. The event bytes are identical. Tracked in docs.local/issues/open/rtdb-sse-connection-close-framing.md."
+  },
   "googleSignedTokens": {
    "statement": "Local RTDB accepts only ID tokens issued by fireemu's Auth (or the owner credential); production Google-signed tokens are not accepted locally, and strict refuses a non-owner gauth credential with production's permission_denied."
   }
  },
+ "knownGaps": {
+  "cv09LongPollingCells": {
+   "statement": "The committed CV09 test replays the WebSocket rows. The long-polling cells r1_lp and r2_lp carry the same request bodies inside long-polling envelopes; they were matched cell by cell only by the private local CAS harness on source 72f67f1f (binary 8509f53a), which is not rerun on the closure binary."
+  },
+  "browserRunsOnOlderBinaries": {
+   "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit."
+  }
+ },
  "outOfScope": [
-  "RTDB-CV-08 reconnect/resume and event ordering",
-  "RTDB-CV-10 onDisconnect register/cancel/re-register and Rules changes before firing",
-  "RTDB-CV-14 RTDB-triggered Cloud Functions delivery (local implementation exists, production not observed)",
+  "UNVERIFIED RTDB-CV-08 reconnect/resume and event ordering (not observed in production)",
+  "UNVERIFIED RTDB-CV-10 onDisconnect register/cancel/re-register and Rules changes before firing (not observed in production)",
+  "UNVERIFIED RTDB-CV-14 RTDB-triggered Cloud Functions delivery (local implementation exists, production not observed)",
   "ID token expiry, tampered signatures, revocation, tenants, wrong-project tokens",
   "latency, throughput, quotas, billing, instance management",
   "Android, Apple, Unity, Java and Python SDKs"

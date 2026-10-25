@@ -422,7 +422,7 @@
     "crates/fireemu-adapter-database/src/long_poll.rs": "419eafc91cfb6989101520c18ece68979b009e7babc3e9483331be1ed9c46aba",
     "crates/fireemu-adapter-database/src/namespace.rs": "0f9f2dff79c8eecdd80b36d1bee268884cc20f03fd272d050d43ecb723e91562",
     "crates/fireemu-adapter-database/src/on_disconnect.rs": "5d4d69e588d9640f6b43cd36e1f428a0af4bd48998261c2de4e1a949f3dbe7a8",
-    "crates/fireemu-adapter-database/src/realtime.rs": "b29b914b17487b0f72de8c09b2b7ff0dc9bd6bb03ee865282a4e97de6ec8aa41",
+    "crates/fireemu-adapter-database/src/realtime.rs": "bfdfe5b9e8f6b121b712aa862416a40e2710baeb47d7beee7313f12ed2fce4c1",
     "crates/fireemu-adapter-database/src/request.rs": "d4186e435fe0cf117b8f8902313f5dbd0721cdf89b232a6f09f7c9712da5222b",
     "crates/fireemu-adapter-database/src/rest.rs": "85df238fa0c62ad1f94e811302268b4caa2b7a61e7bc8a143ab583022930313c",
     "crates/fireemu-adapter-database/src/rules_file.rs": "145820fdddc6131438fde5e62b7f3087448c7a535e45fc96da3ab6a4819a68c7",

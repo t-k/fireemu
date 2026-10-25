@@ -265,7 +265,7 @@ export const transportOf = (counts) => (counts.ws > 0 ? 'ws' : 'lp');
 // One profile in headless Chromium. The page and SDK bundles are served from loopback; only the
 // allowed hosts are reached, and HTTP requests and WebSockets are counted against the caps.
 export function browserRunner({ modules, allowHost, page: pageConfig }) {
-  const require = createRequire(path.join(modules, 'x.js'));
+  const require = createRequire(path.join(path.resolve(modules), 'x.js'));
   const { chromium } = require('playwright');
   return async (prof, hooks) => {
     const server = createServer((req, res) => {
@@ -285,7 +285,7 @@ export function browserRunner({ modules, allowHost, page: pageConfig }) {
       await page.route('**/*', (route) => {
         const url = new URL(route.request().url());
         if (url.host === origin) return route.continue();
-        if (url.host === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/12.18.0/')) return route.fulfill({ contentType: 'text/javascript', body: readFileSync(path.join(modules, 'firebase', path.basename(url.pathname))) });
+        if (url.host === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/12.18.0/')) return route.fulfill({ contentType: 'text/javascript', body: readFileSync(path.resolve(modules, 'firebase', path.basename(url.pathname))) });
         if (!allowHost(url.host)) { counts.blocked++; return route.abort(); }
         if (++counts.http > CAPS.browserHttp) { overCap(); return route.abort(); }
         return route.continue();

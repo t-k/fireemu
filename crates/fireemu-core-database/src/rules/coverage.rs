@@ -407,16 +407,17 @@ mod tests {
     fn object_values_charge_their_keys_and_strings() {
         let value = Json::Object(
             [
-                ("ab".to_owned(), Json::String("cde".to_owned())),
+                ("abc".to_owned(), Json::String("d".to_owned())),
                 (
-                    "f".to_owned(),
-                    Json::Array(vec![Json::String("gh".to_owned()), Json::Null]),
+                    "e".to_owned(),
+                    Json::Array(vec![Json::String("fg".to_owned()), Json::Null]),
                 ),
             ]
             .into_iter()
             .collect(),
         );
-        assert_eq!(super::string_bytes(&value), 8);
+        // Keys and strings add up: 3 + 1 + 1 + 2.
+        assert_eq!(super::string_bytes(&value), 7);
     }
 
     #[test]

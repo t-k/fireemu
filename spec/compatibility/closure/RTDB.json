@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "parent": "RTDB",
- "parentStatus": "IMPLEMENTING",
+ "parentStatus": "COMPAT_VERIFIED",
  "inventoryStatus": "FROZEN",
  "frozenOn": "2026-10-26",
  "freezeAuthority": "docs.local/instructions/owner-decisions.md (owner 1560: genuine whole current supported RTDB closure; owner 1471 Q8: platform SDKs in a later separate parent); conditions frozen from the RTDB coverage ledger RTDB-CV-01..16 (docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-coverage-ledger.md)",

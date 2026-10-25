@@ -520,6 +520,12 @@ export const EXCLUDED_KINDS = [
       "the final release artifact was compared with private native, SDK and browser production recordings that are unavailable to the release job; the native expired-token case also waits 35 minutes and the browser cache and lifecycle cases require Chromium; publish the recordings and provide a long browser-enabled release job before reproducing this comparison",
     issue: "fs-listen-sdk-comparison-needs-private-recordings-and-a-long-browser-release-job.md",
   },
+  {
+    kind: "rtdb-production-comparison-v1",
+    reason:
+      "the three RTDB comparisons (REST replay, SDK onDisconnect, SDK genuine Auth) were run on the closure binary named by the closure with the committed tools/sdk-smoke-database replays and fixtures; the tools have no installed-binary check and export-comparison mode yet, and the onDisconnect and genuine-Auth replays drive headless Chromium (the onDisconnect replay also waits about 3.5 minutes for the long-polling idle close)",
+    issue: "rtdb-comparisons-need-release-replay.md",
+  },
 ];
 
 /**

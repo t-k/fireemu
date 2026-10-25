@@ -8,6 +8,11 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+The Firebase Realtime Database (RTDB) is now `COMPAT_VERIFIED` within its frozen production scope, so all 22 parents of the compatibility inventory are `COMPAT_VERIFIED`. The scope covers the REST `.json` transport, Security Rules loading and owner/UID evaluation, anonymous SSE streams, the web SDK over WebSocket and long polling (onDisconnect, transactions, email/password Auth) and the emulator-only Rules coverage view, import/export and UI view; reconnect ordering, onDisconnect cancel and re-register, RTDB-triggered Functions delivery, token expiry and revocation, and the mobile, Java and Python SDKs are outside it. Known differences:
+
+- RTDB: two REST answers keep a different JSON member order from production (a multi-path PATCH answer, which production returns in the request's order, and an `orderBy` query answer, which production lists in query order); status, parsed JSON and ETag are equal.
+- RTDB: a long-polling client that goes offline without closing has its onDisconnect writes run when the idle connection is dropped, after about 105 s in fireemu and 100.8 s to 104.0 s in the production recordings.
+
 ### Added
 
 - Add explicit local Enterprise text-index backfill, failure and repair controls with build generations and real positional posting data. Session snapshots and reset preserve scope boundaries.

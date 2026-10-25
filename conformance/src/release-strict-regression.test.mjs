@@ -451,6 +451,7 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
     "fs-listen-sdk-comparison-v1",
     "functions-events-comparison",
     "pubsub-production-comparison-v1",
+    "rtdb-production-comparison-v1",
     "scheduled-functions-calendar-comparison-v1",
     "scheduled-functions-comparison-v1",
     "storage-object-comparison-v1",
@@ -1891,6 +1892,29 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   const reviewed = planComparisons(closures, readJson);
   assert.deepEqual(reviewed.errors, []);
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
+});
+
+test("RTDB uses its disclosed exclusion for its three comparisons as a verified closure", () => {
+  const closures = committedClosures();
+  const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
+  assert.equal(rtdb.closure.parentStatus, "COMPAT_VERIFIED");
+  const reviewed = planComparisons(closures, readJson);
+  assert.deepEqual(reviewed.errors, []);
+  const excluded = reviewed.excluded.filter(
+    (entry) => entry.kind === "rtdb-production-comparison-v1",
+  );
+  assert.deepEqual(excluded.map((entry) => entry.path).toSorted(), [
+    "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
+    "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
+    "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
+  ]);
+  assert.ok(excluded.every((entry) => entry.parents.join() === "RTDB"));
+  rtdb.closure.parentStatus = "IMPLEMENTING";
+  assert.ok(
+    planComparisons(closures, readJson).errors.includes(
+      "excluded kind rtdb-production-comparison-v1: no verified closure names it",
+    ),
+  );
 });
 
 test("every release command binds its declared mode to the actual CLI action", () => {

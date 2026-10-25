@@ -183,7 +183,7 @@ export function validateConfig(config) {
 }
 
 // Executed inside a synthetic page. Each callback is durably relayed before advancing.
-async function sdkScenario({ appUrl, databaseUrl, config, prefix, transport }) {
+export async function sdkScenario({ appUrl, databaseUrl, config, prefix, transport }) {
   const app = await import(appUrl);
   const sdk = await import(databaseUrl);
   const emit = event => window.__probeRecord(event);

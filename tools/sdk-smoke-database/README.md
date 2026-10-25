@@ -33,7 +33,7 @@ node tools/sdk-smoke-database/run.mjs --record tools/sdk-smoke-database/fixtures
 
 `--record` checks the jar's SHA-256 and refuses any other file, starts it on a free loopback port and stops it afterwards; `--jar <path>` names a jar kept elsewhere. A recording that changes between two runs is a timing problem in the smoke, not a difference between servers.
 
-`npm test` checks the comparison helper, the jar check and the CV11 recorder below.
+`npm test` checks the comparison helper, the jar check, the CV11 recorder, the production fixtures and the production comparisons below.
 
 ## CV11 genuine-auth recorder
 
@@ -45,3 +45,18 @@ node tools/sdk-smoke-database/cv11-genuine-auth.mjs compare <a>/journal.json <b>
 ```
 
 `local` starts `fireemu up --only auth,database` (strict profile) on free ports and stops it afterwards. `production` refuses to run without `--packet <file>` and a matching `--packet-sha256`, and the packet pins the SHA-256 of both source files. Every admin request is counted against fixed caps before it is sent; any answer other than a complete 2xx or 4xx is unknown, and an unknown create or delete leaves the run `needs-recovery` and is never re-sent.
+
+## Production comparisons
+
+Three tools compare a local `fireemu` (strict profile, `fireemu up --only auth,database` on free loopback ports, stopped afterwards) with production recordings committed under `fixtures/`. None of them sends anything to production.
+
+```sh
+node tools/sdk-smoke-database/rest-replay.mjs local --fireemu <fireemu binary> --out <new dir>
+node tools/sdk-smoke-database/cv07-ondisconnect.mjs local --fireemu <fireemu binary> --out <new dir> [--modules <node_modules>]
+node tools/sdk-smoke-database/cv11-genuine-auth.mjs local --fireemu <fireemu binary> --out <new dir>
+node tools/sdk-smoke-database/cv11-fixture.mjs compare <new dir>/journal.json --out <comparison.json>
+```
+
+- `rest-replay.mjs` sends the 124 REST requests of `fixtures/production-rest.json` (two rounds of `production-corpus.mjs`) in recorded order under the Rules production had, then loads the 48 M14 Rules sources with the bytes the recorder sent. A REST row is `MATCH` when status, body bytes and ETag are equal, `KNOWN_DIFFERENCE` when only the JSON member order differs on the two rows where production answered in another order (`patch-update-nested-and-add` keeps the request's order, `query-get-1` lists children in query order), and `MISMATCH` otherwise. It writes `comparison.json` and exits 1 on any `MISMATCH`.
+- `cv07-ondisconnect.mjs` runs the production onDisconnect scenario (`sdkScenario` in `production-live.mjs`) for round 1 and 2 over WebSocket and long polling in headless Chromium and compares the 36 durable SDK events, projected on eight keys, in order with `fixtures/production-sdk-ondisconnect.json`. The onDisconnect fire delay is judged as a tolerance: within 2 s over WebSocket, and within 5 s of production's 100.8 s to 104.0 s over long polling, where the server drops the idle connection. A run takes about 3.5 minutes. `cv07-ondisconnect.mjs fixture <sdk-events.jsonl> <out>` rebuilds the fixture from the private recording.
+- `cv11-fixture.mjs compare` judges a local CV11 journal against `fixtures/production-cv11-genuine-auth.json` (production run of 2026-10-25, timings removed) with `compareJournals`. `fixtures/local-cv11-genuine-auth.json` is the journal of the closure binary, and `npm test` checks that it matches.

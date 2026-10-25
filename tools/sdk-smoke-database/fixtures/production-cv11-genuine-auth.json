@@ -1,0 +1,481 @@
+{
+ "recording": "RTDB-CV11-LEAN-20261025-02 production-2",
+ "recordedOn": "2026-10-25",
+ "project": "fireemu-oracle-query",
+ "instance": "fireemu-q-rtdb2",
+ "sdk": "firebase 12.18.0 (web, headless Chromium), email/password users",
+ "profiles": [
+  {
+   "name": "r1-ws",
+   "journal": [
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "signin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-1",
+     "type": "value",
+     "epoch": 1,
+     "shape": "{\"value\":1}"
+    },
+    {
+     "step": "refresh-1",
+     "type": "ok"
+    },
+    {
+     "step": "signout",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signout",
+     "type": "ok"
+    },
+    {
+     "step": "signout-wait",
+     "type": "cancel",
+     "epoch": 1,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "resignin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "resignin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-2",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"value\":1}"
+    },
+    {
+     "step": "signin-b",
+     "type": "ok"
+    },
+    {
+     "step": "b-read-own",
+     "type": "ok",
+     "shape": "{\"value\":1}"
+    },
+    {
+     "step": "b-read-a",
+     "type": "error",
+     "code": "message:permission-denied"
+    },
+    {
+     "step": "signout-b",
+     "type": "ok"
+    },
+    {
+     "step": "delete-a",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"after\":1,\"value\":1}"
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "error",
+     "code": "auth/user-token-expired"
+    },
+    {
+     "step": "post-refresh-wait",
+     "type": "cancel",
+     "epoch": 2,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "end",
+     "type": "done"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  },
+  {
+   "name": "r1-lp",
+   "journal": [
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "signin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-1",
+     "type": "value",
+     "epoch": 1,
+     "shape": "{\"value\":1}"
+    },
+    {
+     "step": "refresh-1",
+     "type": "ok"
+    },
+    {
+     "step": "signout",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signout",
+     "type": "ok"
+    },
+    {
+     "step": "signout-wait",
+     "type": "cancel",
+     "epoch": 1,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "resignin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "resignin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-2",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"value\":1}"
+    },
+    {
+     "step": "signin-b",
+     "type": "ok"
+    },
+    {
+     "step": "b-read-own",
+     "type": "ok",
+     "shape": "{\"value\":1}"
+    },
+    {
+     "step": "b-read-a",
+     "type": "error",
+     "code": "message:permission-denied"
+    },
+    {
+     "step": "signout-b",
+     "type": "ok"
+    },
+    {
+     "step": "delete-a",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"after\":1,\"value\":1}"
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "error",
+     "code": "auth/user-token-expired"
+    },
+    {
+     "step": "post-refresh-wait",
+     "type": "cancel",
+     "epoch": 2,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "end",
+     "type": "done"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "lp"
+    }
+   ]
+  },
+  {
+   "name": "r2-ws",
+   "journal": [
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "signin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-1",
+     "type": "value",
+     "epoch": 1,
+     "shape": "{\"value\":2}"
+    },
+    {
+     "step": "refresh-1",
+     "type": "ok"
+    },
+    {
+     "step": "signout",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signout",
+     "type": "ok"
+    },
+    {
+     "step": "signout-wait",
+     "type": "cancel",
+     "epoch": 1,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "resignin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "resignin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-2",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"value\":2}"
+    },
+    {
+     "step": "signin-b",
+     "type": "ok"
+    },
+    {
+     "step": "b-read-own",
+     "type": "ok",
+     "shape": "{\"value\":2}"
+    },
+    {
+     "step": "b-read-a",
+     "type": "error",
+     "code": "message:permission-denied"
+    },
+    {
+     "step": "signout-b",
+     "type": "ok"
+    },
+    {
+     "step": "delete-a",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"after\":1,\"value\":2}"
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "error",
+     "code": "auth/user-token-expired"
+    },
+    {
+     "step": "post-refresh-wait",
+     "type": "cancel",
+     "epoch": 2,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "end",
+     "type": "done"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  },
+  {
+   "name": "r2-lp",
+   "journal": [
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "signin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-1",
+     "type": "value",
+     "epoch": 1,
+     "shape": "{\"value\":2}"
+    },
+    {
+     "step": "refresh-1",
+     "type": "ok"
+    },
+    {
+     "step": "signout",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "signout",
+     "type": "ok"
+    },
+    {
+     "step": "signout-wait",
+     "type": "cancel",
+     "epoch": 1,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "resignin-a",
+     "type": "auth-state",
+     "present": true
+    },
+    {
+     "step": "resignin-a",
+     "type": "ok"
+    },
+    {
+     "step": "listen-2",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"value\":2}"
+    },
+    {
+     "step": "signin-b",
+     "type": "ok"
+    },
+    {
+     "step": "b-read-own",
+     "type": "ok",
+     "shape": "{\"value\":2}"
+    },
+    {
+     "step": "b-read-a",
+     "type": "error",
+     "code": "message:permission-denied"
+    },
+    {
+     "step": "signout-b",
+     "type": "ok"
+    },
+    {
+     "step": "delete-a",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "value",
+     "epoch": 2,
+     "shape": "{\"after\":1,\"value\":2}"
+    },
+    {
+     "step": "write-after-delete",
+     "type": "admin",
+     "code": "ok"
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "auth-state",
+     "present": false
+    },
+    {
+     "step": "refresh-after-delete",
+     "type": "error",
+     "code": "auth/user-token-expired"
+    },
+    {
+     "step": "post-refresh-wait",
+     "type": "cancel",
+     "epoch": 2,
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "end",
+     "type": "done"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "lp"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,265 @@
+{
+ "recording": "rtdb-sdk03-v1",
+ "recordedOn": "2026-10-23",
+ "project": "fireemu-oracle-query",
+ "instance": "fireemu-q-rtdb2",
+ "sdk": "firebase 12.18.0 (web, headless Chromium)",
+ "keys": [
+  "type",
+  "step",
+  "value",
+  "code",
+  "message",
+  "name",
+  "prefix",
+  "transport"
+ ],
+ "onDisconnectFireSeconds": {
+  "parity20261023/sdk/round1/ws": 0.1,
+  "parity20261023/sdk/round1/lp": 104,
+  "parity20261023/sdk/round2/ws": 0.2,
+  "parity20261023/sdk/round2/lp": 100.8
+ },
+ "events": [
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  }
+ ]
+}

@@ -204,11 +204,21 @@ pub fn replace_file_text_indexes(
     if loaded == current {
         return Ok((false, notes));
     }
+    let mut notes = notes;
     for definition in loaded {
         let id = definition.id.clone();
-        trial
-            .add(project, database, definition)
-            .map_err(|error| format!("{path}: text index {id}: {error}"))?;
+        // The live catalog also holds the control and Admin API definitions: in the default
+        // profile one it refuses (too many indexes, a taken id) is skipped with a note, as at
+        // start, so the composite and TTL reload still applies (merge review S-c).
+        match trial.add(project, database, definition) {
+            Ok(_) => {}
+            Err(error) if production_exact => {
+                return Err(format!("{path}: text index {id}: {error}"));
+            }
+            Err(error) => notes.push(format!(
+                "{path}: text index {id}: {error}; this search index is skipped: local text search cannot serve it"
+            )),
+        }
     }
     *catalog = trial;
     Ok((true, notes))
@@ -1833,6 +1843,61 @@ mod tests {
             catalog, before,
             "a refused reload keeps the last good definitions"
         );
+    }
+
+    /// Merge review S-c: in the default profile a definition the live catalog refuses (here,
+    /// more than the catalog holds once control-created indexes count) is noted and skipped, so
+    /// the reload succeeds; under productionExact it is refused.
+    #[test]
+    fn reload_skips_text_indexes_the_live_catalog_refuses_by_default() {
+        let mut catalog = TextIndexCatalog::default();
+        let seed = json!({"indexes": [entry(&json!([search("title")]))]});
+        add_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &seed.to_string(),
+            false,
+        )
+        .unwrap();
+        let template = catalog
+            .get("demo-app", "(default)", "file-text-0")
+            .unwrap()
+            .clone();
+        catalog.remove("demo-app", "(default)", "file-text-0");
+        for n in 0..fireemu_core_firestore::text_index::MAX_TEXT_INDEXES {
+            let mut control = template.clone();
+            control.id = format!("control-{n}");
+            catalog.add("demo-app", "(default)", control).unwrap();
+        }
+        let before = catalog.clone();
+        let (changed, notes) = replace_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &seed.to_string(),
+            false,
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("file-text-0") && notes[0].contains("skipped"),
+            "{}",
+            notes[0]
+        );
+        assert_eq!(catalog, before);
+        assert!(replace_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &seed.to_string(),
+            true
+        )
+        .is_err());
     }
 
     fn search_spec() -> impl proptest::strategy::Strategy<Value = Value> {

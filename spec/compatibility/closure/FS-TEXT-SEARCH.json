@@ -43,26 +43,24 @@
       "conditionId": "FS-TEXT-SEARCH/membership",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#firestore-enterprise-full-text-search-parent-2026-10-26",
       "recipeIds": [
-        "fs-text-search/replay/order",
-        "fs-text-search/replay/sparse"
+        "fs-text-search/replay/membership"
       ],
       "status": "VERIFIED",
-      "note": "Which documents a search returns, for every recorded production search response: 531 responses (233 distinct cases, each on its corpus reconstructed from the recorded writes) from the calibration, continuation, lexical, proof (C4), discriminator (C5, English and Japanese index languages), score-twins, fresh-database, enhancement, OR-composition, language-held and boundary runs. Plain terms, quoted phrases, exclusions, exclusions-only and empty queries, contextual OR, unquoted colons, Latin diacritic and width folding, dotted capital I, Greek, CJK ideographs and Katakana. 211 distinct cases match exactly; the 22 that differ are the knownDifferences cjkDictionarySegmentation and dottedCapitalIpek, each pinned by name so a change in either direction fails.",
+      "note": "Which documents a search returns, for every recorded production search response: 531 responses (223 distinct cases, each on its corpus reconstructed from the recorded writes) from the calibration, continuation, lexical, proof (C4), discriminator (C5, English and Japanese index languages), score-twins, fresh-database, enhancement, OR-composition, language-held and boundary runs. Plain terms, quoted phrases, exclusions, exclusions-only and empty queries, contextual OR, unquoted colons, Latin diacritic and width folding, dotted capital I, Greek, CJK ideographs and Katakana. 201 distinct cases match exactly; the 22 that differ are the knownDifferences cjkDictionarySegmentation and dottedCapitalIpek, each pinned by name so a change in either direction fails.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
-        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "comparisonSha256": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
         "orderFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_order.json",
         "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
-        "sparseFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_sparse.json",
-        "sparseFixtureSha256": "da8b8e291c9851ca36ade362a850dbe96be58328536fae157e7833ce4291dd45",
-        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures, and the sparse fixture is the same builder restricted to responses with zero or one result.",
+        "membershipFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_membership.json",
+        "membershipFixtureSha256": "cb4648a4ea301fc7f9fc75dd60bfe56b9ef823e56ab4d6e84871f51ec065eac1",
+        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures. The membership fixture (all 531 responses, 223 distinct cases) was built on work/review-text-fixes (c7d1f505d) from the same captures.",
         "tests": [
           "crates/fireemu-core-firestore/tests/text_membership_replay.rs#recorded_production_memberships_replay_exactly",
-          "crates/fireemu-core-firestore/tests/text_membership_replay.rs#recorded_sparse_production_memberships_replay_exactly",
           "crates/fireemu-core-firestore/tests/text_closure_comparison.rs#committed_closure_comparison_equals_the_replay"
         ],
         "rows": {
-          "MATCH": 211,
+          "MATCH": 201,
           "KNOWN_DIFFERENCE": 22
         }
       }
@@ -77,7 +75,7 @@
       "note": "Boundary03: nine documents on one English index, thirteen queries in two rounds (234 document/query cells) about Katakana, half-width and Latin token boundaries inside and across fields. Every cell matches in both rounds.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
-        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "comparisonSha256": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
         "fixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_boundary.json",
         "fixtureSha256": "68ff627d6d38d5de2799f752dc00fe1692e65f124e77040975c9c88aa69309ad",
         "tests": [
@@ -108,12 +106,12 @@
       "note": "Result ORDER of search(sort: score().descending()) on every recorded score-sorted response with two or more results: 64 of 64 distinct cases (146 responses) in production order, with exact membership. Ties keep the newest creation time first. Owner decision 2026-10-25 (ledger 1778): the order must match production on every recorded query, implemented as a general scoring model with no per-query lookup; numeric score() values are the knownDifference scoreValues.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
-        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "comparisonSha256": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
         "orderFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_order.json",
         "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
-        "sparseFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_sparse.json",
-        "sparseFixtureSha256": "da8b8e291c9851ca36ade362a850dbe96be58328536fae157e7833ce4291dd45",
-        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures, and the sparse fixture is the same builder restricted to responses with zero or one result.",
+        "membershipFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_membership.json",
+        "membershipFixtureSha256": "cb4648a4ea301fc7f9fc75dd60bfe56b9ef823e56ab4d6e84871f51ec065eac1",
+        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures. The membership fixture (all 531 responses, 223 distinct cases) was built on work/review-text-fixes (c7d1f505d) from the same captures.",
         "tests": [
           "crates/fireemu-core-firestore/tests/text_score_order.rs#recorded_production_score_orders_replay_exactly",
           "crates/fireemu-core-firestore/tests/text_score_order.rs#equal_scores_keep_newest_first_then_path_order",
@@ -141,12 +139,12 @@
       "note": "Result order without a sort, on every recorded response with two or more results: newest creation time first. 96 of 104 distinct cases (245 responses) match exactly; in the 8 cases whose membership is a known difference, the members both sides return are in production order.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
-        "comparisonSha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+        "comparisonSha256": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
         "orderFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_order.json",
         "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
-        "sparseFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_sparse.json",
-        "sparseFixtureSha256": "da8b8e291c9851ca36ade362a850dbe96be58328536fae157e7833ce4291dd45",
-        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures, and the sparse fixture is the same builder restricted to responses with zero or one result.",
+        "membershipFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_membership.json",
+        "membershipFixtureSha256": "cb4648a4ea301fc7f9fc75dd60bfe56b9ef823e56ab4d6e84871f51ec065eac1",
+        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures. The membership fixture (all 531 responses, 223 distinct cases) was built on work/review-text-fixes (c7d1f505d) from the same captures.",
         "tests": [
           "crates/fireemu-core-firestore/tests/text_score_order.rs#recorded_production_default_orders_replay_exactly"
         ],
@@ -318,18 +316,18 @@
   "perCaseAdjudication": {
     "mode": "replay-comparison",
     "path": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
-    "sha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
+    "sha256": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
     "summary": {
-      "rows": 259,
-      "MATCH": 237,
-      "KNOWN_DIFFERENCE": 22,
+      "rows": 417,
+      "MATCH": 387,
+      "KNOWN_DIFFERENCE": 30,
       "MISMATCH": 0,
       "scoreSortedOrderRows": 64,
       "scoreSortedOrderMatch": 64,
       "defaultOrderRows": 104,
       "defaultOrderMatch": 96,
       "defaultOrderMatchCommonMembers": 8,
-      "recordings": 557
+      "membershipResponses": 531
     }
   },
   "knownDifferences": {
@@ -340,16 +338,15 @@
       ]
     },
     "cjkDictionarySegmentation": {
-      "statement": "Production segments unspaced Han and Katakana text with a dictionary; local analysis makes each Han ideograph a token and keeps Katakana runs whole. Twenty recorded distinct cases differ in membership: the six of ledger 1785 (京都, 都 and 東京都 in textlex20261024; 𠮷野家 in textproof20261024; 𠮷ミナ and 𠮷野家 in textdisc20261024) and fourteen zero- or one-result cases found when every recorded response was replayed on 2026-10-26 (京 twice, 京都東京駅, 東京駅京都, \"京 都\", 生物研究所, \"生物 研究所\", \"生 物\", 吉, カタカナ・ｶﾀｶﾅ twice, and three spellings of ネムラ・ﾈﾑﾗ). The fourteen are the same kind of difference but were not named in ledger 1785.",
+      "statement": "Production segments unspaced Han and Katakana text with a dictionary; local analysis makes each Han ideograph a token and keeps Katakana runs whole. Twenty recorded distinct cases differ in membership: the six of ledger 1785 (京都, 都 and 東京都 in textlex20261024; 𠮷野家 in textproof20261024; 𠮷ミナ and 𠮷野家 in textdisc20261024) and fourteen more found when the replay grew to every recorded response (2026-10-26) (京 twice, 京都東京駅, 東京駅京都, \"京 都\", 生物研究所, \"生物 研究所\", \"生 物\", 吉, カタカナ・ｶﾀｶﾅ twice, and three spellings of ネムラ・ﾈﾑﾗ). The fourteen are the same kind of difference but were not named in ledger 1785.",
       "rules": [
         "1785"
       ],
       "pendingOwnerAcceptance": [
-        "the fourteen zero- or one-result cases"
+        "the fourteen cases beyond ledger 1785"
       ],
       "pinnedBy": [
-        "crates/fireemu-core-firestore/tests/text_membership_replay.rs#UNEXPLAINED",
-        "crates/fireemu-core-firestore/tests/text_membership_replay.rs#SPARSE_UNEXPLAINED"
+        "crates/fireemu-core-firestore/tests/text_membership_replay.rs#UNEXPLAINED"
       ]
     },
     "dottedCapitalIpek": {
@@ -396,11 +393,11 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
-        "sha256": "5de3749cc48df408817ac264d86c18dca8fdeb5a9243444e34c2f5f288b7b8cf",
-        "rows": 259,
+        "sha256": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
+        "rows": 417,
         "summary": {
-          "MATCH": 237,
-          "KNOWN_DIFFERENCE": 22,
+          "MATCH": 387,
+          "KNOWN_DIFFERENCE": 30,
           "MISMATCH": 0
         }
       }

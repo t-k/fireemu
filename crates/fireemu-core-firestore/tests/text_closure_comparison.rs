@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 const ORDER_FIXTURE: &str = include_str!("fixtures/production_text_order.json");
-const SPARSE_FIXTURE: &str = include_str!("fixtures/production_text_sparse.json");
+const MEMBERSHIP_FIXTURE: &str = include_str!("fixtures/production_text_membership.json");
 const BOUNDARY_FIXTURE: &str = include_str!("fixtures/production_text_boundary.json");
 const COMPARISON: &str = "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json";
 
@@ -190,9 +190,10 @@ impl Row {
     }
 }
 
-/// One row per recorded case of a replay fixture. Order is compared for responses with two or
-/// more results; where the membership differs, the order of the members both sides return.
-fn replay_rows(prefix: &str, text: &str) -> Vec<Row> {
+/// One row per recorded case of a replay fixture. With `with_order`, the order is compared for
+/// responses with two or more results; where the membership differs, the order of the members
+/// both sides return. The membership fixture's cases carry no sort and count their responses.
+fn replay_rows(prefix: &str, text: &str, with_order: bool) -> Vec<Row> {
     let fixture = parse(text).unwrap();
     let corpora: BTreeMap<&str, SearchIndex> = object(fixture.get("corpora").unwrap())
         .iter()
@@ -202,7 +203,10 @@ fn replay_rows(prefix: &str, text: &str) -> Vec<Row> {
         .iter()
         .enumerate()
         .map(|(n, case)| {
-            let score_sort = case.get("scoreSort").and_then(JsonValue::as_bool).unwrap();
+            let score_sort = case
+                .get("scoreSort")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false);
             let query = string(case, "query");
             let expected: Vec<String> = array(case.get("expected").unwrap())
                 .iter()
@@ -219,7 +223,7 @@ fn replay_rows(prefix: &str, text: &str) -> Vec<Row> {
                     .cloned()
                     .collect()
             };
-            let order = if expected.len() < 2 {
+            let order = if !with_order || expected.len() < 2 {
                 "NOT_APPLICABLE"
             } else if actual == expected {
                 "MATCH"
@@ -233,10 +237,15 @@ fn replay_rows(prefix: &str, text: &str) -> Vec<Row> {
                 corpus: string(case, "corpus").to_owned(),
                 query: query.to_owned(),
                 score_sort,
-                recordings: array(case.get("recordings").unwrap())
-                    .iter()
-                    .map(|r| r.as_str().unwrap().to_owned())
-                    .collect(),
+                recordings: match case.get("recordings") {
+                    Some(list) => array(list)
+                        .iter()
+                        .map(|r| r.as_str().unwrap().to_owned())
+                        .collect(),
+                    None => (0..case.get("responses").and_then(JsonValue::as_i64).unwrap())
+                        .map(|n| format!("response {}", n + 1))
+                        .collect(),
+                },
                 expected,
                 actual,
                 membership,
@@ -310,10 +319,10 @@ fn render(rows: &[Row]) -> String {
     out.push_str(
         "  \"producer\": \"crates/fireemu-core-firestore/tests/text_closure_comparison.rs\",\n",
     );
-    out.push_str("  \"about\": \"Every recorded production Firestore Enterprise text-search case replayed through the local engine: membership for every case, result order for every case with two or more results (score-sorted and default), and Boundary03 membership for both rounds. expected is the production response (order kept where it has two or more results), actual the local answer. Numeric score() values are not compared.\",\n");
+    out.push_str("  \"about\": \"Every recorded production Firestore Enterprise text-search case replayed through the local engine: membership rows for the 223 distinct cases of all 531 responses, order rows for the 168 cases with two or more results (score-sorted and default; their membership is repeated there), and Boundary03 membership for both rounds. expected is the production response (order kept where it has two or more results), actual the local answer. Numeric score() values are not compared.\",\n");
     let _ = writeln!(
         out,
-        "  \"summary\": {{\"rows\": {}, \"MATCH\": {}, \"KNOWN_DIFFERENCE\": {}, \"MISMATCH\": {}, \"scoreSortedOrderRows\": {}, \"scoreSortedOrderMatch\": {}, \"defaultOrderRows\": {}, \"defaultOrderMatch\": {}, \"defaultOrderMatchCommonMembers\": {}, \"recordings\": {}}},",
+        "  \"summary\": {{\"rows\": {}, \"MATCH\": {}, \"KNOWN_DIFFERENCE\": {}, \"MISMATCH\": {}, \"scoreSortedOrderRows\": {}, \"scoreSortedOrderMatch\": {}, \"defaultOrderRows\": {}, \"defaultOrderMatch\": {}, \"defaultOrderMatchCommonMembers\": {}, \"membershipResponses\": {}}},",
         rows.len(),
         count(&|r| r.status() == "MATCH"),
         count(&|r| r.status() == "KNOWN_DIFFERENCE"),
@@ -323,7 +332,10 @@ fn render(rows: &[Row]) -> String {
         count(&|r| !r.score_sort && r.order != "NOT_APPLICABLE"),
         count(&|r| !r.score_sort && r.order == "MATCH"),
         count(&|r| !r.score_sort && r.order == "MATCH_COMMON_MEMBERS"),
-        rows.iter().map(|r| r.recordings.len()).sum::<usize>(),
+        rows.iter()
+            .filter(|r| r.id.starts_with("membership"))
+            .map(|r| r.recordings.len())
+            .sum::<usize>(),
     );
     out.push_str("  \"rows\": [\n");
     for (i, row) in rows.iter().enumerate() {
@@ -348,8 +360,8 @@ fn render(rows: &[Row]) -> String {
 }
 
 fn all_rows() -> Vec<Row> {
-    let mut rows = replay_rows("order", ORDER_FIXTURE);
-    rows.extend(replay_rows("sparse", SPARSE_FIXTURE));
+    let mut rows = replay_rows("membership", MEMBERSHIP_FIXTURE, false);
+    rows.extend(replay_rows("order", ORDER_FIXTURE, true));
     rows.extend(boundary_rows());
     rows
 }
@@ -359,7 +371,7 @@ fn all_rows() -> Vec<Row> {
 #[test]
 fn committed_closure_comparison_equals_the_replay() {
     let rows = all_rows();
-    assert_eq!(rows.len(), 168 + 65 + 26, "recorded cases");
+    assert_eq!(rows.len(), 223 + 168 + 26, "recorded cases");
     let mismatches: Vec<&str> = rows
         .iter()
         .filter(|row| row.status() == "MISMATCH")
@@ -381,7 +393,7 @@ fn committed_closure_comparison_equals_the_replay() {
 }
 
 /// Every score-sorted case has exact membership and the production order, and every
-/// boundary row matches: the known differences are confined to default-order and sparse cases.
+/// boundary row matches: the known differences are confined to default-order and membership rows.
 #[test]
 fn score_sorted_and_boundary_rows_all_match() {
     for row in all_rows() {

@@ -4542,7 +4542,7 @@ proptest::proptest! {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn native_text_admin_language_values_never_poison_the_database() {
-    const ROWS: [(&str, bool, &str); 37] = [
+    const ROWS: [(&str, bool, &str); 44] = [
         ("ja", false, "list-indexes"),
         ("ja", true, "list-indexes"),
         ("non-string", false, "get-operation"),
@@ -4550,36 +4550,43 @@ fn native_text_admin_language_values_never_poison_the_database() {
         ("fr", false, "composite-list-other-group"),
         ("absent", false, "list-indexes"),
         ("invalid-string", false, "get-operation"),
+        ("fr", true, "search"),
+        ("non-string", true, "search"),
+        ("ja", false, "search"),
+        ("non-string", false, "search"),
+        ("fr", false, "get-operation"),
         ("en", false, "list-indexes"),
-        ("fr", true, "get-operation"),
-        ("absent", true, "composite-list-other-group"),
-        ("invalid-string", true, "composite-list-other-group"),
-        ("ja", true, "composite-list-other-group"),
-        ("ja", true, "get-index"),
-        ("ja", true, "list-operations"),
-        ("ja", false, "delete-operation"),
-        ("non-string", true, "delete-operation"),
-        ("en", true, "delete-operation"),
-        ("invalid-string", false, "list-operations"),
-        ("non-string", false, "list-operations"),
-        ("en", false, "composite-list-other-group"),
-        ("non-string", true, "list-indexes"),
-        ("en", false, "get-index"),
+        ("non-string", true, "get-index"),
         ("invalid-string", true, "get-index"),
-        ("fr", true, "delete-operation"),
-        ("en", true, "get-operation"),
-        ("non-string", false, "get-index"),
-        ("non-string", false, "composite-list-other-group"),
-        ("absent", true, "get-index"),
-        ("en", true, "list-operations"),
         ("absent", true, "list-operations"),
-        ("absent", false, "get-operation"),
-        ("fr", true, "get-index"),
+        ("fr", false, "get-index"),
+        ("non-string", true, "composite-list-other-group"),
+        ("fr", true, "delete-operation"),
+        ("absent", false, "composite-list-other-group"),
+        ("fr", true, "list-indexes"),
+        ("non-string", false, "list-operations"),
+        ("non-string", false, "list-indexes"),
+        ("en", true, "search"),
+        ("non-string", false, "delete-operation"),
+        ("absent", true, "search"),
+        ("ja", true, "composite-list-other-group"),
+        ("en", false, "list-operations"),
+        ("en", true, "delete-operation"),
+        ("en", false, "get-index"),
+        ("invalid-string", true, "list-operations"),
+        ("ja", true, "delete-operation"),
         ("fr", true, "list-operations"),
-        ("fr", false, "list-indexes"),
+        ("invalid-string", false, "composite-list-other-group"),
+        ("en", false, "get-operation"),
+        ("invalid-string", true, "search"),
         ("absent", false, "delete-operation"),
-        ("invalid-string", true, "delete-operation"),
-        ("invalid-string", true, "list-indexes"),
+        ("invalid-string", false, "delete-operation"),
+        ("absent", false, "get-operation"),
+        ("ja", true, "list-operations"),
+        ("invalid-string", false, "list-indexes"),
+        ("ja", true, "get-index"),
+        ("en", false, "composite-list-other-group"),
+        ("absent", false, "get-index"),
     ];
     for (row, (language, production_exact, observation)) in ROWS.into_iter().enumerate() {
         let label = format!("row {row}: {language}/exact={production_exact}/{observation}");
@@ -4638,8 +4645,45 @@ fn native_text_admin_language_values_never_poison_the_database() {
                 &format!("{base}/collectionGroups/other/indexes"),
                 Value::Null,
             ),
+            "search" => call(
+                &state,
+                "POST",
+                &format!("{base}/documents:executePipeline"),
+                json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/items"}]},{"name":"search","options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"marker"}]}}}}]}}}),
+            ),
             _ => call(&state, "DELETE", &operation, Value::Null),
         };
+        if observation == "search" {
+            // Review M1: productionExact never answers a search with a definite result or a
+            // definite "no READY index"; the default profile serves a built index and reports a
+            // failed one as not READY.
+            let error = if answer.is_array() {
+                &answer[0]["error"]
+            } else {
+                &answer["error"]
+            };
+            if production_exact {
+                assert_eq!(status, 501, "{label}: {answer}");
+                assert!(
+                    error["message"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("FS_TEXT_UNOBSERVED"),
+                    "{label}: {answer}"
+                );
+            } else if failure.is_some() {
+                assert_eq!(status, 400, "{label}: {answer}");
+                assert_eq!(error["status"], "FAILED_PRECONDITION", "{label}: {answer}");
+            } else {
+                assert_eq!(status, 200, "{label}: {answer}");
+                assert_eq!(
+                    answer[0]["results"].as_array().unwrap().len(),
+                    1,
+                    "{label}: {answer}"
+                );
+            }
+            continue;
+        }
         let direct = matches!(
             observation,
             "get-index" | "get-operation" | "delete-operation"
@@ -4753,4 +4797,72 @@ fn text_index_catalog_is_the_attached_search_catalog() {
         &state.local.text_index_catalog().unwrap(),
         &catalog
     ));
+}
+
+/// Merge review S-a: a definition without the options production always reports (here, from
+/// the index file without `searchIndexOptions`) is listed with the options it has in the
+/// default profile. productionExact leaves it out of the listing (documented) and refuses a
+/// request that names it.
+#[test]
+fn native_text_admin_unrenderable_definitions_by_profile() {
+    use fireemu_core_firestore::text_index::{DefaultTextLanguage, LanguageOverridePolicy};
+    for production_exact in [false, true] {
+        let (state, clock, catalog) = native_text_state_exact(true, production_exact);
+        let base = "/v1/projects/p/databases/(default)";
+        let (_, initial) = call(
+            &state,
+            "POST",
+            &format!("{base}/collectionGroups/items/indexes"),
+            native_text_body(),
+        );
+        advance(&clock, 3600);
+        let id = initial["metadata"]["index"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        let mut file = catalog
+            .lock()
+            .unwrap()
+            .get("p", "(default)", &id)
+            .unwrap()
+            .clone();
+        file.id = "file-text-0".into();
+        file.language = DefaultTextLanguage::Autodetect;
+        file.language_override = LanguageOverridePolicy::Disabled;
+        file.state = fireemu_core_firestore::text_index::TextIndexState::Ready;
+        catalog.lock().unwrap().add("p", "(default)", file).unwrap();
+        let (status, listed) = call(
+            &state,
+            "GET",
+            &format!("{base}/collectionGroups/items/indexes"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{listed}");
+        let file_view = listed["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|index| index["name"].as_str().unwrap().ends_with("/file-text-0"));
+        let (status, direct) = call(
+            &state,
+            "GET",
+            &format!("{base}/collectionGroups/items/indexes/file-text-0"),
+            Value::Null,
+        );
+        if production_exact {
+            assert!(file_view.is_none(), "{listed}");
+            assert_eq!(status, 501, "{direct}");
+        } else {
+            let view = file_view.unwrap();
+            assert_eq!(
+                view["searchIndexOptions"],
+                json!({"textLanguageOverrideFieldPath":""})
+            );
+            assert_eq!(status, 200, "{direct}");
+            assert_eq!(direct, *view);
+        }
+    }
 }

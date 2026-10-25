@@ -33,4 +33,15 @@ node tools/sdk-smoke-database/run.mjs --record tools/sdk-smoke-database/fixtures
 
 `--record` checks the jar's SHA-256 and refuses any other file, starts it on a free loopback port and stops it afterwards; `--jar <path>` names a jar kept elsewhere. A recording that changes between two runs is a timing problem in the smoke, not a difference between servers.
 
-`npm test` checks the comparison helper and the jar check.
+`npm test` checks the comparison helper, the jar check and the CV11 recorder below.
+
+## CV11 genuine-auth recorder
+
+`cv11-genuine-auth.mjs` runs one scenario (`cv11-genuine-auth-page.js`) with the web SDK in headless Chromium for four profiles (round 1 and 2, WebSocket and long polling). Per profile it creates two email/password users, seeds `{value: round}` at each user's scope `<prefix>/r<round>/users/<uid>` under owner-only Rules, and records: sign-in, the first listener's value, a forced token refresh, sign-out and whether the listener is cancelled, a second sign-in and listener, user B reading its own scope and user A's, deletion of user A through the admin API, a write after the deletion, a forced refresh after it, and whether the second listener is cancelled. The journal holds steps, event types, listener epochs, error codes and data shapes only.
+
+```sh
+node tools/sdk-smoke-database/cv11-genuine-auth.mjs local --out <new dir> --modules <node_modules with firebase 12.18.0 and playwright 1.62.1> --fireemu <fireemu binary>
+node tools/sdk-smoke-database/cv11-genuine-auth.mjs compare <a>/journal.json <b>/journal.json
+```
+
+`local` starts `fireemu up --only auth,database` (strict profile) on free ports and stops it afterwards. `production` refuses to run without `--packet <file>` and a matching `--packet-sha256`, and the packet pins the SHA-256 of both source files. Every admin request is counted against fixed caps before it is sent; any answer other than a complete 2xx or 4xx is unknown, and an unknown create or delete leaves the run `needs-recovery` and is never re-sent.

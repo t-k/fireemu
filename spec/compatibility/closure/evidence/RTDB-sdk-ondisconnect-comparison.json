@@ -1,0 +1,308 @@
+{
+ "kind": "rtdb-production-comparison-v1",
+ "parent": "RTDB",
+ "comparison": "sdk-ondisconnect",
+ "conditions": [
+  "RTDB/sdk-ondisconnect-lifecycle"
+ ],
+ "production": {
+  "recording": "rtdb-sdk03-v1",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "recordedOn": "2026-10-23",
+  "flows": 4,
+  "durableEvents": 36
+ },
+ "fixture": {
+  "path": "tools/sdk-smoke-database/fixtures/production-sdk-ondisconnect.json",
+  "sha256": "a19e0463e3185e5a5d6c6d69638f580d28560200e88f3bcba963fd5172cc8057"
+ },
+ "tool": [
+  {
+   "path": "tools/sdk-smoke-database/cv07-ondisconnect.mjs",
+   "sha256": "02ce446910320fb36f60aff86ee75433ab8b07b66e617e6a9eba75584c4f193f"
+  },
+  {
+   "path": "tools/sdk-smoke-database/production-live.mjs",
+   "sha256": "18bc8d5e0d5b5cceb7e41aac4d76668b03f5e1bc37725f3ea7b31aeb5e126e79"
+  }
+ ],
+ "command": "node tools/sdk-smoke-database/cv07-ondisconnect.mjs local --fireemu <binary> --out <dir>",
+ "sdk": "firebase 12.18.0, playwright 1.62.1 (headless Chromium)",
+ "binding": {
+  "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+  "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3 (origin/main; git diff over crates, Cargo.toml, Cargo.lock, rust-toolchain.toml, ui, npm is empty)",
+  "binarySha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+  "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "host": "Darwin arm64",
+  "profile": "strict",
+  "productionRequests": 0
+ },
+ "summary": {
+  "nativeEvents": 36,
+  "localEvents": 36,
+  "matched": true,
+  "mismatches": 0,
+  "timing": {
+   "within": true,
+   "outside": []
+  },
+  "onDisconnectFireSeconds": {
+   "local": {
+    "parity20261023/sdk/round1/ws": 0,
+    "parity20261023/sdk/round1/lp": 105,
+    "parity20261023/sdk/round2/ws": 0,
+    "parity20261023/sdk/round2/lp": 105
+   },
+   "production": {
+    "parity20261023/sdk/round1/ws": 0.1,
+    "parity20261023/sdk/round1/lp": 104,
+    "parity20261023/sdk/round2/ws": 0.2,
+    "parity20261023/sdk/round2/lp": 100.8
+   }
+  }
+ },
+ "events": [
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round1/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round1/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round2/ws",
+   "transport": "ws"
+  },
+  {
+   "type": "sdk-step",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "set-online",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "online"
+   },
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "onDisconnect-offline",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-step",
+   "step": "writer-offline",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-get",
+   "value": {
+    "state": "offline"
+   },
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-callback",
+   "value": null,
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  },
+  {
+   "type": "sdk-ack",
+   "step": "remove",
+   "prefix": "parity20261023/sdk/round2/lp",
+   "transport": "lp"
+  }
+ ]
+}

@@ -1,0 +1,591 @@
+{
+ "schemaVersion": 1,
+ "parent": "RTDB",
+ "parentStatus": "IMPLEMENTING",
+ "inventoryStatus": "FROZEN",
+ "frozenOn": "2026-10-26",
+ "freezeAuthority": "docs.local/instructions/owner-decisions.md (owner 1560: genuine whole current supported RTDB closure; owner 1471 Q8: platform SDKs in a later separate parent); conditions frozen from the RTDB coverage ledger RTDB-CV-01..16 (docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-coverage-ledger.md)",
+ "oracleTrack": "disposable-sandbox",
+ "oracle": {
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "region": "us-central1",
+  "type": "USER_DATABASE"
+ },
+ "closureReview": {
+  "decision": "PENDING",
+  "submittedSourceCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+  "submittedFinalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+  "note": "The coordinator runs the independent clean-context closure review and fills this entry. The submitted binary was built from the tool commit; its Rust sources equal origin/main bb81801b4 (no crate, Cargo or toolchain change on the branch), and rebuilding at the tool commit gave the same SHA-256."
+ },
+ "scopeDecisions": [
+  {
+   "id": "R1",
+   "decision": "RTDB covers the REST .json transport (CRUD, queries, ETag and conditional writes, export format, error texts, number forms, priorities), Security Rules evaluation and loading, SSE event streams, the Firebase JS web SDK over WebSocket and long polling (listen, onDisconnect, transactions, genuine email/password Auth), and the emulator-only management surfaces (Rules coverage inspection, import/export/reset/namespaces, the Emulator UI database view).",
+   "rationale": "These are the surfaces fireemu serves for RTDB (contract.json surface database) and the ones the RTDB coverage ledger rows CV01-CV07, CV09, CV11-CV13 and CV15 define.",
+   "status": "PROPOSED",
+   "decidedBy": "coordinator (assignment 2026-10-26)",
+   "decidedOn": "2026-10-26",
+   "decisionRef": "docs.local/runs/rtdb-closure/status.md (assignment); owner decision pending in the closure review"
+  },
+  {
+   "id": "R2",
+   "decision": "Not claimed, outside this closure: reconnect/resume and child-event and query-window ordering across goOffline/goOnline (CV08); onDisconnect register/cancel/re-register and a Rules change between registration and firing (CV10); RTDB-triggered Cloud Functions v1/v2 delivery (CV14, implemented locally but never observed in production); Firebase ID token expiry, tampered signatures, revocation, tenants and wrong-project tokens; latency, throughput, quotas, billing, multi-region and instance management APIs; Android, Apple, Unity and the Java/Python Admin SDKs (owner 1471 Q8); the Node Admin SDK beyond the official-emulator smokes in tools/sdk-smoke-database.",
+   "rationale": "No production observation of these exists (CV08/CV10 local gap actors never produced a result; CV14 was never deployed). They stay open rows of the coverage ledger and need their own observations before they can be claimed.",
+   "status": "PROPOSED",
+   "decidedBy": "coordinator (assignment 2026-10-26: unknown or unverified areas stated as out of scope)",
+   "decidedOn": "2026-10-26",
+   "decisionRef": "docs.local/runs/rtdb-closure/status.md (Questions for the coordinator Q1)"
+  },
+  {
+   "id": "R3",
+   "decision": "Production comparisons use only shapes recorded on fireemu-oracle-query (rtdb02-v2, rtdb-uid01-v1, rtdb-sse03-v1, rtdb-sdk03-v1, RTDB-CV09-SDK-20261025-08, genuine-auth03, RTDB-CV11-LEAN-20261025-02). Emulator-only surfaces (Rules coverage, import/export/reset, UI) are compared with the official database emulator jar 4.11.2 (firebase-tools 15.28.2) or verified locally.",
+   "rationale": "Production outranks the official emulator wherever production answers; the management surfaces exist only in the emulator.",
+   "status": "FROZEN",
+   "decidedBy": "owner",
+   "decidedOn": "2026-10-19",
+   "decisionRef": "docs.local/instructions/2026-10-19-rtdb-design-memo.md; docs.local/instructions/rtdb-coordinator-rulings.md"
+  }
+ ],
+ "conditions": [
+  {
+   "conditionId": "RTDB/rest-tree-values",
+   "coverageLedgerRows": [
+    "RTDB-CV-01",
+    "RTDB-CV-02"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "fresh-number-0..9 put/get (number spellings incl. -0.0, 1e7, 2^53+1, 2^63-1, 2^63, +-1e400)",
+    "equal-value put/get",
+    "priority put/get",
+    "etag get, missing, if-match wrong, if-match null_etag",
+    "patch nested multi-path, conflicting keys",
+    "native and index-keyed arrays",
+    "orderBy/startAt/limitToFirst/limitToLast queries and their refusals",
+    "bad key, bad JSON, scalar patch target, array patch body"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "rtdb02-v2",
+      "envelope": "RTDB-PRODUCTION-RAW-20261023-02",
+      "recordedAt": "2026-10-23T12:03:00Z",
+      "project": "fireemu-oracle-query",
+      "rounds": 2,
+      "recorderCommit": "b8399bfe1b3eae94960c72ebbbfff8b884a1a365"
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-rest.json",
+    "comparisonTool": "tools/sdk-smoke-database/rest-replay.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
+    "comparisonSha256": "266dcabd81cea462a9fe391863124cf1c1ab1d4f58a460be9418a8f8cfb8d18d",
+    "rows": {
+     "MATCH": 120,
+     "KNOWN_DIFFERENCE": 4
+    },
+    "knownDifferences": [
+     "/knownDifferences/restMemberOrder"
+    ],
+    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
+    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
+    "earlierLocalRun": {
+     "receipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/local-rtdb-final-v3/summary.json",
+     "receiptSha256": "00ed3330f28e6db5de8c948c169fa43a2ffbc3e3014faaae691c84339c85682c",
+     "sourceCommit": "df744e06ce6deb35e028d9970c2d7e5faf888658",
+     "binarySha256": "35da74fa9e3285f7f71484ba3c1a4f9064d70f8aa0f96c7377b95975cdac72bc",
+     "result": "124 rows, 4 raw-order differences, 0 status/JSON/ETag mismatches; the fresh run on the closure binary reproduces it row for row"
+    }
+   }
+  },
+  {
+   "conditionId": "RTDB/rules-load-and-export-format",
+   "coverageLedgerRows": [
+    "RTDB-CV-05"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "format=export reads of a value with priority before and after a priority write",
+    "format=export read of an index-keyed array",
+    "48 Rules loads (8 recorded regular expressions x .read/.write/.validate x 2 rounds) refused with 400 and the recorded column"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "rtdb02-v2",
+      "envelope": "RTDB-PRODUCTION-RAW-20261023-02",
+      "recordedAt": "2026-10-23T12:03:52Z",
+      "project": "fireemu-oracle-query",
+      "rounds": 2
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-rest.json",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
+    "comparisonSha256": "266dcabd81cea462a9fe391863124cf1c1ab1d4f58a460be9418a8f8cfb8d18d",
+    "rows": {
+     "exportReads": {
+      "MATCH": 6
+     },
+     "m14": {
+      "MATCH": 48
+     }
+    },
+    "note": "The Rules sources are uploaded with the bytes the recorder sent (Python json.dumps defaults), because production reports the refusal by column. Runtime evaluation semantics beyond the CV03/CV06/CV11 cases and the four recorded control expressions are not part of this condition.",
+    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
+    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu"
+   }
+  },
+  {
+   "conditionId": "RTDB/rules-uid-owner",
+   "coverageLedgerRows": [
+    "RTDB-CV-03"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "auth.uid owner read/write allowed",
+    "other uid read/write denied (401) with unchanged readback",
+    "auth_variable_override null denied",
+    "anonymous denied",
+    "16 cases x 2 rounds"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "rtdb-uid01-v1",
+      "envelope": "RTDB-PRODUCTION-UID-20261024-01",
+      "recordedAt": "2026-10-23T16:10:33Z",
+      "project": "fireemu-oracle-query",
+      "rounds": 2,
+      "recorderCommit": "13b17239a834aece6e0e854cd9e8c9ce4fa42e91"
+     }
+    ],
+    "test": "crates/fireemu-adapter-database/tests/rest.rs#admin_auth_override_replays_two_native_uid_rounds",
+    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database --profile pr at the tool commit (docs.local/runs/rtdb-closure/nextest/rtdb-crates.log)",
+    "earlierBinaryRun": {
+     "envelope": "RTDB-CV03-FINAL-LOCAL-20261025-01",
+     "closedReceipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv03-final-local-v1-finite-closed.json",
+     "closedReceiptSha256": "d65753e382b8fcfe8387bbd62cb2eb9fb2c6c03b0e4d96e71e5467a0838fdcf7",
+     "review": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv03-final-local-v1-actual-review.md",
+     "reviewSha256": "264c7841b3292f6972853d09182b28ac63136043aa1c631c45da4dec75d3c358",
+     "sourceCommit": "aad73f3de9a41b0c145e0d98846239afdfc8441b",
+     "binarySha256": "7fc0046806dfad10fb85f08988b63591ee929da4f037f94dfdb8c06e48fef663",
+     "rows": {
+      "MATCH": 32
+     }
+    },
+    "rows": {
+     "MATCH": 32
+    },
+    "limitations": "Identity is given by auth_variable_override and the owner credential, not by a Firebase ID token (see RTDB/genuine-auth-sdk-and-rules)."
+   }
+  },
+  {
+   "conditionId": "RTDB/sse-anonymous-lifecycle",
+   "coverageLedgerRows": [
+    "RTDB-CV-06"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "anonymous text/event-stream GET with initial put",
+    "patch event after a privileged PATCH",
+    "Rules switched to deny: raw `event: cancel` / `data: Permission denied` and socket EOF",
+    "anonymous 401 afterwards with the value unchanged",
+    "2 rounds"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "rtdb-sse03-v1",
+      "envelope": "RTDB-SSE-PROOF-20261024-03",
+      "recordedAt": "2026-10-24T02:03:26Z",
+      "project": "fireemu-oracle-query",
+      "rounds": 2
+     }
+    ],
+    "closedReceipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-sse03-v1-closed.json",
+    "closedReceiptSha256": "5d668115ae4777772fef7324c21125b1fb2de9db7ef93ff66e5be799f28b6892",
+    "review": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-sse03-v1-actual-review.md",
+    "reviewSha256": "f1d2928b78160a5568163caae4829fe0b485f9099d36237f06520ba1ea081a60",
+    "localRun": {
+     "receipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/local-ui-final-v1/summary.json",
+     "receiptSha256": "c9f252bb060e050c69154cef02d6c04ad1ef25c8a66744c44b9fa8510167a72e",
+     "sourceCommit": "df744e06ce6deb35e028d9970c2d7e5faf888658",
+     "binarySha256": "35da74fa9e3285f7f71484ba3c1a4f9064d70f8aa0f96c7377b95975cdac72bc",
+     "assertions": 30,
+     "failed": 0
+    },
+    "bindingNote": "The local SSE run predates the closure binary. Between df744e06 and the tool commit the RTDB crates changed in the Rules coverage diagnostics (9657292d8), the strict gauth refusal (4182586a9) and the long-polling reaper and idle close (be84ba321, 4f82d12bb); none of them touches the REST event-stream path. The SSE stream and cancel tests in the adapter suite pass on the closure source (closureRun of RTDB/rules-uid-owner)."
+   }
+  },
+  {
+   "conditionId": "RTDB/sdk-ondisconnect-lifecycle",
+   "coverageLedgerRows": [
+    "RTDB-CV-07"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "round 1 and 2 x WebSocket and long polling",
+    "set online and its ack",
+    "observer value callback",
+    "onDisconnect set and its ack",
+    "writer goOffline",
+    "observer receives the onDisconnect value",
+    "get",
+    "remove and its ack; 9 durable events per flow, 36 in total"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "rtdb-sdk03-v1",
+      "recordedOn": "2026-10-23",
+      "project": "fireemu-oracle-query",
+      "flows": 4
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-sdk-ondisconnect.json",
+    "comparisonTool": "tools/sdk-smoke-database/cv07-ondisconnect.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
+    "comparisonSha256": "375fb29273bdea26d052c4a0f927acf4f0cc2bca255fd8f599986eaaff197226",
+    "rows": {
+     "MATCH": 36
+    },
+    "onDisconnectFireSeconds": {
+     "local": {
+      "parity20261023/sdk/round1/ws": 0,
+      "parity20261023/sdk/round1/lp": 105,
+      "parity20261023/sdk/round2/ws": 0,
+      "parity20261023/sdk/round2/lp": 105
+     },
+     "production": {
+      "parity20261023/sdk/round1/ws": 0.1,
+      "parity20261023/sdk/round1/lp": 104,
+      "parity20261023/sdk/round2/ws": 0.2,
+      "parity20261023/sdk/round2/lp": 100.8
+     }
+    },
+    "knownDifferences": [
+     "/knownDifferences/longPollingIdleClose"
+    ],
+    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
+    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu"
+   }
+  },
+  {
+   "conditionId": "RTDB/sdk-transaction-cas",
+   "coverageLedgerRows": [
+    "RTDB-CV-09"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "round 1 and 2 x WebSocket and long polling",
+    "writer transaction from 0 held while a second client writes 10",
+    "released compare-and-set refused as stale",
+    "updater re-run with 10 commits 11",
+    "updater inputs [0,10], readbacks [0,10,11]"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "RTDB-CV09-SDK-20261025-08",
+      "recordedAt": "2026-10-24T19:22:20Z",
+      "project": "fireemu-oracle-query",
+      "cells": 4,
+      "collectorCommit": "93ae9d1db34847430ce68670fbdd5f9a3cb19d3a"
+     }
+    ],
+    "productionReceipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-cv09-sdk08-v1-closed.json",
+    "productionReceiptSha256": "27e98f9317e14a63af188d6720a4cdb244ea1b7d7cc1b05ef025914fa3bea21d",
+    "productionReview": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-cv09-sdk08-v1-actual-review.md",
+    "productionReviewSha256": "cf808aebe0d736c8bede1bbc5bf1838ce1c70aeb4b444dfe5ca5c8696310d355",
+    "localRun": {
+     "envelope": "RTDB-CV09-LOCAL-20261025-10",
+     "closedReceipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv09-local-final-v4-closed.json",
+     "closedReceiptSha256": "2fbcff2860bb4be3936aa09d56abdfbf63f1c3f62841c0cac8dff196f1256c34",
+     "review": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv09-local-final-v4-actual-review.md",
+     "reviewSha256": "d4a1a4b6329b5de9c05b2a015cf43dadf42b3b9cf7625673b7584d7f57e11f13",
+     "sourceCommit": "72f67f1fac8ed062eb542a4ed8ab6cec4af644b8",
+     "binarySha256": "8509f53a88970fddfea81c5bf5d762c083e3d0e6b6421316629c8e297c15bf09",
+     "cells": 4,
+     "verdict": "PASS"
+    },
+    "test": "crates/fireemu-adapter-database/tests/realtime.rs#transactions_compare_the_current_hash",
+    "rows": {
+     "MATCH": 4
+    },
+    "bindingNote": "The four-cell CAS harness is private and was not rerun on the closure binary. Since 72f67f1f the RTDB crates changed only in the strict gauth refusal (4182586a9, an Auth refusal shape) and the long-polling reaper and 100 s idle close (be84ba321, 4f82d12bb); the CAS cells finish within seconds, well before the idle close. The hash-comparison tests pass on the closure source. Whether a rerun on the closure binary is required is Q2 for the closure review."
+   }
+  },
+  {
+   "conditionId": "RTDB/genuine-auth-sdk-and-rules",
+   "coverageLedgerRows": [
+    "RTDB-CV-04",
+    "RTDB-CV-11"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "web SDK, 4 profiles (round 1 and 2 x WebSocket and long polling), two email/password users per profile",
+    "sign-in, listener value, forced token refresh",
+    "sign-out cancels the listener with PERMISSION_DENIED",
+    "second sign-in and listener",
+    "user B reads its own scope, user A's scope refused (permission-denied)",
+    "admin deletes user A; a later admin write still reaches the listener",
+    "forced refresh after deletion fails with auth/user-token-expired and the listener is cancelled with PERMISSION_DENIED",
+    "REST: 20 genuine-user cases (own PUT/GET allowed, cross-uid and anonymous refused, unchanged readbacks)",
+    "strict refusal of a gauth credential that is not the owner (permission_denied)"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "production-2",
+      "envelope": "RTDB-CV11-LEAN-20261025-02",
+      "recordedOn": "2026-10-25",
+      "project": "fireemu-oracle-query",
+      "profiles": 4,
+      "recorderCommit": "edd70f5d3b4c0274cb6ad3e18f04be6bbc2575b9",
+      "closeRow": "owner-decisions.md 2026-10-26 REVOKED RTDB-CV11-LEAN-20261025-02 (observationComplete, users gone 8/8, baseline restored)"
+     },
+     {
+      "recording": "genuine-auth03",
+      "envelope": "RTDB-GENUINE-AUTH-20261025-03",
+      "recordedAt": "2026-10-24T16:17:25Z",
+      "project": "fireemu-oracle-query",
+      "cases": 20
+     },
+     {
+      "recording": "cv11-gauth-native-a02-v1",
+      "recordedOn": "2026-10-24",
+      "project": "fireemu-oracle-query",
+      "cases": "request 3 permission_denied"
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-cv11-genuine-auth.json",
+    "comparisonTool": "tools/sdk-smoke-database/cv11-fixture.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
+    "comparisonSha256": "6fe651008d7eac845e93936feb25f98de9b07cd0108b4e5a223c104e886ea090",
+    "rows": {
+     "MATCH": 92
+    },
+    "tests": [
+     "crates/fireemu/tests/database.rs#locally_signed_users_match_twenty_native_auth_rules_cases",
+     "crates/fireemu-adapter-database/tests/rules.rs#realtime_credentials_follow_the_profile",
+     "crates/fireemu-adapter-database/tests/rules.rs#a_refused_gauth_signs_the_connection_out_under_strict",
+     "crates/fireemu-adapter-database/tests/rules.rs#gauth_refusal_profile_shape_and_prior_access_matrix",
+     "tools/sdk-smoke-database/cv11-fixture.test.mjs"
+    ],
+    "testFixtures": [
+     "crates/fireemu/tests/fixtures/rtdb-genuine-auth-native.json"
+    ],
+    "genuineAuth03Receipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-genuine-auth03-v1-closed.json",
+    "genuineAuth03ReceiptSha256": "7d7d1bd83e1f3180c8f724da3d69bfac09f7690ac2fda7c866c187ba1b75d953",
+    "knownDifferences": [
+     "/knownDifferences/cv11WriteAfterDeleteRace"
+    ],
+    "note": "Local Auth issues its own signed tokens for local users; production's Google-signed ID tokens are not accepted locally. The comparison is of SDK-visible outcomes per credential origin, not literal token acceptance.",
+    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
+    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu"
+   }
+  },
+  {
+   "conditionId": "RTDB/rules-coverage-diagnostics",
+   "coverageLedgerRows": [
+    "RTDB-CV-12"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "/.inspect/coverage.json double-encoded {report, rules} tree with location-start/end, text, value histograms and children",
+    "/.inspect/coverage HTML view",
+    "lifetime scoped to Rules source and namespace",
+    "same-source reload, rejected reload keeps counters, data reset, namespace isolation, unsupported method 405, invalid namespace 403"
+   ],
+   "status": "VERIFIED",
+   "oracleKind": "official-emulator",
+   "evidence": {
+    "officialEmulator": "firebase-database-emulator-v4.11.2.jar (firebase-tools 15.28.2)",
+    "officialEmulatorCapture": {
+     "result": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/raw/rtdb-coverage-local03-v1/result.json",
+     "resultSha256": "a041c12bf739af274e476963ae1223389b0736bbc60b3910e1d67d395fb69868",
+     "requests": 81,
+     "contract": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-cv12-oracle-observed-contract.md",
+     "contractSha256": "ad43a9a6f2e31367f1cb99bab27fb8961b2c16d39800339ab6381b09d7018923"
+    },
+    "tests": [
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_replays_the_observed_compound_tree_and_primitive_histograms",
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_lifetime_is_scoped_to_source_and_namespace",
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_consumes_seeded_pairwise_lifecycle_cases",
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_html_embeds_the_same_data_and_escapes_script_breakers",
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_valid_callees_record_arguments_and_invalid_callees_keep_completed_children",
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_same_source_reload_still_revalidates_streams",
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_local_decoded_coordinates_keep_raw_unicode_and_escape_anchors_separate",
+     "crates/fireemu-adapter-database/tests/rules.rs#coverage_html_preserves_prototype_named_rule_children_as_json_data",
+     "crates/fireemu-adapter-database/tests/import_export.rs#import_export_and_owner_data_clear_preserve_rules_coverage",
+     "crates/fireemu-core-database/tests/rules.rs#coverage_trace_preserves_read_and_write_decisions",
+     "crates/fireemu-core-database/tests/rules.rs#coverage_observation_can_be_disabled_without_changing_authorization",
+     "crates/fireemu-core-database/tests/rules.rs#coverage_keeps_local_escaped_literal_and_multiline_spans"
+    ],
+    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database --profile pr at the tool commit (docs.local/runs/rtdb-closure/nextest/rtdb-crates.log)",
+    "browserRun": {
+     "summary": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv12-browser-final-v1/attempt7/summary.json",
+     "summarySha256": "32a330148eae8a0acf51181cca2b8972a53c9e572e9c73a7f783173b35a7ee6a",
+     "sourceCommit": "51a089e2b84ebc04afdbe16ef21abeb5b6fd604d",
+     "binarySha256": "b84e5cfad811a0f034f54f091c1776dfd39fb82e401970ff1b501b1a1b8e8dc5",
+     "cases": 2,
+     "assertions": 255
+    },
+    "reviews": [
+     "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-cv12-public-source-review.md",
+     "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/combined-product-cv12-placement-review.md"
+    ],
+    "limitations": "Emulator-only management surface: no production counterpart. Opaque hash@ ids are process-local; positions for multiline expressions, bare CR, tabs, combining and astral characters were not observed in the jar; coverage across restarts and under concurrency is not claimed; no byte parity of the HTML template is claimed. No independent review file exists for the browser attempt 7 itself."
+   }
+  },
+  {
+   "conditionId": "RTDB/import-export-reset-namespaces",
+   "coverageLedgerRows": [
+    "RTDB-CV-13"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "namespace listing",
+    "export format read and import back",
+    "session snapshot capture/restore of owned namespaces only",
+    "reset forgets imports",
+    "prepared import equals the import request",
+    "firebase.json database emulator config, Hub listing, exec export of the host, emulators:export database section"
+   ],
+   "status": "VERIFIED",
+   "oracleKind": "local",
+   "evidence": {
+    "testTargets": [
+     "crates/fireemu-adapter-database/tests/import_export.rs",
+     "crates/fireemu-adapter-database/tests/snapshot.rs",
+     "crates/fireemu-adapter-database/tests/prepared_import.rs",
+     "crates/fireemu/tests/database.rs"
+    ],
+    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database --profile pr and cargo nextest run -p fireemu --test database --profile pr at the tool commit (docs.local/runs/rtdb-closure/nextest/)",
+    "earlierRun": {
+     "receipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv13-final-verification-v2/receipt.json",
+     "receiptSha256": "6d61f5399074d028113ddda78c9052a3a41788c83f8c399741f0927c4948fcaf",
+     "review": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv13-final-verification-v2-independent-review.md",
+     "reviewSha256": "7ccf9fc3eece6066c0ae455cef3bd72f1a2c9ea169eabb32b252b4fbaab06a53",
+     "sourceCommit": "df744e06ce6deb35e028d9970c2d7e5faf888658",
+     "tests": 40
+    },
+    "limitations": "Local surface; the export format follows firebase-tools database_export. No production observation applies."
+   }
+  },
+  {
+   "conditionId": "RTDB/emulator-ui-database-view",
+   "coverageLedgerRows": [
+    "RTDB-CV-15"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "keyboard navigation",
+    "SSE initial put",
+    "UI replace with native readback and real SSE put",
+    "Rules replacement and raw cancel",
+    "anonymous 401 with unchanged data",
+    "patch/delete/readback"
+   ],
+   "status": "VERIFIED",
+   "oracleKind": "local",
+   "evidence": {
+    "review": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/root-ui-identity-final-actual-review.md",
+    "reviewSha256": "69b6c4d4d912c1b085e6fc8684de5031ce1777057942e155774a2d1f1503f29f",
+    "gates": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/root-ui-identity-final-gates.json",
+    "gatesSha256": "161349618b273c42deed1e6fbbe2bd1833a67a6adaafda928fd302b27d2e7eba",
+    "sourceCommit": "fb6faccc5efd0b18ef8de5bc9609158efb759200",
+    "rebind": {
+     "receipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/local-ui-final-v1/summary.json",
+     "receiptSha256": "c9f252bb060e050c69154cef02d6c04ad1ef25c8a66744c44b9fa8510167a72e",
+     "sourceCommit": "df744e06ce6deb35e028d9970c2d7e5faf888658",
+     "assertions": 30
+    },
+    "limitations": "One anonymous scenario; signed-in UI, stale UI and identity switching are not claimed. The browser run predates the closure binary (see the bindingNote of RTDB/sse-anonymous-lifecycle)."
+   }
+  }
+ ],
+ "integratedRegression": {
+  "integrationCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+  "releaseBinarySha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+  "buildReceiptPath": "docs.local/runs/rtdb-closure/build/build-receipt.json",
+  "comparisons": [
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
+    "sha256": "266dcabd81cea462a9fe391863124cf1c1ab1d4f58a460be9418a8f8cfb8d18d",
+    "rows": 172,
+    "summary": {
+     "rest": {
+      "MATCH": 120,
+      "KNOWN_DIFFERENCE": 4
+     },
+     "m14": {
+      "MATCH": 48
+     }
+    }
+   },
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
+    "sha256": "375fb29273bdea26d052c4a0f927acf4f0cc2bca255fd8f599986eaaff197226",
+    "rows": 36,
+    "summary": {
+     "matched": true,
+     "timingWithinTolerance": true
+    }
+   },
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
+    "sha256": "6fe651008d7eac845e93936feb25f98de9b07cd0108b4e5a223c104e886ea090",
+    "rows": 92,
+    "summary": {
+     "match": true,
+     "differences": 0
+    }
+   }
+  ],
+  "productionRequests": 0,
+  "result": "MATCH_WITH_KNOWN_DIFFERENCES",
+  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main bb81801b4. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium."
+ },
+ "knownDifferences": {
+  "restMemberOrder": {
+   "statement": "Two REST answers differ from production only in the member order of the JSON body, in both rounds: the PATCH answer for `{\"y/z\":\"t\",\"w\":3}` (production keeps the request's order, fireemu answers in key order) and GET query.json?orderBy=\"h\"&startAt=2 (production lists children in orderBy order, fireemu in key order). Status, parsed JSON and ETag are equal; the JS SDK parses both into the same snapshot.",
+   "rows": [
+    "rest r1/r2 patch-update-nested-and-add",
+    "rest r1/r2 query-get-1"
+   ]
+  },
+  "longPollingIdleClose": {
+   "statement": "A long-polling client that goes offline without closing has its onDisconnect writes run when the server drops the idle connection: production after 100.8 s and 104.0 s in the two recorded flows, fireemu after about 105 s (100 s idle timeout plus the client's poll timing). The event sequence is identical; the comparison judges the delay within 5 s of production's range."
+  },
+  "cv11WriteAfterDeleteRace": {
+   "statement": "After user A is deleted, the admin write's acknowledgement and the listener's value event race in both production and fireemu; the comparison judges the events of that step unordered. Transport request counts (long-polling HTTP requests per profile) and millisecond timings are not compared."
+  },
+  "googleSignedTokens": {
+   "statement": "Local RTDB accepts only ID tokens issued by fireemu's Auth (or the owner credential); production Google-signed tokens are not accepted locally, and strict refuses a non-owner gauth credential with production's permission_denied."
+  }
+ },
+ "outOfScope": [
+  "RTDB-CV-08 reconnect/resume and event ordering",
+  "RTDB-CV-10 onDisconnect register/cancel/re-register and Rules changes before firing",
+  "RTDB-CV-14 RTDB-triggered Cloud Functions delivery (local implementation exists, production not observed)",
+  "ID token expiry, tampered signatures, revocation, tenants, wrong-project tokens",
+  "latency, throughput, quotas, billing, instance management",
+  "Android, Apple, Unity, Java and Python SDKs"
+ ]
+}

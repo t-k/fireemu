@@ -1,0 +1,95 @@
+{
+ "kind": "rtdb-production-comparison-v1",
+ "parent": "RTDB",
+ "comparison": "sdk-genuine-auth",
+ "conditions": [
+  "RTDB/genuine-auth-sdk-and-rules"
+ ],
+ "production": {
+  "recording": "production-2",
+  "envelope": "RTDB-CV11-LEAN-20261025-02",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "recordedOn": "2026-10-25",
+  "profiles": 4,
+  "eventsPerProfile": 23,
+  "recorderCommit": "edd70f5d3b4c0274cb6ad3e18f04be6bbc2575b9"
+ },
+ "fixture": {
+  "path": "tools/sdk-smoke-database/fixtures/production-cv11-genuine-auth.json",
+  "sha256": "d31997d56aa248019f0e1de6af1ceff554284a353792ea9cecdd1773e1a733ef"
+ },
+ "localJournal": {
+  "path": "tools/sdk-smoke-database/fixtures/local-cv11-genuine-auth.json",
+  "sha256": "52a724e8f91c8167a0e7cbe35221e98b96fbf5cbbf7f2be33b2fbb30ab9bf771"
+ },
+ "tool": [
+  {
+   "path": "tools/sdk-smoke-database/cv11-genuine-auth.mjs",
+   "sha256": "989ce1e9081083692257fb3741feb3095938aa4f9a1ab8c96b6c143b19277f66"
+  },
+  {
+   "path": "tools/sdk-smoke-database/cv11-genuine-auth-page.js",
+   "sha256": "c772c040889f47796785baf73ca857a7f5dd7eecb9098ec424162b9f4f243f07"
+  },
+  {
+   "path": "tools/sdk-smoke-database/cv11-fixture.mjs",
+   "sha256": "40ee5fa036355ddaa65d553a6094f1ab7b84f60ad3060664911e2cd7f2b7ac49"
+  }
+ ],
+ "command": "node tools/sdk-smoke-database/cv11-genuine-auth.mjs local --fireemu <binary> --out <dir>; node tools/sdk-smoke-database/cv11-fixture.mjs compare <dir>/journal.json",
+ "sdk": "firebase 12.18.0, playwright 1.62.1 (headless Chromium)",
+ "binding": {
+  "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
+  "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3 (origin/main; git diff over crates, Cargo.toml, Cargo.lock, rust-toolchain.toml, ui, npm is empty)",
+  "binarySha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+  "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "host": "Darwin arm64",
+  "profile": "strict",
+  "productionRequests": 0
+ },
+ "localRun": {
+  "status": "closed",
+  "observationComplete": true,
+  "unknownAnswers": 0,
+  "users": [
+   "gone",
+   "gone",
+   "gone",
+   "gone",
+   "gone",
+   "gone",
+   "gone",
+   "gone"
+  ]
+ },
+ "judging": "Profiles in order; steps in recorded order; events within one step compared sorted (the write-after-delete admin acknowledgement and the listener value race); millisecond timings and transport request counts are not compared.",
+ "summary": {
+  "match": true,
+  "differences": [],
+  "profiles": [
+   {
+    "name": "r1-ws",
+    "productionEvents": 23,
+    "localEvents": 23
+   },
+   {
+    "name": "r1-lp",
+    "productionEvents": 23,
+    "localEvents": 23
+   },
+   {
+    "name": "r2-ws",
+    "productionEvents": 23,
+    "localEvents": 23
+   },
+   {
+    "name": "r2-lp",
+    "productionEvents": 23,
+    "localEvents": 23
+   }
+  ],
+  "unorderedWithinStep": true
+ }
+}

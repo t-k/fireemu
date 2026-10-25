@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d7e58a8895ec23e4ad44ea4fa1be227a3e4f9d66a6ddf24c402976639739be3d # shrinks to receiver = 2, hold = 1, elapsed = 2
+cc 1d030134623fd1b64c9660f2e083458ae0c67fe0a392ce65e3d3cd3b2c92fdaf # shrinks to receiver = 2, idle_close = 503255, elapsed = 503255

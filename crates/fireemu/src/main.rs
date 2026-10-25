@@ -2710,6 +2710,16 @@ fn start_index_reload_supervisor(
     });
 }
 
+/// The text indexes an index reload replaces: only an Enterprise database has any.
+fn file_text_reload(cfg: &RuntimeConfig) -> Option<FileTextReload> {
+    (cfg.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise).then(|| {
+        FileTextReload {
+            project: cfg.auth_project.clone(),
+            production_exact: cfg.production_exact,
+        }
+    })
+}
+
 /// Replaces the reloaded file's text indexes in the attached catalog, under its lock, and
 /// returns the notes for the entries it skipped. Without a text reload or a catalog there is
 /// nothing to replace.
@@ -2769,13 +2779,7 @@ fn start_firestore_config_reload_supervisors(
         start_rules_reload_supervisor(path.clone(), "Storage rules", slot, barrier);
     }
     let checks = cfg.index_file_checks();
-    let text =
-        (cfg.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise).then(|| {
-            FileTextReload {
-                project: cfg.auth_project.clone(),
-                production_exact: cfg.production_exact,
-            }
-        });
+    let text = file_text_reload(cfg);
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.indexes {
             start_index_reload_supervisor(
@@ -5070,6 +5074,21 @@ mod config_reload_tests {
         );
         drop(backend);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Only an Enterprise daemon reloads text indexes, for its own project and profile.
+    #[test]
+    fn only_an_enterprise_daemon_reloads_text_indexes() {
+        let mut cfg = RuntimeConfig {
+            auth_project: "demo-app".to_owned(),
+            production_exact: true,
+            ..Default::default()
+        };
+        assert!(file_text_reload(&cfg).is_none());
+        cfg.edition = FirestoreEdition::Enterprise;
+        let text = file_text_reload(&cfg).unwrap();
+        assert_eq!(text.project, "demo-app");
+        assert!(text.production_exact);
     }
 
     /// Review S10: an Enterprise index reload replaces the file's text indexes in the catalog

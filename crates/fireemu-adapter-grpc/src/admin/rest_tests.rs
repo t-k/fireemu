@@ -4736,3 +4736,21 @@ fn native_text_admin_delete_finished_operation_without_prior_read() {
     let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
     assert_eq!(call(&state, "GET", &index, Value::Null).1["state"], "READY");
 }
+
+/// The index-file reload reaches the very catalog both transports search.
+#[test]
+fn text_index_catalog_is_the_attached_search_catalog() {
+    let (state, _) = enterprise_native_state(true);
+    assert!(state.local.text_index_catalog().is_none());
+    let catalog = Arc::new(Mutex::new(
+        fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+    ));
+    state
+        .local
+        .set_text_indexes(Arc::clone(&catalog), false)
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &state.local.text_index_catalog().unwrap(),
+        &catalog
+    ));
+}

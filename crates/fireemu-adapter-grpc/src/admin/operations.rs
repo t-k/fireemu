@@ -831,7 +831,7 @@ pub(crate) fn route(
     let store = state.local.admin().operations();
     // Review S9: a DELETE observes its operation as a GET does, so a build past its deadline
     // completes before the done check instead of waiting for a read.
-    if method == "GET" || (method == "DELETE" && rest.len() == 1 && action.is_none()) {
+    if matches!(method, "GET" | "DELETE") {
         // Resolve locally retained identities before admission. An absent view is a404;
         // an ordinary or terminal operation reads its audit without touching catalog work.
         let observed = match rest {

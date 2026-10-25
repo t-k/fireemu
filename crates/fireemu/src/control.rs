@@ -1681,6 +1681,23 @@ mod tests {
         );
     }
 
+    /// The entry's scope and search options reach the definition.
+    #[test]
+    fn file_text_indexes_keep_the_scope_and_search_options() {
+        let mut index = json!({"collectionGroup": "posts", "queryScope": "COLLECTION_GROUP", "fields": [search("body")]});
+        index["searchIndexOptions"] =
+            json!({"textLanguage": "en", "textLanguageOverrideFieldPath": "lang"});
+        let (catalog, _) = file_text(&json!({"indexes": [index]}), false).unwrap();
+        let definition = catalog.get("demo-app", "(default)", "file-text-0").unwrap();
+        assert_eq!(definition.query_scope, IndexQueryScope::CollectionGroup);
+        assert_eq!(
+            definition.language_override,
+            fireemu_core_firestore::text_index::LanguageOverridePolicy::ExplicitField(
+                FieldPath::parse("lang").unwrap()
+            )
+        );
+    }
+
     /// Review S1: shapes the deploy accepts but local search cannot serve are skipped with a
     /// note in the default profile; productionExact keeps refusing them at start.
     #[test]

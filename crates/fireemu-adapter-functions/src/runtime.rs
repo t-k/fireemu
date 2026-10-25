@@ -2456,8 +2456,8 @@ impl FunctionsRuntime {
     /// never fit the local event budget, however empty the queue (review S4, 2026-10-25):
     /// production accepts such a write, so refusing it would fail every retry. The count is
     /// the resource report's `admission.database_fanout_dropped`; the first one in a session
-    /// is also printed.
-    pub fn drop_database_fanout(&self, instance: &str, reason: &str) {
+    /// is also printed, and only then is `true` returned.
+    pub fn drop_database_fanout(&self, instance: &str, reason: &str) -> bool {
         let first = self.inner.lock().is_ok_and(|mut inner| {
             let count = inner
                 .admission_refusals
@@ -2473,6 +2473,7 @@ impl FunctionsRuntime {
                  admission.{DATABASE_FANOUT_DROPPED} in the resource diagnostics"
             );
         }
+        first
     }
 
     /// Reserves an RTDB source operation's complete trigger fanout before data publication.
@@ -2581,7 +2582,7 @@ impl FunctionsRuntime {
             self.reserve_drafts(EventSource::Database, drafts, &mut inner)
         })();
         if let Some(reason) = oversized {
-            self.drop_database_fanout(&commit.instance, reason);
+            let _ = self.drop_database_fanout(&commit.instance, reason);
             return Ok(self.empty_event_reservation());
         }
         if let Err(error) = &result {

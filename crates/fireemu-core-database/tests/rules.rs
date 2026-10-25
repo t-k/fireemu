@@ -1161,8 +1161,21 @@ fn coverage_histograms_stay_bounded_over_many_evaluations() {
             None => 0,
             Some(other) => panic!("omitted {other:?}"),
         };
-        if top {
+        assert!(
+            !matches!(node.get("values-omitted"), Some(Json::Number(count)) if count.as_f64() == 0.0),
+            "an empty omitted count is left out, as the official report has no such field"
+        );
+        // `now` is evaluated every time (the first operand is false) with a new value.
+        if top || node["text"] == Json::string("now") {
             assert_eq!(kept + omitted, EVALUATIONS, "{:?}", node["text"]);
+        }
+        if node["text"] == Json::string("now") {
+            assert_eq!(
+                omitted,
+                EVALUATIONS
+                    - i64::try_from(fireemu_core_database::rules::COVERAGE_VALUES_PER_EXPRESSION)
+                        .unwrap()
+            );
         }
         if let Some(Json::Array(children)) = node.get("children") {
             pending.extend(children.iter().map(|child| (child, false)));

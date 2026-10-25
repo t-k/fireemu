@@ -276,6 +276,75 @@ async fn database_fanout_beyond_the_whole_budget_is_dropped_without_charging_rec
     runtime.shutdown().await;
 }
 
+fn outbox_bytes(runtime: &FunctionsRuntime) -> u64 {
+    runtime
+        .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+        .unwrap()
+        .gauges
+        .into_iter()
+        .find(|gauge| gauge.id == "outbox.bytes")
+        .unwrap()
+        .current
+}
+
+/// The budget is inclusive: exactly 4096 events, or exactly 64 MiB, fit an empty queue and are
+/// reserved, never dropped.
+#[tokio::test]
+async fn database_fanout_of_exactly_the_whole_budget_is_reserved() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_BYTES;
+    let (runtime, _) = runtime(false).await;
+    let mut change = commit();
+    change.data = user_changes(MAX_ACTIVE_EVENT_RECORDS);
+    let reservation = runtime.reserve_database_events(&change).unwrap();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        MAX_ACTIVE_EVENT_RECORDS
+    );
+    drop(reservation);
+    // Eight events of exactly an eighth of the byte budget each: measure one event's overhead
+    // with an empty string, then pad.
+    let events = |padding: usize| {
+        let mut change = commit();
+        change.data = DatabaseChangeData::References(
+            (0..8)
+                .map(|n| DatabaseReferenceChange {
+                    reference: format!("/users/id{n}"),
+                    before: serde_json::Value::Null,
+                    after: json!("x".repeat(padding)),
+                })
+                .collect(),
+        );
+        change
+    };
+    let probe = runtime.reserve_database_events(&events(0)).unwrap();
+    let overhead = usize::try_from(outbox_bytes(&runtime)).unwrap() / 8;
+    drop(probe);
+    let exact = events(MAX_ACTIVE_EVENT_BYTES / 8 - overhead);
+    let reservation = runtime.reserve_database_events(&exact).unwrap();
+    assert_eq!(
+        usize::try_from(outbox_bytes(&runtime)).unwrap(),
+        MAX_ACTIVE_EVENT_BYTES
+    );
+    drop(reservation);
+    assert_eq!(dropped_fanouts(&runtime), 0);
+    // One byte more can never fit.
+    let over = events(MAX_ACTIVE_EVENT_BYTES / 8 - overhead + 1);
+    drop(runtime.reserve_database_events(&over).unwrap());
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    assert_eq!(outbox_bytes(&runtime), 0);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn only_the_first_dropped_fanout_of_a_session_is_printed() {
+    let (runtime, _) = runtime(false).await;
+    assert!(runtime.drop_database_fanout("app-first", "test"));
+    assert!(!runtime.drop_database_fanout("app-first", "test"));
+    assert_eq!(dropped_fanouts(&runtime), 2);
+    runtime.shutdown().await;
+}
+
 /// A fanout that fits an empty queue but not the current one stays a refusal: the caller
 /// answers 503 and a retry succeeds once deliveries drain.
 #[tokio::test]

@@ -3026,23 +3026,6 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
             .any(|pattern| pattern.overlaps(&scope))
     }
 
-    fn capture_references(
-        &self,
-        namespace: &str,
-        before: &fireemu_adapter_database::changes::Tree,
-        after: &fireemu_adapter_database::changes::Tree,
-    ) -> Result<
-        Option<Vec<fireemu_adapter_database::changes::Path>>,
-        fireemu_core_types::admission::EventAdmissionError,
-    > {
-        self.capture_references_within(
-            namespace,
-            before,
-            after,
-            &fireemu_adapter_database::changes::Path::root(),
-        )
-    }
-
     fn capture_references_within(
         &self,
         namespace: &str,
@@ -3069,7 +3052,7 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
             // never be admitted; production accepts the write (review S4), so it proceeds
             // without them.
             Err(fireemu_core_types::admission::EventAdmissionError::Capacity(_)) => {
-                self.runtime.drop_database_fanout(
+                let _ = self.runtime.drop_database_fanout(
                     namespace,
                     "the changed trigger references exceed the whole local event budget",
                 );
@@ -6521,13 +6504,14 @@ while True:
         assert!(!other_region.interested("demo-app-default-rtdb"));
         let empty = database_bridge_tree(&serde_json::Value::Null);
         let after = database_bridge_tree(&json!({"users":{"a":1}}));
+        let root = fireemu_adapter_database::changes::Path::root();
         assert!(sink
-            .capture_references("another-project-default-rtdb", &empty, &after)
+            .capture_references_within("another-project-default-rtdb", &empty, &after, &root)
             .unwrap()
             .unwrap()
             .is_empty());
         assert!(other_region
-            .capture_references("demo-app-default-rtdb", &empty, &after)
+            .capture_references_within("demo-app-default-rtdb", &empty, &after, &root)
             .unwrap()
             .unwrap()
             .is_empty());

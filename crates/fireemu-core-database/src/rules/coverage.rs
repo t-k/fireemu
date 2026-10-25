@@ -379,6 +379,47 @@ mod tests {
     }
 
     #[test]
+    fn the_string_budget_is_64_kib_inclusive() {
+        let mut histogram = Histogram::default();
+        histogram.record(Json::String("x".repeat(65_536)));
+        assert_eq!(histogram.entries.len(), 1, "exactly 64 KiB is kept");
+        histogram.record(Json::String("y".to_owned()));
+        assert_eq!((histogram.entries.len(), histogram.omitted), (1, 1));
+    }
+
+    #[test]
+    fn distinct_numbers_land_in_distinct_buckets() {
+        // The index is what keeps a record O(1); collapsing numbers into one bucket would
+        // bring back the linear scan.
+        let mut histogram = Histogram::default();
+        for value in [
+            Json::Number(Number::Int(1)),
+            Json::Number(Number::Int(2)),
+            Json::Number(Number::Double(1.5)),
+            Json::Number(Number::Double(-7.0)),
+        ] {
+            histogram.record(value);
+        }
+        assert_eq!(histogram.index.len(), 4);
+    }
+
+    #[test]
+    fn object_values_charge_their_keys_and_strings() {
+        let value = Json::Object(
+            [
+                ("ab".to_owned(), Json::String("cde".to_owned())),
+                (
+                    "f".to_owned(),
+                    Json::Array(vec![Json::String("gh".to_owned()), Json::Null]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(super::string_bytes(&value), 8);
+    }
+
+    #[test]
     fn equal_numbers_of_either_kind_share_one_entry() {
         let mut histogram = Histogram::default();
         for value in [

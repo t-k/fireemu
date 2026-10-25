@@ -388,7 +388,7 @@
     }
   },
   "integratedRegression": {
-    "integrationCommit": "aca1e070be348e1418cc86ae349e4c5eda93970a",
+    "integrationCommit": "d51c9f6994adcf713546b65dbc9d300194a3a2c0",
     "kind": "fs-text-search-replay-comparison-v1",
     "comparisons": [
       {

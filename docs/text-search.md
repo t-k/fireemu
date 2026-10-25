@@ -74,13 +74,24 @@ Control-managed backfill advances only through explicit control calls; advancing
 
 A query is limited to 8,192 UTF-8 bytes and 64 clauses. The current query language supports AND terms, quoted phrases that must occur in the same field, and exclusions using `-term` or `-phrase`. Queries with no positive searchable terms, including exclusions-only queries, match no documents. The retained legacy qualified-quoted development form applies field restrictions; unquoted colons delimit ordinary conjunctive terms.
 
-Only string values are indexed. Development analysis applies NFKC normalization and retains full default case folding. A scalar whose canonical decomposition consists of one ASCII Latin base followed only by combining marks folds to that base, before case folding for indexed text and after case folding for queries. Standalone marks and non-Latin bases are retained. This purpose-dependent rule is a bounded approximation, not a reconstruction of the native analyzer. The existing UAX #29 token boundaries and individual CJK ideographs remain unchanged; native CJK segmentation is still unverified. Language codes and tags receive syntactic validation, but analysis remains language-neutral. The score is an approximate BM25 score. Results use creation time descending and document path ascending to break ties. `retrievalDepth` chooses the newest matching documents before ranking; offset and limit apply afterward.
+Only string values are indexed. Development analysis applies NFKC normalization and retains full default case folding. A scalar whose canonical decomposition consists of one ASCII Latin base followed only by combining marks folds to that base, before case folding for indexed text and after case folding for queries. Standalone marks and non-Latin bases are retained. This purpose-dependent rule is a bounded approximation, not a reconstruction of the native analyzer. The existing UAX #29 token boundaries and individual CJK ideographs remain unchanged; native CJK segmentation is still unverified. Language codes and tags receive syntactic validation, but analysis remains language-neutral. `retrievalDepth` chooses the newest matching documents before ranking; offset and limit apply afterward.
 
 REST and gRPC capture the immutable source and catalog together. A later search rebuilds from a new snapshot and sees committed writes. This behavior makes no incremental-index performance claim.
 
+### Result order and `score()`
+
+Without a sort, results are ordered newest creation time first. With `sort: score().descending()`, results are ordered by a relevance score, and equal scores keep the newest creation time first, then ascending document path. The relevance score follows the result orders recorded from production:
+
+- Each positive query token contributes more as it occurs more often across the searched fields, with diminishing increments. Occurrences in different fields count together.
+- Each pair of consecutive positive query tokens (`a b`) adds a bonus when `a` is immediately followed by `b` in the same field, growing with the number of such adjacencies. One adjacency outweighs one extra occurrence of a token. The reverse order (`b a`), a gap of any size, or the two tokens in different fields earn no bonus. An excluded clause ends the sequence.
+- Quoted phrases are scored like the same unquoted tokens; the quotes only restrict which documents match.
+- Document length and the rest of the corpus do not affect a document's score: padding words, other documents, other collections and other databases leave it unchanged, as observed in production.
+
+The numeric `score()` values are an approximation (`0.6 × occurrences^(1/3)` per token and `0.3 × adjacencies^(3/4)` per consecutive pair) and may differ from production's values. Production also weighs different terms differently by a term-specific factor that the emulator does not reproduce, so the order of documents that differ only in which query term they repeat is unverified.
+
 ## Fidelity and limitations
 
-The emulator's ordinary strict profile works by default. Setting `productionExact: true` refuses every text search with `FS_TEXT_UNOBSERVED` until the search behavior has been compared with actual production observations. The lexical matching behavior is approximate and does not claim production parity.
+The emulator's ordinary strict profile works by default. Setting `productionExact: true` refuses every text search with `FS_TEXT_UNOBSERVED` until the search behavior has been compared with actual production observations. The lexical matching behavior is approximate and does not claim production parity. Score ordering reproduces every recorded production order (see Result order and `score()`), but numeric scores are not production values.
 
 The current implementation does not support stemming, synonyms, typo tolerance, morphology, or language autodetection. It also does not support geospatial stages, general boolean-expression trees, search-stage select, nested score aliases, non-score sort, transactions, `readTime`, proxy mode, or full Admin index management.
 

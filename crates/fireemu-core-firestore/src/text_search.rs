@@ -1,4 +1,4 @@
-//! Deterministic lexical-v1 search. Language tags do not enable morphology, stemming, or autodetection. This module makes no production equivalence claim.
+//! Deterministic lexical-v1 search. Language tags do not enable morphology, stemming, or autodetection. Membership makes no production equivalence claim; score ordering follows the recorded production orders (see `relevance`).
 use crate::{
     field_path::FieldPath,
     path::DocumentPath,
@@ -261,13 +261,13 @@ impl SearchQuery {
         })
     }
 }
-/// Result ordering; ties use ascending document resource names.
+/// Result ordering. Ties keep the newest creation time first, then ascending document resource names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchOrder {
     /// Newest creation time first.
     #[default]
     CreationDescending,
-    /// Largest BM25 approximation first.
+    /// Largest relevance score first.
     ScoreDescending,
 }
 /// Pagination and candidate selection. Retrieval depth selects newest matching documents before ranking.
@@ -282,19 +282,46 @@ pub struct SearchOptions {
     /// Ranking policy.
     pub order: SearchOrder,
 }
-/// A matching document and its approximate BM25 score.
+/// A matching document and its relevance score.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {
     /// Matching document name.
     pub path: DocumentPath,
-    /// Approximate BM25 relevance.
+    /// Relevance score (see `SearchIndex::search`). The ordering it induces follows recorded production
+    /// orders; the numeric value is an approximation of production `score()`.
     pub score: f64,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IndexedDocument {
     path: DocumentPath,
     created_at: LogicalInstant,
-    length: usize,
+}
+/// Scale of one query token's occurrence contribution.
+const OCCURRENCE_SCALE: f64 = 0.6;
+/// Scale of one consecutive query-token pair's adjacency contribution.
+const ADJACENCY_SCALE: f64 = 0.3;
+/// Contribution of one positive query token that occurs `occurrences` times across the
+/// searched fields: `0.6 * occurrences^(1/3)`, zero when absent.
+///
+/// It grows without bound but with diminishing increments, and it ignores document length and
+/// corpus statistics: production gave equal scores to the same occurrence count with or without
+/// 20 padding tokens, and in different collections and databases.
+#[allow(clippy::cast_precision_loss)] // Counts are far below 2^52.
+#[must_use]
+pub fn occurrence_weight(occurrences: usize) -> f64 {
+    OCCURRENCE_SCALE * (occurrences as f64).cbrt()
+}
+/// Contribution of one consecutive pair of positive query tokens `(a, b)` whose ordered
+/// adjacency (`a` immediately followed by `b` in one field) occurs `adjacencies` times:
+/// `0.3 * adjacencies^(3/4)`, zero when absent.
+///
+/// The first adjacency (0.3) outweighs any single extra occurrence of one token (at most
+/// `0.6 * (2^(1/3) - 1)`, about 0.156), as production ranked an exact reverse-order pair above
+/// a document with one more occurrence of a term.
+#[allow(clippy::cast_precision_loss)] // Counts are far below 2^52.
+#[must_use]
+pub fn adjacency_weight(adjacencies: usize) -> f64 {
+    ADJACENCY_SCALE * (adjacencies as f64).powf(0.75)
 }
 /// Immutable corpus with positional postings keyed by term, document, then indexed field.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -380,11 +407,9 @@ impl SearchIndex {
                 }
             }
             let id = index.documents.len();
-            let mut length = 0;
             for (field_id, field) in index.fields.iter().enumerate() {
                 if let Some(Value::String(text)) = get_field(&document.fields, field) {
                     for (position, term) in analyze(text).into_iter().enumerate() {
-                        length += 1;
                         index
                             .postings
                             .entry(term)
@@ -400,7 +425,6 @@ impl SearchIndex {
             index.documents.push(IndexedDocument {
                 path: document.path.clone(),
                 created_at: document.created_at,
-                length,
             });
         }
         Ok(index)
@@ -491,8 +515,64 @@ impl SearchIndex {
                 .all(|clause| self.matches(id, clause) != clause.excluded)
         }
     }
+    /// Positions of `term` in `field` of document `id`.
+    fn positions(&self, term: &str, id: usize, field: usize) -> Option<&Vec<usize>> {
+        self.postings.get(term)?.get(&id)?.get(&field)
+    }
+    fn field_allowed(&self, clause: &Clause, field: usize) -> bool {
+        clause
+            .field
+            .as_ref()
+            .is_none_or(|p| p == &self.fields[field])
+    }
+    /// Relevance of document `id`: every positive query token adds
+    /// [`occurrence_weight`] of its occurrences across the clause's fields, and every pair of
+    /// consecutive positive query tokens adds [`adjacency_weight`] of its ordered adjacencies
+    /// within one field. Excluded clauses end a token sequence. Quoted and unquoted tokens are
+    /// scored alike; phrases only restrict membership.
+    fn relevance(&self, id: usize, query: &SearchQuery) -> f64 {
+        let mut score = 0.0;
+        let mut previous: Option<(&str, &Clause)> = None;
+        for clause in &query.clauses {
+            if clause.excluded {
+                previous = None;
+                continue;
+            }
+            for term in &clause.tokens {
+                let occurrences = (0..self.fields.len())
+                    .filter(|field| self.field_allowed(clause, *field))
+                    .filter_map(|field| self.positions(term, id, field))
+                    .map(Vec::len)
+                    .sum();
+                score += occurrence_weight(occurrences);
+                if let Some((before, before_clause)) = previous {
+                    let adjacencies = (0..self.fields.len())
+                        .filter(|field| {
+                            self.field_allowed(clause, *field)
+                                && self.field_allowed(before_clause, *field)
+                        })
+                        .filter_map(|field| {
+                            Some((
+                                self.positions(before, id, field)?,
+                                self.positions(term, id, field)?,
+                            ))
+                        })
+                        .map(|(first, second)| {
+                            first
+                                .iter()
+                                .filter(|p| second.binary_search(&(**p + 1)).is_ok())
+                                .count()
+                        })
+                        .sum();
+                    score += adjacency_weight(adjacencies);
+                }
+                previous = Some((term, clause));
+            }
+        }
+        score
+    }
     /// Evaluate conjunction/exclusion, select retrieval depth by creation order, rank, then paginate.
-    #[allow(clippy::cast_precision_loss)] // BM25 is explicitly an approximate floating-point score.
+    /// Score ranking is stable, so equal scores keep the newest-first, then path, candidate order.
     pub fn search(
         &self,
         query: &SearchQuery,
@@ -529,59 +609,15 @@ impl SearchIndex {
         if let Some(depth) = options.retrieval_depth {
             candidates.truncate(depth);
         }
-        let total = self.documents.len() as f64;
-        let average = (self.documents.iter().map(|d| d.length).sum::<usize>() as f64
-            / total.max(1.0))
-        .max(1.0);
         let mut hits: Vec<SearchHit> = candidates
             .into_iter()
-            .map(|id| {
-                let mut score = 0.0;
-                for clause in query.clauses.iter().filter(|c| !c.excluded) {
-                    for term in &clause.tokens {
-                        if let Some(postings) = self.postings.get(term) {
-                            let frequency = postings.get(&id).map_or(0, |fields| {
-                                fields
-                                    .iter()
-                                    .filter(|(field, _)| {
-                                        clause
-                                            .field
-                                            .as_ref()
-                                            .is_none_or(|p| p == &self.fields[**field])
-                                    })
-                                    .map(|(_, positions)| positions.len())
-                                    .sum::<usize>()
-                            }) as f64;
-                            let df = postings
-                                .values()
-                                .filter(|fields| {
-                                    fields.keys().any(|field| {
-                                        clause
-                                            .field
-                                            .as_ref()
-                                            .is_none_or(|p| p == &self.fields[*field])
-                                    })
-                                })
-                                .count() as f64;
-                            let idf = (1.0 + (total - df + 0.5) / (df + 0.5)).ln();
-                            let denominator = frequency
-                                + 1.2 * (0.25 + 0.75 * self.documents[id].length as f64 / average);
-                            score += idf * frequency * 2.2 / denominator;
-                        }
-                    }
-                }
-                SearchHit {
-                    path: self.documents[id].path.clone(),
-                    score,
-                }
+            .map(|id| SearchHit {
+                path: self.documents[id].path.clone(),
+                score: self.relevance(id, query),
             })
             .collect();
         if options.order == SearchOrder::ScoreDescending {
-            hits.sort_by(|a, b| {
-                b.score
-                    .total_cmp(&a.score)
-                    .then_with(|| a.path.cmp_resource_name(&b.path))
-            });
+            hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         }
         Ok(hits
             .into_iter()

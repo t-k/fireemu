@@ -680,8 +680,8 @@ fn latin_purpose_search_keeps_greek_and_phrase_positions() {
     ];
     let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
     assert_eq!(names(&index, "iris"), ["docs/copper"]);
-    // Review S8: the indexed text matches a query of itself.
-    assert_eq!(names(&index, "İris"), ["docs/copper"]);
+    // Recorded production: a query holding `İ` matched no document, not even its own word.
+    assert!(names(&index, "İris").is_empty());
     assert_eq!(names(&index, "\"creme brulee\""), ["docs/silver"]);
     assert_eq!(names(&index, "ά"), ["docs/jade"]);
     assert_eq!(names(&index, "α"), ["docs/opal"]);
@@ -696,13 +696,14 @@ proptest::proptest! {
         let docs = [document(&first, if in_body { "" } else { "İris" }, if in_body { "İris" } else { "" }, 1), document(&second, "unrelated", "", 2)];
         let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
         proptest::prop_assert_eq!(names(&index, "iris"), vec![format!("docs/{first}")]);
-        proptest::prop_assert_eq!(names(&index, "İris"), vec![format!("docs/{first}")]);
+        proptest::prop_assert!(names(&index, "İris").is_empty());
     }
 
-    /// Review S8: any indexed word matches a query that repeats it, including Latin letters
-    /// whose case folding expands into a base letter and a combining mark.
+    /// Any indexed word matches a query that repeats it, unless it holds a Latin letter whose
+    /// case folding splits off a combining mark (`İ`, `ẖ`, `ǰ`): the query keeps that mark and,
+    /// as recorded in production for `İstanbul`, matches nothing.
     #[test]
-    fn any_indexed_text_matches_a_query_of_itself(
+    fn indexed_text_matches_a_query_of_itself_unless_case_folding_splits_off_a_mark(
         letters in proptest::collection::vec(proptest::sample::select(vec![
             "a", "z", "İ", "I", "i", "ẖ", "ǰ", "É", "é", "ß", "ẞ", "Ω", "ά", "東", "ﬁ", "Å", "Ǆ",
         ]), 1..8)
@@ -711,6 +712,8 @@ proptest::proptest! {
         proptest::prop_assume!(!tokenize(&word).is_empty());
         let docs = [document("self", &word, "", 1), document("other", "unrelated", "", 2)];
         let index = SearchIndex::build(&definition(), &docs, tokenize).unwrap();
-        proptest::prop_assert_eq!(names(&index, &format!("\"{word}\"")), vec!["docs/self".to_owned()]);
+        let splits = letters.iter().any(|letter| ["İ", "ẖ", "ǰ"].contains(letter));
+        let expected = if splits { Vec::new() } else { vec!["docs/self".to_owned()] };
+        proptest::prop_assert_eq!(names(&index, &format!("\"{word}\"")), expected);
     }
 }

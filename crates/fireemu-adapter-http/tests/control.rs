@@ -3285,7 +3285,7 @@ fn latin_purpose_control_backfill_uses_index_analysis_for_real_source_postings()
     );
     assert_eq!(advance.status, 200, "{}", advance.body);
     assert_eq!(search("iris"), ["products/copper"]);
-    assert_eq!(search("İris"), ["products/copper"]);
+    assert!(search("İris").is_empty());
     let complete = handle(
         &s,
         "POST",
@@ -3295,5 +3295,5 @@ fn latin_purpose_control_backfill_uses_index_analysis_for_real_source_postings()
     assert_eq!(complete.status, 200, "{}", complete.body);
     assert_eq!(search("iris"), ["products/copper"]);
     assert_eq!(search("creme"), ["products/silver"]);
-    assert_eq!(search("İris"), ["products/copper"]);
+    assert!(search("İris").is_empty());
 }

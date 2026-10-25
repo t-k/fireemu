@@ -13,6 +13,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Add explicit local Enterprise text-index backfill, failure and repair controls with build generations and real positional posting data. Session snapshots and reset preserve scope boundaries.
 - Execute a finite local lexical `search` stage through REST and gRPC, with Unicode normalization, phrases, exclusions, indexed-field restrictions, approximate BM25 scores and current-snapshot update/delete reflection. Supported `searchConfig.textSpec` definitions load from configured index files. `productionExact` refuses unobserved search semantics; no production text-search equivalence is claimed.
 
+### Fixed
+
+- Text search queries keep the combining mark that case folding splits off a Latin letter such as `İ`, as recorded in production: the query `İstanbul` matches no document, while `istanbul` matches a document holding `İstanbul`. Every recorded production search response, including those with zero or one result, is now replayed offline for membership.
+
 ## [0.29.0] - 2026-10-23
 
 ### Added

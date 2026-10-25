@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { adminClient, rulesFor, runScenario, compareJournals, assertNoSecrets, verifyPacket, transportOf, parseKeyFile, redact, writeOutputs, SOURCES, CAPS } from './cv11-genuine-auth.mjs';
+import { adminClient, rulesFor, runScenario, compareJournals, assertNoSecrets, verifyPacket, transportOf, parseKeyFile, redact, writeOutputs, LAUNCH, SOURCES, CAPS } from './cv11-genuine-auth.mjs';
 
 const FORBIDDEN = JSON.stringify({ error: { code: 403, message: 'denied for ya29.a0secret and AIzaSyA-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', status: 'PERMISSION_DENIED' } });
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}';
@@ -342,4 +342,8 @@ test('S2: an output refused for a secret leaves result.json not closed', () => {
   assert.equal(written.status, 'needs-recovery'); assert.equal(written.outputRefused, 'journal.json');
   const ok = mkdtempSync(path.join(tmpdir(), 'cv11-out-'));
   assert.equal(writeOutputs(ok, 'local', { ...result, profiles: [] }, 'parity1', ['pw-123456']), 'closed');
+});
+
+test('S3: the browser is launched without Playwright signal handlers (they would exit mid-cleanup)', () => {
+  assert.deepEqual(LAUNCH, { headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
 });

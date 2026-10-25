@@ -301,6 +301,10 @@ export function verifyPacket(file, expected) {
   return packet;
 }
 
+// Playwright's own signal handlers exit on SIGINT (code 130) while cleanup may still be running; the
+// recorder handles signals itself.
+export const LAUNCH = { headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false };
+
 // Long polling opens no WebSocket; any WebSocket means the SDK used that transport.
 export const transportOf = (counts) => (counts.ws > 0 ? 'ws' : 'lp');
 
@@ -317,8 +321,7 @@ export function browserRunner({ modules, allowHost, page: pageConfig, stop = {} 
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const origin = `127.0.0.1:${server.address().port}`, counts = { http: 0, ws: 0, blocked: 0 }, journal = [];
-    // Playwright's own handlers would exit on SIGINT before cleanup; the recorder handles signals itself.
-    const browser = await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+    const browser = await chromium.launch(LAUNCH);
     stop.closeBrowser = () => browser.close().catch(() => {});
     let overCap;
     const capped = new Promise((_, reject) => { overCap = () => reject(Error('browser request cap reached')); });

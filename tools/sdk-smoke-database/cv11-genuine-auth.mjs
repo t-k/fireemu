@@ -20,7 +20,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const SOURCES = ['cv11-genuine-auth.mjs', 'cv11-genuine-auth-page.js'];
 export const PROFILES = [[1, 'ws'], [1, 'lp'], [2, 'ws'], [2, 'lp']].map(([round, transport]) => ({ round, transport, name: `r${round}-${transport}` }));
 // observe/cleanup: admin requests per phase; mutations: admin writes overall; browser caps per profile.
-export const CAPS = { observe: 70, cleanup: 30, mutations: 45, pollsPerOperation: 12, browserHttp: 150, browserWs: 6 };
+export const CAPS = { observe: 80, cleanup: 30, mutations: 45, pollsPerOperation: 12, browserHttp: 150, browserWs: 6 };
+// After the API enable, a 403 on a read-only setup GET is read as "not yet propagated" (production-1:
+// the instance GET answered 200 while the list answered 403) and retried within this total wait.
+const PROPAGATION_MS = 120000;
 const INSTANCE = 'fireemu-q-rtdb2', LOCATION = 'us-central1', TIMEOUT_MS = 25000;
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 class Stop extends Error {}
@@ -30,12 +33,24 @@ export function rulesFor(prefix) {
   return { rules: { '.read': false, '.write': false, [top]: { [run]: { $round: { users: { $uid: { '.read': own, '.write': own } } } } } } };
 }
 
+// Masks key-, token- and address-shaped text and the listed secrets, and caps the size, so a log row
+// can always be written (a refusal after a request was sent would lose that request).
+export function redact(text, secrets = []) {
+  let out = String(text);
+  for (const secret of secrets) if (secret) out = out.split(secret).join('***');
+  out = out.replace(/AIza[0-9A-Za-z_-]{20,}|eyJ[0-9A-Za-z_.-]{8,}|ya29\.[0-9A-Za-z_.-]+|Bearer\s+\S+|[^\s"'<>]+@[^\s"'<>]+\.[A-Za-z]{2,}/g, '***');
+  return out.length > 2048 ? `${out.slice(0, 2048)}...[${out.length} chars]` : out;
+}
+
 // Every admin request is counted against the caps before it is sent. Only a complete 2xx with a
-// readable body ('ok') or a complete 4xx ('refused') is a known answer; anything else is 'unknown'.
-export function adminClient({ fetchImpl = fetch, headers, log, caps = CAPS }) {
-  const counts = { observe: 0, cleanup: 0, mutations: 0 };
+// readable body ('ok') or a complete 4xx ('refused') is a known answer; anything else is 'unknown',
+// and so is any answer whose log row could not be written. After a stop request (signal), no
+// further observation request is sent; cleanup requests still are.
+export function adminClient({ fetchImpl = fetch, headers, log, caps = CAPS, stop = {}, secrets = [] }) {
+  const counts = { observe: 0, cleanup: 0, mutations: 0, unknown: 0, logFailures: 0 }, unknownAnswers = [];
   let phase = 'observe';
   async function call(step, method, url, body, { raw = false } = {}) {
+    if (phase === 'observe' && stop.requested) throw new Stop(`stop requested before ${step}`);
     const mutation = method !== 'GET' && !new URL(url).pathname.endsWith('accounts:lookup');
     if (counts[phase] >= caps[phase] || (mutation && counts.mutations >= caps.mutations)) throw new Stop(`cap reached before ${step}`);
     counts[phase]++;
@@ -49,10 +64,13 @@ export function adminClient({ fetchImpl = fetch, headers, log, caps = CAPS }) {
       outcome = status >= 200 && status < 300 ? 'ok' : status >= 400 && status < 500 ? 'refused' : 'unknown';
       if (outcome === 'ok' && !raw) try { value = text === '' ? undefined : JSON.parse(text); } catch { outcome = 'unknown'; }
     } catch { outcome = 'unknown'; }
-    log({ step, phase, method, url, status, outcome, bytes: Buffer.byteLength(text) });
-    return { outcome, value, text };
+    const row = { step, phase, method, url, status, outcome, bytes: Buffer.byteLength(text) };
+    if (outcome !== 'ok') row.body = redact(text, secrets);
+    try { log(row); } catch { counts.logFailures++; outcome = 'unknown'; }
+    if (outcome === 'unknown') { counts.unknown++; unknownAnswers.push(step); }
+    return { outcome, status, value, text };
   }
-  return { call, counts, cleanup: () => { phase = 'cleanup'; } };
+  return { call, counts, unknownAnswers, cleanup: () => { phase = 'cleanup'; } };
 }
 
 function urls(o) {
@@ -73,7 +91,16 @@ function urls(o) {
 // 'live' | 'deleted' (own 2xx delete, awaiting read-back) | 'gone' | 'unknown-delete'.
 // unresolved holds unknown creates and deletes: they are sticky and never re-sent.
 async function read(run, step, method, url, accept, body) {
-  const r = await run.call(step, method, url, body, { raw: method === 'GET' && url.includes('.settings/rules') });
+  const options = { raw: method === 'GET' && url.includes('.settings/rules') };
+  let r = await run.call(step, method, url, body, options);
+  // Bounded backoff 2, 4, 8, 16, 30, 30, 30 s (120 s in all), counted against the caps; GETs only.
+  for (let k = 1; method === 'GET' && run.propagation && r.outcome === 'refused' && r.status === 403; k++) {
+    const wait = Math.min(2000 * 2 ** (k - 1), 30000, PROPAGATION_MS - run.propagationWaited);
+    if (wait <= 0) break;
+    run.propagationWaited += wait;
+    await run.sleep(wait);
+    r = await run.call(`${step}-retry-${k}`, method, url, body, options);
+  }
   if (r.outcome !== 'ok' || !accept(r.value, r.text)) throw new Stop(`${step}: ${r.outcome}`);
   return r.value ?? r.text;
 }
@@ -112,6 +139,7 @@ async function setupProduction(run, sleep) {
   const u = run.u;
   await read(run, 'api-before', 'GET', u.service, (v) => v?.name === u.serviceName && v.state === 'DISABLED');
   await setApi(run, 'enable', sleep);
+  run.propagation = true;
   await read(run, 'instance-before', 'GET', u.instance, isInstance(run, 'DELETED'));
   await read(run, 'active-before', 'GET', u.list, (v) => !v?.instances?.length && !v?.nextPageToken);
   const back = await mutate(run, 'instance-undelete', 'instance', 'POST', `${u.instance}:undelete`, undefined, (v) => isInstance(run, 'ACTIVE')(v) || isInstance(run, 'DISABLED')(v));
@@ -203,29 +231,32 @@ async function cleanup(run, o, sleep) {
     },
     async () => { if (run.state.api === 'ours' && run.state.instance === 'baseline') await setApi(run, 'disable', sleep); },
   ];
-  for (const step of steps) try { await step(); } catch (e) { if (!(e instanceof Stop)) throw e; run.errors.push(e.message); }
+  for (const step of steps) try { await step(); } catch (e) { run.errors.push(e instanceof Stop ? e.message : `unexpected: ${e?.message}`); }
 }
 
 // Runs setup, the four profiles and cleanup. The status is 'closed' only when nothing is unknown
 // and every owned resource read back at its starting state; otherwise 'needs-recovery'.
 export async function runScenario(o) {
-  const admin = adminClient({ fetchImpl: o.fetchImpl, headers: o.headers, log: o.log });
-  const run = { admin, call: admin.call, u: urls(o), state: { api: 'baseline', instance: 'baseline', rules: 'baseline', data: 'baseline' }, users: new Map(), unresolved: [], errors: [] };
-  const sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   o.secrets ??= [];
+  const admin = adminClient({ fetchImpl: o.fetchImpl, headers: o.headers, log: o.log, stop: o.stop, secrets: o.secrets });
+  const run = { admin, call: admin.call, u: urls(o), propagation: false, propagationWaited: 0, state: { api: 'baseline', instance: 'baseline', rules: 'baseline', data: 'baseline' }, users: new Map(), unresolved: [], errors: [] };
+  const sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  run.sleep = sleep;
   const profiles = [];
   try {
     if (o.mode === 'production') await setupProduction(run, sleep);
     await installRules(run, o);
+    run.propagation = false;
     for (const prof of PROFILES) profiles.push(await runProfile(run, o, prof));
   } catch (e) {
-    if (!(e instanceof Stop)) run.errors.push(`unexpected: ${e.message}`);
-    else run.errors.push(e.message);
+    run.errors.push(e instanceof Stop ? e.message : `unexpected: ${e?.message}`);
   } finally {
     await cleanup(run, o, sleep);
   }
   const restored = Object.values(run.state).every((s) => s === 'baseline') && [...run.users.values()].every((s) => s === 'gone');
-  return { status: run.unresolved.length === 0 && restored ? 'closed' : 'needs-recovery', observationComplete: profiles.length === PROFILES.length, profiles, state: run.state, users: [...run.users.values()], unresolved: run.unresolved, errors: run.errors, counts: admin.counts };
+  // An unexpected error or an unwritten log row means a sent request may be unaccounted for.
+  const accounted = admin.counts.logFailures === 0 && !run.errors.some((e) => e.startsWith('unexpected'));
+  return { status: run.unresolved.length === 0 && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: admin.unknownAnswers, observationComplete: profiles.length === PROFILES.length, profiles, state: run.state, users: [...run.users.values()], unresolved: run.unresolved, errors: run.errors, counts: admin.counts };
 }
 
 // Compares two runs profile by profile. Step order is the observation; within one step the order
@@ -253,7 +284,9 @@ export function assertNoSecrets(text, secrets) {
 // The key file holds a JSON string or an object with exactly one of these fields (the shapes the
 // earlier sandbox loader accepted); anything else stops the run before any request.
 export function parseKeyFile(text) {
-  const doc = JSON.parse(text), fields = ['keyString', 'apiKey', 'api_key', 'key'];
+  let doc;
+  try { doc = JSON.parse(text); } catch { throw Error('API key file has an unexpected shape'); } // never echo the text
+  const fields = ['keyString', 'apiKey', 'api_key', 'key'];
   const values = typeof doc === 'string' ? [doc] : doc && !Array.isArray(doc) ? fields.filter((f) => f in doc).map((f) => doc[f]) : [];
   if (values.length !== 1 || !/^AIza[0-9A-Za-z_-]{35}$/.test(values[0])) throw Error('API key file has an unexpected shape');
   return values[0];
@@ -273,7 +306,7 @@ export const transportOf = (counts) => (counts.ws > 0 ? 'ws' : 'lp');
 
 // One profile in headless Chromium. The page and SDK bundles are served from loopback; only the
 // allowed hosts are reached, and HTTP requests and WebSockets are counted against the caps.
-export function browserRunner({ modules, allowHost, page: pageConfig }) {
+export function browserRunner({ modules, allowHost, page: pageConfig, stop = {} }) {
   const require = createRequire(path.join(path.resolve(modules), 'x.js'));
   const { chromium } = require('playwright');
   return async (prof, hooks) => {
@@ -284,7 +317,9 @@ export function browserRunner({ modules, allowHost, page: pageConfig }) {
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const origin = `127.0.0.1:${server.address().port}`, counts = { http: 0, ws: 0, blocked: 0 }, journal = [];
-    const browser = await chromium.launch({ headless: true });
+    // Playwright's own handlers would exit on SIGINT before cleanup; the recorder handles signals itself.
+    const browser = await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+    stop.closeBrowser = () => browser.close().catch(() => {});
     let overCap;
     const capped = new Promise((_, reject) => { overCap = () => reject(Error('browser request cap reached')); });
     try {
@@ -329,6 +364,19 @@ async function freePort() {
   return port;
 }
 
+// result.json first, then journal.json. If either refuses (it would hold a secret), result.json is
+// replaced by a minimal record that is never 'closed'. Returns the status written.
+export function writeOutputs(out, mode, result, prefixRoot, secrets) {
+  const write = (f, text) => writeFileSync(path.join(out, f), assertNoSecrets(text, secrets));
+  let refused;
+  for (const [f, value] of [['result.json', { ...result, profiles: undefined, prefixRoot }], ['journal.json', { mode, profiles: result.profiles }]]) {
+    try { write(f, `${JSON.stringify(value, null, 2)}\n`); } catch { refused ??= f; }
+  }
+  if (!refused) return result.status;
+  writeFileSync(path.join(out, 'result.json'), `${JSON.stringify({ status: 'needs-recovery', outputRefused: refused, resultStatus: result.status, counts: result.counts, unknownAnswers: result.unknownAnswers }, null, 2)}\n`);
+  return 'needs-recovery';
+}
+
 async function main(argv) {
   const opt = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
   if (argv[0] === 'compare') {
@@ -341,32 +389,37 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
   mkdirSync(out); // refuses an existing directory
-  const secrets = [], write = (f, text) => writeFileSync(path.join(out, f), assertNoSecrets(text, secrets));
-  const append = (f, row) => appendFileSync(path.join(out, f), assertNoSecrets(`${JSON.stringify(row)}\n`, secrets));
+  const secrets = [], stop = { requested: false };
+  // Logs are redacted, never refused: a row that cannot be written would hide a sent request.
+  const append = (f, row) => appendFileSync(path.join(out, f), `${redact(JSON.stringify(row), secrets).replace(/\n/g, ' ')}\n`);
+  // A signal or a crash stops the observation; cleanup then runs once through runScenario's finally.
+  const onStop = (why) => { if (!stop.requested) console.error(`cv11: ${why}: stopping the observation, cleanup continues`); stop.requested = true; stop.closeBrowser?.(); };
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => onStop(signal));
+  process.on('unhandledRejection', () => onStop('unhandled rejection'));
+  process.on('uncaughtException', () => onStop('uncaught exception'));
   const prefix = `${packet?.prefixRoot ?? 'parity20261025'}/cv11${randomBytes(5).toString('hex')}`;
-  const common = { prefix, secrets, log: (row) => append('requests.jsonl', row), event: (name, row) => append('events.jsonl', { profile: name, ...row }) };
+  const common = { prefix, secrets, stop, log: (row) => append('requests.jsonl', row), event: (name, row) => append('events.jsonl', { profile: name, ...row }) };
   let child, o;
   try {
     if (mode === 'local') {
       const [authPort, dbPort] = [await freePort(), await freePort()], projectId = 'demo-cv11', ns = 'demo-cv11-default-rtdb';
-      child = spawn(opt('--fireemu') ?? 'fireemu', ['up', '--only', 'auth,database', '--no-config-discovery', '--project', projectId, '--http-port', String(authPort), '--database-port', String(dbPort), '--ui-port', '0', '--hub-port', '0', '--logging-port', '0', '--log-verbosity', 'quiet', '--owner-stdin'], { stdio: ['pipe', 'ignore', 'inherit'] });
+      child = spawn(opt('--fireemu') ?? 'fireemu', ['up', '--only', 'auth,database', '--no-config-discovery', '--project', projectId, '--http-port', String(authPort), '--database-port', String(dbPort), '--ui-port', '0', '--hub-port', '0', '--logging-port', '0', '--log-verbosity', 'quiet', '--owner-stdin'], { stdio: ['pipe', 'ignore', 'inherit'], detached: true }); // own group: a terminal Ctrl-C reaches only us
       const db = `http://127.0.0.1:${dbPort}`, auth = `http://127.0.0.1:${authPort}`;
       for (let i = 0; ; i++) { try { await fetch(`${db}/.json?ns=${ns}`); await fetch(`${auth}/`); break; } catch { if (i > 150) throw Error('fireemu did not start'); await new Promise((r) => setTimeout(r, 200)); } }
-      const browser = browserRunner({ modules: opt('--modules') ?? path.join(here, 'node_modules'), allowHost: (h) => h === `127.0.0.1:${authPort}` || h === `127.0.0.1:${dbPort}`, page: { apiKey: 'fake-api-key', projectId, databaseURL: `${db}?ns=${ns}`, emulator: { auth, host: '127.0.0.1', dbPort } } });
+      const browser = browserRunner({ modules: opt('--modules') ?? path.join(here, 'node_modules'), allowHost: (h) => h === `127.0.0.1:${authPort}` || h === `127.0.0.1:${dbPort}`, stop, page: { apiKey: 'fake-api-key', projectId, databaseURL: `${db}?ns=${ns}`, emulator: { auth, host: '127.0.0.1', dbPort } } });
       o = { mode, local: { auth, db, ns, projectId }, headers: { authorization: 'Bearer owner' }, browser, ...common };
     } else {
       const apiKey = parseKeyFile(readFileSync(packet.keyFile, 'utf8'));
       const token = execFileSync(packet.gcloud, ['auth', 'application-default', 'print-access-token'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
       if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');
       secrets.push(apiKey, token);
-      const browser = browserRunner({ modules: packet.modules, allowHost: (h) => ['identitytoolkit.googleapis.com', 'securetoken.googleapis.com'].includes(h) || /^[a-z0-9-]+\.firebaseio\.com$/.test(h), page: { apiKey, projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com` } });
+      const browser = browserRunner({ modules: packet.modules, allowHost: (h) => ['identitytoolkit.googleapis.com', 'securetoken.googleapis.com'].includes(h) || /^[a-z0-9-]+\.firebaseio\.com$/.test(h), stop, page: { apiKey, projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com` } });
       o = { mode, packet, headers: { authorization: `Bearer ${token}`, 'x-goog-user-project': packet.projectId }, browser, ...common };
     }
     const result = await runScenario(o);
-    write('journal.json', `${JSON.stringify({ mode, profiles: result.profiles }, null, 2)}\n`);
-    write('result.json', `${JSON.stringify({ ...result, profiles: undefined, prefixRoot: prefix.split('/')[0] }, null, 2)}\n`);
-    console.log(`${mode}: ${result.status}, observationComplete=${result.observationComplete}`);
-    return result.status === 'closed' && result.observationComplete ? 0 : 3;
+    const status = writeOutputs(out, mode, result, prefix.split('/')[0], secrets);
+    console.log(`${mode}: ${status}, observationComplete=${result.observationComplete}`);
+    return status === 'closed' && result.observationComplete ? 0 : 3;
   } finally {
     if (child) { child.stdin.end(); child.kill('SIGTERM'); }
   }

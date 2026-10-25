@@ -11,12 +11,15 @@ use std::sync::{Arc, Mutex};
 
 const DB: &str = "projects/demo-app/databases/(default)";
 fn fixture() -> RestState {
+    fixture_with_policy(IndexValidationPolicy::Emulator)
+}
+fn fixture_with_policy(policy: IndexValidationPolicy) -> RestState {
     let gateway = Gateway {
         enforce_limits: false,
         ctx: PlanningContext {
             edition: FirestoreEdition::Enterprise,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Emulator,
+            policy,
         },
         indexes: IndexSet::default(),
     };
@@ -431,5 +434,186 @@ fn latin_purpose_adapter_queries_use_query_analysis_and_rebuild_with_index_analy
         let response = request(&state, "POST", &path, search_query(query));
         assert_eq!(response.status, 200, "{query}: {}", response.body);
         assert_eq!(ids(&response.body), expected, "{query}");
+    }
+}
+
+#[test]
+fn strict_enterprise_search_root_or_matches_the_production_error() {
+    let state = fixture_with_policy(IndexValidationPolicy::Production);
+    let _catalog = install(&state, true);
+    let (left, right) = ("cedar", "mango");
+    let response = request(
+        &state,
+        "POST",
+        &format!("{DB}/documents:executePipeline"),
+        json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"args":[{"referenceValue":"/score-boolean-a-20261025"}],"name":"collection"},
+            {"args":[],"name":"search","options":{
+                "add_fields":{"mapValue":{"fields":{"rank":{"functionValue":{"args":[],"name":"score"}}}}},
+                "query":{"functionValue":{"args":[
+                    {"functionValue":{"args":[{"stringValue":left}],"name":"document_matches"}},
+                    {"functionValue":{"args":[{"stringValue":right}],"name":"document_matches"}}
+                ],"name":"or"}},
+                "query_enhancement":{"stringValue":"disabled"},
+                "sort":{"arrayValue":{"values":[{"mapValue":{"fields":{
+                    "direction":{"stringValue":"descending"},
+                    "expression":{"functionValue":{"args":[],"name":"score"}}
+                }}}]}}
+            }}
+        ]}}}),
+    );
+    assert_eq!(response.status, 400, "{}", response.body);
+    let errors = response.body.as_array().expect("stream error array");
+    assert_eq!(errors.len(), 1);
+    let error = &errors[0]["error"];
+    assert_eq!(error["code"].as_u64(), Some(400));
+    assert_eq!(error["status"].as_str(), Some("INVALID_ARGUMENT"));
+    assert_eq!(error["message"].as_str(), Some(format!(
+            "search(...) only supports 'document_matches' or distance based searches like lte(geo_distance(field(STRING), GEO_POINT), NUMBER) but got or(document_matches(\"{left}\"), document_matches(\"{right}\"))"
+        ).as_str()));
+}
+
+#[test]
+fn other_search_roots_remain_unimplemented() {
+    let state = fixture_with_policy(IndexValidationPolicy::Production);
+    let _catalog = install(&state, true);
+    let mut body = search_query("cedar");
+    body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]["functionValue"]
+        ["name"] = json!("unrecorded_root");
+    let response = request(
+        &state,
+        "POST",
+        &format!("{DB}/documents:executePipeline"),
+        body,
+    );
+    assert_eq!(response.status, 501, "{}", response.body);
+    assert_eq!(response.body[0]["error"]["status"], "UNIMPLEMENTED");
+}
+
+#[test]
+fn search_root_classification_covers_pairwise_terms_and_policies() {
+    let cases = [
+        ("or", "observed", IndexValidationPolicy::Production),
+        ("other", "observed", IndexValidationPolicy::Production),
+        (
+            "document_matches",
+            "observed",
+            IndexValidationPolicy::Emulator,
+        ),
+        ("or", "alternate", IndexValidationPolicy::Emulator),
+        ("other", "alternate", IndexValidationPolicy::Production),
+        ("or", "unicode", IndexValidationPolicy::Production),
+        (
+            "document_matches",
+            "unicode",
+            IndexValidationPolicy::Production,
+        ),
+        ("other", "unicode", IndexValidationPolicy::Emulator),
+        (
+            "document_matches",
+            "alternate",
+            IndexValidationPolicy::Emulator,
+        ),
+    ];
+    for (root, terms, policy) in cases {
+        let state = fixture_with_policy(policy);
+        let _catalog = install(&state, false);
+        let (left, right) = match terms {
+            "observed" => ("cedar", "mango"),
+            "alternate" => ("birch", "peach"),
+            _ => ("cèdre", "mangue"),
+        };
+        let mut body = search_query(left);
+        if root == "or" {
+            let query =
+                &mut body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"];
+            *query = json!({"functionValue":{"name":"or","args":[
+                {"functionValue":{"name":"document_matches","args":[{"stringValue":left}]}},
+                {"functionValue":{"name":"document_matches","args":[{"stringValue":right}]}}
+            ]}});
+        } else if root == "other" {
+            body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+                ["functionValue"]["name"] = json!("unrecorded_root");
+        }
+        let response = request(
+            &state,
+            "POST",
+            &format!("{DB}/documents:executePipeline"),
+            body,
+        );
+        let expected = match root {
+            "or" if policy == IndexValidationPolicy::Emulator => 400,
+            "or" | "other" => 501,
+            _ => 200,
+        };
+        assert_eq!(
+            response.status, expected,
+            "root={root}, terms={terms}: {}",
+            response.body
+        );
+        if root == "or" && policy == IndexValidationPolicy::Emulator {
+            let message = format!("search(...) only supports 'document_matches' or distance based searches like lte(geo_distance(field(STRING), GEO_POINT), NUMBER) but got or(document_matches({}), document_matches({}))", serde_json::to_string(left).unwrap(), serde_json::to_string(right).unwrap());
+            assert_eq!(response.body[0]["error"]["message"], message);
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(16))]
+    #[test]
+    fn search_root_or_diagnostic_quotes_input_strings(left in "[[:print:]]{0,32}", right in "[[:print:]]{0,32}") {
+        let state = fixture_with_policy(IndexValidationPolicy::Emulator);
+        let _catalog = install(&state, true);
+        let mut body = search_query("");
+        body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"] = json!({"functionValue":{"name":"or","args":[
+            {"functionValue":{"name":"document_matches","args":[{"stringValue":left}]}},
+            {"functionValue":{"name":"document_matches","args":[{"stringValue":right}]}}
+        ]}});
+        let response = request(&state, "POST", &format!("{DB}/documents:executePipeline"), body);
+        proptest::prop_assert_eq!(response.status, 400);
+        let message = format!("search(...) only supports 'document_matches' or distance based searches like lte(geo_distance(field(STRING), GEO_POINT), NUMBER) but got or(document_matches({}), document_matches({}))", serde_json::to_string(&left).unwrap(), serde_json::to_string(&right).unwrap());
+        proptest::prop_assert_eq!(&response.body[0]["error"]["message"], &json!(message));
+    }
+}
+
+#[test]
+fn strict_search_root_or_neighbors_remain_unobserved() {
+    let state = fixture_with_policy(IndexValidationPolicy::Production);
+    let _catalog = install(&state, true);
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../conformance/fs-ent-text-refusal-requests.json"
+    ))
+    .unwrap();
+    let observed = fixture["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|program| program["id"] == "fs-ent-text/v1/search-root-or-refusal")
+        .unwrap()["steps"][0]["body"]
+        .clone();
+    let mut changed_terms = observed.clone();
+    changed_terms["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+        ["functionValue"]["args"][0]["functionValue"]["args"][0]["stringValue"] = json!("birch");
+    let mut changed_collection = observed.clone();
+    changed_collection["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]
+        ["referenceValue"] = json!("/products");
+    let mut changed_options = observed;
+    changed_options["structuredPipeline"]["pipeline"]["stages"][1]["options"]
+        .as_object_mut()
+        .unwrap()
+        .remove("query_enhancement");
+    for body in [changed_terms, changed_collection, changed_options] {
+        let response = request(
+            &state,
+            "POST",
+            &format!("{DB}/documents:executePipeline"),
+            body,
+        );
+        assert_eq!(response.status, 501, "{}", response.body);
+        assert_eq!(response.body[0]["error"]["status"], "UNIMPLEMENTED");
+        assert!(response.body[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not observed locally"));
     }
 }

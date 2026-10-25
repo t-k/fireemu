@@ -36,6 +36,35 @@ fn invalid(message: &str) -> Status {
 fn unsupported(message: &str) -> Status {
     Status::unimplemented(format!("FS_TEXT_UNSUPPORTED: {message}"))
 }
+// Only render the bounded function/string shape covered by search diagnostics.
+fn render_search_expression(value: &pb::Value, depth: usize, budget: &mut usize) -> Option<String> {
+    if depth == 0 || *budget == 0 {
+        return None;
+    }
+    *budget -= 1;
+    let rendered = match value.value_type.as_ref()? {
+        pb::value::ValueType::StringValue(text) if text.len() <= 4096 => {
+            serde_json::to_string(text).ok()?
+        }
+        pb::value::ValueType::FunctionValue(function)
+            if function.options.is_empty()
+                && function.name.len() <= 64
+                && function
+                    .name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_') =>
+        {
+            let args = function
+                .args
+                .iter()
+                .map(|arg| render_search_expression(arg, depth - 1, budget))
+                .collect::<Option<Vec<_>>>()?;
+            format!("{}({})", function.name, args.join(", "))
+        }
+        _ => return None,
+    };
+    (rendered.len() <= 8192).then_some(rendered)
+}
 fn is_score(value: &pb::Value) -> bool {
     matches!(&value.value_type, Some(pb::value::ValueType::FunctionValue(f)) if f.name == "score" && f.args.is_empty() && f.options.is_empty())
 }
@@ -77,6 +106,13 @@ pub fn decode(stage: &pb::pipeline::Stage) -> Result<SearchPlan, Status> {
     let Some(pb::value::ValueType::FunctionValue(function)) = &value.value_type else {
         return Err(unsupported("query must be document_matches(string)"));
     };
+    if function.name == "or" {
+        if let Some(expression) = render_search_expression(value, 16, &mut 64) {
+            return Err(Status::invalid_argument(format!(
+                "search(...) only supports 'document_matches' or distance based searches like lte(geo_distance(field(STRING), GEO_POINT), NUMBER) but got {expression}"
+            )));
+        }
+    }
     if function.name != "document_matches"
         || function.args.len() != 1
         || !function.options.is_empty()

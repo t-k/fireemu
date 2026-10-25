@@ -347,7 +347,7 @@
     "crates/fireemu-adapter-grpc/src/service/tests/pipeline_exec_tests.rs": "52181da7ef2afe9eef582280111a4ecee3d97ff1b96ba1fe1e8fdc51d4b06bea",
     "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs": "edeb5dd13c8ba31947a22074f700a2d39d701ab1c284887eddfeea7117058619",
     "crates/fireemu-adapter-grpc/src/streams.rs": "d43a0fa057213f814882860f144c97586f6eb86e19157efd80de63e26487796a",
-    "crates/fireemu-adapter-grpc/src/text_search.rs": "81a45d0a4dcdc0483c95e0521d2e92833273b8855c563bd483f5fef2f26bf163",
+    "crates/fireemu-adapter-grpc/src/text_search.rs": "07b44d1600e1e968054ef3aa7bfe8ad7904b055bfdb0863637014c5056cae0c9",
     "crates/fireemu-adapter-grpc/src/webchannel.rs": "d38857d42c59d7d78276d09829f870323df8a5854269028bab68f9282bf962a7",
     "crates/fireemu-adapter-http/Cargo.toml": "aeb2bea1ca1d1114968f527ef8053928644aae0bf0f11333da34088e6d744e6b",
     "crates/fireemu-adapter-http/src/app_check.rs": "92cc13fab652805b8b6153c185c3276dfef7a4969ddc13499fef0117371f36dd",

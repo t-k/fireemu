@@ -3,7 +3,7 @@
   "recordedAgainst": {
     "target": "production Firestore REST v1 and gRPC google.firestore.v1 text search, Enterprise Native, database entpipe1",
     "project": "demo-fs-query-index",
-    "note": "Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as demo-fs-query-index in every lane. Missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed."
+    "note": "Original text-corpus programs have two recordings. The separate search-root OR refusal program is a single observation, as its provenance states; it does not establish repeated confirmation. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as demo-fs-query-index in every lane. Missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed."
   },
   "programs": {
     "fs-ent-text/v1/lexical": {
@@ -3425,9 +3425,7 @@
           "status": 200,
           "body": {
             "commitTime": "<t1>",
-            "writeResults": [
-              {}
-            ]
+            "writeResults": [{}]
           }
         },
         "after-delete": {
@@ -3714,6 +3712,27 @@
                   "updateTime": "<t2>"
                 }
               ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-text/v1/search-root-or-refusal": {
+      "provenance": {
+        "requestBodySha256": "0238d20ac40e21c3d62bedbc7c008be1d50e37100b08a26478dde9d37ab24227",
+        "responseBodySha256": "ae710fc780facd94587ada47f410108fa9b4bbd7bbb4e8f88fd0b5ef8a2dac13",
+        "limitations": "One directly recorded Enterprise Native REST refusal. No repeated recording, gRPC result, alternate literal, changed collection or changed option is asserted. Request and response contain no project or database identifiers."
+      },
+      "steps": {
+        "root-or": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "search(...) only supports 'document_matches' or distance based searches like lte(geo_distance(field(STRING), GEO_POINT), NUMBER) but got or(document_matches(\"cedar\"), document_matches(\"mango\"))",
+                "status": "INVALID_ARGUMENT"
+              }
             }
           ]
         }

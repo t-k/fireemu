@@ -1,1 +1,330 @@
-{"schema":"text-refusal-requests/v1","source":"src/fs-ent-pipeline/text-corpus.mjs","programs":[{"id":"fs-ent-text/v1/lexical","steps":[{"id":"rank-asc","rpc":"executePipeline","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"fox"}]}},"sort":{"arrayValue":{"values":[{"mapValue":{"fields":{"expression":{"functionValue":{"name":"score","args":[]}},"direction":{"stringValue":"ascending"}}}}]}},"add_fields":{"mapValue":{"fields":{"rank":{"functionValue":{"name":"score","args":[]}}}}}}}]}}}},{"id":"rank-asc-grpc","rpc":"executePipeline","transport":"grpc","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"fox"}]}},"sort":{"arrayValue":{"values":[{"mapValue":{"fields":{"expression":{"functionValue":{"name":"score","args":[]}},"direction":{"stringValue":"ascending"}}}}]}},"add_fields":{"mapValue":{"fields":{"rank":{"functionValue":{"name":"score","args":[]}}}}}}}]}}}},{"id":"retrieval-zero","rpc":"executePipeline","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"fox"}]}},"retrieval_depth":{"integerValue":"0"}}}]}}}},{"id":"retrieval-zero-grpc","rpc":"executePipeline","transport":"grpc","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"fox"}]}},"retrieval_depth":{"integerValue":"0"}}}]}}}},{"id":"language-auto","rpc":"executePipeline","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"東京"}]}},"language_code":{"stringValue":"auto"}}}]}}}},{"id":"language-auto-grpc","rpc":"executePipeline","transport":"grpc","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"東京"}]}},"language_code":{"stringValue":"auto"}}}]}}}},{"id":"language-invalid","rpc":"executePipeline","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"fox"}]}},"language_code":{"stringValue":"not a language"}}}]}}}},{"id":"language-invalid-grpc","rpc":"executePipeline","transport":"grpc","body":{"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/textobs1"}]},{"name":"search","args":[],"options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"fox"}]}},"language_code":{"stringValue":"not a language"}}}]}}}}]}]}
+{
+  "schema": "text-refusal-requests/v1",
+  "source": "src/fs-ent-pipeline/text-corpus.mjs",
+  "programs": [
+    {
+      "id": "fs-ent-text/v1/lexical",
+      "steps": [
+        {
+          "id": "rank-asc",
+          "rpc": "executePipeline",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "fox" }]
+                        }
+                      },
+                      "sort": {
+                        "arrayValue": {
+                          "values": [
+                            {
+                              "mapValue": {
+                                "fields": {
+                                  "expression": {
+                                    "functionValue": { "name": "score", "args": [] }
+                                  },
+                                  "direction": { "stringValue": "ascending" }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "add_fields": {
+                        "mapValue": {
+                          "fields": { "rank": { "functionValue": { "name": "score", "args": [] } } }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "rank-asc-grpc",
+          "rpc": "executePipeline",
+          "transport": "grpc",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "fox" }]
+                        }
+                      },
+                      "sort": {
+                        "arrayValue": {
+                          "values": [
+                            {
+                              "mapValue": {
+                                "fields": {
+                                  "expression": {
+                                    "functionValue": { "name": "score", "args": [] }
+                                  },
+                                  "direction": { "stringValue": "ascending" }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "add_fields": {
+                        "mapValue": {
+                          "fields": { "rank": { "functionValue": { "name": "score", "args": [] } } }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "retrieval-zero",
+          "rpc": "executePipeline",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "fox" }]
+                        }
+                      },
+                      "retrieval_depth": { "integerValue": "0" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "retrieval-zero-grpc",
+          "rpc": "executePipeline",
+          "transport": "grpc",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "fox" }]
+                        }
+                      },
+                      "retrieval_depth": { "integerValue": "0" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "language-auto",
+          "rpc": "executePipeline",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "東京" }]
+                        }
+                      },
+                      "language_code": { "stringValue": "auto" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "language-auto-grpc",
+          "rpc": "executePipeline",
+          "transport": "grpc",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "東京" }]
+                        }
+                      },
+                      "language_code": { "stringValue": "auto" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "language-invalid",
+          "rpc": "executePipeline",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "fox" }]
+                        }
+                      },
+                      "language_code": { "stringValue": "not a language" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "language-invalid-grpc",
+          "rpc": "executePipeline",
+          "transport": "grpc",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  { "name": "collection", "args": [{ "referenceValue": "/textobs1" }] },
+                  {
+                    "name": "search",
+                    "args": [],
+                    "options": {
+                      "query": {
+                        "functionValue": {
+                          "name": "document_matches",
+                          "args": [{ "stringValue": "fox" }]
+                        }
+                      },
+                      "language_code": { "stringValue": "not a language" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "fs-ent-text/v1/search-root-or-refusal",
+      "source": "A single recorded Enterprise Native REST search-root OR refusal; the original synthetic collection and all query options are preserved.",
+      "steps": [
+        {
+          "id": "root-or",
+          "rpc": "executePipeline",
+          "body": {
+            "structuredPipeline": {
+              "pipeline": {
+                "stages": [
+                  {
+                    "args": [{ "referenceValue": "/score-boolean-a-20261025" }],
+                    "name": "collection"
+                  },
+                  {
+                    "args": [],
+                    "name": "search",
+                    "options": {
+                      "add_fields": {
+                        "mapValue": {
+                          "fields": { "rank": { "functionValue": { "args": [], "name": "score" } } }
+                        }
+                      },
+                      "query": {
+                        "functionValue": {
+                          "args": [
+                            {
+                              "functionValue": {
+                                "args": [{ "stringValue": "cedar" }],
+                                "name": "document_matches"
+                              }
+                            },
+                            {
+                              "functionValue": {
+                                "args": [{ "stringValue": "mango" }],
+                                "name": "document_matches"
+                              }
+                            }
+                          ],
+                          "name": "or"
+                        }
+                      },
+                      "query_enhancement": { "stringValue": "disabled" },
+                      "sort": {
+                        "arrayValue": {
+                          "values": [
+                            {
+                              "mapValue": {
+                                "fields": {
+                                  "direction": { "stringValue": "descending" },
+                                  "expression": { "functionValue": { "args": [], "name": "score" } }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

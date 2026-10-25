@@ -648,7 +648,7 @@
     "crates/fireemu-core-firestore/src/size.rs": "c77499edf9c248d269265cb584149d17bdcf895ea7108e8dbcf74778d0e9bee4",
     "crates/fireemu-core-firestore/src/store.rs": "46786741178d0814529bfd5346c757aef489a6cab102e9f4bb16f5e72341cbdd",
     "crates/fireemu-core-firestore/src/text_index.rs": "afce13af1737470ef634011538e6c7c9277bcfe5c6db0ca841e316aafb52660d",
-    "crates/fireemu-core-firestore/src/text_search.rs": "8c00661d3c5d8d6f81c6883e3f27fab951dad6aede281a7826eb5c7da9965820",
+    "crates/fireemu-core-firestore/src/text_search.rs": "2cdaa7866c2033bac33752a344e5f92012ce2bfabfea8c7ecf34fbf03f748b02",
     "crates/fireemu-core-firestore/src/ttl.rs": "a737c418067b2c3a4a145ea925ba39dbc89bc6b564a68771d51bbd1212d2ac5d",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
     "crates/fireemu-core-functions/Cargo.toml": "ef6e37d1abe120c9b61c4c23054b3e3c39249403c3d3b34bacbf33f68fa6018a",

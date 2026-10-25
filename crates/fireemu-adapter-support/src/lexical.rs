@@ -51,11 +51,15 @@ pub fn tokenize_query(input: &str) -> Vec<String> {
 }
 
 fn analyze(input: &str) -> Vec<String> {
+    // UAX #29 keeps a colon between letters inside one word (MidLetter); production separates
+    // the words there (`title:fox` matched `fox`). NFKC already mapped the full-width and small
+    // colons to U+003A.
     let normalized: String = input
         .nfkc()
         .map(fold_precomposed_latin)
         .case_fold()
         .nfkc()
+        .map(|c| if c == ':' { ' ' } else { c })
         .collect();
     segment(&normalized)
 }
@@ -117,6 +121,16 @@ mod tests {
         assert_eq!(tokenize_query("ẖ ǰ"), tokenize_index("ẖ ǰ"));
     }
 
+    /// A colon separates words: production returned the document `title:fox` for `fox` and
+    /// for `title fox` (recorded calibration corpus `textcal20261024`).
+    #[test]
+    fn a_colon_separates_words_in_both_purposes() {
+        for input in ["title:fox", "title：fox", "title : fox"] {
+            assert_eq!(tokenize_index(input), ["title", "fox"], "{input}");
+            assert_eq!(tokenize_query(input), ["title", "fox"], "{input}");
+        }
+    }
+
     #[test]
     fn greek_other_scripts_and_noncomposing_marks_keep_their_distinctions() {
         for input in [
@@ -148,9 +162,10 @@ mod tests {
 
     proptest::proptest! {
         #[test]
-        fn ascii_purposes_retain_legacy_tokens(input in "[ -~]{0,80}") {
-            proptest::prop_assert_eq!(tokenize_index(&input), tokenize(&input));
-            proptest::prop_assert_eq!(tokenize_query(&input), tokenize(&input));
+        fn ascii_purposes_retain_legacy_tokens_apart_from_colons(input in "[ -~]{0,80}") {
+            let separated = input.replace(':', " ");
+            proptest::prop_assert_eq!(tokenize_index(&input), tokenize(&separated));
+            proptest::prop_assert_eq!(tokenize_query(&input), tokenize(&separated));
         }
         #[test]
         fn query_analysis_equals_index_analysis(input in ".{0,100}") {

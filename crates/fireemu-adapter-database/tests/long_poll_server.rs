@@ -376,7 +376,7 @@ async fn a_held_request_that_runs_out_closes_the_connection() {
     lp.poll(&[&request(1, "q", r#"{"p":"/a","h":""}"#)]).await;
     assert_eq!(database.lock().unwrap().listen_count(), 1);
     assert_eq!(lp.poll(&[]).await, "<!-- -->");
-    // Closed at once, well before an idle connection would be (twice the hold time).
+    // Closed at once, well before an idle connection would be (the idle-close time).
     assert_eq!(database.lock().unwrap().listen_count(), 0);
     assert!(lp.poll(&[]).await.ends_with("pLPCommand('close');\n"));
 }
@@ -385,6 +385,7 @@ async fn a_held_request_that_runs_out_closes_the_connection() {
 async fn a_connection_that_never_polls_is_closed() {
     let (address, _) = start(ServerConfig {
         long_poll_hold: Duration::from_millis(200),
+        long_poll_idle_close: Duration::from_millis(400),
         ..ServerConfig::default()
     })
     .await;
@@ -628,9 +629,10 @@ async fn bounds_are_inclusive_and_regular_requests_keep_a_connection() {
         lp.poll(&[]).await,
         format!("pRTLPCB(2,[{first},{second}]);\n")
     );
-    // A connection asking again within twice the hold time stays open.
+    // A connection asking again within the idle-close time stays open.
     let (address, _) = start(ServerConfig {
         long_poll_hold: Duration::from_millis(400),
+        long_poll_idle_close: Duration::from_millis(800),
         ..ServerConfig::default()
     })
     .await;
@@ -713,16 +715,18 @@ async fn a_long_polling_connection_writes_what_it_registered_when_it_ends() {
 
 #[tokio::test]
 async fn reaped_and_overflowing_long_polling_connections_write_what_they_registered() {
-    // The reaper: no request for twice the hold time.
+    // The reaper: no request for the idle-close time.
     let (address, _) = start(ServerConfig {
         long_poll_hold: Duration::from_millis(200),
+        long_poll_idle_close: Duration::from_millis(400),
         ..ServerConfig::default()
     })
     .await;
     let (mut lp, _) = Lp::start(&address, "lpr").await;
     lp.poll(&[&request(1, "o", r#"{"p":"/reaped","d":1}"#)])
         .await;
-    // The reaper runs every hold time; wait for its write rather than for a fixed time.
+    // The reaper runs every twentieth of the idle-close time; wait for its write rather than
+    // for a fixed time.
     let mut reaped = String::new();
     for _ in 0..100 {
         reaped = get(&address, "GET", "/reaped.json?ns=lpr", "").await.2;
@@ -748,4 +752,49 @@ async fn reaped_and_overflowing_long_polling_connections_write_what_they_registe
     get(&address, "PUT", "/a.json?ns=lpf", &big).await;
     get(&address, "PUT", "/a.json?ns=lpf", "1").await;
     assert_eq!(get(&address, "GET", "/over.json?ns=lpf", "").await.2, "1");
+}
+
+#[tokio::test]
+async fn an_abandoned_held_request_closes_its_connection_at_the_idle_close_time() {
+    // Production (a web SDK with forceLongPolling going offline, its held request aborted)
+    // fired the connection's onDisconnect about 100 to 104 s after its last request, well
+    // before twice the 90 s hold. Here the hold is far longer than the idle-close time, so
+    // only the idle-close time can end the connection.
+    let idle_close = Duration::from_millis(500);
+    let (address, _) = start(ServerConfig {
+        long_poll_hold: Duration::from_secs(30),
+        long_poll_idle_close: idle_close,
+        ..ServerConfig::default()
+    })
+    .await;
+    let (mut lp, _) = Lp::start(&address, "lpi").await;
+    lp.poll(&[&request(1, "o", r#"{"p":"/idle","d":1}"#)]).await;
+    let target = lp.target(&[]);
+    let mut abandoned = TcpStream::connect(&address).await.unwrap();
+    abandoned
+        .write_all(
+            format!("GET {target} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let last_request = std::time::Instant::now();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(abandoned);
+    let mut written = String::new();
+    while last_request.elapsed() < Duration::from_secs(3) {
+        written = get(&address, "GET", "/idle.json?ns=lpi", "").await.2;
+        if written == "1" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let closed_after = last_request.elapsed();
+    assert_eq!(written, "1", "not closed within 3 s");
+    assert!(closed_after >= idle_close, "closed early: {closed_after:?}");
+    // The reaper looks every twentieth of the idle-close time; leave room for a busy machine.
+    assert!(
+        closed_after < idle_close * 2,
+        "closed late: {closed_after:?}"
+    );
 }

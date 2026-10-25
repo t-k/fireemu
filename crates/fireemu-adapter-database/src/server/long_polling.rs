@@ -73,8 +73,10 @@ impl Connection {
 }
 
 impl State {
-    fn is_stale(&self, hold: Duration, elapsed: Duration) -> bool {
-        self.held.as_ref().is_none_or(oneshot::Sender::is_closed) && elapsed >= hold * 2
+    /// Whether the reaper closes the connection: no live held request (a held request
+    /// whose client went away does not count), and no request for the idle-close time.
+    fn is_stale(&self, idle_close: Duration, elapsed: Duration) -> bool {
+        self.held.as_ref().is_none_or(oneshot::Sender::is_closed) && elapsed >= idle_close
     }
 
     /// The next answer, carrying every waiting message.
@@ -430,11 +432,13 @@ fn close(shared: &Shared, database: &mut Database, connection: &Connection, stat
     database.close_realtime(connection.client, (shared.config.clock)());
 }
 
-/// Closes a connection that sends no request for twice the hold time (a held request that
-/// runs out closes it sooner), and forgets one closed for falling behind.
+/// Closes a connection that has no live held request and sends no request for the
+/// idle-close time (a held request that runs out closes it at the hold time), and forgets
+/// one closed for falling behind. It looks every [`reap_period`], so the close comes at most
+/// that long after the idle-close time.
 async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
-    let hold = shared.config.long_poll_hold;
-    let mut ticks = tokio::time::interval(hold);
+    let idle_close = shared.config.long_poll_idle_close;
+    let mut ticks = tokio::time::interval(reap_period(idle_close));
     ticks.tick().await;
     loop {
         ticks.tick().await;
@@ -445,11 +449,16 @@ async fn reap(shared: Arc<Shared>, connection: Arc<Connection>) {
             .map(|barrier| barrier.admit());
         let mut database = lock_database(&shared);
         let mut state = connection.lock();
-        if state.closed || state.is_stale(hold, state.last_request.elapsed()) {
+        if state.closed || state.is_stale(idle_close, state.last_request.elapsed()) {
             close(&shared, &mut database, &connection, &mut state);
             return;
         }
     }
+}
+
+/// How often a connection's reaper looks: a twentieth of the idle-close time, at least 1 ms.
+fn reap_period(idle_close: Duration) -> Duration {
+    (idle_close / 20).max(Duration::from_millis(1))
 }
 
 #[cfg(test)]
@@ -469,6 +478,7 @@ mod tests {
             long_polls: Connections::default(),
             config: super::super::ServerConfig {
                 long_poll_hold: Duration::from_millis(5),
+                long_poll_idle_close: Duration::from_millis(15),
                 ..super::super::ServerConfig::default()
             },
         });
@@ -566,7 +576,7 @@ mod tests {
             state.closed = closed;
             let expected = closed || (!matches!(receiver, Live) && age >= 20);
             assert_eq!(
-                state.closed || state.is_stale(Duration::from_secs(10), Duration::from_secs(age)),
+                state.closed || state.is_stale(Duration::from_secs(20), Duration::from_secs(age)),
                 expected,
                 "age={age}, closed={closed}"
             );
@@ -577,7 +587,7 @@ mod tests {
         #[test]
         fn idle_expiry_matches_receiver_liveness_and_elapsed_time(
             receiver in 0u8..3,
-            hold in 1u64..1_000_000,
+            idle_close in 1u64..1_000_000,
             elapsed in 0u64..2_000_001,
         ) {
             let (_, connection) = fixture();
@@ -590,8 +600,8 @@ mod tests {
             let mut state = connection.lock();
             state.held = sender;
             prop_assert_eq!(
-                state.is_stale(Duration::from_nanos(hold), Duration::from_nanos(elapsed)),
-                receiver != 1 && elapsed >= hold * 2
+                state.is_stale(Duration::from_nanos(idle_close), Duration::from_nanos(elapsed)),
+                receiver != 1 && elapsed >= idle_close
             );
         }
     }
@@ -621,11 +631,11 @@ mod tests {
         drop(request);
         assert!(connection.lock().held.as_ref().unwrap().is_closed());
         connection.lock().last_request = Instant::now()
-            .checked_sub(shared.config.long_poll_hold * 3)
+            .checked_sub(shared.config.long_poll_idle_close * 2)
             .unwrap();
         let mut reaper = Box::pin(reap(Arc::clone(&shared), Arc::clone(&connection)));
         assert!(ready_once(reaper.as_mut()).is_pending());
-        tokio::time::sleep(shared.config.long_poll_hold * 2).await;
+        tokio::time::sleep(reap_period(shared.config.long_poll_idle_close) * 2).await;
         assert!(
             ready_once(reaper.as_mut()).is_ready(),
             "cancelled held poll must be reaped"
@@ -667,7 +677,7 @@ mod tests {
         {
             let mut state = connection.lock();
             state.last_request = Instant::now()
-                .checked_sub(shared.config.long_poll_hold * 3)
+                .checked_sub(shared.config.long_poll_idle_close * 2)
                 .unwrap();
             state.outbox = vec!["first".to_owned(), "second".to_owned()];
             state.outbox_bytes = 11;
@@ -684,7 +694,7 @@ mod tests {
             assert!(state.last_request >= renewed_at);
             assert_eq!(state.next_packet, 2);
             assert_eq!(state.outbox_bytes, 0);
-            assert!(!state.is_stale(shared.config.long_poll_hold, Duration::ZERO));
+            assert!(!state.is_stale(shared.config.long_poll_idle_close, Duration::ZERO));
         }
         let mut replacement = Box::pin(poll(&shared, &connection, Vec::new(), "h"));
         assert!(ready_once(replacement.as_mut()).is_pending());
@@ -692,18 +702,45 @@ mod tests {
             let mut state = connection.lock();
             assert!(!state.held.as_ref().unwrap().is_closed());
             assert!(!state.is_stale(
-                shared.config.long_poll_hold,
-                shared.config.long_poll_hold * 3
+                shared.config.long_poll_idle_close,
+                shared.config.long_poll_idle_close * 2
             ));
             state.last_request = Instant::now()
-                .checked_sub(shared.config.long_poll_hold * 3)
+                .checked_sub(shared.config.long_poll_idle_close * 2)
                 .unwrap();
         }
         let mut reaper = Box::pin(reap(Arc::clone(&shared), Arc::clone(&connection)));
         assert!(ready_once(reaper.as_mut()).is_pending());
-        tokio::time::sleep(shared.config.long_poll_hold * 2).await;
+        tokio::time::sleep(shared.config.long_poll_idle_close).await;
         assert!(ready_once(reaper.as_mut()).is_pending());
         assert!(!connection.lock().closed);
+    }
+
+    #[test]
+    fn the_reaper_looks_every_twentieth_of_the_idle_close_time() {
+        // Production closed abandoned connections 100.75 s and 103.98 s after their last
+        // request; a 5 s look keeps the close inside [100 s, 105 s].
+        assert_eq!(
+            reap_period(Duration::from_secs(100)),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            reap_period(Duration::from_millis(400)),
+            Duration::from_millis(20)
+        );
+        // A tokio interval panics on a zero period.
+        assert_eq!(reap_period(Duration::ZERO), Duration::from_millis(1));
+        assert_eq!(
+            reap_period(Duration::from_millis(19)),
+            Duration::from_millis(1)
+        );
+    }
+
+    #[test]
+    fn the_default_idle_close_is_the_recorded_production_time() {
+        let config = super::super::ServerConfig::default();
+        assert_eq!(config.long_poll_idle_close, Duration::from_secs(100));
+        assert_eq!(config.long_poll_hold, Duration::from_secs(90));
     }
 
     #[test]

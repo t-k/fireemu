@@ -1,6 +1,7 @@
-//! Replays every recorded production text-search response of `production_text_order.json` and
-//! checks that the local analysis returns the same SET of documents (membership). The order is
-//! checked by `text_score_order.rs`.
+//! Replays every recorded production text-search response (`production_text_membership.json`,
+//! 531 REST responses including those with zero or one result, so over-matching shows) and
+//! checks that the local analysis returns the same SET of documents. The order is checked by
+//! `text_score_order.rs`.
 use fireemu_adapter_support::lexical::{tokenize_index, tokenize_query};
 use fireemu_core_firestore::{
     field_path::FieldPath, index::IndexQueryScope, path::DocumentPath, text_index::*,
@@ -80,7 +81,12 @@ fn corpus(value: &JsonValue) -> Corpus {
 
 /// Each recorded case's corpus, query, production members and local members.
 fn replay() -> Vec<(String, String, Vec<String>, Vec<String>)> {
-    let fixture = parse(include_str!("fixtures/production_text_order.json")).unwrap();
+    let fixture = parse(include_str!("fixtures/production_text_membership.json")).unwrap();
+    assert_eq!(
+        fixture.get("responses").and_then(JsonValue::as_i64),
+        Some(531),
+        "recorded production search responses"
+    );
     let corpora: BTreeMap<&str, Corpus> = object(fixture.get("corpora").unwrap())
         .iter()
         .map(|(name, value)| (name.as_str(), corpus(value)))
@@ -99,12 +105,11 @@ fn replay() -> Vec<(String, String, Vec<String>, Vec<String>)> {
                 .into_iter()
                 .map(|hit| hit.path.relative().rsplit('/').next().unwrap().to_owned())
                 .collect();
-            let mut expected: Vec<String> = array(case.get("expected").unwrap())
+            actual.sort();
+            let expected: Vec<String> = array(case.get("expected").unwrap())
                 .iter()
                 .map(|id| id.as_str().unwrap().to_owned())
                 .collect();
-            actual.sort();
-            expected.sort();
             (
                 string(case, "corpus").to_owned(),
                 query.to_owned(),
@@ -115,27 +120,51 @@ fn replay() -> Vec<(String, String, Vec<String>, Vec<String>)> {
         .collect()
 }
 
-/// Recorded cases no general analysis rule explains, kept so a change in either direction
-/// surfaces. `京都`, `都` and `東京都` need dictionary segmentation of an unspaced Han run (the
-/// document `京都東京駅東京都京都東京駅` contains `東京都` yet matches neither `都` nor
-/// `東京都`). `𠮷` alone matches only documents containing `𠮷`, while `𠮷ミナ` and `𠮷野家`
-/// also match `吉ミナ` and `吉野家`, and `ミナ` alone matches `森ミナ`, which `𠮷ミナ` does
-/// not: no per-character fold reproduces all three.
-const UNEXPLAINED: [(&str, &str); 6] = [
+/// Recorded cases no general analysis rule explains (owner ledger 1785 accepted the first six as
+/// known differences; the rest surfaced when the replay grew to every response). They stay
+/// pinned so a change in either direction surfaces.
+///
+/// - Han and kana runs: production segments them with a dictionary. `京都`, `都`, `東京都`,
+///   `京` and `京都東京駅` depend on the words around the character (`京都東京駅東京都京都東京駅`
+///   contains `東京都` yet matches neither `都` nor `東京都`; `京` alone matches `京` and `京 都`
+///   only); `生物研究所` and `"生 物"` separate `生物` from `生 物`; `吉` does not match `吉野家`.
+/// - `𠮷`: alone it matches only `𠮷`, but `𠮷ミナ` and `𠮷野家` also match `吉ミナ` and `吉野家`.
+/// - Katakana with width and `・` variants: unquoted `ネムラ ﾈﾑﾗ` (and the `・`/`･` forms) match only
+///   `ネムラネムラ`, and `カタカナ・ｶﾀｶﾅ` matches nothing, not even the document holding it.
+/// - `İpek`: the query keeps the mark case folding splits off `İ` (so `İzmir`, `İnci`, `İzunex`
+///   and `İstanbul` match nothing, as production answered), yet production matched `İpek` and
+///   `ipek` for the query `İpek`.
+const UNEXPLAINED: [(&str, &str); 22] = [
+    ("textcal20261024#4", "京"),
     ("textlex20261024#0", "京都"),
+    ("textlex20261024#0", "京"),
     ("textlex20261024#0", "都"),
     ("textlex20261024#0", "東京都"),
+    ("textlex20261024#0", "京都東京駅"),
+    ("textlex20261024#0", "東京駅京都"),
+    ("textlex20261024#0", "\"京 都\""),
+    ("textproof20261024#0", "生物研究所"),
+    ("textproof20261024#0", "\"生物 研究所\""),
+    ("textproof20261024#0", "\"生 物\""),
+    ("textproof20261024#0", "カタカナ・ｶﾀｶﾅ"),
     ("textproof20261024#0", "𠮷野家"),
+    ("textproof20261024#0", "İpek"),
+    ("textdisc20261024#0", "ネムラ・ﾈﾑﾗ"),
+    ("textdisc20261024#0", "ネムラ ﾈﾑﾗ"),
+    ("textdisc20261024#0", "ネムラ･ﾈﾑﾗ"),
+    ("textdisc20261024#0", "吉"),
     ("textdisc20261024#0", "𠮷ミナ"),
+    ("textdisc20261024#0", "カタカナ・ｶﾀｶﾅ"),
     ("textdisc20261024#0", "𠮷野家"),
+    ("textdisc20261024#0", "İpek"),
 ];
 
 /// Every recorded production response has the local membership, apart from the documented
-/// [`UNEXPLAINED`] dictionary-segmentation cases.
+/// [`UNEXPLAINED`] cases.
 #[test]
 fn recorded_production_memberships_replay_exactly() {
     let cases = replay();
-    assert_eq!(cases.len(), 168, "recorded cases");
+    assert_eq!(cases.len(), 223, "distinct recorded cases");
     let mut differing: Vec<(String, String)> = Vec::new();
     let mut report = Vec::new();
     for (corpus, query, expected, actual) in cases {

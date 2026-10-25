@@ -583,7 +583,9 @@ fn text_key(program: &str, step: &Value) -> String {
 /// The recorded text row of `request`'s transport whose request equals it apart from the
 /// literals production's search-option checks never read (review S7): the database, the
 /// collection a `collection` stage names and the string a top-level `document_matches` query
-/// searches for. Every other part, the offending option value included, must be equal.
+/// searches for. Only the classes the recordings cover are cleared: a single valid collection
+/// id and a non-empty query (merge review S-b). Every other part, the offending option value
+/// included, must be equal.
 fn text_key_of(request: &pb::ExecutePipelineRequest, grpc: bool) -> Option<String> {
     let skeleton = text_skeleton(request);
     text_requests()
@@ -592,7 +594,8 @@ fn text_key_of(request: &pb::ExecutePipelineRequest, grpc: bool) -> Option<Strin
         .map(|row| row.key.clone())
 }
 
-/// `request` with its database, collection references and `document_matches` literal cleared.
+/// `request` with its database cleared and its collection reference and `document_matches`
+/// literal replaced by markers no request carries.
 fn text_skeleton(request: &pb::ExecutePipelineRequest) -> pb::ExecutePipelineRequest {
     use pb::value::ValueType as V;
     let mut request = request.clone();
@@ -611,7 +614,14 @@ fn text_skeleton(request: &pb::ExecutePipelineRequest) -> pb::ExecutePipelineReq
                         value_type: Some(V::ReferenceValue(collection)),
                     }] = stage.args.as_mut_slice()
                     {
-                        collection.clear();
+                        let recorded_class = collection.strip_prefix('/').is_some_and(|id| {
+                            !id.contains('/')
+                                && fireemu_core_types::ids::CollectionId::try_new(id).is_ok()
+                        });
+                        if recorded_class {
+                            // A NUL never occurs in a request, so no literal equals the marker.
+                            "\0collection".clone_into(collection);
+                        }
                     }
                 }
                 "search" => {
@@ -626,7 +636,9 @@ fn text_skeleton(request: &pb::ExecutePipelineRequest) -> pb::ExecutePipelineReq
                             }],
                         ) = (query.name.as_str(), query.args.as_mut_slice())
                         {
-                            text.clear();
+                            if !text.is_empty() {
+                                "\0query".clone_into(text);
+                            }
                         }
                     }
                 }
@@ -879,6 +891,21 @@ mod text_refusal_tests {
 
     fn text_request_neighbors(body: &Value) -> Vec<Value> {
         let mut neighbors = Vec::new();
+        // Collection and query classes the recordings do not cover (merge review S-b).
+        for collection in ["/a/b", "/__x__", "/", ""] {
+            let mut changed = body.clone();
+            changed["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]["referenceValue"] =
+                json!(collection);
+            neighbors.push(changed);
+        }
+        let root = &body["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+            ["functionValue"];
+        if root["name"] == "document_matches" {
+            let mut changed = body.clone();
+            changed["structuredPipeline"]["pipeline"]["stages"][1]["options"]["query"]
+                ["functionValue"]["args"][0]["stringValue"] = json!("");
+            neighbors.push(changed);
+        }
         // The collection may be any reference, never another kind of value.
         let mut changed = body.clone();
         changed["structuredPipeline"]["pipeline"]["stages"][0]["args"][0] =

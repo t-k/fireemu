@@ -261,8 +261,11 @@ fn execute_at_snapshot(
             parent.database.as_str(),
             db,
             &mut catalog,
+            // A search observes its collection's builds directly: a build fireemu cannot complete
+            // faithfully refuses the search instead of leaving it without a READY index (M1).
             crate::admin::index_rest::NativeTextSelection {
                 collection: Some(&collection),
+                direct: true,
                 ..Default::default()
             },
         )?;

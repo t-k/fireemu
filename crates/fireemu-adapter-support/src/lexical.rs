@@ -35,29 +35,39 @@ fn segment(normalized: &str) -> Vec<String> {
     result
 }
 
-/// Analyze indexed text using the bounded development profile: NFKC, precomposed Latin folded
-/// to its base, full case fold, NFKC.
+/// Analyze indexed text: NFKC, precomposed Latin folded to its base, full case fold, NFKC.
 #[must_use]
 pub fn tokenize_index(input: &str) -> Vec<String> {
-    analyze(input)
+    analyze(input, Purpose::Index)
 }
 
-/// Analyze query text. It is the index analysis, so any indexed text matches a query of itself
-/// (a fold applied after case folding on one side only kept the mark that case folding splits
-/// off `İ`, so `İSTANBUL` stopped matching itself).
+/// Analyze query text: NFKC, full case fold, precomposed Latin folded to its base, NFKC. The
+/// fold after case folding keeps the mark case folding splits off `İ` (U+0130 folds to `i` and
+/// U+0307), so the query `İzmir` matches neither `İzmir` nor `izmir` while `izmir` matches both:
+/// production answered exactly so for `İzmir`, `İnci`, `İzunex` and `İstanbul` (recorded corpora
+/// `textdisc20261024` and `textlex20261024`).
 #[must_use]
 pub fn tokenize_query(input: &str) -> Vec<String> {
-    analyze(input)
+    analyze(input, Purpose::Query)
 }
 
-fn analyze(input: &str) -> Vec<String> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Index,
+    Query,
+}
+
+fn analyze(input: &str, purpose: Purpose) -> Vec<String> {
+    let nfkc = input.nfkc();
+    let folded: String = if purpose == Purpose::Index {
+        nfkc.map(fold_precomposed_latin).case_fold().collect()
+    } else {
+        nfkc.case_fold().map(fold_precomposed_latin).collect()
+    };
     // UAX #29 keeps a colon between letters inside one word (MidLetter); production separates
     // the words there (`title:fox` matched `fox`). NFKC already mapped the full-width and small
     // colons to U+003A.
-    let normalized: String = input
-        .nfkc()
-        .map(fold_precomposed_latin)
-        .case_fold()
+    let normalized: String = folded
         .nfkc()
         .map(|c| if c == ':' { ' ' } else { c })
         .collect();
@@ -112,13 +122,24 @@ mod tests {
         }
     }
 
+    /// Production keeps the mark case folding splits off `İ` on the query side only: the query
+    /// `İzmir` matched neither `İzmir` nor `izmir`, and `izmir` matched both (textdisc20261024).
     #[test]
-    fn dotted_capital_latin_base_folds_the_same_way_for_index_and_query() {
-        assert_eq!(tokenize_index("İris İSTANBUL"), ["iris", "istanbul"]);
-        assert_eq!(tokenize_query("İris İSTANBUL"), ["iris", "istanbul"]);
-        assert_eq!(tokenize_query("iris istanbul"), ["iris", "istanbul"]);
-        // Case folding that expands into a Latin base and a mark (U+1E96, U+01F0) folds alike.
-        assert_eq!(tokenize_query("ẖ ǰ"), tokenize_index("ẖ ǰ"));
+    fn dotted_capital_latin_base_is_directional_and_query_keeps_its_mark() {
+        assert_eq!(
+            tokenize_index("İris İSTANBUL İzmir"),
+            ["iris", "istanbul", "izmir"]
+        );
+        assert_eq!(
+            tokenize_query("İris İSTANBUL İzmir"),
+            ["i\u{307}ris", "i\u{307}stanbul", "i\u{307}zmir"]
+        );
+        assert_eq!(
+            tokenize_query("iris istanbul izmir"),
+            ["iris", "istanbul", "izmir"]
+        );
+        assert_eq!(tokenize_query("i\u{307}zmir"), ["i\u{307}zmir"]);
+        assert_eq!(tokenize_query("ızunex"), ["ızunex"]);
     }
 
     /// A colon separates words: production returned the document `title:fox` for `fox` and
@@ -166,16 +187,6 @@ mod tests {
             let separated = input.replace(':', " ");
             proptest::prop_assert_eq!(tokenize_index(&input), tokenize(&separated));
             proptest::prop_assert_eq!(tokenize_query(&input), tokenize(&separated));
-        }
-        #[test]
-        fn query_analysis_equals_index_analysis(input in ".{0,100}") {
-            proptest::prop_assert_eq!(tokenize_query(&input), tokenize_index(&input));
-        }
-        #[test]
-        fn query_analysis_equals_index_analysis_on_expanding_case_folds(
-            input in "[a-zA-Z İıẖẗẘẙǰÉéßẞŉΐΰ\u{0300}-\u{0310}]{0,40}"
-        ) {
-            proptest::prop_assert_eq!(tokenize_query(&input), tokenize_index(&input));
         }
         #[test]
         fn arbitrary_unicode_has_no_empty_tokens_or_panics(input in ".{0,100}") {

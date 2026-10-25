@@ -59,6 +59,8 @@ pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
 pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
 /// Maximum non-terminal event records retained by one Functions runtime.
 pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
+/// The admission-refusal category of RTDB writes applied without their trigger events.
+pub const DATABASE_FANOUT_DROPPED: &str = "database_fanout_dropped";
 /// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
 /// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
 pub const MAX_CAUSALITY_ENTRIES: usize = 512;
@@ -2450,7 +2452,35 @@ impl FunctionsRuntime {
             .collect()
     }
 
+    /// Counts an RTDB source write admitted without its trigger events because they could
+    /// never fit the local event budget, however empty the queue (review S4, 2026-10-25):
+    /// production accepts such a write, so refusing it would fail every retry. The count is
+    /// the resource report's `admission.database_fanout_dropped`; the first one in a session
+    /// is also printed.
+    pub fn drop_database_fanout(&self, instance: &str, reason: &str) {
+        let first = self.inner.lock().is_ok_and(|mut inner| {
+            let count = inner
+                .admission_refusals
+                .entry(DATABASE_FANOUT_DROPPED)
+                .or_default();
+            *count = count.saturating_add(1);
+            *count == 1
+        });
+        if first {
+            eprintln!(
+                "warning: functions: a Realtime Database write to {instance} was applied without \
+                 its trigger events: {reason}. Later drops are counted as \
+                 admission.{DATABASE_FANOUT_DROPPED} in the resource diagnostics"
+            );
+        }
+    }
+
     /// Reserves an RTDB source operation's complete trigger fanout before data publication.
+    /// A fanout that fits an empty queue but not the current one is refused (back-pressure:
+    /// a retry succeeds once deliveries drain). One that can never fit, more events or bytes
+    /// than the whole budget, or one event larger than an invocation frame, is dropped with
+    /// [`Self::drop_database_fanout`] and the write proceeds.
+    #[allow(clippy::too_many_lines)]
     pub fn reserve_database_events(
         self: &Arc<Self>,
         commit: &crate::events::DatabaseCommit,
@@ -2458,6 +2488,7 @@ impl FunctionsRuntime {
         if commit.project != self.config.project || !self.background_triggers_enabled() {
             return Ok(self.empty_event_reservation());
         }
+        let mut oversized = None;
         let result = (|| {
             let mut inner = self
                 .inner
@@ -2493,6 +2524,7 @@ impl FunctionsRuntime {
                             ordinal,
                             inner.epoch,
                         ) {
+                            oversized = Some("one event exceeds the invocation frame limit");
                             return Err(SourceEventAdmissionError::Capacity);
                         }
                         let retained_bytes = Self::retained_event_bytes(
@@ -2513,6 +2545,11 @@ impl FunctionsRuntime {
                             .len()
                             .checked_add(copies)
                             .ok_or(SourceEventAdmissionError::Capacity)?;
+                        if count > MAX_ACTIVE_EVENT_RECORDS || draft_bytes > MAX_ACTIVE_EVENT_BYTES
+                        {
+                            oversized = Some("the events exceed the whole local event budget");
+                            return Err(SourceEventAdmissionError::Capacity);
+                        }
                         if !Self::can_admit_events(
                             &inner,
                             EventSource::Database,
@@ -2543,6 +2580,10 @@ impl FunctionsRuntime {
             }
             self.reserve_drafts(EventSource::Database, drafts, &mut inner)
         })();
+        if let Some(reason) = oversized {
+            self.drop_database_fanout(&commit.instance, reason);
+            return Ok(self.empty_event_reservation());
+        }
         if let Err(error) = &result {
             self.note_admission_refusal(*error);
         }

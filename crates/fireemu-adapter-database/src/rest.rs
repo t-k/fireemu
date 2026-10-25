@@ -423,7 +423,7 @@ impl Database {
         context: ServerValueContext,
         principal: crate::changes::Principal,
     ) -> Result<Option<Node>, crate::changes::ChangeError> {
-        self.commit_change(namespace, context, principal, |tree| {
+        self.commit_change(namespace, path, context, principal, |tree| {
             tree.set(path, value, context)
         })
     }
@@ -436,22 +436,31 @@ impl Database {
         context: ServerValueContext,
         principal: crate::changes::Principal,
     ) -> Result<(), crate::changes::ChangeError> {
-        self.commit_change(namespace, context, principal, |tree| {
+        self.commit_change(namespace, path, context, principal, |tree| {
             tree.update(path, entries, context)
         })
     }
 
+    /// Applies `operation`, a set or an update at `path`, coupling it to the change sink when
+    /// the sink watches what it can change.
     fn commit_change<R>(
         &mut self,
         namespace: &str,
+        path: &Path,
         context: ServerValueContext,
         principal: crate::changes::Principal,
         operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
     ) -> Result<R, crate::changes::ChangeError> {
+        // A `.priority` path sets the priority of its parent.
+        let scope = if path.is_priority() {
+            path.parent().unwrap_or_default()
+        } else {
+            path.clone()
+        };
         let sink = self
             .change_sink
             .clone()
-            .filter(|sink| sink.interested(namespace));
+            .filter(|sink| sink.interested(namespace) && sink.affects(namespace, &scope));
         if sink.is_none() {
             return operation(self.tree_mut(namespace))
                 .map_err(crate::changes::ChangeError::Database);
@@ -471,7 +480,7 @@ impl Database {
         };
         let tree = self.tree_mut(namespace);
         let (result, candidate) =
-            crate::changes::prepare(tree, change, sink.as_deref(), operation)?;
+            crate::changes::prepare_within(tree, &scope, change, sink.as_deref(), operation)?;
         candidate.commit(tree);
         self.next_change = next;
         Ok(result)

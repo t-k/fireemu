@@ -406,11 +406,16 @@ mod tests {
         histogram.record(Json::String("hash@0".to_owned()));
         assert_eq!(histogram.entries[0].1, 2, "kept values keep counting");
         let mut large = Histogram::default();
-        large.record(Json::String("x".repeat(COVERAGE_STRING_BYTES_PER_EXPRESSION)));
+        large.record(Json::String(
+            "x".repeat(COVERAGE_STRING_BYTES_PER_EXPRESSION),
+        ));
         large.record(Json::String("y".to_owned()));
         large.record(Json::Bool(true));
         assert_eq!(large.entries.len(), 2);
         assert_eq!(large.omitted, 1);
-        assert!(large.index.len() == 2, "an omitted value leaves no index entry");
+        assert!(
+            large.index.len() == 2,
+            "an omitted value leaves no index entry"
+        );
     }
 }

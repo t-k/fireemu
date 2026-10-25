@@ -1876,6 +1876,43 @@ pub fn missing_secret_warnings(
         .collect()
 }
 
+/// The location of every local Realtime Database instance, as 2nd-gen trigger events report
+/// it, and its DNS suffix. Production delivers a 2nd-gen RTDB event only to functions in the
+/// instance's location; a local instance has no configured location, so it is this one, the
+/// official emulator's assumption too.
+pub const LOCAL_DATABASE_LOCATION: &str = "us-central1";
+/// The DNS suffix of [`LOCAL_DATABASE_LOCATION`] instances.
+pub const LOCAL_DATABASE_HOST: &str = "firebaseio.com";
+
+/// One `functions[...]` warning per 2nd-gen Realtime Database trigger outside
+/// [`LOCAL_DATABASE_LOCATION`] (review S11, 2026-10-25): it never fires locally, as the official
+/// emulator warns ("function region is defined outside the database region, will not
+/// trigger"), and a test waiting for it would otherwise time out with no explanation.
+#[must_use]
+pub fn database_region_warnings(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    codebase: &str,
+) -> Vec<String> {
+    use fireemu_core_functions::manifest::{FunctionGeneration, Trigger};
+    manifest
+        .functions
+        .iter()
+        .filter(|function| {
+            matches!(function.trigger, Trigger::Database { .. })
+                && function.generation == FunctionGeneration::Second
+                && function.region != LOCAL_DATABASE_LOCATION
+        })
+        .map(|function| {
+            format!(
+                "functions[{codebase}]: {} is a 2nd-gen Realtime Database trigger in {}, but \
+                 local Realtime Database instances are in {LOCAL_DATABASE_LOCATION}, so it will \
+                 not trigger; in production it fires only for instances located in {}",
+                function.name, function.region, function.region
+            )
+        })
+        .collect()
+}
+
 /// The stderr lines for every export that will never run, each a `warning:` and followed by one
 /// summary line. An export production would deploy and run (a v2 Test Lab trigger, a function
 /// whose options fail to resolve) is skipped here, so a test asserting "no side effect" would
@@ -2982,6 +3019,13 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
         !self.patterns(namespace).is_empty()
     }
 
+    fn affects(&self, namespace: &str, scope: &fireemu_adapter_database::changes::Path) -> bool {
+        let scope = scope.to_string();
+        self.patterns(namespace)
+            .iter()
+            .any(|pattern| pattern.overlaps(&scope))
+    }
+
     fn capture_references(
         &self,
         namespace: &str,
@@ -2991,17 +3035,48 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
         Option<Vec<fireemu_adapter_database::changes::Path>>,
         fireemu_core_types::admission::EventAdmissionError,
     > {
+        self.capture_references_within(
+            namespace,
+            before,
+            after,
+            &fireemu_adapter_database::changes::Path::root(),
+        )
+    }
+
+    fn capture_references_within(
+        &self,
+        namespace: &str,
+        before: &fireemu_adapter_database::changes::Tree,
+        after: &fireemu_adapter_database::changes::Tree,
+        scope: &fireemu_adapter_database::changes::Path,
+    ) -> Result<
+        Option<Vec<fireemu_adapter_database::changes::Path>>,
+        fireemu_core_types::admission::EventAdmissionError,
+    > {
         use fireemu_adapter_functions::runtime::{
             MAX_ACTIVE_EVENT_BYTES, MAX_ACTIVE_EVENT_RECORDS,
         };
-        capture_database_references(
+        match capture_database_references(
             &self.patterns(namespace),
             before,
             after,
+            scope,
             MAX_ACTIVE_EVENT_RECORDS,
             MAX_ACTIVE_EVENT_BYTES as u64,
-        )
-        .map(Some)
+        ) {
+            Ok(references) => Ok(Some(references)),
+            // The capture budget is the whole local event budget, so this write's events can
+            // never be admitted; production accepts the write (review S4), so it proceeds
+            // without them.
+            Err(fireemu_core_types::admission::EventAdmissionError::Capacity(_)) => {
+                self.runtime.drop_database_fanout(
+                    namespace,
+                    "the changed trigger references exceed the whole local event budget",
+                );
+                Ok(Some(Vec::new()))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn reserve(
@@ -3108,10 +3183,14 @@ fn database_node_children(
     }
 }
 
+/// The changed trigger references of a write confined to `scope` (see
+/// `ChangeSink::capture_references_within`): above `scope` only the branch leading to it is
+/// followed, without comparing its unchanged siblings.
 fn capture_database_references(
     patterns: &[fireemu_core_functions::manifest::DatabasePattern],
     before: &fireemu_adapter_database::changes::Tree,
     after: &fireemu_adapter_database::changes::Tree,
+    scope: &fireemu_adapter_database::changes::Path,
     record_limit: usize,
     byte_limit: u64,
 ) -> Result<
@@ -3146,6 +3225,7 @@ fn capture_database_references(
             before.root(),
             after.root(),
             &fireemu_adapter_database::changes::Path::root(),
+            scope,
             &mut capture,
         )?;
     }
@@ -3157,9 +3237,13 @@ fn walk_database_references(
     before: Option<&fireemu_adapter_database::changes::Node>,
     after: Option<&fireemu_adapter_database::changes::Node>,
     path: &fireemu_adapter_database::changes::Path,
+    scope: &fireemu_adapter_database::changes::Path,
     capture: &mut DatabaseReferenceCapture,
 ) -> Result<(), fireemu_core_types::admission::EventAdmissionError> {
-    if before == after {
+    // Above the written scope, the node changed exactly when the scope did, which the caller
+    // established; comparing would walk every unchanged sibling.
+    let above_scope = path.depth() < scope.depth();
+    if !above_scope && before == after {
         return Ok(());
     }
     if path.depth() == prefixes.len() {
@@ -3183,9 +3267,13 @@ fn walk_database_references(
             old_children.and_then(|children| children.get(key)),
             new_children.and_then(|children| children.get(key)),
             &child,
+            scope,
             capture,
         )
     };
+    if above_scope {
+        return visit(&scope.keys()[path.depth()]);
+    }
     if !segment.contains(['{', '*']) {
         return visit(segment);
     }
@@ -3503,6 +3591,9 @@ async fn start_codebase(
             eprintln!("{line}");
         }
         for line in missing_secret_warnings(&manifest, &user_env.secrets, label) {
+            eprintln!("warning: {line}");
+        }
+        for line in database_region_warnings(&manifest, label) {
             eprintln!("warning: {line}");
         }
         if cfg.functions_manifest.is_some() {
@@ -6342,6 +6433,17 @@ mod tests {
 
     async fn database_bridge_runtime() -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>
     {
+        database_bridge_runtime_with(
+            &json!({"functions":[{"name":"databaseChanged","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/users/{uid}"
+            }}]}),
+        )
+        .await
+    }
+
+    async fn database_bridge_runtime_with(
+        manifest: &serde_json::Value,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_types::time::LogicalInstant;
@@ -6365,9 +6467,7 @@ while True:
         })
         .await
         .unwrap();
-        let manifest=parse_manifest(&json!({"functions":[{"name":"databaseChanged","generation":2,"region":"us-central1","trigger":{
-            "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/users/{uid}"
-        }}]})).unwrap();
+        let manifest = parse_manifest(manifest).unwrap();
         FunctionsRuntime::new(
             manifest,
             FunctionsConfig::for_tests(1000, "test".to_owned()),
@@ -6448,8 +6548,15 @@ while True:
             .map(|pattern| DatabasePattern::parse(pattern).unwrap());
         // The selected small subtree fits this test budget even while both unrelated branches
         // exceed it by orders of magnitude. Duplicate patterns must not charge twice.
-        let references =
-            super::capture_database_references(&patterns, &before, &after, 3, 100_000).unwrap();
+        let references = super::capture_database_references(
+            &patterns,
+            &before,
+            &after,
+            &fireemu_adapter_database::changes::Path::root(),
+            3,
+            100_000,
+        )
+        .unwrap();
         assert_eq!(
             references
                 .iter()
@@ -6457,11 +6564,16 @@ while True:
                 .collect::<Vec<_>>(),
             vec!["/users", "/users/a-test", "/users/c-test"]
         );
-        assert!(
-            super::capture_database_references(&patterns, &before, &before, 0, 0)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(super::capture_database_references(
+            &patterns,
+            &before,
+            &before,
+            &fireemu_adapter_database::changes::Path::root(),
+            0,
+            0
+        )
+        .unwrap()
+        .is_empty());
     }
 
     #[test]
@@ -6472,21 +6584,365 @@ while True:
         let after = database_bridge_tree(&json!({"users":{"a":"after"}}));
         let patterns = [DatabasePattern::parse("/users/{uid}").unwrap()];
         assert!(matches!(
-            super::capture_database_references(&patterns, &before, &after, 1, 1),
+            super::capture_database_references(
+                &patterns,
+                &before,
+                &after,
+                &fireemu_adapter_database::changes::Path::root(),
+                1,
+                1
+            ),
             Err(EventAdmissionError::Capacity(_))
         ));
         assert_eq!(
-            super::capture_database_references(&patterns, &before, &after, 1, 10_000)
-                .unwrap()
-                .len(),
+            super::capture_database_references(
+                &patterns,
+                &before,
+                &after,
+                &fireemu_adapter_database::changes::Path::root(),
+                1,
+                10_000
+            )
+            .unwrap()
+            .len(),
             1
         );
     }
 
     #[tokio::test]
-    async fn database_bridge_complete_fanout_refusal_keeps_source_and_runtime_unpublished() {
-        use fireemu_adapter_database::rest::{Database, RestOptions};
-        use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS;
+    async fn database_bridge_affects_only_writes_that_can_reach_a_trigger_reference() {
+        use fireemu_adapter_database::changes::Path;
+        let runtime = database_bridge_runtime().await;
+        let sink = super::database_sink(&runtime, "demo-app", "us-central1", "firebaseio.com");
+        for (keys, expected) in [
+            (&[][..], true),
+            (&["users"][..], true),
+            (&["users", "a"][..], true),
+            (&["users", "a", "name"][..], true),
+            (&["other"][..], false),
+            (&["other", "users", "a"][..], false),
+        ] {
+            assert_eq!(
+                sink.affects(
+                    "demo-app-default-rtdb",
+                    &Path::from_keys(keys.iter().copied())
+                ),
+                expected,
+                "{keys:?}"
+            );
+        }
+        runtime.shutdown().await;
+    }
+
+    use proptest::strategy::Strategy as _;
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+
+        /// Review S3: following only the written branch above the write finds exactly the
+        /// references a whole-tree walk finds.
+        #[test]
+        fn database_bridge_scoped_capture_matches_the_whole_tree_walk(
+            seed in proptest::collection::btree_map(
+                proptest::sample::select(vec!["users", "other", "a"]),
+                proptest::collection::btree_map(
+                    proptest::sample::select(vec!["a", "b", "c-test"]),
+                    proptest::prelude::prop_oneof![
+                        (0i32..3).prop_map(|n| json!(n)),
+                        (0i32..3).prop_map(|n| json!({"v": n})),
+                    ],
+                    0..3,
+                ),
+                0..3,
+            ),
+            write in proptest::collection::vec(proptest::sample::select(vec!["users", "other", "a", "b", "c-test", "v"]), 0..4),
+            value in proptest::prelude::prop_oneof![
+                proptest::prelude::Just(serde_json::Value::Null),
+                (0i32..3).prop_map(|n| json!(n)),
+                (0i32..3).prop_map(|n| json!({"v": n, "w": n})),
+            ],
+        ) {
+            use fireemu_adapter_database::changes::Path;
+            use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+            use fireemu_core_functions::manifest::DatabasePattern;
+            let mut database = Database::new(RestOptions::default(), 1);
+            proptest::prop_assert_eq!(database_bridge_write(&mut database, &serde_json::to_value(&seed).unwrap()), 200);
+            let before = database.tree("demo-app-default-rtdb").cloned().unwrap_or_default();
+            let target = format!("/{}.json?ns=demo-app-default-rtdb", write.join("/"));
+            let Handled::Response { response, .. } = database.handle(
+                &HttpRequest { method: "PUT".to_owned(), target, headers: Vec::new(), body: serde_json::to_vec(&value).unwrap() },
+                100_000,
+            ) else {
+                panic!("a PUT must not create a stream")
+            };
+            proptest::prop_assert_eq!(response.status, 200);
+            let after = database.tree("demo-app-default-rtdb").cloned().unwrap_or_default();
+            let scope = Path::from_keys(write.iter().copied());
+            // The caller captures only after the write changed its scope.
+            if before.get(&scope) == after.get(&scope) {
+                return Ok(());
+            }
+            let patterns = ["/users", "/users/{uid}", "/{top}/{uid=*-test}", "/a/b/v", "/"]
+                .map(|pattern| DatabasePattern::parse(pattern).unwrap());
+            let whole = super::capture_database_references(&patterns, &before, &after, &Path::root(), usize::MAX, u64::MAX).unwrap();
+            let scoped = super::capture_database_references(&patterns, &before, &after, &scope, usize::MAX, u64::MAX).unwrap();
+            proptest::prop_assert_eq!(scoped, whole);
+        }
+    }
+
+    /// The pairwise table of docs.local/coverage-ledger/pict/review-rtdb-fixes.pict (review
+    /// S3, S4 and S11), with its required rows seeded. Each row writes through the real bridge
+    /// and compares status, source tree, published events and dropped fanouts with a model
+    /// computed from the trees the write produces without a sink.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn database_bridge_pairwise_paths_fanouts_and_regions_match_the_model() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::events::{
+            DatabaseChangeData, DatabaseCommit, DatabaseReferenceChange,
+        };
+        use fireemu_adapter_functions::runtime::{
+            DATABASE_FANOUT_DROPPED, MAX_ACTIVE_EVENT_RECORDS,
+        };
+        const TABLE: &str = "WritePath	Change	Fanout	Region
+belowRef	changed	small	usCentral1
+root	changed	overBudget	usCentral1
+unwatched	changed	none	usCentral1
+belowRef	changed	transientFull	usCentral1
+atRef	unchanged	none	usCentral1
+belowRef	changed	small	europeWest1
+ancestor	unchanged	small	firstGen
+root	changed	none	firstGen
+unwatched	unchanged	overFrame	europeWest1
+ancestor	changed	overFrame	usCentral1
+unwatched	unchanged	transientFull	firstGen
+priority	unchanged	overFrame	firstGen
+root	unchanged	overFrame	europeWest1
+priority	changed	overBudget	europeWest1
+ancestor	changed	none	europeWest1
+belowRef	unchanged	overFrame	firstGen
+unwatched	unchanged	overBudget	firstGen
+unwatched	unchanged	small	europeWest1
+ancestor	unchanged	overBudget	europeWest1
+root	unchanged	transientFull	europeWest1
+atRef	changed	small	firstGen
+atRef	unchanged	overFrame	europeWest1
+priority	unchanged	transientFull	usCentral1
+atRef	unchanged	transientFull	usCentral1
+ancestor	changed	transientFull	europeWest1
+atRef	unchanged	overBudget	usCentral1
+priority	changed	none	europeWest1
+priority	unchanged	small	firstGen
+belowRef	changed	overBudget	usCentral1
+belowRef	changed	none	firstGen
+root	unchanged	small	firstGen";
+        const NS: &str = "demo-app-default-rtdb";
+        fn put(database: &mut Database, path: &str, body: &serde_json::Value) -> u16 {
+            let target = if path == "/" {
+                format!("/.json?ns={NS}")
+            } else {
+                format!("{path}.json?ns={NS}")
+            };
+            let Handled::Response { response, .. } = database.handle(
+                &HttpRequest {
+                    method: "PUT".to_owned(),
+                    target,
+                    headers: Vec::new(),
+                    body: serde_json::to_vec(body).unwrap(),
+                },
+                100_000,
+            ) else {
+                panic!("a PUT must not create a stream")
+            };
+            response.status
+        }
+        fn export(database: &mut Database) -> serde_json::Value {
+            let Handled::Response { response, .. } = database.handle(
+                &HttpRequest {
+                    method: "GET".to_owned(),
+                    target: format!("/.json?ns={NS}&format=export"),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                },
+                100_000,
+            ) else {
+                panic!("a GET without SSE must not create a stream")
+            };
+            assert_eq!(response.status, 200);
+            serde_json::from_slice(&response.body).unwrap()
+        }
+        let seed = json!({"users":{"a":{"v":1},"b":{"v":1}},"other":{"x":1}});
+        for row in TABLE.lines().skip(1) {
+            let columns: Vec<_> = row.split('\t').collect();
+            let [path_kind, change, fanout, region] = columns.as_slice() else {
+                panic!("{row}")
+            };
+            let function = match *region {
+                "usCentral1" => json!({"generation":2,"region":"us-central1"}),
+                "europeWest1" => json!({"generation":2,"region":"europe-west1"}),
+                _ => json!({"generation":1}),
+            };
+            let mut function = function;
+            function["name"] = json!("usersChanged");
+            function["trigger"] = json!({"type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/users/{uid}"});
+            let runtime = database_bridge_runtime_with(&json!({"functions":[function]})).await;
+            let delivering = *region != "europeWest1";
+            // The value a changed write puts at /users/a/v.
+            let leaf = match *fanout {
+                // Two strings below the 10 MB string limit; six times their bytes exceed the
+                // 64 MiB capture budget of one reference.
+                "overBudget" => {
+                    json!({"p": "x".repeat(9 * 1024 * 1024), "q": "y".repeat(9 * 1024 * 1024)})
+                }
+                "overFrame" => json!("\0".repeat(3 * 1024 * 1024)),
+                _ => json!(2),
+            };
+            let many: serde_json::Map<_, _> = (0..=MAX_ACTIVE_EVENT_RECORDS)
+                .map(|n| (format!("id{n}"), json!(n)))
+                .collect();
+            let mut changed_users = seed["users"].clone();
+            changed_users["a"]["v"] = leaf.clone();
+            if *fanout == "overBudget" && matches!(*path_kind, "ancestor" | "root") {
+                changed_users = serde_json::Value::Object(many.clone());
+            }
+            let unchanged = *change == "unchanged";
+            let (target, body) = match *path_kind {
+                "unwatched" => ("/other/x", if unchanged { json!(1) } else { json!(2) }),
+                "ancestor" => (
+                    "/users",
+                    if unchanged {
+                        seed["users"].clone()
+                    } else {
+                        changed_users.clone()
+                    },
+                ),
+                "atRef" => (
+                    "/users/a",
+                    if unchanged {
+                        seed["users"]["a"].clone()
+                    } else {
+                        changed_users["a"].clone()
+                    },
+                ),
+                "belowRef" => (
+                    "/users/a/v",
+                    if unchanged { json!(1) } else { leaf.clone() },
+                ),
+                // A priority is small: it changes one reference whatever the fanout column says.
+                "priority" => (
+                    "/users/a/.priority",
+                    if unchanged {
+                        serde_json::Value::Null
+                    } else {
+                        json!(5)
+                    },
+                ),
+                _ => {
+                    let mut root = seed.clone();
+                    if !unchanged {
+                        if *fanout == "none" {
+                            root["other"]["x"] = json!(2);
+                        } else {
+                            root["users"] = changed_users.clone();
+                        }
+                    }
+                    ("/", root)
+                }
+            };
+            // The model: the same write without a sink.
+            let mut plain = Database::new(RestOptions::default(), 1);
+            assert_eq!(put(&mut plain, "/", &seed), 200);
+            let before = export(&mut plain);
+            assert_eq!(put(&mut plain, target, &body), 200, "{row}");
+            let after = export(&mut plain);
+            let refs = |tree: &serde_json::Value| {
+                tree.get("users")
+                    .and_then(serde_json::Value::as_object)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let (old, new) = (refs(&before), refs(&after));
+            let changed_refs = old
+                .keys()
+                .chain(new.keys())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .filter(|key| old.get(*key) != new.get(*key))
+                .count();
+            let oversized = changed_refs > MAX_ACTIVE_EVENT_RECORDS
+                || (*path_kind != "priority" && matches!(*fanout, "overBudget" | "overFrame"));
+            let firing = delivering && changed_refs > 0;
+            let refused = firing && !oversized && *fanout == "transientFull";
+
+            let mut database = Database::new(RestOptions::default(), 1);
+            assert_eq!(put(&mut database, "/", &seed), 200);
+            database.set_change_sink(super::database_sink(
+                &runtime,
+                "demo-app",
+                "us-central1",
+                "firebaseio.com",
+            ));
+            let holding = (*fanout == "transientFull").then(|| {
+                runtime
+                    .reserve_database_events(&DatabaseCommit {
+                        project: "demo-app".to_owned(),
+                        instance: NS.to_owned(),
+                        location: "us-central1".to_owned(),
+                        host: "firebaseio.com".to_owned(),
+                        sequence: 0,
+                        time: fireemu_core_types::time::LogicalInstant::from_unix_seconds(100),
+                        data: DatabaseChangeData::References(
+                            (0..MAX_ACTIVE_EVENT_RECORDS)
+                                .map(|n| DatabaseReferenceChange {
+                                    reference: format!("/users/hold{n}"),
+                                    before: serde_json::Value::Null,
+                                    after: json!(n),
+                                })
+                                .collect(),
+                        ),
+                        auth_type: "ADMIN".to_owned(),
+                        auth_id: None,
+                        auth: None,
+                    })
+                    .unwrap()
+            });
+            let status = put(&mut database, target, &body);
+            assert_eq!(status, if refused { 503 } else { 200 }, "{row}");
+            assert_eq!(
+                export(&mut database),
+                if refused {
+                    before.clone()
+                } else {
+                    after.clone()
+                },
+                "{row}"
+            );
+            drop(holding);
+            let accounting = runtime.source_event_accounting().unwrap();
+            let expected = if firing && !oversized && !refused {
+                changed_refs
+            } else {
+                0
+            };
+            assert_eq!(accounting.published_records, expected, "{row}");
+            let dropped = runtime
+                .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+                .unwrap()
+                .refusals
+                .into_iter()
+                .find(|refusal| refusal.reason == format!("admission.{DATABASE_FANOUT_DROPPED}"))
+                .map_or(0, |refusal| refusal.count);
+            assert_eq!(dropped, u64::from(firing && oversized), "{row}");
+            runtime.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn database_bridge_oversized_fanout_admits_the_write_and_drops_its_events() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::runtime::{
+            DATABASE_FANOUT_DROPPED, MAX_ACTIVE_EVENT_RECORDS,
+        };
         let runtime = database_bridge_runtime().await;
         let mut database = Database::new(RestOptions::default(), 1);
         database.set_change_sink(super::database_sink(
@@ -6495,34 +6951,55 @@ while True:
             "us-central1",
             "firebaseio.com",
         ));
+        // Review S4: production accepts a write of more children than the local event budget
+        // under a trigger; refusing it with 503 failed every retry.
         let users: serde_json::Map<_, _> = (0..=MAX_ACTIVE_EVENT_RECORDS)
             .map(|n| (format!("id{n}"), json!(n)))
             .collect();
         assert_eq!(
             database_bridge_write(&mut database, &json!({"users":users})),
-            503
+            200
         );
         assert!(database
             .tree("demo-app-default-rtdb")
             .unwrap()
-            .root()
-            .is_none());
+            .get(&fireemu_adapter_database::changes::Path::from_keys([
+                "users", "id4096"
+            ]))
+            .is_some());
+        let accounting = runtime.source_event_accounting().unwrap();
         assert_eq!(
-            runtime.source_event_accounting().unwrap().reserved_records,
-            0
+            (accounting.reserved_records, accounting.published_records),
+            (0, 0)
         );
-        assert_eq!(
-            runtime.source_event_accounting().unwrap().published_records,
-            0
-        );
-        assert_eq!(
-            database_bridge_write(&mut database, &json!({"users":{"one":1}})),
-            200
-        );
+        let dropped = |runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime| {
+            runtime
+                .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+                .unwrap()
+                .refusals
+                .into_iter()
+                .find(|refusal| refusal.reason == format!("admission.{DATABASE_FANOUT_DROPPED}"))
+                .map_or(0, |refusal| refusal.count)
+        };
+        assert_eq!(dropped(&runtime), 1);
+        // A later ordinary write under the trigger still delivers its event.
+        let Handled::Response { response, .. } = database.handle(
+            &HttpRequest {
+                method: "PUT".to_owned(),
+                target: "/users/extra.json?ns=demo-app-default-rtdb".to_owned(),
+                headers: Vec::new(),
+                body: b"1".to_vec(),
+            },
+            100_000,
+        ) else {
+            panic!("a PUT must not create a stream")
+        };
+        assert_eq!(response.status, 200);
         assert_eq!(
             runtime.source_event_accounting().unwrap().published_records,
             1
         );
+        assert_eq!(dropped(&runtime), 1);
         runtime.shutdown().await;
     }
 
@@ -13239,6 +13716,31 @@ module.exports = { tick, observer };
 
     /// A declared secret with no `.secret.local` value is named once, with the functions that
     /// declare it; one that has a value, and a function that declares none, are not.
+    #[test]
+    fn a_second_gen_database_trigger_outside_the_local_location_is_warned_about() {
+        let manifest = parse_manifest(&json!({"functions":[
+            {"name":"euWritten","generation":2,"region":"europe-west1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/a"}},
+            {"name":"usWritten","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/a"}},
+            {"name":"defaultRegion","generation":2,"trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/a"}},
+            {"name":"firstGen","generation":1,"region":"europe-west1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/a"}},
+            {"name":"euDocument","generation":2,"region":"europe-west1","trigger":{
+                "type":"firestore","eventType":"google.cloud.firestore.document.v1.written","document":"a/{id}"}}
+        ]}))
+        .unwrap();
+        let lines = super::database_region_warnings(&manifest, "default");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].starts_with("functions[default]: euWritten "),
+            "{lines:?}"
+        );
+        assert!(lines[0].contains("in europe-west1"), "{lines:?}");
+        assert!(lines[0].contains("will not trigger"), "{lines:?}");
+    }
+
     #[test]
     fn a_declared_secret_without_a_local_value_is_warned_about() {
         let manifest = parse_manifest(&json!({"functions": [

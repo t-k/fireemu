@@ -96,7 +96,8 @@ fn unchanged_wrong_instance_wrong_region_and_wrong_mutation_family_emit_nothing(
 
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 use fireemu_adapter_functions::runtime::{
-    FunctionsConfig, FunctionsRuntime, SourceEventAdmissionError, MAX_ACTIVE_EVENT_RECORDS,
+    FunctionsConfig, FunctionsRuntime, SourceEventAdmissionError, DATABASE_FANOUT_DROPPED,
+    MAX_ACTIVE_EVENT_RECORDS,
 };
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::LogicalDuration;
@@ -221,33 +222,74 @@ async fn database_reservations_are_invisible_refundable_and_invalidated_by_reset
     runtime.shutdown().await;
 }
 
-#[tokio::test]
-async fn database_complete_fanout_capacity_refusal_does_not_charge_partial_records() {
+fn dropped_fanouts(runtime: &FunctionsRuntime) -> u64 {
+    runtime
+        .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+        .unwrap()
+        .refusals
+        .into_iter()
+        .find(|refusal| refusal.reason == format!("admission.{DATABASE_FANOUT_DROPPED}"))
+        .map_or(0, |refusal| refusal.count)
+}
+
+fn user_changes(count: usize) -> DatabaseChangeData {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
-    let (runtime, _) = runtime(false).await;
-    let mut change = commit();
-    change.data = DatabaseChangeData::References(
-        (0..=MAX_ACTIVE_EVENT_RECORDS)
+    DatabaseChangeData::References(
+        (0..count)
             .map(|n| DatabaseReferenceChange {
                 reference: format!("/users/id{n}"),
                 before: serde_json::Value::Null,
                 after: json!(n),
             })
             .collect(),
-    );
-    assert!(matches!(
-        runtime.reserve_database_events(&change),
-        Err(SourceEventAdmissionError::Capacity)
-    ));
+    )
+}
+
+/// Review S4 (2026-10-25): a fanout larger than the whole event budget can never be admitted,
+/// so it is dropped (counted, nothing charged) and the source write proceeds, as production
+/// accepts it.
+#[tokio::test]
+async fn database_fanout_beyond_the_whole_budget_is_dropped_without_charging_records() {
+    let (runtime, _) = runtime(false).await;
+    let mut change = commit();
+    change.data = user_changes(MAX_ACTIVE_EVENT_RECORDS + 1);
+    let reservation = runtime
+        .reserve_database_events(&change)
+        .expect("a fanout that can never fit is dropped, not refused");
     assert_eq!(
         runtime.source_event_accounting().unwrap().reserved_records,
         0
     );
+    reservation.publish();
     assert_eq!(
         runtime.source_event_accounting().unwrap().published_records,
         0
     );
-    // A refused larger source operation cannot consume the following operation's capacity.
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    // A dropped larger source operation cannot consume the following operation's capacity.
+    let reservation = runtime.reserve_database_events(&commit()).unwrap();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        2
+    );
+    drop(reservation);
+    runtime.shutdown().await;
+}
+
+/// A fanout that fits an empty queue but not the current one stays a refusal: the caller
+/// answers 503 and a retry succeeds once deliveries drain.
+#[tokio::test]
+async fn database_fanout_that_fits_an_empty_queue_is_refused_only_while_the_queue_is_full() {
+    let (runtime, _) = runtime(false).await;
+    let mut held = commit();
+    held.data = user_changes(MAX_ACTIVE_EVENT_RECORDS - 1);
+    let holding = runtime.reserve_database_events(&held).unwrap();
+    assert!(matches!(
+        runtime.reserve_database_events(&commit()),
+        Err(SourceEventAdmissionError::Capacity)
+    ));
+    assert_eq!(dropped_fanouts(&runtime), 0);
+    drop(holding);
     let reservation = runtime.reserve_database_events(&commit()).unwrap();
     assert_eq!(
         runtime.source_event_accounting().unwrap().reserved_records,
@@ -272,12 +314,12 @@ async fn database_ipc_capacity_counts_json_escaping_and_the_invoke_envelope() {
             before: json!(character.to_string().repeat(bytes)),
             after: json!("b".repeat(bytes)),
         }]);
+        let dropped = dropped_fanouts(&runtime);
         let result = runtime.reserve_database_events(&change);
-        if accepted {
-            drop(result.expect("a complete 14MiB invocation fits the existing IPC limit"));
-        } else {
-            assert!(matches!(result, Err(SourceEventAdmissionError::Capacity)));
-        }
+        // An event larger than an invocation frame can never be delivered; production does
+        // not deliver an oversized event either, and still accepts the write (review S4).
+        drop(result.expect("a fitting event is reserved and an oversized one dropped"));
+        assert_eq!(dropped_fanouts(&runtime), dropped + u64::from(!accepted));
         assert_eq!(
             runtime.source_event_accounting().unwrap().reserved_records,
             0
@@ -313,10 +355,13 @@ async fn database_ipc_capacity_counts_json_escaping_and_the_invoke_envelope() {
         serde_json::to_vec(&event).unwrap().len(),
         fireemu_adapter_functions::protocol::MAX_FRAME_BYTES
     );
-    assert!(matches!(
-        runtime.reserve_database_events(&change),
-        Err(SourceEventAdmissionError::Capacity)
-    ));
+    let dropped = dropped_fanouts(&runtime);
+    drop(runtime.reserve_database_events(&change).unwrap());
+    assert_eq!(dropped_fanouts(&runtime), dropped + 1);
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        0
+    );
     runtime.shutdown().await;
 }
 

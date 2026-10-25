@@ -1007,3 +1007,90 @@ fn stats_need_counters_as_the_official_emulator_reads_them() {
     assert!(received.drop_connection);
     assert!(received.replies.is_empty());
 }
+
+/// The stale-transaction rows of the production SDK recording RTDB-CV09-SDK-20261025-08
+/// (fireemu-oracle-query, 2026-10-24, firebase 12.18.0), cells `r1_ws` and `r2_ws`: the writer's
+/// compare-and-set from 0 is refused after another client wrote 10, and its retry from 10
+/// commits 11. Every frame below is the recorded production frame, path aside.
+#[test]
+fn production_stale_transaction_rows_replay_as_recorded() {
+    const HASH_OF_0: &str = "7ysMph9WPitGP7poMnMHMVPtUlI=";
+    const HASH_OF_10: &str = "+r5aI9HvKKagELki8SYKBk0q7D4=";
+    let path = "/cv09proof20261024/round1/ws/cv09/counter";
+    let mut db = Database::new(RestOptions::default(), 1);
+    let (mut root, _) = open(&mut db, "/.ws?v=5&ns=cv09");
+    assert_eq!(
+        send(
+            &mut db,
+            &mut root,
+            &request(1, "p", &format!(r#"{{"p":"{path}","d":0}}"#))
+        ),
+        vec![reply(1, "ok", r#""""#)]
+    );
+    let (mut writer, _) = open(&mut db, "/.ws?v=5&ns=cv09");
+    let (mut observer, _) = open(&mut db, "/.ws?v=5&ns=cv09");
+    // The writer's update function ran on 0; its compare-and-set is held while the observer writes.
+    assert_eq!(
+        send(
+            &mut db,
+            &mut observer,
+            &request(2, "p", &format!(r#"{{"p":"{path}","d":10}}"#))
+        ),
+        vec![reply(2, "ok", r#""""#)]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut writer,
+            &request(
+                3,
+                "p",
+                &format!(r#"{{"p":"{path}","d":1,"h":"{HASH_OF_0}"}}"#)
+            )
+        ),
+        vec![
+            r#"{"t":"d","d":{"r":3,"b":{"s":"datastale","d":"Transaction ETag does not match"}}}"#
+                .to_owned()
+        ]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut writer,
+            &request(
+                4,
+                "p",
+                &format!(r#"{{"p":"{path}","d":11,"h":"{HASH_OF_10}"}}"#)
+            )
+        ),
+        vec![r#"{"t":"d","d":{"r":4,"b":{"s":"ok","d":11}}}"#.to_owned()]
+    );
+    assert_eq!(
+        send(
+            &mut db,
+            &mut observer,
+            &request(4, "g", &format!(r#"{{"p":"{path}","q":{{}}}}"#))
+        ),
+        vec![r#"{"t":"d","d":{"r":4,"b":{"s":"ok","d":11}}}"#.to_owned()]
+    );
+    // Without the competing write, the recorded hash of 0 is the current hash.
+    let mut fresh = Database::new(RestOptions::default(), 1);
+    let (mut alone, _) = open(&mut fresh, "/.ws?v=5&ns=cv09");
+    send(
+        &mut fresh,
+        &mut alone,
+        &request(1, "p", &format!(r#"{{"p":"{path}","d":0}}"#)),
+    );
+    assert_eq!(
+        send(
+            &mut fresh,
+            &mut alone,
+            &request(
+                2,
+                "p",
+                &format!(r#"{{"p":"{path}","d":1,"h":"{HASH_OF_0}"}}"#)
+            )
+        ),
+        vec![reply(2, "ok", "1")]
+    );
+}

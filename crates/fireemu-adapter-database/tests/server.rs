@@ -1444,3 +1444,86 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
     }
     outcome.unwrap().unwrap();
 }
+
+/// Round 1 of the production SSE recording RTDB-SSE-PROOF-20261024-03 (fireemu-oracle-query,
+/// 2026-10-24): an anonymous event stream gets the recorded `put` and `patch` events, the Rules
+/// change ends it with the recorded `cancel` event, and the anonymous read is then refused with
+/// production's 401 body while the owner still reads the patched value. The event bytes, the
+/// refusal body and the readback are the recorded production bytes. Production sent the stream
+/// with `Connection: close` and closed the socket after the cancel event; fireemu ends its
+/// chunked body and keeps the connection (a known framing difference of the RTDB closure).
+#[tokio::test]
+async fn production_sse_round_replays_the_recorded_events_and_refusal() {
+    let (address, _database) = start(Duration::from_secs(60)).await;
+    let call = |method: &'static str, target: &'static str, owner: bool, body: &'static str| {
+        let address = address.clone();
+        async move {
+            let mut stream = TcpStream::connect(&address).await.unwrap();
+            let auth = if owner {
+                "Authorization: Bearer owner\r\n"
+            } else {
+                ""
+            };
+            let request = format!(
+                "{method} {target} HTTP/1.1\r\nHost: {address}\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            response
+        }
+    };
+    let allow = r#"{"rules":{".read":false,".write":false,"sseproof20261024":{".read":true,".write":false}}}"#;
+    let deny = r#"{"rules":{".read":false,".write":false}}"#;
+    let target = "/sseproof20261024/round1.json?ns=sse03";
+    assert!(call("PUT", "/.settings/rules.json?ns=sse03", true, allow)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    assert!(call("PUT", target, true, r#"{"value":1}"#)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    let request =
+        format!("GET {target} HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let head = read_until(
+        &mut stream,
+        "event: put\ndata: {\"path\":\"/\",\"data\":{\"value\":1}}\n\n",
+    )
+    .await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head:?}");
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-type: text/event-stream"),
+        "{head:?}"
+    );
+    assert!(call("PATCH", target, true, r#"{"value":2}"#)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    read_until(
+        &mut stream,
+        "event: patch\ndata: {\"path\":\"/\",\"data\":{\"value\":2}}\n\n",
+    )
+    .await;
+    assert!(call("PUT", "/.settings/rules.json?ns=sse03", true, deny)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    let tail = read_until(&mut stream, "0\r\n\r\n").await;
+    assert!(
+        tail.ends_with("event: cancel\ndata: Permission denied\n\n\r\n0\r\n\r\n")
+            && !tail.contains("event: put"),
+        "{tail:?}"
+    );
+    let denied = call("GET", target, false, "").await;
+    assert!(denied.starts_with("HTTP/1.1 401"), "{denied:?}");
+    assert!(
+        denied.ends_with("{\n  \"error\" : \"Permission denied\"\n}\n"),
+        "{denied:?}"
+    );
+    let unchanged = call("GET", target, true, "").await;
+    assert!(
+        unchanged.ends_with("\r\n\r\n{\"value\":2}"),
+        "{unchanged:?}"
+    );
+}

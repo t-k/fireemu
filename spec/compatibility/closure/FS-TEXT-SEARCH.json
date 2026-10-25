@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FS-TEXT-SEARCH",
-  "parentStatus": "IN_PROGRESS",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-query",
@@ -391,7 +391,8 @@
     }
   },
   "integratedRegression": {
-    "integrationCommit": "PENDING (the final commit of work/text-closure)",
+    "integrationCommit": "aca1e070be348e1418cc86ae349e4c5eda93970a",
+    "kind": "fs-text-search-replay-comparison-v1",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",

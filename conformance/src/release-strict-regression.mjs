@@ -515,6 +515,12 @@ export const EXCLUDED_KINDS = [
     issue: "storage-object-comparison-needs-the-recorder-in-the-release-job.md",
   },
   {
+    kind: "fs-text-search-replay-comparison-v1",
+    reason:
+      "the comparison is produced by a Rust test (crates/fireemu-core-firestore/tests/text_closure_comparison.rs) that replays the committed public fixtures through the core text engine on every commit and fails when the committed file differs; there is no harness yet that drives an installed binary over REST with a check and an export-comparison mode, so the release job cannot rerun it against the binary under test",
+    issue: "fs-text-search-comparison-needs-a-release-binary-run.md",
+  },
+  {
     kind: "fs-listen-sdk-comparison-v1",
     reason:
       "the final release artifact was compared with private native, SDK and browser production recordings that are unavailable to the release job; the native expired-token case also waits 35 minutes and the browser cache and lifecycle cases require Chromium; publish the recordings and provide a long browser-enabled release job before reproducing this comparison",

@@ -1,6 +1,6 @@
 # Local Enterprise text search
 
-Text search is an unreleased Firestore Enterprise Native feature after fireemu 0.29. It is owner-only while Security Rules are configured. This guide describes the current emulator behavior; it does not claim exact production parity.
+Text search is an unreleased Firestore Enterprise Native feature after fireemu 0.29. It is owner-only while Security Rules are configured. Its membership and result order are compared with every recorded production search response; the known differences are listed under [Production comparison](#production-comparison), and numeric `score()` values are approximate.
 
 ## Configure a text index
 
@@ -93,7 +93,7 @@ The numeric `score()` values are an approximation (`0.6 × occurrences^(1/3)` pe
 
 ## Fidelity and limitations
 
-The emulator's ordinary strict profile works by default. Setting `productionExact: true` refuses every text search with `FS_TEXT_UNOBSERVED` until the search behavior has been compared with actual production observations. The lexical matching behavior is approximate and does not claim production parity. Score ordering reproduces every recorded production order (see Result order and `score()`), but numeric scores are not production values.
+The emulator's ordinary strict profile works by default. Setting `productionExact: true` still refuses every text search with `FS_TEXT_UNOBSERVED`. Membership matches every recorded production response apart from the cases listed under Production comparison, and score ordering reproduces every recorded production order (see Result order and `score()`), but numeric scores are not production values and analysis beyond the recorded cases is a language-neutral approximation.
 
 The current implementation does not support stemming, synonyms, typo tolerance, morphology, or language autodetection. It also does not support geospatial stages, general boolean-expression trees, search-stage select, nested score aliases, non-score sort, transactions, `readTime`, proxy mode, or full Admin index management.
 

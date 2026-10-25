@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { adminClient, rulesFor, runScenario, compareJournals, assertNoSecrets, verifyPacket, transportOf, SOURCES, CAPS } from './cv11-genuine-auth.mjs';
+import { adminClient, rulesFor, runScenario, compareJournals, assertNoSecrets, verifyPacket, transportOf, parseKeyFile, SOURCES, CAPS } from './cv11-genuine-auth.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
@@ -239,4 +239,10 @@ test('production refuses without a packet whose SHA-256 and source pins match', 
 
 test('the transport is read from what the browser opened, not from the profile', () => {
   assert.equal(transportOf({ ws: 1 }), 'ws'); assert.equal(transportOf({ ws: 0 }), 'lp');
+});
+
+test('the API key file must hold exactly one key-shaped string, checked before any request', () => {
+  const key = `AIza${'x'.repeat(35)}`;
+  for (const doc of [key, { keyString: key }, { apiKey: key }, { api_key: key }, { key }]) assert.equal(parseKeyFile(JSON.stringify(doc)), key);
+  for (const doc of [{}, { keyString: key, apiKey: key }, { keyString: 'short' }, [key], `${key} `]) assert.throws(() => parseKeyFile(JSON.stringify(doc)), /API key file/);
 });

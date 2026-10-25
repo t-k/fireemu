@@ -250,6 +250,15 @@ export function assertNoSecrets(text, secrets) {
   return text;
 }
 
+// The key file holds a JSON string or an object with exactly one of these fields (the shapes the
+// earlier sandbox loader accepted); anything else stops the run before any request.
+export function parseKeyFile(text) {
+  const doc = JSON.parse(text), fields = ['keyString', 'apiKey', 'api_key', 'key'];
+  const values = typeof doc === 'string' ? [doc] : doc && !Array.isArray(doc) ? fields.filter((f) => f in doc).map((f) => doc[f]) : [];
+  if (values.length !== 1 || !/^AIza[0-9A-Za-z_-]{35}$/.test(values[0])) throw Error('API key file has an unexpected shape');
+  return values[0];
+}
+
 export function verifyPacket(file, expected) {
   if (!file || !expected) throw Error('production needs --packet <file> and --packet-sha256 <hex>');
   const raw = readFileSync(file);
@@ -346,9 +355,9 @@ async function main(argv) {
       const browser = browserRunner({ modules: opt('--modules') ?? path.join(here, 'node_modules'), allowHost: (h) => h === `127.0.0.1:${authPort}` || h === `127.0.0.1:${dbPort}`, page: { apiKey: 'fake-api-key', projectId, databaseURL: `${db}?ns=${ns}`, emulator: { auth, host: '127.0.0.1', dbPort } } });
       o = { mode, local: { auth, db, ns, projectId }, headers: { authorization: 'Bearer owner' }, browser, ...common };
     } else {
-      const doc = JSON.parse(readFileSync(packet.keyFile, 'utf8'));
-      const apiKey = typeof doc === 'string' ? doc : doc.keyString ?? doc.apiKey ?? doc.key;
+      const apiKey = parseKeyFile(readFileSync(packet.keyFile, 'utf8'));
       const token = execFileSync(packet.gcloud, ['auth', 'application-default', 'print-access-token'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
+      if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');
       secrets.push(apiKey, token);
       const browser = browserRunner({ modules: packet.modules, allowHost: (h) => ['identitytoolkit.googleapis.com', 'securetoken.googleapis.com'].includes(h) || /^[a-z0-9-]+\.firebaseio\.com$/.test(h), page: { apiKey, projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com` } });
       o = { mode, packet, headers: { authorization: `Bearer ${token}`, 'x-goog-user-project': packet.projectId }, browser, ...common };

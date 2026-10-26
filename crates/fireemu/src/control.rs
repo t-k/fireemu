@@ -53,56 +53,175 @@ pub fn load_text_indexes(
             let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
             // Preserve the existing file validation and keep search out of the ordinary planner.
             parse_indexes_with_notes(path, &text, cfg.index_file_checks())?;
-            let body: Value =
-                serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))?;
-            for (position, index) in body
-                .get("indexes")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .enumerate()
-            {
-                let fields = index
-                    .get("fields")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter(|field| {
-                        field
-                            .get("searchConfig")
-                            .is_some_and(|search| search.get("textSpec").is_some())
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if fields.is_empty() {
-                    continue;
-                }
-                let collection = ["collectionGroup", "collectionId"]
-                    .into_iter()
-                    .filter_map(|key| index.get(key).and_then(Value::as_str))
-                    .find(|value| !value.is_empty())
-                    .ok_or_else(|| format!("{path}: missing collectionGroup"))?;
-                let scope = index
-                    .get("queryScope")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("COLLECTION");
-                let options = index
-                    .get("searchIndexOptions")
-                    .cloned()
-                    .unwrap_or_else(|| json!({}));
-                let entry = json!({"index": {
-                    "name":format!("projects/{}/databases/{database}/collectionGroups/{collection}/indexes/file-text-{position}",cfg.auth_project),
-                    "queryScope":scope,
-                    "apiScope":index.get("apiScope").and_then(Value::as_str).unwrap_or("ANY_API"),
-                    "fields":fields,
-                    "searchIndexOptions":options,
-                },"xFirebaseTestd":{"state":"READY","buildPolicy":"synchronous","languageOverride":"disabled"}});
-                add_text_definition(&mut catalog, path, position, &entry)?;
+            for note in add_file_text_indexes(
+                &mut catalog,
+                &cfg.auth_project,
+                database,
+                path,
+                &text,
+                cfg.production_exact,
+            )? {
+                eprintln!("[firestore] {note}");
             }
         }
     }
     Ok(catalog)
+}
+
+/// The id prefix of the text indexes an ordinary index file defines (`file-text-<entry>`).
+const FILE_TEXT_PREFIX: &str = "file-text-";
+
+/// Adds the text indexes of one `firestore.indexes.json` generation to `database` of
+/// `project`, as `file-text-<entry>` READY definitions, and returns the notes for the entries
+/// it skipped. The file already passed [`parse_indexes_with_notes`], so every entry here is one
+/// `firebase deploy` accepts. In the default profile an entry local search cannot serve (an
+/// empty or repeated `indexSpecs`, a field that is also a `geoSpec`, more text indexes than the
+/// catalog holds) is skipped with a note instead of failing the start (review S1); under
+/// `productionExact` it fails as before. A `*_UNSPECIFIED` enum is its default (proto3), and a
+/// JSON `null` is an absent key.
+pub fn add_file_text_indexes(
+    catalog: &mut fireemu_core_firestore::text_index::TextIndexCatalog,
+    project: &str,
+    database: &str,
+    path: &str,
+    text: &str,
+    production_exact: bool,
+) -> Result<Vec<String>, String> {
+    let body: Value = serde_json::from_str(text).map_err(|error| format!("{path}: {error}"))?;
+    let mut notes = Vec::new();
+    for (position, index) in body
+        .get("indexes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let fields = index
+            .get("fields")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|field| text_field_entry(field, production_exact))
+            .collect::<Vec<_>>();
+        if fields.is_empty() {
+            continue;
+        }
+        let collection = ["collectionGroup", "collectionId"]
+            .into_iter()
+            .filter_map(|key| index.get(key).and_then(Value::as_str))
+            .find(|value| !value.is_empty())
+            .ok_or_else(|| format!("{path}: missing collectionGroup"))?;
+        let scope = index
+            .get("queryScope")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("COLLECTION");
+        let options = index
+            .get("searchIndexOptions")
+            .filter(|options| !options.is_null())
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let entry = json!({"index": {
+            "name":format!("projects/{project}/databases/{database}/collectionGroups/{collection}/indexes/{FILE_TEXT_PREFIX}{position}"),
+            "queryScope":scope,
+            "apiScope":index.get("apiScope").and_then(Value::as_str).unwrap_or("ANY_API"),
+            "fields":fields,
+            "searchIndexOptions":options,
+        },"xFirebaseTestd":{"state":"READY","buildPolicy":"synchronous","languageOverride":"disabled"}});
+        match add_text_definition(catalog, path, position, &entry) {
+            Ok(()) => {}
+            Err(error) if production_exact => return Err(error),
+            Err(error) => notes.push(format!(
+                "{error}; this search index is skipped: local text search cannot serve it"
+            )),
+        }
+    }
+    Ok(notes)
+}
+
+/// One field of an index-file entry as a text-index field (`fieldPath` and `searchConfig`
+/// holding only its `textSpec`), or `None` when it has no `textSpec` object. In the default
+/// profile the `*_UNSPECIFIED` enums become their defaults and a `geoSpec` beside the
+/// `textSpec` stays in place, so the entry is skipped rather than half-loaded.
+fn text_field_entry(field: &Value, production_exact: bool) -> Option<Value> {
+    let config = field.get("searchConfig")?;
+    let text_spec = config.get("textSpec").filter(|spec| spec.is_object())?;
+    let mut text_spec = text_spec.clone();
+    if !production_exact {
+        for spec in text_spec
+            .get_mut("indexSpecs")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(spec) = spec.as_object_mut() {
+                spec.retain(|key, value| {
+                    !matches!(
+                        (key.as_str(), value.as_str()),
+                        ("indexType", Some("TEXT_INDEX_TYPE_UNSPECIFIED"))
+                            | ("matchType", Some("TEXT_MATCH_TYPE_UNSPECIFIED"))
+                    )
+                });
+            }
+        }
+    }
+    let mut search = json!({ "textSpec": text_spec });
+    if let Some(geo) = config.get("geoSpec").filter(|geo| !geo.is_null()) {
+        search["geoSpec"] = geo.clone();
+    }
+    Some(json!({"fieldPath": field.get("fieldPath")?, "searchConfig": search}))
+}
+
+/// Replaces the `file-text-*` definitions of `database` of `project` with the ones a reloaded
+/// index file defines (review S10). It changes nothing and answers `Ok(false)` when they are
+/// the same, and keeps the last good definitions when the new generation is refused. The
+/// definitions the control API or the Admin API added stay.
+pub fn replace_file_text_indexes(
+    catalog: &mut fireemu_core_firestore::text_index::TextIndexCatalog,
+    project: &str,
+    database: &str,
+    path: &str,
+    text: &str,
+    production_exact: bool,
+) -> Result<(bool, Vec<String>), String> {
+    let from_file = |catalog: &fireemu_core_firestore::text_index::TextIndexCatalog| {
+        catalog
+            .entries()
+            .filter(|(p, d, definition)| {
+                *p == project && *d == database && definition.id.starts_with(FILE_TEXT_PREFIX)
+            })
+            .map(|(_, _, definition)| definition.clone())
+            .collect::<Vec<_>>()
+    };
+    let current = from_file(catalog);
+    let mut trial = catalog.clone();
+    for definition in &current {
+        trial.remove(project, database, &definition.id);
+    }
+    let mut fresh = fireemu_core_firestore::text_index::TextIndexCatalog::default();
+    let notes = add_file_text_indexes(&mut fresh, project, database, path, text, production_exact)?;
+    let loaded = from_file(&fresh);
+    if loaded == current {
+        return Ok((false, notes));
+    }
+    let mut notes = notes;
+    for definition in loaded {
+        let id = definition.id.clone();
+        // The live catalog also holds the control and Admin API definitions: in the default
+        // profile one it refuses (too many indexes, a taken id) is skipped with a note, as at
+        // start, so the composite and TTL reload still applies (merge review S-c).
+        match trial.add(project, database, definition) {
+            Ok(_) => {}
+            Err(error) if production_exact => {
+                return Err(format!("{path}: text index {id}: {error}"));
+            }
+            Err(error) => notes.push(format!(
+                "{path}: text index {id}: {error}; this search index is skipped: local text search cannot serve it"
+            )),
+        }
+    }
+    *catalog = trial;
+    Ok((true, notes))
 }
 
 fn add_text_definition(
@@ -1527,6 +1646,313 @@ mod tests {
                     parse_indexes("f", &file.to_string(), checks).is_err(),
                     "{group} {checks:?}"
                 );
+            }
+        }
+    }
+
+    use fireemu_core_firestore::text_index::{TextIndexCatalog, TextIndexType, TextMatchType};
+
+    /// Loads one index-file generation's text definitions into a fresh catalog.
+    fn file_text(
+        file: &Value,
+        production_exact: bool,
+    ) -> Result<(TextIndexCatalog, Vec<String>), String> {
+        let mut catalog = TextIndexCatalog::default();
+        let notes = add_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &file.to_string(),
+            production_exact,
+        )?;
+        Ok((catalog, notes))
+    }
+
+    fn text_field(config: Value) -> Value {
+        let mut field = json!({"fieldPath": "body"});
+        field["searchConfig"] = config;
+        field
+    }
+
+    /// Review S1: the `*_UNSPECIFIED` enums `firebase deploy` accepts are the defaults, so the
+    /// index loads as a `TOKENIZED` / `MATCH_GLOBALLY` text index in the default profile.
+    #[test]
+    fn file_text_indexes_read_unspecified_enums_as_defaults() {
+        let file = json!({"indexes": [entry(&json!([text_field(json!({"textSpec": {"indexSpecs": [
+            {"indexType": "TEXT_INDEX_TYPE_UNSPECIFIED", "matchType": "TEXT_MATCH_TYPE_UNSPECIFIED"}]}}))]))]});
+        let (catalog, notes) = file_text(&file, false).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        let definition = catalog.get("demo-app", "(default)", "file-text-0").unwrap();
+        assert_eq!(definition.fields[0].index_type, TextIndexType::Tokenized);
+        assert_eq!(
+            definition.fields[0].match_type,
+            TextMatchType::MatchGlobally
+        );
+    }
+
+    /// The entry's scope and search options reach the definition.
+    #[test]
+    fn file_text_indexes_keep_the_scope_and_search_options() {
+        let mut index = json!({"collectionGroup": "posts", "queryScope": "COLLECTION_GROUP", "fields": [search("body")]});
+        index["searchIndexOptions"] =
+            json!({"textLanguage": "en", "textLanguageOverrideFieldPath": "lang"});
+        let (catalog, _) = file_text(&json!({"indexes": [index]}), false).unwrap();
+        let definition = catalog.get("demo-app", "(default)", "file-text-0").unwrap();
+        assert_eq!(definition.query_scope, IndexQueryScope::CollectionGroup);
+        assert_eq!(
+            definition.language_override,
+            fireemu_core_firestore::text_index::LanguageOverridePolicy::ExplicitField(
+                FieldPath::parse("lang").unwrap()
+            )
+        );
+    }
+
+    /// Review S1: shapes the deploy accepts but local search cannot serve are skipped with a
+    /// note in the default profile; productionExact keeps refusing them at start.
+    #[test]
+    fn unsupported_file_text_shapes_are_skipped_by_default_and_refused_under_production_exact() {
+        for config in [
+            json!({"textSpec": {"indexSpecs": []}}),
+            json!({"textSpec": {"indexSpecs": [
+                {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"},
+                {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}),
+            json!({"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]},
+                "geoSpec": {"geoJsonIndexingDisabled": false}}),
+        ] {
+            let file = json!({"indexes": [entry(&json!([text_field(config.clone())])), entry(&json!([search("title")]))]});
+            assert!(parse_indexes("f.json", &file.to_string(), IndexFileChecks::Deploy).is_ok());
+            let (catalog, notes) = file_text(&file, false).unwrap();
+            assert!(
+                catalog
+                    .get("demo-app", "(default)", "file-text-0")
+                    .is_none(),
+                "{config}"
+            );
+            assert!(
+                catalog
+                    .get("demo-app", "(default)", "file-text-1")
+                    .is_some(),
+                "{config}"
+            );
+            assert_eq!(notes.len(), 1, "{config}: {notes:?}");
+            assert!(
+                notes[0].contains("indexes[0]") && notes[0].contains("skipped"),
+                "{}",
+                notes[0]
+            );
+            let error = file_text(&file, true).unwrap_err();
+            assert!(error.contains("indexes[0]"), "{error}");
+        }
+    }
+
+    /// Review S1: a `null` `textSpec` (and a `null` mode beside `searchConfig`) is no text
+    /// index, and the null mode never makes a text field unreadable.
+    #[test]
+    fn null_text_spec_and_null_modes_are_absent() {
+        let file = json!({"indexes": [
+            entry(&json!([text_field(json!({"textSpec": null, "geoSpec": {}}))])),
+            entry(&json!([{"fieldPath": "body", "order": null, "searchConfig": {"textSpec": {"indexSpecs": [
+                {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}])),
+        ]});
+        assert!(parse_indexes("f.json", &file.to_string(), IndexFileChecks::Deploy).is_ok());
+        for production_exact in [false, true] {
+            let (catalog, notes) = file_text(&file, production_exact).unwrap();
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(catalog
+                .get("demo-app", "(default)", "file-text-0")
+                .is_none());
+            assert!(catalog
+                .get("demo-app", "(default)", "file-text-1")
+                .is_some());
+        }
+    }
+
+    /// Review S10: a reload replaces the file's text definitions of that database, keeps the
+    /// ones the control API added, and reports whether anything changed.
+    #[test]
+    fn reloading_the_index_file_replaces_only_its_text_indexes() {
+        let mut catalog = TextIndexCatalog::default();
+        let first =
+            json!({"indexes": [entry(&json!([search("title")])), entry(&json!([search("body")]))]});
+        add_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &first.to_string(),
+            false,
+        )
+        .unwrap();
+        let mut control = catalog
+            .get("demo-app", "(default)", "file-text-0")
+            .unwrap()
+            .clone();
+        control.id = "control".into();
+        catalog.add("demo-app", "(default)", control).unwrap();
+        let other = catalog
+            .get("demo-app", "(default)", "file-text-1")
+            .unwrap()
+            .clone();
+        catalog.add("demo-app", "named", other).unwrap();
+        let second = json!({"indexes": [entry(&json!([search("summary")]))]});
+        assert_eq!(
+            replace_file_text_indexes(
+                &mut catalog,
+                "demo-app",
+                "(default)",
+                "f.json",
+                &second.to_string(),
+                false
+            ),
+            Ok((true, Vec::new()))
+        );
+        let fields = |id: &str| {
+            catalog
+                .get("demo-app", "(default)", id)
+                .map(|d| d.fields[0].path.canonical())
+        };
+        assert_eq!(fields("file-text-0").as_deref(), Some("summary"));
+        assert_eq!(fields("file-text-1"), None);
+        assert_eq!(fields("control").as_deref(), Some("title"));
+        assert!(catalog.get("demo-app", "named", "file-text-1").is_some());
+        let before = catalog.clone();
+        assert_eq!(
+            replace_file_text_indexes(
+                &mut catalog,
+                "demo-app",
+                "(default)",
+                "f.json",
+                &second.to_string(),
+                false
+            ),
+            Ok((false, Vec::new()))
+        );
+        assert_eq!(catalog, before);
+        let refused = json!({"indexes": [entry(&json!([text_field(json!({"textSpec": {"indexSpecs": []}}))]))]});
+        assert!(replace_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &refused.to_string(),
+            true
+        )
+        .is_err());
+        assert_eq!(
+            catalog, before,
+            "a refused reload keeps the last good definitions"
+        );
+    }
+
+    /// Merge review S-c: in the default profile a definition the live catalog refuses (here,
+    /// more than the catalog holds once control-created indexes count) is noted and skipped, so
+    /// the reload succeeds; under productionExact it is refused.
+    #[test]
+    fn reload_skips_text_indexes_the_live_catalog_refuses_by_default() {
+        let mut catalog = TextIndexCatalog::default();
+        let seed = json!({"indexes": [entry(&json!([search("title")]))]});
+        add_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &seed.to_string(),
+            false,
+        )
+        .unwrap();
+        let template = catalog
+            .get("demo-app", "(default)", "file-text-0")
+            .unwrap()
+            .clone();
+        catalog.remove("demo-app", "(default)", "file-text-0");
+        for n in 0..fireemu_core_firestore::text_index::MAX_TEXT_INDEXES {
+            let mut control = template.clone();
+            control.id = format!("control-{n}");
+            catalog.add("demo-app", "(default)", control).unwrap();
+        }
+        let before = catalog.clone();
+        let (changed, notes) = replace_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &seed.to_string(),
+            false,
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("file-text-0") && notes[0].contains("skipped"),
+            "{}",
+            notes[0]
+        );
+        assert_eq!(catalog, before);
+        assert!(replace_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "(default)",
+            "f.json",
+            &seed.to_string(),
+            true
+        )
+        .is_err());
+    }
+
+    fn search_spec() -> impl proptest::strategy::Strategy<Value = Value> {
+        use proptest::prelude::*;
+        let spec = (
+            proptest::sample::select(vec!["TOKENIZED", "TEXT_INDEX_TYPE_UNSPECIFIED"]),
+            proptest::sample::select(vec!["MATCH_GLOBALLY", "TEXT_MATCH_TYPE_UNSPECIFIED"]),
+        )
+            .prop_map(|(index_type, match_type)| json!({"indexType": index_type, "matchType": match_type}));
+        (
+            proptest::option::of(proptest::option::of(proptest::collection::vec(spec, 0..3))),
+            proptest::option::of(proptest::option::of(proptest::bool::ANY)),
+            proptest::bool::ANY,
+        )
+            .prop_map(|(text, geo, null_order)| {
+                let mut config = json!({});
+                match text {
+                    Some(Some(specs)) => config["textSpec"] = json!({"indexSpecs": specs}),
+                    Some(None) => config["textSpec"] = Value::Null,
+                    None => {}
+                }
+                match geo {
+                    Some(Some(disabled)) => {
+                        config["geoSpec"] = json!({"geoJsonIndexingDisabled": disabled});
+                    }
+                    Some(None) => config["geoSpec"] = json!({}),
+                    None => {}
+                }
+                let mut field = text_field(config);
+                if null_order {
+                    field["order"] = Value::Null;
+                }
+                field
+            })
+    }
+
+    proptest::proptest! {
+        /// Review S1: in the default profile, loading the text indexes never fails where the
+        /// deploy checks accept the file.
+        #[test]
+        fn file_text_indexes_never_fail_where_deploy_checks_accept(
+            fields in proptest::collection::vec(search_spec(), 1..3),
+            options in proptest::option::of(proptest::sample::select(vec![
+                json!({}), json!({"textLanguage": "en"}), json!({"textLanguageOverrideFieldPath": "language"}),
+            ])),
+        ) {
+            let mut index = entry(&Value::Array(fields));
+            if let Some(options) = options {
+                index["searchIndexOptions"] = options;
+            }
+            let file = json!({"indexes": [index]});
+            for checks in both_checks() {
+                if parse_indexes("f.json", &file.to_string(), checks).is_ok() {
+                    proptest::prop_assert!(file_text(&file, false).is_ok(), "{} {:?}", file, checks);
+                }
             }
         }
     }

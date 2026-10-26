@@ -471,18 +471,69 @@ fn text_index_json(
     database: &str,
     definition: &TextIndexDefinition,
 ) -> Result<Value, tonic::Status> {
-    let DefaultTextLanguage::Tag(language) = &definition.language else {
+    let DefaultTextLanguage::Tag(_) = &definition.language else {
         return Err(text_unverified("default text language"));
     };
-    let LanguageOverridePolicy::ExplicitField(override_path) = &definition.language_override else {
+    let LanguageOverridePolicy::ExplicitField(_) = &definition.language_override else {
         return Err(text_unverified("text language override policy"));
     };
-    Ok(json!({
+    Ok(text_index_view(project, database, definition))
+}
+
+/// The Admin view of a text definition. A definition from the index file or the control API
+/// may lack the default language or the override path production always reports; the view
+/// then leaves that option out (review S2: the default profile lists it instead of failing the
+/// whole listing). [`text_index_json`] is the productionExact form, which refuses such views.
+fn text_index_view(project: &str, database: &str, definition: &TextIndexDefinition) -> Value {
+    let mut options = serde_json::Map::new();
+    if let DefaultTextLanguage::Tag(language) = &definition.language {
+        options.insert("textLanguage".into(), json!(language));
+    }
+    match &definition.language_override {
+        LanguageOverridePolicy::ExplicitField(path) => {
+            options.insert(
+                "textLanguageOverrideFieldPath".into(),
+                json!(path.canonical()),
+            );
+        }
+        LanguageOverridePolicy::ImplicitLanguageField => {
+            options.insert("textLanguageOverrideFieldPath".into(), json!("language"));
+        }
+        LanguageOverridePolicy::Disabled => {
+            options.insert("textLanguageOverrideFieldPath".into(), json!(""));
+        }
+        LanguageOverridePolicy::BackendDefaultUnresolved => {}
+    }
+    json!({
         "name": text_index_name(project, database, definition), "queryScope": scope_name(definition.query_scope),
         "fields": definition.fields.iter().map(|field| json!({"fieldPath":field.path.canonical(),"searchConfig":{"textSpec":{"indexSpecs":[{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}]}}})).collect::<Vec<_>>(),
         "state":definition.state.as_str(),"density":"SPARSE_ANY",
-        "searchIndexOptions":{"textLanguage":language,"textLanguageOverrideFieldPath":override_path.canonical()},
-    }))
+        "searchIndexOptions":options,
+    })
+}
+
+/// Whether the attached text catalog follows productionExact.
+fn production_exact(local: &crate::local::LocalBackend) -> Result<bool, tonic::Status> {
+    Ok(local
+        .text_search_configuration()?
+        .is_some_and(|config| config.production_exact))
+}
+
+/// Document language tags production has recorded text search for (the `language-en` and
+/// `language-ja` searches of the `fs-ent-text/v1/lexical` program).
+const RECORDED_LANGUAGES: [&str; 2] = ["en", "ja"];
+
+/// A non-string language value as the failed build's message names it.
+fn language_value_text(value: &fireemu_core_firestore::value::Value) -> String {
+    use fireemu_core_firestore::value::Value as V;
+    match value {
+        V::String(text) => text.clone(),
+        V::Null => "null".into(),
+        V::Boolean(flag) => flag.to_string(),
+        V::Integer(number) => number.to_string(),
+        V::Double(number) => number.to_string(),
+        other => format!("{:?}", other.kind()),
+    }
 }
 
 fn create_text_index(
@@ -543,6 +594,9 @@ pub(crate) struct NativeTextSelection<'a> {
     pub index: Option<&'a str>,
     pub operation: Option<&'a str>,
     pub operation_targets: Option<&'a [(&'a str, &'a super::operations::NativeTextBuild)]>,
+    /// The request names this one build (its index or its operation): only such a request
+    /// answers a build fireemu cannot complete faithfully; others leave it pending (review S2).
+    pub direct: bool,
 }
 
 /// Advances one database's native work while its admitted source snapshot and catalog are held.
@@ -594,7 +648,12 @@ pub(crate) fn advance_text_builds(
     local.check_native_text_epoch(catalog, |p, d, def| {
         p == project && d == database && targets.iter().any(|(target, _, _)| target.id == def.id)
     })?;
-    let mut trial = catalog.clone();
+    // Review S5: a search or listing with nothing to complete copies nothing.
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let production_exact = production_exact(local)?;
+    let mut trial: Option<TextIndexCatalog> = None;
     let mut completions = Vec::new();
     for (definition, generation, schedule) in targets {
         let elapsed = std::time::Duration::from_nanos(
@@ -621,16 +680,26 @@ pub(crate) fn advance_text_builds(
             .into_iter()
             .filter(|document| document.path.collection_id() == &definition.collection_id)
             .collect();
-        for document in &documents {
-            if let Some(language) = source_language(&definition, document) {
-                match language {
-                    fireemu_core_firestore::value::Value::String(tag)
-                        if tag == "en"
-                            || !fireemu_core_firestore::text_index::is_language_tag(tag) => {}
-                    _ => return Err(text_unverified("source language value")),
+        // Review S2: a valid tag builds language-neutral in the default profile; productionExact
+        // completes only languages production has recorded, and a malformed tag fails the build
+        // below as production recorded.
+        let unverified = documents.iter().any(|document| {
+            source_language(&definition, document).is_some_and(|language| match language {
+                fireemu_core_firestore::value::Value::String(tag) => {
+                    production_exact
+                        && fireemu_core_firestore::text_index::is_language_tag(tag)
+                        && !RECORDED_LANGUAGES.contains(&tag.as_str())
                 }
+                _ => production_exact,
+            })
+        });
+        if unverified {
+            if selection.direct {
+                return Err(text_unverified("source language value"));
             }
+            continue;
         }
+        let trial = trial.get_or_insert_with(|| catalog.clone());
         let mut ready_definition = definition.clone();
         ready_definition.state = TextIndexState::Ready;
         let mut response = text_index_json(project, database, &ready_definition)?;
@@ -673,13 +742,17 @@ pub(crate) fn advance_text_builds(
                     .iter()
                     .find(|document| document.path.resource_name() == path)
                     .and_then(|document| source_language(&definition, document));
-                let Some(fireemu_core_firestore::value::Value::String(value)) = language else {
+                let Some(language) = language else {
                     return Err(text_unverified("unresolved source language error"));
                 };
-                if fireemu_core_firestore::text_index::is_language_tag(value) {
-                    return Err(text_unverified("unrecorded text language error"));
+                if let fireemu_core_firestore::value::Value::String(value) = language {
+                    if fireemu_core_firestore::text_index::is_language_tag(value) {
+                        return Err(text_unverified("unrecorded text language error"));
+                    }
                 }
-                let message = format!("Invalid text language: {value}");
+                // A non-string value reaches here only in the default profile: a development
+                // approximation of the recorded malformed-tag failure.
+                let message = format!("Invalid text language: {}", language_value_text(language));
                 trial
                     .lifecycle(
                         project,
@@ -706,7 +779,11 @@ pub(crate) fn advance_text_builds(
         database,
         &completions,
         selection.operation_targets,
-        || *catalog = trial,
+        || {
+            if let Some(trial) = trial {
+                *catalog = trial;
+            }
+        },
     )
 }
 
@@ -730,6 +807,7 @@ fn text_route(
                 collection: (group != "-").then_some(group),
                 index: rest.first().copied(),
                 operation: None,
+                direct: true,
                 ..Default::default()
             },
         )?;
@@ -750,12 +828,6 @@ fn text_route(
                 })?;
             match (method, rest) {
                 ("GET", []) => {
-                    for (_, _, definition) in catalog
-                        .entries()
-                        .filter(|(p, d, _)| *p == project && *d == database)
-                    {
-                        text_index_json(project, database, definition)?;
-                    }
                     state.local.advance_text_builds_at_snapshot(
                         project,
                         database,
@@ -763,18 +835,31 @@ fn text_route(
                         catalog,
                         NativeTextSelection::default(),
                     )?;
+                    // Review S2: one text index never fails the listing. productionExact leaves
+                    // out the definitions it cannot render as production would.
+                    let exact = production_exact(&state.local)?;
                     let indexes = catalog
                         .entries()
                         .filter(|(p, d, _)| *p == project && *d == database)
-                        .map(|(_, _, definition)| definition)
-                        .map(|definition| text_index_json(project, database, definition))
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .filter_map(|(_, _, definition)| {
+                            if exact {
+                                text_index_json(project, database, definition).ok()
+                            } else {
+                                Some(text_index_view(project, database, definition))
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     Ok(Some(ok(json!({"indexes":indexes}))))
                 }
                 ("GET", [id]) => catalog.get(project, database, id).filter(scoped).map_or(
                     Ok(None),
                     |definition| {
-                        text_index_json(project, database, definition).map(|value| Some(ok(value)))
+                        if production_exact(&state.local)? {
+                            text_index_json(project, database, definition)
+                                .map(|value| Some(ok(value)))
+                        } else {
+                            Ok(Some(ok(text_index_view(project, database, definition))))
+                        }
                     },
                 ),
                 ("DELETE", [id]) => {

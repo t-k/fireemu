@@ -1,0 +1,4959 @@
+{
+ "about": "Every recorded production Firestore Enterprise text-search REST response (any number of results), as the set of returned document ids. Corpus state is reconstructed from the recorded writes; only string fields are kept. Order is checked by production_text_order.json.",
+ "responses": 531,
+ "corpora": {
+  "textobs1#0": {
+   "collection": "textobs1",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "backfill-a",
+     "created": 0,
+     "fields": {
+      "title": "otter",
+      "body": "backfill fixture"
+     }
+    },
+    {
+     "id": "backfill-c",
+     "created": 4190059000,
+     "fields": {
+      "title": "fox",
+      "body": "backfill fixture"
+     }
+    }
+   ]
+  },
+  "textobs1#1": {
+   "collection": "textobs1",
+   "fields": [
+    "title"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 1022344000,
+     "fields": {
+      "title": "fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 2044840000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 2955011000,
+     "fields": {
+      "title": "fox fox fox fox fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 3938071000,
+     "fields": {
+      "title": "fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 5047789000,
+     "fields": {
+      "title": "padding",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 6212788000,
+     "fields": {
+      "title": "quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 7235132000,
+     "fields": {
+      "title": "quick fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 8276261000,
+     "fields": {
+      "title": "quick quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 9194902000,
+     "fields": {
+      "title": "quick",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 10175772000,
+     "fields": {
+      "title": "fox",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 11180622000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "fox fox fox fox"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 12196414000,
+     "fields": {
+      "title": "padding",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 13151696000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 14193814000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox fox fox"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 15207400000,
+     "fields": {
+      "title": "fox fox",
+      "body": "fox neutral"
+     }
+    }
+   ]
+  },
+  "textobs1#2": {
+   "collection": "textobs1",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 1039070000,
+     "fields": {
+      "title": "fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 2143292000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 3147533000,
+     "fields": {
+      "title": "fox fox fox fox fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 4345950000,
+     "fields": {
+      "title": "fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 5382083000,
+     "fields": {
+      "title": "padding",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 6441316000,
+     "fields": {
+      "title": "quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 7563729000,
+     "fields": {
+      "title": "quick fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 8531008000,
+     "fields": {
+      "title": "quick quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 9515233000,
+     "fields": {
+      "title": "quick",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 10454913000,
+     "fields": {
+      "title": "fox",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 11582704000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "fox fox fox fox"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 12556274000,
+     "fields": {
+      "title": "padding",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 13744437000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 13983799000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox fox fox"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 15146549000,
+     "fields": {
+      "title": "fox fox",
+      "body": "fox neutral"
+     }
+    }
+   ]
+  },
+  "textcal20261024#0": {
+   "collection": "textcal20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 1056065000,
+     "fields": {
+      "title": "fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 2104946000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 3245658000,
+     "fields": {
+      "title": "fox fox fox fox fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 4417536000,
+     "fields": {
+      "title": "fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 5483991000,
+     "fields": {
+      "title": "padding",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 6365040000,
+     "fields": {
+      "title": "quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 7478999000,
+     "fields": {
+      "title": "quick fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 8523221000,
+     "fields": {
+      "title": "quick quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 9682809000,
+     "fields": {
+      "title": "quick",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 10757398000,
+     "fields": {
+      "title": "fox",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 11792481000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "fox fox fox fox"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 12797321000,
+     "fields": {
+      "title": "padding",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 14321544000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 15360093000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox fox fox"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 16788506000,
+     "fields": {
+      "title": "fox fox",
+      "body": "fox neutral"
+     }
+    }
+   ]
+  },
+  "textcal20261024#1": {
+   "collection": "textcal20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 1057788000,
+     "fields": {
+      "title": "fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 2201730000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 3233254000,
+     "fields": {
+      "title": "fox fox fox fox fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 4245030000,
+     "fields": {
+      "title": "fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 5144286000,
+     "fields": {
+      "title": "fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 6153358000,
+     "fields": {
+      "title": "quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 7053105000,
+     "fields": {
+      "title": "quick fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 8214056000,
+     "fields": {
+      "title": "quick quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 8511771000,
+     "fields": {
+      "title": "quick",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 9689539000,
+     "fields": {
+      "title": "fox",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 10716717000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "fox fox fox fox"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 11907469000,
+     "fields": {
+      "title": "quick",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 12189175000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 13165076000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox fox fox"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 14222817000,
+     "fields": {
+      "title": "fox fox",
+      "body": "fox neutral"
+     }
+    }
+   ]
+  },
+  "textcal20261024#2": {
+   "collection": "textcal20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 901958000,
+     "fields": {
+      "title": "fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 2023533000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 3166245000,
+     "fields": {
+      "title": "fox fox fox fox fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 4201764000,
+     "fields": {
+      "title": "fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 5109412000,
+     "fields": {
+      "title": "padding",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 6139923000,
+     "fields": {
+      "title": "quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 7015383000,
+     "fields": {
+      "title": "quick fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 8000595000,
+     "fields": {
+      "title": "quick quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 8279283000,
+     "fields": {
+      "title": "quick",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 9450177000,
+     "fields": {
+      "title": "fox",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 10605492000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "fox fox fox fox"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 11775663000,
+     "fields": {
+      "title": "padding",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 12656357000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 13781631000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox fox fox"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 14783087000,
+     "fields": {
+      "title": "fox fox",
+      "body": "fox neutral"
+     }
+    },
+    {
+     "id": "c-pad-1",
+     "created": 15818309000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-pad-2",
+     "created": 16746086000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-pad-3",
+     "created": 17743732000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-pad-4",
+     "created": 18019224000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-pad-5",
+     "created": 18415957000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-pad-6",
+     "created": 18704358000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-pad-7",
+     "created": 19843585000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-pad-8",
+     "created": 20822241000,
+     "fields": {
+      "title": "padding filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    }
+   ]
+  },
+  "textcal20261024#3": {
+   "collection": "textcal20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 969912000,
+     "fields": {
+      "title": "fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 1998831000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 2975165000,
+     "fields": {
+      "title": "fox fox fox fox fox fox fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 3253610000,
+     "fields": {
+      "title": "fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 4314491000,
+     "fields": {
+      "title": "padding",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 5273877000,
+     "fields": {
+      "title": "quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 6283134000,
+     "fields": {
+      "title": "quick fox filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 6542625000,
+     "fields": {
+      "title": "quick quick fox",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 7577825000,
+     "fields": {
+      "title": "quick",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 7830419000,
+     "fields": {
+      "title": "fox",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 8086671000,
+     "fields": {
+      "title": "fox fox fox",
+      "body": "fox fox fox fox"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 9275622000,
+     "fields": {
+      "title": "padding",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 10422900000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 11303702000,
+     "fields": {
+      "title": "neutral",
+      "body": "fox fox fox"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 12287492000,
+     "fields": {
+      "title": "fox fox",
+      "body": "fox neutral"
+     }
+    },
+    {
+     "id": "c-q",
+     "created": 12536708000,
+     "fields": {}
+    },
+    {
+     "id": "c-r",
+     "created": 13559511000,
+     "fields": {}
+    },
+    {
+     "id": "c-s",
+     "created": 14534700000,
+     "fields": {
+      "title": "",
+      "body": ""
+     }
+    }
+   ]
+  },
+  "textcal20261024#4": {
+   "collection": "textcal20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "fox",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 281989000,
+     "fields": {
+      "title": "waffles",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 1428021000,
+     "fields": {
+      "title": "fox waffles",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 2594179000,
+     "fields": {
+      "title": "or",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 3593924000,
+     "fields": {
+      "title": "body fox title",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 3869499000,
+     "fields": {
+      "title": "title fox",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 4093320000,
+     "fields": {
+      "title": "title:fox",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 5274636000,
+     "fields": {
+      "title": "",
+      "body": "fox marker"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 5584923000,
+     "fields": {
+      "title": "İSTANBUL",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 6729866000,
+     "fields": {
+      "title": "Café naïve",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 7906608000,
+     "fields": {
+      "title": "東京都の猫と東京駅",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 8161792000,
+     "fields": {
+      "title": "京",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 9294233000,
+     "fields": {
+      "title": "東京",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 9557152000,
+     "fields": {
+      "title": "猫",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 10702581000,
+     "fields": {
+      "title": "quick fox",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 11729550000,
+     "fields": {
+      "title": "quick something fox",
+      "body": "marker"
+     }
+    }
+   ]
+  },
+  "textlex20261024#0": {
+   "collection": "textlex20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-a",
+     "created": 0,
+     "fields": {
+      "title": "京都",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-b",
+     "created": 1178704000,
+     "fields": {
+      "title": "東京都の猫と東京駅",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-c",
+     "created": 2338583000,
+     "fields": {
+      "title": "京都東京駅東京都京都東京駅",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-d",
+     "created": 3396007000,
+     "fields": {
+      "title": "京 都",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-e",
+     "created": 4362282000,
+     "fields": {
+      "title": "東京 駅",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-f",
+     "created": 5584163000,
+     "fields": {
+      "title": "東京都",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-g",
+     "created": 6801613000,
+     "fields": {
+      "title": "東京駅",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-h",
+     "created": 7938110000,
+     "fields": {
+      "title": "の と",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-i",
+     "created": 9075987000,
+     "fields": {
+      "title": "cafe",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-j",
+     "created": 10108289000,
+     "fields": {
+      "title": "café",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-k",
+     "created": 11086686000,
+     "fields": {
+      "title": "café",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-l",
+     "created": 12194877000,
+     "fields": {
+      "title": "naive",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-m",
+     "created": 13174646000,
+     "fields": {
+      "title": "naïve",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-n",
+     "created": 14246285000,
+     "fields": {
+      "title": "İstanbul",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-o",
+     "created": 15326797000,
+     "fields": {
+      "title": "α",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-p",
+     "created": 16235391000,
+     "fields": {
+      "title": "ｃａｆｅ ά",
+      "body": "marker"
+     }
+    }
+   ]
+  },
+  "textproof20261024#0": {
+   "collection": "textproof20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c-001",
+     "created": 0,
+     "fields": {
+      "title": "cedar plum",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-002",
+     "created": 913468000,
+     "fields": {
+      "title": "cedar padding plum",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-003",
+     "created": 1903220000,
+     "fields": {
+      "title": "cedar padding padding padding plum",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-004",
+     "created": 2908141000,
+     "fields": {
+      "title": "plum cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-005",
+     "created": 3909735000,
+     "fields": {
+      "title": "cedar",
+      "body": "plum"
+     }
+    },
+    {
+     "id": "c-006",
+     "created": 4814812000,
+     "fields": {
+      "title": "cedar plum padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-007",
+     "created": 5798796000,
+     "fields": {
+      "title": "padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding cedar plum",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-008",
+     "created": 6880286000,
+     "fields": {
+      "title": "cedar cedar plum",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-009",
+     "created": 8009592000,
+     "fields": {
+      "title": "cedar padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding cedar plum",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-010",
+     "created": 9009343000,
+     "fields": {
+      "title": "cedar plum padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-011",
+     "created": 9899547000,
+     "fields": {
+      "title": "cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-012",
+     "created": 10809760000,
+     "fields": {
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-013",
+     "created": 11848694000,
+     "fields": {
+      "title": "mango pearl",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-014",
+     "created": 12815600000,
+     "fields": {
+      "title": "mango padding pearl",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-015",
+     "created": 14059600000,
+     "fields": {
+      "title": "mango padding padding padding pearl",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-016",
+     "created": 15087472000,
+     "fields": {
+      "title": "pearl mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-017",
+     "created": 15998353000,
+     "fields": {
+      "title": "mango",
+      "body": "pearl"
+     }
+    },
+    {
+     "id": "c-018",
+     "created": 16926732000,
+     "fields": {
+      "title": "mango pearl padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-019",
+     "created": 17800949000,
+     "fields": {
+      "title": "padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding mango pearl",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-020",
+     "created": 18779112000,
+     "fields": {
+      "title": "mango mango pearl",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-021",
+     "created": 19713233000,
+     "fields": {
+      "title": "mango padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding mango pearl",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-022",
+     "created": 20674856000,
+     "fields": {
+      "title": "mango pearl padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-023",
+     "created": 21636350000,
+     "fields": {
+      "title": "mango mango mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-024",
+     "created": 22656904000,
+     "fields": {
+      "title": "mango mango mango mango mango mango mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "c-025",
+     "created": 23564546000,
+     "fields": {
+      "title": "関西国際空港",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-026",
+     "created": 24514016000,
+     "fields": {
+      "title": "関西 国際 空港",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-027",
+     "created": 25460007000,
+     "fields": {
+      "title": "生物研究所",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-028",
+     "created": 26409725000,
+     "fields": {
+      "title": "生 物 研究 所",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-029",
+     "created": 27365080000,
+     "fields": {
+      "title": "ヌメポ星観測所",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-030",
+     "created": 28243919000,
+     "fields": {
+      "title": "ヌメポ 星 観測 所",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-031",
+     "created": 29174474000,
+     "fields": {
+      "title": "カタカナ・ｶﾀｶﾅ 𠮷野家 ΟΣ ά á İpek",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c-032",
+     "created": 30009052000,
+     "fields": {
+      "title": "カタカナ カタカナ 吉野家 ος α á ipek",
+      "body": "marker"
+     }
+    }
+   ]
+  },
+  "textdisc20261024#0": {
+   "collection": "textdisc20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "c5-u-01",
+     "created": 0,
+     "fields": {
+      "title": "ネムラ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-02",
+     "created": 964016000,
+     "fields": {
+      "title": "ﾈﾑﾗ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-03",
+     "created": 1994343000,
+     "fields": {
+      "title": "ネムラ・ﾈﾑﾗ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-04",
+     "created": 2935827000,
+     "fields": {
+      "title": "ネムラ ﾈﾑﾗ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-05",
+     "created": 3856553000,
+     "fields": {
+      "title": "ネムラネムラ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-06",
+     "created": 4833844000,
+     "fields": {
+      "title": "𠮷ミナ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-07",
+     "created": 5830850000,
+     "fields": {
+      "title": "吉ミナ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-08",
+     "created": 6771049000,
+     "fields": {
+      "title": "森ミナ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-09",
+     "created": 7736973000,
+     "fields": {
+      "title": "𠮟ミナ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-10",
+     "created": 8720450000,
+     "fields": {
+      "title": "叱ミナ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-11",
+     "created": 9691741000,
+     "fields": {
+      "title": "İzmir",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-12",
+     "created": 9916738000,
+     "fields": {
+      "title": "izmir",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-13",
+     "created": 10907269000,
+     "fields": {
+      "title": "İnci",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-14",
+     "created": 11841020000,
+     "fields": {
+      "title": "inci",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-15",
+     "created": 12249138000,
+     "fields": {
+      "title": "İzunex",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-u-16",
+     "created": 13180342000,
+     "fields": {
+      "title": "izunex",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-c4-src-01",
+     "created": 14059986000,
+     "fields": {
+      "title": "カタカナ・ｶﾀｶﾅ 𠮷野家 ΟΣ ά á İpek",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-c4-src-02",
+     "created": 15064384000,
+     "fields": {
+      "title": "カタカナ カタカナ 吉野家 ος α á ipek",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-c4-src-03",
+     "created": 15416831000,
+     "fields": {
+      "title": "İstanbul",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-s-01",
+     "created": 16340914000,
+     "fields": {
+      "title": "willow hazel willow hazel",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-s-02",
+     "created": 16540402000,
+     "fields": {
+      "title": "willow willow hazel hazel",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-s-03",
+     "created": 17409630000,
+     "fields": {
+      "title": "hazel willow hazel willow",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-s-04",
+     "created": 18399520000,
+     "fields": {
+      "title": "willow padding hazel willow padding hazel",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-s-05",
+     "created": 19264922000,
+     "fields": {
+      "title": "hazel padding willow hazel padding willow",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-s-06",
+     "created": 20172851000,
+     "fields": {
+      "title": "willow hazel padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding willow hazel",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "c5-s-07",
+     "created": 21128722000,
+     "fields": {
+      "title": "willow hazel padding padding padding padding padding padding padding padding padding willow padding padding padding padding padding padding padding padding padding hazel padding padding",
+      "body": "marker"
+     }
+    }
+   ]
+  },
+  "repairprobe20261024#0": {
+   "collection": "repairprobe20261024",
+   "fields": [
+    "title"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "probe-valid",
+     "created": 0,
+     "fields": {
+      "language": "en",
+      "title": "repairprobe-marker"
+     }
+    }
+   ]
+  },
+  "textlanguagecontrolled20261024_en#0": {
+   "collection": "textlanguagecontrolled20261024_en",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": null,
+   "documents": [
+    {
+     "id": "src-v-full",
+     "created": 0,
+     "fields": {
+      "title": "ミパヨ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "src-halfwidth-surface-and-separator",
+     "created": 393849000,
+     "fields": {
+      "body": "marker",
+      "title": "ﾇﾚｺ･ﾐﾊﾟﾖ"
+     }
+    },
+    {
+     "id": "src-fullwidth-separator",
+     "created": 408606000,
+     "fields": {
+      "title": "ヌレコ・ミパヨ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "src-u-full",
+     "created": 1218644000,
+     "fields": {
+      "title": "ヌレコ",
+      "body": "marker"
+     }
+    }
+   ]
+  },
+  "textlanguagecontrolled20261024_ja#0": {
+   "collection": "textlanguagecontrolled20261024_ja",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "src-fullwidth-separator",
+     "created": 0,
+     "fields": {
+      "body": "marker",
+      "title": "ヌレコ・ミパヨ"
+     }
+    },
+    {
+     "id": "src-halfwidth-surface-and-separator",
+     "created": 834738000,
+     "fields": {
+      "title": "ﾇﾚｺ･ﾐﾊﾟﾖ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "src-u-full",
+     "created": 1635430000,
+     "fields": {
+      "title": "ヌレコ",
+      "body": "marker"
+     }
+    },
+    {
+     "id": "src-v-full",
+     "created": 2032050000,
+     "fields": {
+      "body": "marker",
+      "title": "ミパヨ"
+     }
+    }
+   ]
+  },
+  "score-twin-a#0": {
+   "collection": "score-twin-a",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "mango-tf-2",
+     "created": 0,
+     "fields": {
+      "title": "mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-2",
+     "created": 982000,
+     "fields": {
+      "title": "cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-1",
+     "created": 430240000,
+     "fields": {
+      "title": "mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-1",
+     "created": 430512000,
+     "fields": {
+      "title": "cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 430513000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango mango mango mango mango"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 830802000,
+     "fields": {
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 1633928000,
+     "fields": {
+      "title": "mango mango mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-4",
+     "created": 1634229000,
+     "fields": {
+      "title": "cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    }
+   ]
+  },
+  "score-twin-b#0": {
+   "collection": "score-twin-b",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "cedar-tf-2",
+     "created": 0,
+     "fields": {
+      "title": "cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 791000,
+     "fields": {
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-4",
+     "created": 1580000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar cedar cedar"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 431275000,
+     "fields": {
+      "title": "mango mango mango mango mango mango mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-1",
+     "created": 432188000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 1357621000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango"
+     }
+    },
+    {
+     "id": "cedar-tf-1",
+     "created": 2053104000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar"
+     }
+    },
+    {
+     "id": "mango-tf-2",
+     "created": 2053381000,
+     "fields": {
+      "title": "mango mango",
+      "body": "neutral"
+     }
+    }
+   ]
+  },
+  "score-twin-a#1": {
+   "collection": "score-twin-a",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "mango-tf-1",
+     "created": 0,
+     "fields": {
+      "body": "neutral",
+      "title": "mango"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 174000,
+     "fields": {
+      "title": "mango mango mango mango mango mango mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-4",
+     "created": 175000,
+     "fields": {
+      "title": "cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 176000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar"
+     }
+    },
+    {
+     "id": "cedar-tf-1",
+     "created": 25203000,
+     "fields": {
+      "title": "cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-2",
+     "created": 25382000,
+     "fields": {
+      "title": "mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-2",
+     "created": 25383000,
+     "fields": {
+      "title": "cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 25732000,
+     "fields": {
+      "title": "mango mango mango mango",
+      "body": "neutral"
+     }
+    }
+   ]
+  },
+  "score-twin-b#1": {
+   "collection": "score-twin-b",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "cedar-tf-4",
+     "created": 0,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar cedar cedar"
+     }
+    },
+    {
+     "id": "mango-tf-1",
+     "created": 1000,
+     "fields": {
+      "title": "mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-2",
+     "created": 2000,
+     "fields": {
+      "title": "cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 25040000,
+     "fields": {
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-1",
+     "created": 25043000,
+     "fields": {
+      "title": "cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 25686000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango mango mango mango mango"
+     }
+    },
+    {
+     "id": "mango-tf-2",
+     "created": 25871000,
+     "fields": {
+      "title": "mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 25872000,
+     "fields": {
+      "title": "mango mango mango mango",
+      "body": "neutral"
+     }
+    }
+   ]
+  },
+  "score-enhancement-a-20261024#0": {
+   "collection": "score-enhancement-a-20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "cedar-tf-1",
+     "created": 0,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar"
+     }
+    },
+    {
+     "id": "mango-tf-2",
+     "created": 3430000,
+     "fields": {
+      "title": "mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-2",
+     "created": 4108000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 5065000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango mango mango mango mango"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 5586000,
+     "fields": {
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-4",
+     "created": 13752000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar cedar cedar"
+     }
+    },
+    {
+     "id": "mango-tf-1",
+     "created": 13943000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 20197000,
+     "fields": {
+      "title": "mango mango mango mango",
+      "body": "neutral"
+     }
+    }
+   ]
+  },
+  "score-enhancement-b-20261024#0": {
+   "collection": "score-enhancement-b-20261024",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "cedar-tf-1",
+     "created": 0,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 60000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar"
+     }
+    },
+    {
+     "id": "mango-tf-2",
+     "created": 294000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango"
+     }
+    },
+    {
+     "id": "cedar-tf-2",
+     "created": 295000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar"
+     }
+    },
+    {
+     "id": "cedar-tf-4",
+     "created": 296000,
+     "fields": {
+      "title": "cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 297000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango mango mango mango mango"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 5648000,
+     "fields": {
+      "title": "mango mango mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-1",
+     "created": 6296000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango"
+     }
+    }
+   ]
+  },
+  "score-or-a-20261025#0": {
+   "collection": "score-or-a-20261025",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "cedar-tf-4",
+     "created": 0,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar cedar cedar"
+     }
+    },
+    {
+     "id": "mango-tf-2",
+     "created": 870000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango"
+     }
+    },
+    {
+     "id": "mango-tf-1",
+     "created": 5589000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 5590000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango mango mango mango mango"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 6771000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango"
+     }
+    },
+    {
+     "id": "cedar-tf-1",
+     "created": 7319000,
+     "fields": {
+      "title": "cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 12055000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar"
+     }
+    },
+    {
+     "id": "cedar-tf-2",
+     "created": 16872000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar cedar"
+     }
+    }
+   ]
+  },
+  "textboundary20261024_nonce01#0": {
+   "collection": "textboundary20261024_nonce01",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "src-concatenated",
+     "created": 0,
+     "fields": {
+      "title": "ヌヘソメラピ",
+      "body": "neutral boundary marker"
+     }
+    },
+    {
+     "id": "src-separated",
+     "created": 247000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ メラピ"
+     }
+    },
+    {
+     "id": "src-u",
+     "created": 562000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ"
+     }
+    },
+    {
+     "id": "src-v",
+     "created": 944000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "メラピ"
+     }
+    }
+   ]
+  },
+  "score-boolean-a-20261025#0": {
+   "collection": "score-boolean-a-20261025",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "mango-tf-1",
+     "created": 0,
+     "fields": {
+      "body": "neutral",
+      "title": "mango"
+     }
+    },
+    {
+     "id": "cedar-tf-2",
+     "created": 23939000,
+     "fields": {
+      "title": "cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-2",
+     "created": 23940000,
+     "fields": {
+      "title": "mango mango",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-1",
+     "created": 24016000,
+     "fields": {
+      "body": "neutral",
+      "title": "cedar"
+     }
+    },
+    {
+     "id": "cedar-tf-8",
+     "created": 24724000,
+     "fields": {
+      "title": "cedar cedar cedar cedar cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "cedar-tf-4",
+     "created": 24885000,
+     "fields": {
+      "title": "cedar cedar cedar cedar",
+      "body": "neutral"
+     }
+    },
+    {
+     "id": "mango-tf-4",
+     "created": 25130000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango"
+     }
+    },
+    {
+     "id": "mango-tf-8",
+     "created": 25131000,
+     "fields": {
+      "body": "neutral",
+      "title": "mango mango mango mango mango mango mango mango"
+     }
+    }
+   ]
+  },
+  "textboundary20261025_nonce03#0": {
+   "collection": "textboundary20261025_nonce03",
+   "fields": [
+    "title",
+    "body"
+   ],
+   "languageOverride": "language",
+   "documents": [
+    {
+     "id": "src-separated",
+     "created": 0,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ メラピ"
+     }
+    },
+    {
+     "id": "src-v",
+     "created": 1251000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "メラピ"
+     }
+    },
+    {
+     "id": "src-reverse",
+     "created": 1512000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "メラピ ヌヘソ"
+     }
+    },
+    {
+     "id": "src-latin-concat",
+     "created": 6715000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "alphabeta"
+     }
+    },
+    {
+     "id": "src-concatenated",
+     "created": 6887000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "ヌヘソメラピ"
+     }
+    },
+    {
+     "id": "src-latin-separated",
+     "created": 14429000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "alpha beta"
+     }
+    },
+    {
+     "id": "src-repeat",
+     "created": 14641000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ メラピ ヌヘソ"
+     }
+    },
+    {
+     "id": "src-u",
+     "created": 15195000,
+     "fields": {
+      "body": "neutral boundary marker",
+      "title": "ヌヘソ"
+     }
+    },
+    {
+     "id": "src-cross-field",
+     "created": 15460000,
+     "fields": {
+      "body": "メラピ",
+      "title": "ヌヘソ"
+     }
+    }
+   ]
+  }
+ },
+ "cases": [
+  {
+   "corpus": "textobs1#0",
+   "query": "fox",
+   "expected": [
+    "backfill-c"
+   ],
+   "responses": 1
+  },
+  {
+   "corpus": "textobs1#1",
+   "query": "fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-k",
+    "c-l",
+    "c-p"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textobs1#1",
+   "query": "quick",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textobs1#1",
+   "query": "quick fox",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textobs1#1",
+   "query": "fox fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-k",
+    "c-l",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textobs1#1",
+   "query": "\"quick fox\"",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textobs1#2",
+   "query": "fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textobs1#2",
+   "query": "quick",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textobs1#2",
+   "query": "quick fox",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textobs1#2",
+   "query": "fox fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textobs1#2",
+   "query": "\"quick fox\"",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 7
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "quick",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "padding",
+   "expected": [
+    "c-f",
+    "c-m"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "neutral",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "filler",
+   "expected": [
+    "c-e",
+    "c-h"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "quick fox",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "fox fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#0",
+   "query": "\"quick fox\"",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 6
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "quick",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-m"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "padding",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "neutral",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "filler",
+   "expected": [
+    "c-e",
+    "c-h"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "quick fox",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-m"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "fox fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#1",
+   "query": "\"quick fox\"",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 6
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "quick",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "padding",
+   "expected": [
+    "c-f",
+    "c-m",
+    "c-pad-1",
+    "c-pad-2",
+    "c-pad-3",
+    "c-pad-4",
+    "c-pad-5",
+    "c-pad-6",
+    "c-pad-7",
+    "c-pad-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "neutral",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-n",
+    "c-o",
+    "c-p",
+    "c-pad-1",
+    "c-pad-2",
+    "c-pad-3",
+    "c-pad-4",
+    "c-pad-5",
+    "c-pad-6",
+    "c-pad-7",
+    "c-pad-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "filler",
+   "expected": [
+    "c-e",
+    "c-h",
+    "c-pad-1",
+    "c-pad-2",
+    "c-pad-3",
+    "c-pad-4",
+    "c-pad-5",
+    "c-pad-6",
+    "c-pad-7",
+    "c-pad-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "quick fox",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "fox fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#2",
+   "query": "\"quick fox\"",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 6
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "quick",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "padding",
+   "expected": [
+    "c-f",
+    "c-m"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "neutral",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "filler",
+   "expected": [
+    "c-e",
+    "c-h"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "quick fox",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "fox fox",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#3",
+   "query": "\"quick fox\"",
+   "expected": [
+    "c-g",
+    "c-h",
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "marker",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "fox OR waffles",
+   "expected": [
+    "c-c"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "fox or waffles",
+   "expected": [
+    "c-c"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "OR",
+   "expected": [
+    "c-d"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "or",
+   "expected": [
+    "c-d"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "title:fox",
+   "expected": [
+    "c-e",
+    "c-f",
+    "c-g"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "title : fox",
+   "expected": [
+    "c-e",
+    "c-f",
+    "c-g"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "body:fox",
+   "expected": [
+    "c-e"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "unknown:fox",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "title fox",
+   "expected": [
+    "c-e",
+    "c-f",
+    "c-g"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "fox",
+   "expected": [
+    "c-a",
+    "c-c",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "!!!",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "fox !!!",
+   "expected": [
+    "c-a",
+    "c-c",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "   ",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "-fox",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "-fox -waffles",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "\"fox",
+   "expected": [
+    "c-a",
+    "c-c",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "\"quick fox",
+   "expected": [
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "\"",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "\"quick fox\"",
+   "expected": [
+    "c-o"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "istanbul",
+   "expected": [
+    "c-i"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "cafe",
+   "expected": [
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "café",
+   "expected": [
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "naive",
+   "expected": [
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "naïve",
+   "expected": [
+    "c-j"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "京",
+   "expected": [
+    "c-l"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "東京",
+   "expected": [
+    "c-k",
+    "c-m"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textcal20261024#4",
+   "query": "猫",
+   "expected": [
+    "c-k",
+    "c-n"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "marker",
+   "expected": [
+    "c-a",
+    "c-b",
+    "c-c",
+    "c-d",
+    "c-e",
+    "c-f",
+    "c-g",
+    "c-h",
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-l",
+    "c-m",
+    "c-n",
+    "c-o",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "京都",
+   "expected": [
+    "c-a",
+    "c-c"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "京",
+   "expected": [
+    "c-d"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "都",
+   "expected": [
+    "c-b",
+    "c-d",
+    "c-f"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "駅",
+   "expected": [
+    "c-b",
+    "c-c",
+    "c-e",
+    "c-g"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "東京駅",
+   "expected": [
+    "c-b",
+    "c-c",
+    "c-e",
+    "c-g"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "東京都",
+   "expected": [
+    "c-b",
+    "c-f"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "の",
+   "expected": [
+    "c-b",
+    "c-h"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "と",
+   "expected": [
+    "c-b",
+    "c-h"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "京都東京駅",
+   "expected": [
+    "c-c"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "東京駅京都",
+   "expected": [
+    "c-c"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "\"東京駅\"",
+   "expected": [
+    "c-b",
+    "c-c",
+    "c-e",
+    "c-g"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "\"東京 駅\"",
+   "expected": [
+    "c-b",
+    "c-c",
+    "c-e",
+    "c-g"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "\"東京都の猫\"",
+   "expected": [
+    "c-b"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "\"京 都\"",
+   "expected": [
+    "c-d"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "cafe",
+   "expected": [
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "café",
+   "expected": [
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "naive",
+   "expected": [
+    "c-l",
+    "c-m"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "naïve",
+   "expected": [
+    "c-l",
+    "c-m"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "İstanbul",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "istanbul",
+   "expected": [
+    "c-n"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "ｃａｆｅ",
+   "expected": [
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "ά",
+   "expected": [
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "α",
+   "expected": [
+    "c-o"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textlex20261024#0",
+   "query": "café",
+   "expected": [
+    "c-i",
+    "c-j",
+    "c-k",
+    "c-p"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "cedar",
+   "expected": [
+    "c-001",
+    "c-002",
+    "c-003",
+    "c-004",
+    "c-005",
+    "c-006",
+    "c-007",
+    "c-008",
+    "c-009",
+    "c-010",
+    "c-011",
+    "c-012"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "mango",
+   "expected": [
+    "c-013",
+    "c-014",
+    "c-015",
+    "c-016",
+    "c-017",
+    "c-018",
+    "c-019",
+    "c-020",
+    "c-021",
+    "c-022",
+    "c-023",
+    "c-024"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "marker",
+   "expected": [
+    "c-025",
+    "c-026",
+    "c-027",
+    "c-028",
+    "c-029",
+    "c-030",
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "plum",
+   "expected": [
+    "c-001",
+    "c-002",
+    "c-003",
+    "c-004",
+    "c-005",
+    "c-006",
+    "c-007",
+    "c-008",
+    "c-009",
+    "c-010"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "cedar plum",
+   "expected": [
+    "c-001",
+    "c-002",
+    "c-003",
+    "c-004",
+    "c-005",
+    "c-006",
+    "c-007",
+    "c-008",
+    "c-009",
+    "c-010"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "plum cedar",
+   "expected": [
+    "c-001",
+    "c-002",
+    "c-003",
+    "c-004",
+    "c-005",
+    "c-006",
+    "c-007",
+    "c-008",
+    "c-009",
+    "c-010"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "cedar cedar",
+   "expected": [
+    "c-001",
+    "c-002",
+    "c-003",
+    "c-004",
+    "c-005",
+    "c-006",
+    "c-007",
+    "c-008",
+    "c-009",
+    "c-010",
+    "c-011",
+    "c-012"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "\"cedar plum\"",
+   "expected": [
+    "c-001",
+    "c-006",
+    "c-007",
+    "c-008",
+    "c-009",
+    "c-010"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "pearl",
+   "expected": [
+    "c-013",
+    "c-014",
+    "c-015",
+    "c-016",
+    "c-017",
+    "c-018",
+    "c-019",
+    "c-020",
+    "c-021",
+    "c-022"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "mango pearl",
+   "expected": [
+    "c-013",
+    "c-014",
+    "c-015",
+    "c-016",
+    "c-017",
+    "c-018",
+    "c-019",
+    "c-020",
+    "c-021",
+    "c-022"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "pearl mango",
+   "expected": [
+    "c-013",
+    "c-014",
+    "c-015",
+    "c-016",
+    "c-017",
+    "c-018",
+    "c-019",
+    "c-020",
+    "c-021",
+    "c-022"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "mango mango",
+   "expected": [
+    "c-013",
+    "c-014",
+    "c-015",
+    "c-016",
+    "c-017",
+    "c-018",
+    "c-019",
+    "c-020",
+    "c-021",
+    "c-022",
+    "c-023",
+    "c-024"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "\"mango pearl\"",
+   "expected": [
+    "c-013",
+    "c-018",
+    "c-019",
+    "c-020",
+    "c-021",
+    "c-022"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "関西国際空港",
+   "expected": [
+    "c-025",
+    "c-026"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "\"関西 国際 空港\"",
+   "expected": [
+    "c-025",
+    "c-026"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "国際",
+   "expected": [
+    "c-025",
+    "c-026"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "生物研究所",
+   "expected": [
+    "c-027"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "\"生物 研究所\"",
+   "expected": [
+    "c-027"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "\"生 物\"",
+   "expected": [
+    "c-028"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "ヌメポ",
+   "expected": [
+    "c-029",
+    "c-030"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "\"ヌメポ 星\"",
+   "expected": [
+    "c-029",
+    "c-030"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "\"カタカナ カタカナ\"",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "カタカナ・ｶﾀｶﾅ",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "𠮷野家",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "吉野家",
+   "expected": [
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "ά",
+   "expected": [
+    "c-031"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "α",
+   "expected": [
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "İpek",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "ipek",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "á",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "á",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "ΟΣ",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textproof20261024#0",
+   "query": "ος",
+   "expected": [
+    "c-031",
+    "c-032"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "marker",
+   "expected": [
+    "c5-c4-src-01",
+    "c5-c4-src-02",
+    "c5-c4-src-03",
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-04",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07",
+    "c5-u-01",
+    "c5-u-02",
+    "c5-u-03",
+    "c5-u-04",
+    "c5-u-05",
+    "c5-u-06",
+    "c5-u-07",
+    "c5-u-08",
+    "c5-u-09",
+    "c5-u-10",
+    "c5-u-11",
+    "c5-u-12",
+    "c5-u-13",
+    "c5-u-14",
+    "c5-u-15",
+    "c5-u-16"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "willow",
+   "expected": [
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-04",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "hazel",
+   "expected": [
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-04",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ネムラ",
+   "expected": [
+    "c5-u-01",
+    "c5-u-02",
+    "c5-u-03",
+    "c5-u-04"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ﾈﾑﾗ",
+   "expected": [
+    "c5-u-01",
+    "c5-u-02",
+    "c5-u-03",
+    "c5-u-04"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ネムラ・ネムラ",
+   "expected": [
+    "c5-u-01",
+    "c5-u-02",
+    "c5-u-03",
+    "c5-u-04",
+    "c5-u-05"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ネムラ・ﾈﾑﾗ",
+   "expected": [
+    "c5-u-05"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ネムラ ﾈﾑﾗ",
+   "expected": [
+    "c5-u-05"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ネムラ･ﾈﾑﾗ",
+   "expected": [
+    "c5-u-05"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"ネムラ・ﾈﾑﾗ\"",
+   "expected": [
+    "c5-u-03",
+    "c5-u-04"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"ネムラ ﾈﾑﾗ\"",
+   "expected": [
+    "c5-u-03",
+    "c5-u-04"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "𠮷",
+   "expected": [
+    "c5-c4-src-01",
+    "c5-u-06"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "吉",
+   "expected": [
+    "c5-u-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "𠮟",
+   "expected": [
+    "c5-u-09"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "叱",
+   "expected": [
+    "c5-u-10"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ミナ",
+   "expected": [
+    "c5-u-06",
+    "c5-u-07",
+    "c5-u-08",
+    "c5-u-09",
+    "c5-u-10"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "𠮷ミナ",
+   "expected": [
+    "c5-u-06",
+    "c5-u-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "吉ミナ",
+   "expected": [
+    "c5-u-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "𠮟ミナ",
+   "expected": [
+    "c5-u-09"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "叱ミナ",
+   "expected": [
+    "c5-u-10"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"𠮷 ミナ\"",
+   "expected": [
+    "c5-u-06"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"吉 ミナ\"",
+   "expected": [
+    "c5-u-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"𠮟 ミナ\"",
+   "expected": [
+    "c5-u-09"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"叱 ミナ\"",
+   "expected": [
+    "c5-u-10"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "İzmir",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "izmir",
+   "expected": [
+    "c5-u-11",
+    "c5-u-12"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "i̇zmir",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "İnci",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "inci",
+   "expected": [
+    "c5-u-13",
+    "c5-u-14"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "i̇nci",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "İzunex",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "izunex",
+   "expected": [
+    "c5-u-15",
+    "c5-u-16"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "i̇zunex",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "ızunex",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "カタカナ・ｶﾀｶﾅ",
+   "expected": [],
+   "responses": 8
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "𠮷野家",
+   "expected": [
+    "c5-c4-src-01",
+    "c5-c4-src-02"
+   ],
+   "responses": 8
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "İpek",
+   "expected": [
+    "c5-c4-src-01",
+    "c5-c4-src-02"
+   ],
+   "responses": 8
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "İstanbul",
+   "expected": [],
+   "responses": 8
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "willow hazel",
+   "expected": [
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-04",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "hazel willow",
+   "expected": [
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-04",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "willow willow",
+   "expected": [
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-04",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "hazel hazel",
+   "expected": [
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-04",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"willow hazel\"",
+   "expected": [
+    "c5-s-01",
+    "c5-s-02",
+    "c5-s-03",
+    "c5-s-05",
+    "c5-s-06",
+    "c5-s-07"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textdisc20261024#0",
+   "query": "\"hazel willow\"",
+   "expected": [
+    "c5-s-01",
+    "c5-s-03",
+    "c5-s-04"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "repairprobe20261024#0",
+   "query": "repairprobe-marker",
+   "expected": [
+    "probe-valid"
+   ],
+   "responses": 1
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_en#0",
+   "query": "ヌレコ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator",
+    "src-u-full"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_en#0",
+   "query": "ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator",
+    "src-v-full"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_en#0",
+   "query": "ヌレコ・ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_en#0",
+   "query": "ヌレコ･ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_en#0",
+   "query": "ﾇﾚｺ・ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_en#0",
+   "query": "ヌレコ・ﾐﾊﾟﾖ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_ja#0",
+   "query": "ヌレコ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator",
+    "src-u-full"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_ja#0",
+   "query": "ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator",
+    "src-v-full"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_ja#0",
+   "query": "ヌレコ・ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_ja#0",
+   "query": "ヌレコ･ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_ja#0",
+   "query": "ﾇﾚｺ・ミパヨ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "textlanguagecontrolled20261024_ja#0",
+   "query": "ヌレコ・ﾐﾊﾟﾖ",
+   "expected": [
+    "src-fullwidth-separator",
+    "src-halfwidth-surface-and-separator"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "score-twin-a#0",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-twin-a#0",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-twin-b#0",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-twin-b#0",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-twin-a#1",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-twin-a#1",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-twin-b#1",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-twin-b#1",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-enhancement-a-20261024#0",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "score-enhancement-a-20261024#0",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "score-enhancement-b-20261024#0",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "score-enhancement-b-20261024#0",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 4
+  },
+  {
+   "corpus": "score-or-a-20261025#0",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-or-a-20261025#0",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-or-a-20261025#0",
+   "query": "cedar OR mango",
+   "expected": [],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261024_nonce01#0",
+   "query": "ヌヘソ",
+   "expected": [
+    "src-separated",
+    "src-u"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261024_nonce01#0",
+   "query": "メラピ",
+   "expected": [
+    "src-separated",
+    "src-v"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261024_nonce01#0",
+   "query": "ヌヘソ・メラピ",
+   "expected": [
+    "src-concatenated",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261024_nonce01#0",
+   "query": "ヌヘソ・ﾒﾗﾋﾟ",
+   "expected": [
+    "src-concatenated",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261024_nonce01#0",
+   "query": "ヌヘソ ﾒﾗﾋﾟ",
+   "expected": [
+    "src-concatenated",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261024_nonce01#0",
+   "query": "\"ヌヘソ ﾒﾗﾋﾟ\"",
+   "expected": [
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "score-boolean-a-20261025#0",
+   "query": "cedar",
+   "expected": [
+    "cedar-tf-1",
+    "cedar-tf-2",
+    "cedar-tf-4",
+    "cedar-tf-8"
+   ],
+   "responses": 1
+  },
+  {
+   "corpus": "score-boolean-a-20261025#0",
+   "query": "mango",
+   "expected": [
+    "mango-tf-1",
+    "mango-tf-2",
+    "mango-tf-4",
+    "mango-tf-8"
+   ],
+   "responses": 1
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "ヌヘソ",
+   "expected": [
+    "src-cross-field",
+    "src-repeat",
+    "src-reverse",
+    "src-separated",
+    "src-u"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "メラピ",
+   "expected": [
+    "src-cross-field",
+    "src-repeat",
+    "src-reverse",
+    "src-separated",
+    "src-v"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "ヌヘソ・メラピ",
+   "expected": [
+    "src-concatenated",
+    "src-cross-field",
+    "src-repeat",
+    "src-reverse",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "ヌヘソ・ﾒﾗﾋﾟ",
+   "expected": [
+    "src-concatenated",
+    "src-cross-field",
+    "src-repeat",
+    "src-reverse",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "ヌヘソ ﾒﾗﾋﾟ",
+   "expected": [
+    "src-concatenated",
+    "src-cross-field",
+    "src-repeat",
+    "src-reverse",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "\"ヌヘソ ﾒﾗﾋﾟ\"",
+   "expected": [
+    "src-repeat",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "ﾒﾗﾋﾟ ヌヘソ",
+   "expected": [
+    "src-cross-field",
+    "src-repeat",
+    "src-reverse",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "ヌヘソメラピ",
+   "expected": [
+    "src-concatenated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "\"ヌヘソメラピ\"",
+   "expected": [
+    "src-concatenated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "ヌヘソ ﾒﾗﾋﾟ ヌヘソ",
+   "expected": [
+    "src-cross-field",
+    "src-repeat",
+    "src-reverse",
+    "src-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "\"メラピ ヌヘソ\"",
+   "expected": [
+    "src-repeat",
+    "src-reverse"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "alpha beta",
+   "expected": [
+    "src-latin-concat",
+    "src-latin-separated"
+   ],
+   "responses": 2
+  },
+  {
+   "corpus": "textboundary20261025_nonce03#0",
+   "query": "\"alpha beta\"",
+   "expected": [
+    "src-latin-separated"
+   ],
+   "responses": 2
+  }
+ ]
+}

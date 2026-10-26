@@ -365,3 +365,67 @@ fn a_hot_reload_notes_the_search_indexes_after_it_takes_effect() {
         .unwrap_or_else(|| panic!("{seen:?}"));
     assert!(reloaded < noted, "{seen:?}");
 }
+
+/// Search indexes `firebase deploy` accepts but local text search cannot serve: the
+/// `*_UNSPECIFIED` enums, an empty `indexSpecs`, a `textSpec` with a `geoSpec`, a `null`
+/// `textSpec` and a `null` mode beside `searchConfig`.
+const ENTERPRISE_DEPLOYABLE_SEARCH_INDEXES: &str = r#"{"indexes": [
+  {"collectionGroup": "posts", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "body", "searchConfig": {"textSpec": {"indexSpecs": [
+     {"indexType": "TEXT_INDEX_TYPE_UNSPECIFIED", "matchType": "TEXT_MATCH_TYPE_UNSPECIFIED"}]}}}]},
+  {"collectionGroup": "posts", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "title", "searchConfig": {"textSpec": {"indexSpecs": []}}}]},
+  {"collectionGroup": "places", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "name", "searchConfig": {"textSpec": {"indexSpecs": [
+     {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}, "geoSpec": {"geoJsonIndexingDisabled": false}}}]},
+  {"collectionGroup": "places", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "location", "searchConfig": {"textSpec": null, "geoSpec": {}}}]},
+  {"collectionGroup": "notes", "queryScope": "COLLECTION",
+   "fields": [{"fieldPath": "text", "order": null, "searchConfig": {"textSpec": {"indexSpecs": [
+     {"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}]}
+], "fieldOverrides": []}"#;
+
+/// Review S1: an Enterprise project whose index file `firebase deploy` accepts starts in the
+/// default profile, as it did on v0.29.0; the entries local search cannot serve are noted.
+#[test]
+fn an_enterprise_index_file_the_deploy_accepts_starts_by_default() {
+    for profile in ["strict", "emulator"] {
+        let (mut command, dir) = command(
+            &format!("enterprise-{profile}"),
+            profile,
+            ENTERPRISE_DEPLOYABLE_SEARCH_INDEXES,
+        );
+        std::fs::write(
+            dir.join("fireemu.json"),
+            format!(
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "firestore": {{"edition": "enterprise", "apiMode": "native"}}}}"#
+            ),
+        )
+        .unwrap();
+        let mut child = Running(command.spawn().unwrap());
+        let rx = lines(&mut child.0);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut skipped = Vec::new();
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(Line::Out(line)) if line.contains("control API:") => break,
+                Ok(Line::Err(line)) if line.contains("skipped") => skipped.push(line),
+                Ok(_) => {}
+                Err(error) => {
+                    panic!("{profile}: the daemon did not start ({error}); skipped: {skipped:?}")
+                }
+            }
+        }
+        drop(child);
+        assert_eq!(skipped.len(), 2, "{profile}: {skipped:?}");
+        assert!(
+            skipped.iter().any(|line| line.contains("indexes[1]")),
+            "{skipped:?}"
+        );
+        assert!(
+            skipped.iter().any(|line| line.contains("indexes[2]")),
+            "{skipped:?}"
+        );
+    }
+}

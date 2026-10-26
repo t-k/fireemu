@@ -9,7 +9,7 @@
 //!
 //! The same files are also searched for a project number written as ASCII decimal digits inside base64 (a GCF
 //! v2 `sourceToken` carried the events project number that way): a whole run of 10 to 13 digits in the decoded
-//! bytes that is not the mask, does not start with a zero, has no letter or digit next to it and is not an
+//! bytes that is not the mask, does not start with a zero, has no letter next to it and is not an
 //! epoch instant of 2020 to 2036.
 //!
 //! The scan is deliberately general: it is not limited to one fixture or to the Eventarc page token.
@@ -209,7 +209,7 @@ fn is_instant(digits: &[u8]) -> bool {
 }
 
 /// The numbers that the base64 runs of `text` carry as ASCII decimal digits (a GCF v2 `sourceToken` held the
-/// events project number this way): a whole run of 10 to 13 digits, with no letter or digit next to it (a hex
+/// events project number this way): a whole run of 10 to 13 digits, with no letter next to it (a hex
 /// id that starts with digits and an X.509 `UTCTime` such as `261015000000Z` are not numbers), that is not an
 /// instant, and does not start with a zero. The mask is returned as the mask. A run is decoded from each of
 /// its first four characters, so that every byte alignment and a word glued to the front of the token (`pageToken/<token>`) is covered.
@@ -229,8 +229,8 @@ fn ascii_numbers_in(text: &[u8]) -> Vec<String> {
                     .position(|byte| !byte.is_ascii_digit())
                     .map_or(bytes.len(), |length| at + length);
                 let digits = &bytes[at..end];
-                let flanked = (at > 0 && bytes[at - 1].is_ascii_alphanumeric())
-                    || bytes.get(end).is_some_and(u8::is_ascii_alphanumeric);
+                let flanked = (at > 0 && bytes[at - 1].is_ascii_alphabetic())
+                    || bytes.get(end).is_some_and(u8::is_ascii_alphabetic);
                 if ASCII_DIGITS.contains(&digits.len())
                     && digits[0] != b'0'
                     && !flanked
@@ -282,6 +282,7 @@ fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_
         all.len()
     );
     let mut with_mask = 0;
+    let mut with_ascii_mask = 0;
     let mut refused = Vec::new();
     for path in &all {
         let Ok(bytes) = std::fs::read(path) else {
@@ -297,6 +298,7 @@ fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_
         for number in ascii_numbers_in(&bytes) {
             if number == MASK.to_string() {
                 with_mask += 1;
+                with_ascii_mask += 1;
             } else {
                 refused.push(format!("{} (ASCII digits)", path.display()));
             }
@@ -310,6 +312,11 @@ fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_
     assert!(
         with_mask >= 1,
         "files with a token naming the mask: {with_mask}"
+    );
+    // So does the ASCII scan: recorded response bodies stored as base64 name the mask in the clear.
+    assert!(
+        with_ascii_mask >= 1,
+        "files with base64 naming the mask in ASCII digits: {with_ascii_mask}"
     );
 }
 
@@ -513,19 +520,31 @@ fn the_scan_ignores_a_digit_run_inside_a_longer_identifier() {
         assert!(ascii_numbers_in(token.as_bytes()).is_empty(), "{text}");
     }
     // Any delimiter, or the edge of the data, still counts.
-    for text in [
-        "592603257417",
-        "a/592603257417/b",
-        "a-592603257417-b",
-        "a 592603257417\n",
-        "\"592603257417\"",
-        "p=592603257417&q=1",
-        "a_592603257417_b",
+    for (text, number) in [
+        ("592603257417", "592603257417"),
+        ("a/592603257417/b", "592603257417"),
+        ("a-592603257417-b", "592603257417"),
+        ("a 592603257417\n", "592603257417"),
+        ("\"592603257417\"", "592603257417"),
+        ("p=592603257417&q=1", "592603257417"),
+        ("a_592603257417_b", "592603257417"),
+        ("2987654321", "2987654321"),
+        ("5987654321012", "5987654321012"),
     ] {
         let token = encode(text.as_bytes(), false, true);
-        let expected = ["592603257417"];
-        assert_eq!(ascii_numbers_in(token.as_bytes()), expected, "{text}");
+        assert_eq!(ascii_numbers_in(token.as_bytes()), [number], "{text}");
     }
+}
+
+#[test]
+fn the_scan_lists_each_number_once_in_order() {
+    let first = encode(b"projects/222222222222/", true, false);
+    let second = encode(b"projects/111111111111/", true, false);
+    let text = format!("{first} {second} {first}");
+    assert_eq!(
+        ascii_numbers_in(text.as_bytes()),
+        ["111111111111", "222222222222"]
+    );
 }
 
 #[test]

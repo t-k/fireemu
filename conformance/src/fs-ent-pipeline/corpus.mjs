@@ -40,6 +40,7 @@ import { O8A_PROGRAMS } from "./o8a-corpus.mjs";
 import { O8B_PROGRAMS } from "./o8b-corpus.mjs";
 import { O8C_PROGRAMS } from "./o8c-corpus.mjs";
 import { O8D_PROGRAMS } from "./o8d-corpus.mjs";
+import { O9_PROGRAMS } from "./o9-corpus.mjs";
 
 export { fld, fn, seedCommit };
 
@@ -1866,4 +1867,6 @@ export const PROGRAMS = [
   ...O8B_PROGRAMS,
   ...O8C_PROGRAMS,
   ...O8D_PROGRAMS,
+  // O-9 (the residual shapes the strict stages are gated on): see o9-corpus.mjs.
+  ...O9_PROGRAMS,
 ];

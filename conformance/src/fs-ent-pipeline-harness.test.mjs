@@ -43,9 +43,12 @@ import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
 
-// The two O-8A framing programs are not in the fixture at all: their answers are kept as a
-// summary (fs-ent-pipeline-framing.json).
-const PROGRAMS = ALL_PROGRAMS.filter((program) => !SUMMARY_ONLY.has(program.id));
+// The O-9 programs join the pinned counts below after their recording
+// (fs-ent-pipeline-o9.test.mjs covers them until then). The two O-8A framing programs are not
+// in the fixture at all: their answers are kept as a summary (fs-ent-pipeline-framing.json).
+const PROGRAMS = ALL_PROGRAMS.filter(
+  (program) => !program.id.startsWith("fs-ent-pipeline/o9/") && !SUMMARY_ONLY.has(program.id),
+);
 
 const production = (database = lane.database) =>
   createContext({

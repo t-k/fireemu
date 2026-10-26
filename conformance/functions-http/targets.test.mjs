@@ -48,6 +48,9 @@ test("the corpus still accepts only the named targets as strings", () => {
   assert.throws(() => validateCorpus(corpus), /unreviewed target/);
   assert.throws(() => expectedFunctionName(spec()), /unreviewed target/);
   assert.throws(() => expectedFunctionName("constructor"), /unreviewed target constructor/);
+  assert.throws(() => expectedFunctionName(["http"]), /unreviewed target/);
+  assert.throws(() => resolveTarget([]), /^Error: invalid target spec$/);
+  assert.throws(() => resolveTarget(["http"]), /^Error: invalid target spec$/);
 });
 
 test("a target spec gets its own resources, and the named target keeps its old ones", () => {
@@ -85,7 +88,15 @@ test("a spec that is not a reviewed 2nd gen function of this project is refused"
     spec({ functionName: "has space" }),
     spec({ functionName: "a/b" }),
     spec({ functionName: "x".repeat(64) }),
-    spec({ functionName: "1abc" }),
+    // each field is refused by its own rule, so the other fields are valid
+    spec({ functionName: "1abc", entryPoint: "entry" }),
+    spec({ functionName: 5, entryPoint: "entry" }),
+    spec({ functionName: undefined, entryPoint: "entry" }),
+    spec({ entryPoint: " abc" }),
+    spec({ entryPoint: 7 }),
+    spec({ region: "xx us-central1" }),
+    spec({ region: "us-central1x" }),
+    spec({ region: "us-central1/" }),
     spec({ codebase: "Upper" }),
     spec({ codebase: "a b" }),
     spec({ codebase: "" }),
@@ -169,6 +180,22 @@ test("a function record is checked against its own target's name, region, entry 
   assert.equal(
     validateFunctionRecord(record(), target),
     "https://cv14dbcreatedv2-abc-ew.a.run.app",
+  );
+  // the cloudfunctions.net host form belongs to the target's own region and project
+  const functionsHost = (host) =>
+    record({
+      serviceConfig: {
+        service: `projects/${P}/locations/europe-west1/services/cv14dbcreatedv2`,
+        uri: `https://${host}/cv14DbCreatedV2`,
+      },
+    });
+  assert.equal(
+    validateFunctionRecord(functionsHost(`europe-west1-${P}.cloudfunctions.net`), target),
+    `https://europe-west1-${P}.cloudfunctions.net/cv14DbCreatedV2`,
+  );
+  assert.throws(
+    () => validateFunctionRecord(functionsHost(`us-central1-${P}.cloudfunctions.net`), target),
+    /differs from the reviewed destination/,
   );
   for (const patch of [
     { name: `projects/${P}/locations/us-central1/functions/cv14DbCreatedV2` },

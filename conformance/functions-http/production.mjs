@@ -970,6 +970,38 @@ async function listOwnedVersions(control, target, kind) {
   return versions;
 }
 
+/**
+ * After the function delete no image of the target may remain. Observed: a 2nd gen function delete
+ * removes the image package and its `/cache` package service-side (FE stage 2, 2026-09-30 and
+ * 2026-10-01; the stage 1 probe, 2026-10-26, found the package absent after the delete). The packages
+ * of the repository are listed once and the target's two package names are looked at exactly: a
+ * version left in either is a residue to name, not to ignore. An empty package is no residue.
+ */
+export async function assertNoImageResidue(control, target, kind) {
+  const response = await control(
+    "GET",
+    `${ARTIFACT_HOST}/v1/${REPOSITORY}/packages?pageSize=1000`,
+    undefined,
+    kind,
+  );
+  if (response.value.nextPageToken) throw new Error("Artifact Registry package list is incomplete");
+  const owned = new Set([packageName(target), `${packageName(target)}%2Fcache`]);
+  const present = (response.value.packages ?? [])
+    .map((entry) => entry.name)
+    .filter((name) => owned.has(name));
+  for (const name of present) {
+    const versions = await control(
+      "GET",
+      `${ARTIFACT_HOST}/v1/${name}/versions?pageSize=1000`,
+      undefined,
+      kind,
+    );
+    if (versions.value.nextPageToken || (versions.value.versions ?? []).length > 0) {
+      throw new Error(`owned image version remains in ${name.split("/packages/")[1]}`);
+    }
+  }
+}
+
 async function assertOwnedTag(control, target, tag, versionName) {
   const response = await control(
     "GET",
@@ -1186,6 +1218,7 @@ export async function cleanupTarget(
       if (after.status !== 404) throw new Error("owned image version remains");
       await log("image-version-deleted", `${state.versionName}; absence read back`);
     }
+    await assertNoImageResidue(control, target, "cleanup");
     if (state.uploadCleanupError) throw new Error(state.uploadCleanupError);
     state.cleaned = true;
   } catch (error) {

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { BOUNDS, createBudget } from "./harness.mjs";
-import { assertTargetAbsent } from "./production.mjs";
+import { assertNoImageResidue, assertTargetAbsent } from "./production.mjs";
 import { FAKE_RECEIPT_SCRIPT, FH_PACKAGE, UPLOAD_OBJECT, deployWorld } from "./production.fake.mjs";
 import {
   PROBE_LIMITS,
@@ -447,4 +447,76 @@ test("the deployed fixture function has no invoker option, so the CLI makes it p
   const source = readFileSync(new URL("./fixtures/index.js", import.meta.url), "utf8");
   assert.match(source, /onRequest\(/);
   assert.doesNotMatch(source, /invoker/);
+});
+
+test("a Gen2 delete that removes the image package service-side is the expected, recorded outcome", async () => {
+  // stage 1, 2026-10-26: the package was absent after `functions:delete`; FE stage 2 (2026-09-30) saw the
+  // image and the `/cache` package removed service-side too. The fake models it: no package is listed.
+  const { world, result } = await probe({ script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200) });
+  try {
+    assert.equal(result.outcome, "recorded");
+    assert.equal(world.deployed.versionExists, false);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a version left in the target's /cache package after the delete is a residue that stops the run", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  world.deployed.cacheVersion = true;
+  try {
+    const result = await runUploadProbe({
+      control: world.control,
+      adcPath: "/adc",
+      budget: world.budget,
+      runDir: join(world.dir, "run"),
+      projectNumber: NUMBER,
+      run: world.run,
+    });
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.equal(result.residual, true);
+    assert.equal(result.uploadsClosureReady, true, "the upload itself was cleaned");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the image residue check looks at the target's two package names exactly", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  try {
+    // another function whose package id merely starts with ours is not ours
+    world.deployed.otherPackage = true;
+    await assert.doesNotReject(() => assertNoImageResidue(world.control, "http", "cleanup"));
+    // an empty package is no residue
+    world.deployed.packageRemains = true;
+    await assert.doesNotReject(() => assertNoImageResidue(world.control, "http", "cleanup"));
+    // a version in the cache package is
+    world.deployed.cacheVersion = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /owned image version remains in fireemu--oracle--query__us--central1__fireemu_http_probe%2Fcache/,
+    );
+    // a version in the main package is
+    world.deployed.cacheVersion = false;
+    world.deployed.versionExists = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /owned image version remains in fireemu--oracle--query__us--central1__fireemu_http_probe$/,
+    );
+    // an incomplete package list is not an empty one
+    world.deployed.versionExists = false;
+    world.deployed.packagesNextPage = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /package list is incomplete/,
+    );
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
 });

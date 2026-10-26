@@ -47,6 +47,8 @@ export async function uploadWorld(overrides = {}) {
     let reply;
     if (url.startsWith("https://storage.googleapis.com/")) {
       reply = await gcs.send(method, url);
+    } else if (url.includes("/repositories/gcf-artifacts/packages?") && method === "GET") {
+      reply = { status: 200, value: { packages: [] }, bytes: 20 };
     } else if (url.includes("/functions/") && method === "GET") {
       reply = functions.present
         ? { status: 200, value: functions.record, bytes: 10 }
@@ -214,6 +216,28 @@ export async function deployWorld({ deployScript, deleteStatus, caps, buildsImag
         deployed.bindings = body.policy.bindings;
         result = reply(200, body.policy);
       }
+    } else if (
+      url ===
+      "https://artifactregistry.googleapis.com/v1/projects/fireemu-oracle-query/locations/us-central1/repositories/gcf-artifacts/packages?pageSize=1000"
+    ) {
+      const names = [];
+      if (deployed.versionExists || deployed.packageRemains) names.push(FH_PACKAGE);
+      if (deployed.cacheVersion) names.push(`${FH_PACKAGE}%2Fcache`);
+      if (deployed.otherPackage) names.push(`${FH_PACKAGE}_two`);
+      result = reply(200, {
+        packages: names.map((name) => ({ name })),
+        ...(deployed.packagesNextPage ? { nextPageToken: "t" } : {}),
+      });
+    } else if (
+      url ===
+      `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}%2Fcache/versions?pageSize=1000`
+    ) {
+      result = reply(
+        200,
+        deployed.cacheVersion
+          ? { versions: [{ name: `${FH_PACKAGE}%2Fcache/versions/${FH_DIGEST}` }] }
+          : {},
+      );
     } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}`) {
       result = deployed.versionExists ? reply(200, { name: FH_PACKAGE }) : reply(404);
     } else if (

@@ -13194,7 +13194,7 @@ async fn execute_pipeline_runs_the_recorded_stages_and_inputs() {
             .await
             .unwrap();
         let collection = || pipeline_stage("collection", collection_ref("st"));
-        let mut run = |stages: Vec<pb::pipeline::Stage>| {
+        let run = |stages: Vec<pb::pipeline::Stage>| {
             let mut client = client.clone();
             async move {
                 let mut stream = client
@@ -13329,6 +13329,132 @@ async fn execute_pipeline_runs_the_recorded_stages_and_inputs() {
         )])
         .await;
         assert_eq!(names(&documents), ["a", "c"], "{policy:?}");
+        handle.abort();
+    }
+}
+
+/// What the recorded stages refuse or take beyond the recorded rows: a signature-bearing arity
+/// text for a call of a new function, `add_fields` reading `__name__`, overlapping `add_fields`
+/// aliases, function options of an accumulator, and the read time of a documents input.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
+    let map = |entries: Vec<(&str, pb::Value)>| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: entries
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect(),
+        })),
+    };
+    let stage = |name: &str, args: Vec<pb::Value>| pb::pipeline::Stage {
+        name: name.to_owned(),
+        args,
+        ..Default::default()
+    };
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let strict = policy == IndexValidationPolicy::Production;
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("na/a", &[("n", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let collection = || pipeline_stage("collection", collection_ref("na"));
+        // A call of a function with the wrong number of arguments: production's signature
+        // wording under the emulator profile, UNIMPLEMENTED under strict (unrecorded shape).
+        for (name, call, text) in [
+            (
+                "array_contains",
+                pipeline_function("array_contains", vec![pipeline_field("n")]),
+                "The function 'array_contains(array: array[any], value: any): boolean' takes [2..2] argument(s), but 1 was provided.",
+            ),
+            (
+                "exists",
+                pipeline_function("exists", vec![]),
+                "The function 'exists(value: any?): boolean' takes [1..1] argument(s), but 0 were provided.",
+            ),
+        ] {
+            let err = pipeline_error(
+                &mut client,
+                vec![collection(), stage("where", vec![call])],
+            )
+            .await;
+            if strict {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{name}: {err}");
+            } else {
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{name}: {err}");
+                assert_eq!(err.message(), text, "{name}");
+            }
+        }
+        // add_fields reads `__name__` like any field.
+        let mut stream = client
+            .execute_pipeline(pipeline_request(vec![
+                collection(),
+                stage(
+                    "add_fields",
+                    vec![map(vec![("nm", pipeline_field("__name__"))])],
+                ),
+            ]))
+            .await
+            .unwrap()
+            .into_inner();
+        let results = stream.message().await.unwrap().unwrap().results;
+        assert_eq!(
+            results[0].fields["nm"].value_type,
+            Some(pb::value::ValueType::ReferenceValue(format!("{DOCS}/na/a"))),
+            "{policy:?}"
+        );
+        // Overlapping aliases are unrecorded.
+        let err = pipeline_error(
+            &mut client,
+            vec![
+                collection(),
+                stage("add_fields", vec![map(vec![("a", i(1)), ("a.b", i(2))])]),
+            ],
+        )
+        .await;
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        // Function options of an accumulator: ignored by the emulator profile, unobserved under
+        // strict.
+        let mut count = pipeline_function("count", vec![]);
+        let Some(pb::value::ValueType::FunctionValue(function)) = count.value_type.as_mut() else {
+            unreachable!()
+        };
+        function.options.insert("unexpected".into(), i(1));
+        let counted = client
+            .execute_pipeline(pipeline_request(vec![
+                collection(),
+                stage("aggregate", vec![map(vec![("c", count)]), map(vec![])]),
+            ]))
+            .await;
+        match counted {
+            Err(status) => assert!(strict, "{policy:?}: {status}"),
+            Ok(response) => {
+                let mut stream = response.into_inner();
+                let outcome = stream.message().await;
+                assert_eq!(outcome.is_err(), strict, "{policy:?}");
+            }
+        }
+        // A documents input carries the snapshot's read time.
+        let mut stream = client
+            .execute_pipeline(pipeline_request(vec![pipeline_stage(
+                "documents",
+                collection_ref("na/a"),
+            )]))
+            .await
+            .unwrap()
+            .into_inner();
+        let response = stream.message().await.unwrap().unwrap();
+        assert_eq!(response.results.len(), 1, "{policy:?}");
+        assert!(response.execution_time.is_some(), "{policy:?}");
         handle.abort();
     }
 }

@@ -821,11 +821,10 @@ pub fn compile_pipeline_in_order(
         Err(error)
             if error.code() == tonic::Code::Unimplemented
                 && !validated_unrun
-                && failed_at > 0
                 && unrecorded == Unrecorded::OfficialEmulator =>
         {
             let mut result = Err(error);
-            for rest in pipeline.stages.iter().skip(failed_at + 1) {
+            for rest in pipeline.stages.iter().skip(failed_at).skip(1) {
                 if let Err(refusal) = check_unrun_alias_stage(rest, &mut deferred, unrecorded) {
                     result = Err(refusal);
                     break;
@@ -2484,6 +2483,8 @@ fn check_unrun_alias_stage(
     if !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
         return if strict { Err(unvalidated()) } else { Ok(()) };
     }
+    // `aggregate`, `add_fields` and `distinct` run: their values are decoded by the stage, not
+    // validated here.
     let runs = matches!(name, "aggregate" | "add_fields" | "distinct");
     if strict && !runs && !unrun_values_validated(stage, unrecorded) {
         return Err(unvalidated());
@@ -2547,28 +2548,24 @@ fn check_unrun_alias_stage(
             });
         if let Some(text) = reserved_alias(name, alias).filter(|_| !itself) {
             // Production answered a reserved alias of `aggregate`, `distinct` and `add_fields`
-            // (FS-ENT-ORACLE O-7); the shape gate answers it only for a recorded request. It has
-            // not answered one of a stage fireemu does not run.
-            return Err(if strict && !runs {
-                Status::unimplemented(format!("{text}; this text is not observed locally"))
-            } else {
-                Status::invalid_argument(text)
-            });
+            // (FS-ENT-ORACLE O-7); under strict the shape gate answers it only for a recorded
+            // request.
+            return Err(Status::invalid_argument(text));
         }
     }
-    // The official emulator's checks of the stages that assign top-level fields only, and of an
-    // aggregate's names (production has not answered them, so strict refuses them).
+    // The checks of the stages that assign top-level fields only, and of an aggregate's names
+    // (FS-ENT-ORACLE O-7; under strict the shape gate answers them only for a recorded request).
     if let Some(text) = unrun_stage_name_error(stage) {
-        return Err(if strict && !runs {
-            Status::unimplemented(format!("{text}; this text is not observed locally"))
-        } else if let Some(field) = text
-            .strip_prefix("The nested field reference '")
-            .and_then(|rest| rest.split('\'').next())
-        {
-            crate::production_status::top_level_property_path_only(field, &text)
-        } else {
-            Status::invalid_argument(text)
-        });
+        return Err(
+            if let Some(field) = text
+                .strip_prefix("The nested field reference '")
+                .and_then(|rest| rest.split('\'').next())
+            {
+                crate::production_status::top_level_property_path_only(field, &text)
+            } else {
+                Status::invalid_argument(text)
+            },
+        );
     }
     for alias in &stage_aliases {
         parse_alias(alias)?;

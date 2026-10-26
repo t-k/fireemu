@@ -1240,6 +1240,7 @@ impl tokio_stream::Stream for PipelineResponseStream {
                 return Poll::Ready(None);
             }
             let Some(inner) = this.inner.as_mut() else {
+                this.done = true;
                 this.close();
                 continue;
             };

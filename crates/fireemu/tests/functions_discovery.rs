@@ -1070,19 +1070,16 @@ fn a_trigger_of_a_product_the_daemon_does_not_serve_fails_discovery_by_name() {
     let out = exec(&fixture("unserved-triggers"), None);
     let err = stderr(&out);
     assert_eq!(out.status.code(), Some(1), "{err}");
-    for name in ["fxOnValueWritten", "fxV1DatabaseWrite", "fxOnConfigUpdated"] {
-        assert!(err.contains(name), "{name} is not named:\n{err}");
-    }
-    assert!(
-        err.contains("the Realtime Database emulator is not in the active supported surface"),
-        "{err}"
-    );
+    assert!(err.contains("fxOnConfigUpdated (remoteConfig)"), "{err}");
     assert!(
         err.contains("Remote Config has no emulator in the active supported surface"),
         "{err}"
     );
-    // The served export is not the reason the run failed, and is not named as unserved.
-    assert!(!err.contains("fxHealth ("), "{err}");
+    // The served exports are not the reason the run failed, and are not named as unserved:
+    // Realtime Database triggers run locally in both the v2 and the v1 spelling.
+    for name in ["fxHealth", "fxOnValueWritten", "fxV1DatabaseWrite"] {
+        assert!(!err.contains(&format!("{name} (")), "{name} is named as unserved:\n{err}");
+    }
 }
 
 /// `functions.unservedTriggers = "report"` is the official emulator's carry-on: every ignored
@@ -1100,10 +1097,14 @@ fn the_report_policy_names_every_ignored_export_and_serves_the_rest() {
     let out = exec(&fixture("unserved-triggers"), Some(&config));
     let err = stderr(&out);
     assert_eq!(out.status.code(), Some(0), "{err}");
-    for name in ["fxOnValueWritten", "fxV1DatabaseWrite", "fxOnConfigUpdated"] {
+    assert!(
+        err.contains("functions[us-central1-fxOnConfigUpdated]: function ignored"),
+        "fxOnConfigUpdated has no ignored line:\n{err}"
+    );
+    for name in ["fxHealth", "fxOnValueWritten", "fxV1DatabaseWrite"] {
         assert!(
-            err.contains(&format!("functions[us-central1-{name}]: function ignored")),
-            "{name} has no ignored line:\n{err}"
+            !err.contains(&format!("functions[us-central1-{name}]: function ignored")),
+            "{name} is ignored although it is served:\n{err}"
         );
     }
     let _ = std::fs::remove_dir_all(&dir);

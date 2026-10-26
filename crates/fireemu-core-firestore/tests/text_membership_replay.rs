@@ -120,9 +120,9 @@ fn replay() -> Vec<(String, String, Vec<String>, Vec<String>)> {
         .collect()
 }
 
-/// Recorded cases no general analysis rule explains (owner ledger 1785 accepted the first six as
-/// known differences; the rest surfaced when the replay grew to every response). They stay
-/// pinned so a change in either direction surfaces.
+/// Recorded cases no general analysis rule explains: 20 CJK/kana cases plus 2 `İpek` cases, all
+/// known differences by owner decision 1788 (which widens the six cases of 1785; text search is
+/// verified for Latin-script text). They stay pinned so a change in either direction surfaces.
 ///
 /// - Han and kana runs: production segments them with a dictionary. `京都`, `都`, `東京都`,
 ///   `京` and `京都東京駅` depend on the words around the character (`京都東京駅東京都京都東京駅`

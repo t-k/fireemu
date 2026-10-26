@@ -1,6 +1,6 @@
 # Local Enterprise text search
 
-Text search is an unreleased Firestore Enterprise Native feature after fireemu 0.29. It is owner-only while Security Rules are configured. Its membership and result order are compared with every recorded production search response; the known differences are listed under [Production comparison](#production-comparison), and numeric `score()` values are approximate.
+Text search is an unreleased Firestore Enterprise Native feature after fireemu 0.29. It is owner-only while Security Rules are configured. Its membership and result order are compared with every recorded production search response and match production for Latin-script text; the known differences are listed under [Production comparison](#production-comparison), and numeric `score()` values are approximate.
 
 ## Configure a text index
 
@@ -102,7 +102,7 @@ For the managed service's text-search concepts and query syntax, see [Cloud Fire
 
 ## Production comparison
 
-Every recorded production search response is replayed through the local engine (the FS-TEXT-SEARCH closure, [`spec/compatibility/closure/FS-TEXT-SEARCH.json`](../spec/compatibility/closure/FS-TEXT-SEARCH.json)): 531 responses, 223 distinct queries on their recorded corpora, and both rounds of the Boundary03 cells. Result order matches production on all 64 score-sorted cases and on all 104 unsorted cases (in 8 of them for the documents both sides return). The membership differences that remain are listed by name in `crates/fireemu-core-firestore/tests/text_membership_replay.rs`:
+Every recorded production search response is replayed through the local engine (the FS-TEXT-SEARCH closure, [`spec/compatibility/closure/FS-TEXT-SEARCH.json`](../spec/compatibility/closure/FS-TEXT-SEARCH.json)): 531 responses, 223 distinct queries on their recorded corpora, and both rounds of the Boundary03 cells. Result order matches production on all 64 score-sorted cases and on all 104 unsorted cases (in 8 of them for the documents both sides return). The 22 membership differences that remain (20 CJK/kana plus 2 `İpek`) are known differences, and Japanese/CJK segmentation and dotted capital I handling are future work; they are listed by name in `crates/fireemu-core-firestore/tests/text_membership_replay.rs`:
 
 - Unspaced Han and Katakana text. Production segments it with a dictionary: `京` does not match `京都` or `東京`, `都` and `東京都` do not match `京都東京駅東京都京都東京駅`, `吉` does not match `吉野家`, and `ネムラ・ﾈﾑﾗ` matches only `ネムラネムラ`. Local analysis makes each Han ideograph a token and keeps a Katakana run whole (20 recorded cases).
 - `İpek`. Production matched it against both `İpek` and `ipek`, while `İstanbul`, `İzmir`, `İnci` and `İzunex` matched nothing; the local query analysis follows the second group (2 recorded cases).

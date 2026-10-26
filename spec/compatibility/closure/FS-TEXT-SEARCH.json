@@ -32,10 +32,24 @@
     },
     {
       "id": "T3",
-      "decision": "The six recorded CJK membership cases that need a dictionary segmenter are known differences; Japanese segmentation is future work.",
+      "decision": "The six recorded CJK membership cases that need a dictionary segmenter are known differences; Japanese segmentation is future work. Widened by T4.",
       "decidedBy": "owner",
       "decidedOn": "2026-10-26",
       "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1785, Text search CJK segmentation known difference)"
+    },
+    {
+      "id": "T4",
+      "decision": "Narrowed scope: full-text search is COMPAT_VERIFIED for Latin-script text. The 22 recorded membership differences (20 CJK/kana cases that need dictionary segmentation, 2 İpek cases) are known differences pinned by the 531-response membership replay; Japanese/CJK segmentation and dotted capital I handling are future work.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-10-26",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1788, Text search closure scope)"
+    },
+    {
+      "id": "T5",
+      "decision": "The transient 409 when a deleted text index is created again at once and an operation reporting PROCESSING while its index is READY are known differences (production transient states not emulated); productionExact keeps refusing text search for now; the comparison may run as a Rust test over committed production fixtures.",
+      "decidedBy": "coordinator (owner 1777)",
+      "decidedOn": "2026-10-26",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1787)"
     }
   ],
   "conditions": [
@@ -46,7 +60,7 @@
         "fs-text-search/replay/membership"
       ],
       "status": "VERIFIED",
-      "note": "Which documents a search returns, for every recorded production search response: 531 responses (223 distinct cases, each on its corpus reconstructed from the recorded writes) from the calibration, continuation, lexical, proof (C4), discriminator (C5, English and Japanese index languages), score-twins, fresh-database, enhancement, OR-composition, language-held and boundary runs. Plain terms, quoted phrases, exclusions, exclusions-only and empty queries, contextual OR, unquoted colons, Latin diacritic and width folding, dotted capital I, Greek, CJK ideographs and Katakana. 201 distinct cases match exactly; the 22 that differ are the knownDifferences cjkDictionarySegmentation and dottedCapitalIpek, each pinned by name so a change in either direction fails.",
+      "note": "Which documents a search returns, for every recorded production search response: 531 responses (223 distinct cases, each on its corpus reconstructed from the recorded writes) from the calibration, continuation, lexical, proof (C4), discriminator (C5, English and Japanese index languages), score-twins, fresh-database, enhancement, OR-composition, language-held and boundary runs. Plain terms, quoted phrases, exclusions, exclusions-only and empty queries, contextual OR, unquoted colons, Latin diacritic and width folding, dotted capital I, Greek, CJK ideographs and Katakana. 201 distinct cases match exactly; the 22 that differ (20 CJK/kana plus 2 İpek) are the knownDifferences cjkDictionarySegmentation and dottedCapitalIpek, accepted by owner decision 1788 and pinned by name so a change in either direction fails. The parent is verified for Latin-script text (1788).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json",
         "comparisonSha256": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
@@ -54,7 +68,8 @@
         "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
         "membershipFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_membership.json",
         "membershipFixtureSha256": "cb4648a4ea301fc7f9fc75dd60bfe56b9ef823e56ab4d6e84871f51ec065eac1",
-        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures. The membership fixture (all 531 responses, 223 distinct cases) was built on work/review-text-fixes (c7d1f505d) from the same captures.",
+        "fixtureBuilder": "tools/text-search-fixtures/README.md",
+        "fixtureBuilderNote": "extract.py reconstructs each corpus from the recorded writes in send order (string fields only) from the private recordings; order_fixture.py and membership_fixture.py reproduce both committed fixtures byte for byte and stop if two recordings of one case disagree (none do over the 531 responses).",
         "tests": [
           "crates/fireemu-core-firestore/tests/text_membership_replay.rs#recorded_production_memberships_replay_exactly",
           "crates/fireemu-core-firestore/tests/text_closure_comparison.rs#committed_closure_comparison_equals_the_replay"
@@ -111,7 +126,8 @@
         "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
         "membershipFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_membership.json",
         "membershipFixtureSha256": "cb4648a4ea301fc7f9fc75dd60bfe56b9ef823e56ab4d6e84871f51ec065eac1",
-        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures. The membership fixture (all 531 responses, 223 distinct cases) was built on work/review-text-fixes (c7d1f505d) from the same captures.",
+        "fixtureBuilder": "tools/text-search-fixtures/README.md",
+        "fixtureBuilderNote": "extract.py reconstructs each corpus from the recorded writes in send order (string fields only) from the private recordings; order_fixture.py and membership_fixture.py reproduce both committed fixtures byte for byte and stop if two recordings of one case disagree (none do over the 531 responses).",
         "tests": [
           "crates/fireemu-core-firestore/tests/text_score_order.rs#recorded_production_score_orders_replay_exactly",
           "crates/fireemu-core-firestore/tests/text_score_order.rs#equal_scores_keep_newest_first_then_path_order",
@@ -144,7 +160,8 @@
         "orderFixtureSha256": "255b7975fe54f7a3ef1d506519efcf49db8c797331e5427f9c7de78467f3e18d",
         "membershipFixturePath": "crates/fireemu-core-firestore/tests/fixtures/production_text_membership.json",
         "membershipFixtureSha256": "cb4648a4ea301fc7f9fc75dd60bfe56b9ef823e56ab4d6e84871f51ec065eac1",
-        "fixtureBuilder": "docs.local/runs/text-score-order/extract.py and fixture.py (private): reconstruct each corpus from the recorded writes in send order and keep string fields only; the committed order fixture is reproduced byte for byte from the raw captures. The membership fixture (all 531 responses, 223 distinct cases) was built on work/review-text-fixes (c7d1f505d) from the same captures.",
+        "fixtureBuilder": "tools/text-search-fixtures/README.md",
+        "fixtureBuilderNote": "extract.py reconstructs each corpus from the recorded writes in send order (string fields only) from the private recordings; order_fixture.py and membership_fixture.py reproduce both committed fixtures byte for byte and stop if two recordings of one case disagree (none do over the 531 responses).",
         "tests": [
           "crates/fireemu-core-firestore/tests/text_score_order.rs#recorded_production_default_orders_replay_exactly"
         ],
@@ -338,22 +355,19 @@
       ]
     },
     "cjkDictionarySegmentation": {
-      "statement": "Production segments unspaced Han and Katakana text with a dictionary; local analysis makes each Han ideograph a token and keeps Katakana runs whole. Twenty recorded distinct cases differ in membership: the six of ledger 1785 (京都, 都 and 東京都 in textlex20261024; 𠮷野家 in textproof20261024; 𠮷ミナ and 𠮷野家 in textdisc20261024) and fourteen more found when the replay grew to every recorded response (2026-10-26) (京 twice, 京都東京駅, 東京駅京都, \"京 都\", 生物研究所, \"生物 研究所\", \"生 物\", 吉, カタカナ・ｶﾀｶﾅ twice, and three spellings of ネムラ・ﾈﾑﾗ). The fourteen are the same kind of difference but were not named in ledger 1785.",
+      "statement": "Production segments unspaced Han and Katakana text with a dictionary; local analysis makes each Han ideograph a token and keeps Katakana runs whole. Twenty recorded distinct CJK/kana cases differ in membership: the six of ledger 1785 (京都, 都 and 東京都 in textlex20261024; 𠮷野家 in textproof20261024; 𠮷ミナ and 𠮷野家 in textdisc20261024) and fourteen more found when the replay grew to every recorded response (2026-10-26) (京 twice, 京都東京駅, 東京駅京都, \"京 都\", 生物研究所, \"生物 研究所\", \"生 物\", 吉, カタカナ・ｶﾀｶﾅ twice, and three spellings of ネムラ・ﾈﾑﾗ). All twenty are known differences by owner decision 1788, which widens 1785; Japanese/CJK segmentation is future work.",
       "rules": [
-        "1785"
-      ],
-      "pendingOwnerAcceptance": [
-        "the fourteen cases beyond ledger 1785"
+        "1785",
+        "1788"
       ],
       "pinnedBy": [
         "crates/fireemu-core-firestore/tests/text_membership_replay.rs#UNEXPLAINED"
       ]
     },
     "dottedCapitalIpek": {
-      "statement": "A query term holding İ keeps the mark case folding splits off, so İstanbul, İzmir, İnci and İzunex match no document, as production recorded. Production nevertheless matched İpek against both İpek and ipek (textproof20261024 and textdisc20261024); no per-character rule reproduces both groups, and the query analysis follows the larger one.",
-      "pendingOwnerAcceptance": [
-        "İpek in textproof20261024",
-        "İpek in textdisc20261024"
+      "statement": "A query term holding İ keeps the mark case folding splits off, so İstanbul, İzmir, İnci and İzunex match no document, as production recorded. Production nevertheless matched İpek against both İpek and ipek (textproof20261024 and textdisc20261024); no per-character rule reproduces both groups, and the query analysis follows the larger one. Known difference by owner decision 1788; dotted capital I handling is future work.",
+      "rules": [
+        "1788"
       ],
       "pinnedBy": [
         "crates/fireemu-core-firestore/tests/text_membership_replay.rs#UNEXPLAINED"
@@ -361,14 +375,14 @@
     },
     "recreateAfterDeleteConflict": {
       "statement": "Production answered 409 ALREADY_EXISTS (index already exists with the deleted index ID) to a create of the same definition right after deleting a failed text index, and accepted it with a new index ID later (TEXT-REPAIR-PROBE-20261024-02, TEXT-REPAIR-HELD-20261024-03/04). Local creates the new index at once; the transient window is not emulated.",
-      "pendingOwnerAcceptance": [
-        "transient 409 after delete"
+      "rules": [
+        "1787"
       ]
     },
     "operationProgressWhileReady": {
       "statement": "Production can still report an operation PROCESSING while its index already reads READY (the two reads are not atomic). Local finishes the operation and the index together; no test covers the production interleaving.",
-      "pendingOwnerAcceptance": [
-        "non-atomic operation and index reads"
+      "rules": [
+        "1787"
       ]
     },
     "unverifiedOrderingContrasts": {
@@ -381,9 +395,9 @@
       "statement": "The Admin lifecycle and the search-root OR refusal were observed over REST only; their gRPC answers are checked against the local REST answers, not against production."
     },
     "productionExactSearch": {
-      "statement": "productionExact: true still refuses every text search with FS_TEXT_UNOBSERVED (501). The conditions are verified on the strict profile without productionExact, where text search runs by default.",
-      "pendingCoordinatorDecision": [
-        "whether productionExact should serve text search once the parent is verified"
+      "statement": "productionExact: true still refuses every text search with FS_TEXT_UNOBSERVED (501). The conditions are verified on the strict profile without productionExact, where text search runs by default. Kept for now by ruling 1787; tracked privately (docs.local/issues/open/text-search-production-exact-refuses-verified-search.md).",
+      "rules": [
+        "1787"
       ]
     }
   },
@@ -404,6 +418,6 @@
     ],
     "productionRequests": 0,
     "result": "COMPARED_PER_CASE",
-    "releaseBindingNote": "The comparison is produced by a Rust test over committed public fixtures (crates/fireemu-core-firestore/tests/text_closure_comparison.rs), run by nextest on every commit, and the test fails when the committed comparison differs from the engine. It exercises the core engine, not an installed release binary; the adapter path is covered by the REST and gRPC tests named in each condition."
+    "releaseBindingNote": "The comparison is produced by a Rust test over committed public fixtures (crates/fireemu-core-firestore/tests/text_closure_comparison.rs), run by nextest on every commit, and the test fails when the committed comparison differs from the engine. It exercises the core engine, not an installed release binary; the adapter path is covered by the REST and gRPC tests named in each condition. Accepted by ruling 1787; a binary-level harness is tracked privately (docs.local/issues/open/fs-text-search-comparison-needs-a-release-binary-run.md)."
   }
 }

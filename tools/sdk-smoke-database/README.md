@@ -46,6 +46,20 @@ node tools/sdk-smoke-database/cv11-genuine-auth.mjs compare <a>/journal.json <b>
 
 `local` starts `fireemu up --only auth,database` (strict profile) on free ports and stops it afterwards. `production` refuses to run without `--packet <file>` and a matching `--packet-sha256`, and the packet pins the SHA-256 of both source files. Every admin request is counted against fixed caps before it is sent; any answer other than a complete 2xx or 4xx is unknown, and an unknown create or delete leaves the run `needs-recovery` and is never re-sent.
 
+## Residual recorder (CV08 reconnect and ordering, CV10 onDisconnect cancel and re-register)
+
+`rtdb-residual.mjs` runs two scenarios (`rtdb-residual-page.js`) for four profiles each (round 1 and 2, WebSocket and long polling) with the web SDK in headless Chromium. The page has no account: the Rules give the anonymous client its own run prefix.
+
+- `cv08`: an observer listens (value and child events on a `limitToFirst(2)` and a `limitToLast(2)` window, a path gated by another path, a control path), drops the `limitToLast` window (query-scoped removal), goes offline, queues three writes, the writer changes the server (including the gate), the observer comes back, a fresh listen on the dropped window starts, and later writes show which listeners survived.
+- `cv10`: a writer registers `set`, `update` (with a null and a server value) and `remove` onDisconnect writes, cancels and re-registers, cancels a parent, a Rules change denies two paths between registration and firing, the writer goes offline, and the observer records what fires and the final values. Long-polling profiles wait for the server's idle close (about 105 s).
+
+```sh
+node tools/sdk-smoke-database/rtdb-residual.mjs local --fireemu <fireemu binary> --out <new dir> [--profile strict|emulator] [--modules <node_modules>]
+node tools/sdk-smoke-database/rtdb-residual.mjs compare <production journal.json> <local journal.json> [--out <comparison.json>]
+```
+
+`compare` judges the second journal against the first with `rtdb-residual-judge.mjs`: a step is compared in the recorded order where the first journal's two rounds of one transport agree, sorted where they hold the same events in another order, and not judged (needs-review) where they differ or where a `timeout` or `error` row was recorded. The order between the writer's and the observer's rows is a race of two connections and is not compared. `production` needs a packet, like the CV11 recorder.
+
 ## Production comparisons
 
 Three tools compare a local `fireemu` (strict profile, `fireemu up --only auth,database` on free loopback ports, stopped afterwards) with production recordings committed under `fixtures/`. None of them sends anything to production.

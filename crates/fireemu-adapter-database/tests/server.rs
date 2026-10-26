@@ -1223,6 +1223,13 @@ async fn the_rules_route_answers_loopback_peers_only_however_its_path_is_written
 
 // This fixture models only the existing reservation epoch cancellation contract;
 // actual Functions reservation semantics are covered by the runtime and Loom controls.
+/// How long a thread of the reset-admission schedule waits for the event it depends on before
+/// the test calls it a hang. Every wait in the schedule is for an event the controller is
+/// guaranteed to produce (or its cleanup releases), so this is a backstop for a hung test and
+/// never the oracle: a loaded runner can delay the controller by many seconds, and a fixed short
+/// deadline made the reset thread give up first (flake seen on CI and under a CPU hog).
+const RESET_ADMISSION_BACKSTOP: Duration = Duration::from_secs(120);
+
 #[derive(Debug)]
 struct ResetAdmissionSink {
     epoch: Arc<std::sync::atomic::AtomicU64>,
@@ -1255,11 +1262,13 @@ impl fireemu_adapter_database::changes::ChangeSink for ResetAdmissionSink {
         fireemu_core_types::admission::EventAdmissionError,
     > {
         let reserved_epoch = self.epoch.load(std::sync::atomic::Ordering::SeqCst);
-        self.reserved.send(reserved_epoch).unwrap();
+        // The controller may already be gone (a failed or aborted test): the test itself reports
+        // that, so an undeliverable notification is not a second panic here.
+        let _ = self.reserved.send(reserved_epoch);
         self.resume
             .lock()
             .unwrap()
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(RESET_ADMISSION_BACKSTOP)
             .unwrap();
         Ok(Box::new(ResetAdmissionPublication {
             epoch: self.epoch.clone(),
@@ -1284,7 +1293,7 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
 
-    let limit = Duration::from_secs(5);
+    let limit = RESET_ADMISSION_BACKSTOP;
     let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
     let epoch = Arc::new(AtomicU64::new(0));
     let armed = Arc::new(AtomicBool::new(false));
@@ -1309,7 +1318,7 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
             let armed = armed.clone();
             Arc::new(move || {
                 if armed.swap(false, Ordering::SeqCst) {
-                    clock_tx.send(()).unwrap();
+                    let _ = clock_tx.send(());
                     clock_resume_rx.lock().unwrap().recv_timeout(limit).unwrap();
                 }
                 1_000
@@ -1327,6 +1336,14 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
         let clock_resume = clock_resume_tx.clone();
         let reserve_resume = reserve_resume_tx.clone();
         async move {
+            // Every blocking checkpoint wait goes through `block_in_place`: it hands this worker's
+            // run queue (the writer just spawned sits in its LIFO slot) to another thread first.
+            // A plain blocking wait here, with `yield_now` to dispatch the writer, deadlocked when
+            // the worker that held the deferred wake then blocked in the server's own admission
+            // wait (a hang found under a CPU hog; the 5 s deadlines turned it into a flake).
+            fn wait<T>(f: impl FnOnce() -> T) -> T {
+                tokio::task::block_in_place(f)
+            }
             // A completed warm-up proves startup installed its clock before reset starts.
             assert!(exchange(&address, "GET", "/.json?ns=reset-admission", "")
                 .await
@@ -1346,15 +1363,15 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
                 move || {
                     let exclusive = barrier.exclusive();
                     database.lock().unwrap().clear_namespaces_where(|_| true);
-                    cleared_tx.send(()).unwrap();
+                    let _ = cleared_tx.send(());
                     reset_advance_rx.recv_timeout(limit).unwrap();
                     epoch.store(1, Ordering::SeqCst);
                     // Exclusive spans the complete clear + Functions epoch transition.
                     drop(exclusive);
-                    reset_done_tx.send(()).unwrap();
+                    let _ = reset_done_tx.send(());
                 }
             }));
-            cleared_rx.recv_timeout(limit).unwrap();
+            wait(|| cleared_rx.recv_timeout(limit)).unwrap();
             armed.store(true, Ordering::SeqCst);
             let mut writing = ResetAdmissionTask(tokio::spawn(async move {
                 exchange(
@@ -1366,27 +1383,24 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
                 .await
             }));
 
-            // Dispatch the spawned writer before a blocking checkpoint can occupy its worker.
-            tokio::task::yield_now().await;
-
             // This bounded observation selects a concrete schedule; absence is not the oracle.
             // A skipped REST admission reaches the clock while reset still holds exclusive.
-            let forced_old_epoch = match clock_rx.recv_timeout(Duration::from_secs(1)) {
+            let forced_old_epoch = match wait(|| clock_rx.recv_timeout(Duration::from_secs(1))) {
                 Ok(()) => {
-                    clock_resume.send(()).unwrap();
-                    assert_eq!(reserved_rx.recv_timeout(limit).unwrap(), 0);
-                    reset_advance.send(()).unwrap();
-                    reset_done_rx.recv_timeout(limit).unwrap();
-                    reserve_resume.send(()).unwrap();
+                    let _ = clock_resume.send(());
+                    assert_eq!(wait(|| reserved_rx.recv_timeout(limit)).unwrap(), 0);
+                    let _ = reset_advance.send(());
+                    wait(|| reset_done_rx.recv_timeout(limit)).unwrap();
+                    let _ = reserve_resume.send(());
                     true
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    reset_advance.send(()).unwrap();
-                    reset_done_rx.recv_timeout(limit).unwrap();
-                    clock_rx.recv_timeout(limit).unwrap();
-                    clock_resume.send(()).unwrap();
-                    assert_eq!(reserved_rx.recv_timeout(limit).unwrap(), 1);
-                    reserve_resume.send(()).unwrap();
+                    let _ = reset_advance.send(());
+                    wait(|| reset_done_rx.recv_timeout(limit)).unwrap();
+                    wait(|| clock_rx.recv_timeout(limit)).unwrap();
+                    let _ = clock_resume.send(());
+                    assert_eq!(wait(|| reserved_rx.recv_timeout(limit)).unwrap(), 1);
+                    let _ = reserve_resume.send(());
                     false
                 }
                 Err(error) => panic!("clock checkpoint disconnected: {error}"),
@@ -1426,7 +1440,7 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
                     if before.is_null() && after == &serde_json::json!({"probe":"retained"})));
         }
     }));
-    let outcome = tokio::time::timeout(Duration::from_secs(20), &mut controller.0).await;
+    let outcome = tokio::time::timeout(limit + Duration::from_secs(60), &mut controller.0).await;
     // Finally-style cleanup also releases every blocking test checkpoint after a panic.
     let _ = reset_advance_tx.send(());
     let _ = clock_resume_tx.send(());

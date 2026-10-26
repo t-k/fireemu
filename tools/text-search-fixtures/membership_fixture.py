@@ -17,6 +17,9 @@ def nanos(ts):
 corpora, cases = {}, {}
 for s in inv:
     o = [x for x in s['stages'] if x['name'] == 'search'][0].get('options', {})
+    if not s['indexes']:
+        sys.exit(f"no reconstructed text index for {s['run']}/{s['step']}: pass every recorded text run "
+                 "directory to extract.py (index creates live in runs without searches); see README.md")
     idx = s['indexes'][0]
     fields = [f['fieldPath'] for f in idx['fields']]
     override = (idx.get('searchIndexOptions') or {}).get('textLanguageOverrideFieldPath')

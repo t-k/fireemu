@@ -21,6 +21,10 @@ use fireemu_core_types::{
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+#[path = "support/text_known_differences.rs"]
+mod text_known_differences;
+use text_known_differences::known_difference;
+
 const ORDER_FIXTURE: &str = include_str!("fixtures/production_text_order.json");
 const MEMBERSHIP_FIXTURE: &str = include_str!("fixtures/production_text_membership.json");
 const BOUNDARY_FIXTURE: &str = include_str!("fixtures/production_text_boundary.json");
@@ -176,13 +180,19 @@ struct Row {
     actual: Vec<String>,
     membership: &'static str,
     order: &'static str,
+    /// The closure known difference a membership difference belongs to; `None` when the
+    /// membership matches or the difference is not a named one.
+    known_difference: Option<&'static str>,
 }
 
 impl Row {
     fn status(&self) -> &'static str {
         if self.membership == "MATCH" && self.order != "MISMATCH" {
             "MATCH"
-        } else if self.membership == "DIFFERENT" && self.order != "MISMATCH" {
+        } else if self.membership == "DIFFERENT"
+            && self.known_difference.is_some()
+            && self.order != "MISMATCH"
+        {
             "KNOWN_DIFFERENCE"
         } else {
             "MISMATCH"
@@ -192,7 +202,10 @@ impl Row {
 
 /// One row per recorded case of a replay fixture. With `with_order`, the order is compared for
 /// responses with two or more results; where the membership differs, the order of the members
-/// both sides return. The membership fixture's cases carry no sort and count their responses.
+/// both sides return (`MATCH_COMMON_MEMBERS`), or `NOT_COMPARABLE` when fewer than two members
+/// are common. A membership difference is a known difference only when it is named in
+/// `support/text_known_differences.rs`; any other is a mismatch. The membership fixture's cases
+/// carry no sort and count their responses.
 fn replay_rows(prefix: &str, text: &str, with_order: bool) -> Vec<Row> {
     let fixture = parse(text).unwrap();
     let corpora: BTreeMap<&str, SearchIndex> = object(fixture.get("corpora").unwrap())
@@ -227,6 +240,8 @@ fn replay_rows(prefix: &str, text: &str, with_order: bool) -> Vec<Row> {
                 "NOT_APPLICABLE"
             } else if actual == expected {
                 "MATCH"
+            } else if membership == "DIFFERENT" && common(&actual).len() < 2 {
+                "NOT_COMPARABLE"
             } else if membership == "DIFFERENT" && common(&actual) == common(&expected) {
                 "MATCH_COMMON_MEMBERS"
             } else {
@@ -245,6 +260,11 @@ fn replay_rows(prefix: &str, text: &str, with_order: bool) -> Vec<Row> {
                     None => (0..case.get("responses").and_then(JsonValue::as_i64).unwrap())
                         .map(|n| format!("response {}", n + 1))
                         .collect(),
+                },
+                known_difference: if membership == "DIFFERENT" {
+                    known_difference(string(case, "corpus"), query)
+                } else {
+                    None
                 },
                 expected,
                 actual,
@@ -301,6 +321,7 @@ fn boundary_rows() -> Vec<Row> {
                     "DIFFERENT"
                 },
                 order: "NOT_APPLICABLE",
+                known_difference: None,
                 expected,
                 actual,
             });
@@ -319,10 +340,10 @@ fn render(rows: &[Row]) -> String {
     out.push_str(
         "  \"producer\": \"crates/fireemu-core-firestore/tests/text_closure_comparison.rs\",\n",
     );
-    out.push_str("  \"about\": \"Every recorded production Firestore Enterprise text-search case replayed through the local engine: membership rows for the 223 distinct cases of all 531 responses, order rows for the 168 cases with two or more results (score-sorted and default; their membership is repeated there), and Boundary03 membership for both rounds. expected is the production response (order kept where it has two or more results), actual the local answer. Numeric score() values are not compared.\",\n");
+    out.push_str("  \"about\": \"Every recorded production Firestore Enterprise text-search case replayed through the local engine: membership rows for the 223 distinct cases of all 531 responses, order rows for the 168 cases with two or more results (score-sorted and default; their membership is repeated there), and Boundary03 membership for both rounds. A membership difference is KNOWN_DIFFERENCE only when it is a named closure known difference (knownDifference), otherwise MISMATCH. Where membership differs, order is MATCH_COMMON_MEMBERS when two or more common members keep production order and NOT_COMPARABLE when fewer than two are common. expected is the production response (order kept where it has two or more results), actual the local answer. Numeric score() values are not compared.\",\n");
     let _ = writeln!(
         out,
-        "  \"summary\": {{\"rows\": {}, \"MATCH\": {}, \"KNOWN_DIFFERENCE\": {}, \"MISMATCH\": {}, \"scoreSortedOrderRows\": {}, \"scoreSortedOrderMatch\": {}, \"defaultOrderRows\": {}, \"defaultOrderMatch\": {}, \"defaultOrderMatchCommonMembers\": {}, \"membershipResponses\": {}}},",
+        "  \"summary\": {{\"rows\": {}, \"MATCH\": {}, \"KNOWN_DIFFERENCE\": {}, \"MISMATCH\": {}, \"scoreSortedOrderRows\": {}, \"scoreSortedOrderMatch\": {}, \"defaultOrderRows\": {}, \"defaultOrderMatch\": {}, \"defaultOrderMatchCommonMembers\": {}, \"defaultOrderNotComparable\": {}, \"membershipResponses\": {}}},",
         rows.len(),
         count(&|r| r.status() == "MATCH"),
         count(&|r| r.status() == "KNOWN_DIFFERENCE"),
@@ -332,6 +353,7 @@ fn render(rows: &[Row]) -> String {
         count(&|r| !r.score_sort && r.order != "NOT_APPLICABLE"),
         count(&|r| !r.score_sort && r.order == "MATCH"),
         count(&|r| !r.score_sort && r.order == "MATCH_COMMON_MEMBERS"),
+        count(&|r| !r.score_sort && r.order == "NOT_COMPARABLE"),
         rows.iter()
             .filter(|r| r.id.starts_with("membership"))
             .map(|r| r.recordings.len())
@@ -341,11 +363,12 @@ fn render(rows: &[Row]) -> String {
     for (i, row) in rows.iter().enumerate() {
         let _ = write!(
             out,
-            "    {{\"row\": {}, \"status\": {}, \"membership\": {}, \"order\": {}, \"corpus\": {}, \"query\": {}, \"scoreSort\": {}, \"expected\": {}, \"actual\": {}, \"recordings\": {}}}",
+            "    {{\"row\": {}, \"status\": {}, \"membership\": {}, \"order\": {}, \"knownDifference\": {}, \"corpus\": {}, \"query\": {}, \"scoreSort\": {}, \"expected\": {}, \"actual\": {}, \"recordings\": {}}}",
             quoted(&row.id),
             quoted(row.status()),
             quoted(row.membership),
             quoted(row.order),
+            row.known_difference.map_or_else(|| "null".to_owned(), quoted),
             quoted(&row.corpus),
             quoted(&row.query),
             row.score_sort,
@@ -377,7 +400,10 @@ fn committed_closure_comparison_equals_the_replay() {
         .filter(|row| row.status() == "MISMATCH")
         .map(|row| row.id.as_str())
         .collect();
-    assert!(mismatches.is_empty(), "order mismatches: {mismatches:?}");
+    assert!(
+        mismatches.is_empty(),
+        "unnamed membership differences or order mismatches: {mismatches:?}"
+    );
     let rendered = render(&rows);
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -399,6 +425,58 @@ fn score_sorted_and_boundary_rows_all_match() {
     for row in all_rows() {
         if row.score_sort || row.corpus == "boundary03" {
             assert_eq!(row.status(), "MATCH", "{} {:?}", row.id, row.query);
+        }
+    }
+}
+
+/// A membership difference counts as a known difference only when it is named; an unnamed one
+/// is a mismatch, and every named difference occurs as a membership row.
+#[test]
+fn only_named_membership_differences_are_known_differences() {
+    let row = |known_difference| Row {
+        id: "synthetic#0".into(),
+        corpus: "textlex20261024#0".into(),
+        query: "京都".into(),
+        score_sort: false,
+        recordings: Vec::new(),
+        expected: vec!["a".into()],
+        actual: vec!["b".into()],
+        membership: "DIFFERENT",
+        order: "NOT_APPLICABLE",
+        known_difference,
+    };
+    assert_eq!(row(None).status(), "MISMATCH");
+    assert_eq!(
+        row(Some("cjkDictionarySegmentation")).status(),
+        "KNOWN_DIFFERENCE"
+    );
+    assert_eq!(known_difference("textlex20261024#0", "fox"), None);
+    assert_eq!(known_difference("othercollection#0", "京都"), None);
+    let mut named: Vec<(String, String)> = all_rows()
+        .into_iter()
+        .filter(|r| r.id.starts_with("membership") && r.known_difference.is_some())
+        .map(|r| (r.corpus, r.query))
+        .collect();
+    named.sort();
+    let mut pinned: Vec<(String, String)> = text_known_differences::UNEXPLAINED
+        .iter()
+        .map(|(c, q, _)| ((*c).to_owned(), (*q).to_owned()))
+        .collect();
+    pinned.sort();
+    assert_eq!(named, pinned);
+}
+
+/// Where membership differs, an order is compared only over two or more common members.
+#[test]
+fn common_member_order_needs_two_common_members() {
+    for row in all_rows() {
+        if row.order == "MATCH_COMMON_MEMBERS" {
+            let common = row
+                .actual
+                .iter()
+                .filter(|id| row.expected.contains(id))
+                .count();
+            assert!(common >= 2, "{} {:?}", row.id, row.query);
         }
     }
 }

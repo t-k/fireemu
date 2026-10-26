@@ -11,7 +11,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Added
 
 - Add explicit local Enterprise text-index backfill, failure and repair controls with build generations and real positional posting data. Session snapshots and reset preserve scope boundaries.
-- Execute a finite local lexical `search` stage through REST and gRPC, with Unicode normalization, phrases, exclusions, indexed-field restrictions, approximate BM25 scores and current-snapshot update/delete reflection. Supported `searchConfig.textSpec` definitions load from configured index files. `productionExact` refuses unobserved search semantics; no production text-search equivalence is claimed.
+- Execute the Firestore Enterprise `search` stage through REST and gRPC, with Unicode normalization, phrases, exclusions, indexed-field restrictions, an occurrence and adjacency relevance model for `score()` and current-snapshot update/delete reflection. Supported `searchConfig.textSpec` definitions load from configured index files. Membership and result order match production for Latin-script text, as verified by the FS-TEXT-SEARCH closure; numeric `score()` values are approximate, recorded CJK/kana segmentation and `İpek` cases differ (listed in `docs/text-search.md`), and `productionExact` still refuses search.
 
 ### Fixed
 

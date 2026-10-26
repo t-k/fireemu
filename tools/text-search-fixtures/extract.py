@@ -106,10 +106,6 @@ for d in DIRS:
             store[res['name']] = {'fields': res.get('fields', {}), 'createTime': res.get('createTime')}
         elif m == 'DELETE' and '/documents/' in path:
             store.pop(path.split('/v1/')[1], None)
-        elif m == 'POST' and path.endswith('/indexes') and req:
-            cg = path.split('/collectionGroups/')[1].split('/')[0]
-            idxname = (res or {}).get('metadata', {}).get('index') or step
-            indexes.setdefault((db, cg), {})[idxname] = req
         elif m == 'POST' and path.endswith(':executePipeline') and req:
             stages = req.get('structuredPipeline', {}).get('pipeline', {}).get('stages', [])
             if not any(s.get('name') == 'search' for s in stages):

@@ -120,44 +120,9 @@ fn replay() -> Vec<(String, String, Vec<String>, Vec<String>)> {
         .collect()
 }
 
-/// Recorded cases no general analysis rule explains: 20 CJK/kana cases plus 2 `İpek` cases, all
-/// known differences by owner decision 1788 (which widens the six cases of 1785; text search is
-/// verified for Latin-script text). They stay pinned so a change in either direction surfaces.
-///
-/// - Han and kana runs: production segments them with a dictionary. `京都`, `都`, `東京都`,
-///   `京` and `京都東京駅` depend on the words around the character (`京都東京駅東京都京都東京駅`
-///   contains `東京都` yet matches neither `都` nor `東京都`; `京` alone matches `京` and `京 都`
-///   only); `生物研究所` and `"生 物"` separate `生物` from `生 物`; `吉` does not match `吉野家`.
-/// - `𠮷`: alone it matches only `𠮷`, but `𠮷ミナ` and `𠮷野家` also match `吉ミナ` and `吉野家`.
-/// - Katakana with width and `・` variants: unquoted `ネムラ ﾈﾑﾗ` (and the `・`/`･` forms) match only
-///   `ネムラネムラ`, and `カタカナ・ｶﾀｶﾅ` matches nothing, not even the document holding it.
-/// - `İpek`: the query keeps the mark case folding splits off `İ` (so `İzmir`, `İnci`, `İzunex`
-///   and `İstanbul` match nothing, as production answered), yet production matched `İpek` and
-///   `ipek` for the query `İpek`.
-const UNEXPLAINED: [(&str, &str); 22] = [
-    ("textcal20261024#4", "京"),
-    ("textlex20261024#0", "京都"),
-    ("textlex20261024#0", "京"),
-    ("textlex20261024#0", "都"),
-    ("textlex20261024#0", "東京都"),
-    ("textlex20261024#0", "京都東京駅"),
-    ("textlex20261024#0", "東京駅京都"),
-    ("textlex20261024#0", "\"京 都\""),
-    ("textproof20261024#0", "生物研究所"),
-    ("textproof20261024#0", "\"生物 研究所\""),
-    ("textproof20261024#0", "\"生 物\""),
-    ("textproof20261024#0", "カタカナ・ｶﾀｶﾅ"),
-    ("textproof20261024#0", "𠮷野家"),
-    ("textproof20261024#0", "İpek"),
-    ("textdisc20261024#0", "ネムラ・ﾈﾑﾗ"),
-    ("textdisc20261024#0", "ネムラ ﾈﾑﾗ"),
-    ("textdisc20261024#0", "ネムラ･ﾈﾑﾗ"),
-    ("textdisc20261024#0", "吉"),
-    ("textdisc20261024#0", "𠮷ミナ"),
-    ("textdisc20261024#0", "カタカナ・ｶﾀｶﾅ"),
-    ("textdisc20261024#0", "𠮷野家"),
-    ("textdisc20261024#0", "İpek"),
-];
+#[path = "support/text_known_differences.rs"]
+mod text_known_differences;
+use text_known_differences::{known_difference, UNEXPLAINED};
 
 /// Every recorded production response has the local membership, apart from the documented
 /// [`UNEXPLAINED`] cases.
@@ -179,10 +144,36 @@ fn recorded_production_memberships_replay_exactly() {
     }
     let unexplained: Vec<(String, String)> = UNEXPLAINED
         .iter()
-        .map(|(corpus, query)| ((*corpus).to_owned(), (*query).to_owned()))
+        .map(|(corpus, query, _)| ((*corpus).to_owned(), (*query).to_owned()))
         .collect();
     differing.sort();
     let mut wanted = unexplained;
     wanted.sort();
     assert_eq!(differing, wanted, "{}", report.join("\n"));
+}
+
+/// Every pinned case names one of the two closure known differences, and the lookup the closure
+/// comparison uses finds each pinned case under that name.
+#[test]
+fn pinned_cases_name_their_closure_known_difference() {
+    for (corpus, query, kind) in UNEXPLAINED {
+        assert!(
+            matches!(kind, "cjkDictionarySegmentation" | "dottedCapitalIpek"),
+            "{corpus} {query:?}"
+        );
+        assert_eq!(
+            known_difference(corpus, query),
+            Some(kind),
+            "{corpus} {query:?}"
+        );
+    }
+    let ipek = UNEXPLAINED
+        .iter()
+        .filter(|(_, _, kind)| *kind == "dottedCapitalIpek")
+        .count();
+    assert_eq!(
+        (UNEXPLAINED.len() - ipek, ipek),
+        (20, 2),
+        "20 CJK/kana plus 2 İpek"
+    );
 }

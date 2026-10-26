@@ -133,7 +133,7 @@
     "spec/compatibility/closure/evidence/FS-RULES-auth-credential-regression.json": "a2f85e8ddc7b88bdeb0d079e093558d977117efdf52c57ec76033b310d322980",
     "spec/compatibility/closure/evidence/FS-RULES-comparison.json": "e492410720a2c1c626a422e0c6f4852af0a54c530d514fe5f4c7fc6e4525125a",
     "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json": "5220c029a10cedf0fea5e7789f778110ac2293c2dab20f1532d23a054558c5a2",
-    "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json": "7ec2a90df26f68c2ca0e1d3beaa68aee32fa673b8ff3371b55afbd18dd31d0b5",
+    "spec/compatibility/closure/evidence/FS-TEXT-SEARCH-comparison.json": "fed9836dc32414c5bf4b52127998c0e9587a25024c3ab502d2858bfcd10e0622",
     "spec/compatibility/closure/evidence/FS-TRANSACTION-build.json": "19a5dc93456788e1f229ed076a152dd99bcba9e2e643a3d0806cacca7efd5fe2",
     "spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json": "b8c98a39d7b3fe5669d538eba975a01a30ac567e99504b09127483fe42e05168",
     "spec/compatibility/closure/evidence/FS-TRANSACTION-debug-build.json": "751edbaab9a9fc8034efa8ec31311af82764ab1730dd40189fbfb157fbc7d312",

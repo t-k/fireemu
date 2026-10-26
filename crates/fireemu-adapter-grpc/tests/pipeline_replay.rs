@@ -258,8 +258,21 @@ fn nondeterministic(row: &str) -> Option<Nondeterministic> {
     })
 }
 
+/// How far a clock row may be from the clock it is judged against: a day. The recordings are
+/// minutes apart; a millisecond-scale or zero answer is far outside it.
+const CLOCK_WINDOW_SECONDS: i64 = 24 * 60 * 60;
+
+/// The clock in seconds since the epoch.
+fn now_seconds() -> i64 {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    i64::try_from(elapsed.as_secs()).unwrap()
+}
+
 /// Whether an answer satisfies the rule of its row.
-fn satisfies(rule: &Nondeterministic, status: u16, body: &Value) -> bool {
+/// `now` is the clock in seconds since the epoch that a clock row is judged against.
+fn satisfies(rule: &Nondeterministic, status: u16, body: &Value, now: i64) -> bool {
     if status != 200 {
         return false;
     }
@@ -287,9 +300,10 @@ fn satisfies(rule: &Nondeterministic, status: u16, body: &Value) -> bool {
             let fields = result["fields"].as_object();
             fields.is_some_and(|fields| {
                 fields.len() == 1
-                    && fields["v"]["integerValue"]
-                        .as_str()
-                        .is_some_and(|text| text.parse::<i64>().is_ok_and(|seconds| seconds >= 0))
+                    && fields["v"]["integerValue"].as_str().is_some_and(|text| {
+                        text.parse::<i64>()
+                            .is_ok_and(|seconds| (seconds - now).abs() <= CLOCK_WINDOW_SECONDS)
+                    })
             })
         }
     }
@@ -1103,7 +1117,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                         )
                 };
                 let matches = match nondeterministic(&row) {
-                    Some(rule) => satisfies(&rule, status, &body),
+                    Some(rule) => satisfies(&rule, status, &body, now_seconds()),
                     None => matches,
                 };
                 compared += 1;
@@ -1201,6 +1215,37 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             "strict={strict}"
         );
         let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
+        // The pins stay meaningful: each names a pending program once, each step it lists is
+        // replayed in this profile (a renamed or no longer replayable step would never be
+        // compared), and no step is listed twice.
+        let mut pinned_programs = HashSet::new();
+        for (program, strict_rows, emulator_rows) in PENDING_MATCHES {
+            if !pinned_programs.insert(*program) {
+                failures.push(format!("strict={strict}: pins listed twice: {program}"));
+            }
+            if !PENDING_PROGRAMS.contains(program) {
+                failures.push(format!(
+                    "strict={strict}: pins of a program that is not pending: {program}"
+                ));
+            }
+            for rows in [strict_rows, emulator_rows] {
+                let mut listed = HashSet::new();
+                for step_id in rows.iter() {
+                    if !listed.insert(*step_id) {
+                        failures.push(format!(
+                            "strict={strict}: pin listed twice: {program}#{step_id}"
+                        ));
+                    }
+                }
+            }
+            for step_id in (if strict { *strict_rows } else { *emulator_rows }).iter() {
+                if !seen.contains(&format!("{program}#{step_id}")) {
+                    failures.push(format!(
+                        "strict={strict}: pinned step is not replayed: {program}#{step_id}"
+                    ));
+                }
+            }
+        }
         for program in PENDING_PROGRAMS {
             if !differing
                 .iter()
@@ -1272,13 +1317,19 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         for (step, again) in second {
             let row = format!("{id}#{step}");
             let rule = nondeterministic(&row).unwrap_or_else(|| panic!("no rule for {row}"));
+            // A clock row is judged against the first recording's own value (the day it was
+            // taken), so the check does not age; the second recording is a minute later.
+            let now = program["steps"][step]["body"][0]["results"][0]["fields"]["v"]
+                ["integerValue"]
+                .as_str()
+                .map_or(0, |text| text.parse::<i64>().unwrap());
             for recording in [&program["steps"][step], again] {
                 let status = u16::try_from(recording["status"].as_u64().unwrap()).unwrap();
-                assert!(satisfies(&rule, status, &recording["body"]), "{row}");
+                assert!(satisfies(&rule, status, &recording["body"], now), "{row}");
             }
             // A refusal is no answer to a request production accepted.
-            assert!(!satisfies(&rule, 400, &json!([])), "{row}");
-            assert!(!satisfies(&rule, 200, &json!([])), "{row}");
+            assert!(!satisfies(&rule, 400, &json!([]), now), "{row}");
+            assert!(!satisfies(&rule, 200, &json!([]), now), "{row}");
             checked += 1;
         }
     }
@@ -1297,39 +1348,50 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         count: 2,
         members: SU,
     });
-    assert!(satisfies(&two, 200, &named(&["e", "a"])));
-    assert!(!satisfies(&two, 200, &named(&["a"])), "too few");
-    assert!(!satisfies(&two, 200, &named(&["a", "b", "c"])), "too many");
-    assert!(!satisfies(&two, 200, &named(&["a", "a"])), "a repeat");
-    assert!(!satisfies(&two, 200, &named(&["a", "z"])), "not a member");
+    assert!(satisfies(&two, 200, &named(&["e", "a"]), 0));
+    assert!(!satisfies(&two, 200, &named(&["a"]), 0), "too few");
+    assert!(
+        !satisfies(&two, 200, &named(&["a", "b", "c"]), 0),
+        "too many"
+    );
+    assert!(!satisfies(&two, 200, &named(&["a", "a"]), 0), "a repeat");
+    assert!(
+        !satisfies(&two, 200, &named(&["a", "z"]), 0),
+        "not a member"
+    );
     let filtered = Nondeterministic::Sample(SampleOf {
         count: 2,
         members: SU_AFTER_N_1,
     });
     assert!(
-        !satisfies(&filtered, 200, &named(&["a", "b"])),
+        !satisfies(&filtered, 200, &named(&["a", "b"]), 0),
         "filtered out"
     );
 
     let clock = |value: &Value| json!([{"results": [{"fields": {"v": value}}]}]);
-    assert!(satisfies(
-        &Nondeterministic::ClockSeconds,
-        200,
-        &clock(&json!({"integerValue": "1793029330"}))
-    ));
-    assert!(!satisfies(
-        &Nondeterministic::ClockSeconds,
-        200,
-        &clock(&json!({"stringValue": "1793029330"}))
-    ));
-    assert!(!satisfies(
-        &Nondeterministic::ClockSeconds,
-        200,
-        &clock(&json!({"doubleValue": 1.5}))
-    ));
-    assert!(!satisfies(
-        &Nondeterministic::ClockSeconds,
-        200,
-        &clock(&json!({"integerValue": "-1"}))
-    ));
+    let now = 1_793_029_330;
+    let integer = |seconds: i64| json!({"integerValue": seconds.to_string()});
+    let clock_ok = |value: &Value, now: i64| {
+        satisfies(&Nondeterministic::ClockSeconds, 200, &clock(value), now)
+    };
+    assert!(clock_ok(&integer(now), now));
+    assert!(clock_ok(&integer(now + 57), now), "a minute later");
+    assert!(
+        clock_ok(&integer(now - CLOCK_WINDOW_SECONDS), now),
+        "edge of the window"
+    );
+    assert!(
+        !clock_ok(&integer(now + CLOCK_WINDOW_SECONDS + 1), now),
+        "just past the window"
+    );
+    assert!(!clock_ok(&integer(0), now), "zero");
+    assert!(!clock_ok(&integer(-1), now), "negative");
+    assert!(!clock_ok(&integer(now * 1000), now), "milliseconds");
+    assert!(
+        !clock_ok(&json!({"stringValue": now.to_string()}), now),
+        "a string"
+    );
+    assert!(!clock_ok(&json!({"doubleValue": 1.5}), now), "a double");
+    // The replay judges against the real clock.
+    assert!(now_seconds() > 1_700_000_000);
 }

@@ -2,6 +2,7 @@
 // two `--debug` line forms (the generateUploadUrl answer and the upload's PUT status) and clean up.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -180,7 +181,11 @@ test("both lines seen: the upload is deleted by generation, nothing else is touc
     assert.equal(result.loggingApiState, "ENABLED");
     assert.deepEqual(world.calls, ["cliDeploy", "cliDelete"]);
     assert.doesNotMatch(await journalOf(world), /public-invoker-granted/);
-    assert.deepEqual(world.deployed.bindings, [], "no IAM binding was ever written");
+    // the CLI's allUsers invoker binding is removed by exactly one setIamPolicy, and nothing else is written
+    assert.equal(world.deployed.setPolicyCalls, 1);
+    assert.deepEqual(world.deployed.bindings, []);
+    assert.match(await journalOf(world), /public-invoker-revoked/);
+    assert.equal(result.iamRevocationError, null);
     assert.match(await journalOf(world), /source-upload-deleted/);
     // the masked lines are what the lane turns into a replay fixture
     assert.equal(result.maskedLines.length, 2);
@@ -411,4 +416,35 @@ test("a reserved function, service or image package that already exists stops be
     await assert.rejects(() => assertTargetAbsent(control, "http"), /already exists/, present);
   }
   await assert.doesNotReject(() => assertTargetAbsent(async () => reply(404), "http"));
+});
+
+test("a failed removal of the CLI's public invoker binding is shown in the result and the journal", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  world.deployed.setPolicyStatus = 403;
+  try {
+    const result = await runUploadProbe({
+      control: world.control,
+      adcPath: "/adc",
+      budget: world.budget,
+      runDir: join(world.dir, "run"),
+      projectNumber: NUMBER,
+      run: world.run,
+    });
+    assert.match(result.iamRevocationError, /403/);
+    assert.equal(world.deployed.setPolicyCalls, 1, "not retried");
+    assert.match(await journalOf(world), /iam-revocation-failed/);
+    assert.equal(world.deployed.present, false, "the function is still deleted");
+    assert.equal(result.uploadsClosureReady, true);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the deployed fixture function has no invoker option, so the CLI makes it public and cleanup must undo that", () => {
+  const source = readFileSync(new URL("./fixtures/index.js", import.meta.url), "utf8");
+  assert.match(source, /onRequest\(/);
+  assert.doesNotMatch(source, /invoker/);
 });

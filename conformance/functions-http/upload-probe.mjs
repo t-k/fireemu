@@ -175,6 +175,10 @@ export async function runUploadProbe({
   }
   const { decision, finding } = decideAfterDeploy(forms.summary());
   await cleanupTarget(control, TARGET, adcPath, budget, runDir, state, { run, log });
+  // The CLI grants allUsers on the service and cleanup removes it first; a failed removal is harmless
+  // once the service is gone, but the coordinator must be able to see that it happened.
+  const iamRevocationError = state.iamRevocationError ?? null;
+  if (iamRevocationError) await log("iam-revocation-failed", iamRevocationError);
   const residual = Boolean(error?.indeterminate) || (state.started && !state.cleaned);
   const outcome = withUploadClosure(uploads.report(), {
     outcome: error || residual ? "stopped-needs-review" : "recorded",
@@ -193,6 +197,7 @@ export async function runUploadProbe({
     uploadsClosureReady: report.closureReady,
     a2Required: report.a2Required,
     loggingApiState: loggingState,
+    iamRevocationError,
     requests,
     estimatedUsd: Number((0.01 + requests.cliDeploy * 0.55).toFixed(2)),
     maskedLines: forms.maskedLines(),

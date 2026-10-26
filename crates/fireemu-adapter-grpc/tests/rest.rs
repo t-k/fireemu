@@ -7179,10 +7179,9 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
         };
         let (status, body) = run(select(&up));
         assert_eq!(status, 200, "{body}");
-        assert_eq!(
-            body[0],
-            json!({"results": [{"fields": {"v": {"referenceValue": "projects/demo-app/databases/(default)/documents"}}}]})
-        );
+        // The collection holds two documents, answered in one element.
+        let one = json!({"fields": {"v": {"referenceValue": "projects/demo-app/databases/(default)/documents"}}});
+        assert_eq!(body[0], json!({"results": [one.clone(), one]}));
         let (status, body) = run(select(
             &json!({"functionValue": {"name": "document_id", "args": [up]}}),
         ));
@@ -7627,7 +7626,12 @@ fn rest_execute_pipeline_transcodes_every_request_field() {
         json!({"structured_pipeline": pipeline, "auto_commit_transaction": false, "request_options": {}}),
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body.as_array().map(Vec::len), Some(2), "{body}");
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(
+        body[0]["results"].as_array().map(Vec::len),
+        Some(2),
+        "{body}"
+    );
 }
 
 /// Under Security Rules a pipeline runs for the owner only: the owner gets results, a
@@ -7645,7 +7649,8 @@ fn rest_execute_pipeline_runs_for_the_owner_under_rules() {
         pipeline_body(&json!([{"name": "collection", "args": [{"referenceValue": "/nest"}]}]));
     let (status, owner) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body.clone());
     assert_eq!(status, 200, "{owner}");
-    assert_eq!(owner.as_array().map(Vec::len), Some(2));
+    assert_eq!(owner.as_array().map(Vec::len), Some(1));
+    assert_eq!(owner[0]["results"].as_array().map(Vec::len), Some(2));
     let (status, denied) = call_as(&s, "POST", &format!("{DOCS}:executePipeline"), body, None);
     assert_eq!(status, 403, "{denied}");
     assert_eq!(denied.as_array().map(Vec::len), Some(1));

@@ -1985,3 +1985,145 @@ fn a_literal_field_path_past_1500_bytes_is_refused_in_every_position() {
     });
     check(cases);
 }
+
+/// The body of a pipeline over the one-document collection `c` (document `d`), whatever it
+/// answers.
+fn run(state: &RestState, stages: &[Value]) -> (u16, Value) {
+    let mut all = vec![stage("collection", vec![json!({ "referenceValue": "/c" })])];
+    all.extend(stages.iter().cloned());
+    let body = json!({ "structuredPipeline": { "pipeline": { "stages": all } } });
+    call(state, "POST", &format!("{DOCS}:executePipeline"), &body)
+}
+
+const NAME_D: &str = "projects/demo-app/databases/(default)/documents/c/d";
+
+/// `select` of `__name__` as itself: the official emulator 1.22.0 answers the document name in
+/// the result (probed 2026-10-26, alone, quoted either way, beside other aliases, before a
+/// limit) and refuses `__name__` set from any other value. Production answered the alone,
+/// unquoted form with the name only (FS-ENT-ORACLE O5, `appendix#proposed-select-name-field`),
+/// so strict answers that form and refuses the others as unobserved.
+#[test]
+fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile() {
+    let quoted = json!({ "mapValue": { "fields": {
+        "`__name__`": field("`__name__`"),
+    } } });
+    let beside = map(vec![("__name__", field("__name__")), ("a", field("i"))]);
+    // The strict status: 501 for the unobserved identity select, 200 for the neighbour that
+    // selects the name under another alias (production answered that one).
+    let named = |cases: Vec<(&str, Vec<Value>, Value, u16)>| {
+        let (strict, emulator) = (seeded(true), seeded(false));
+        for (label, stages, expected, strict_status) in cases {
+            let (status, body) = run(&emulator, &stages);
+            assert_eq!(status, 200, "{label}: {body}");
+            assert_eq!(body[0]["results"], expected, "{label}");
+            assert!(body[0]["executionTime"].is_string(), "{label}");
+            let (status, body) = run(&strict, &stages);
+            assert_eq!(status, strict_status, "strict {label}: {body}");
+        }
+    };
+    named(vec![
+        (
+            "alone",
+            vec![stage(
+                "select",
+                vec![map(vec![("__name__", field("__name__"))])],
+            )],
+            json!([{ "name": NAME_D }]),
+            200,
+        ),
+        (
+            "quoted alias and value",
+            vec![stage("select", vec![quoted])],
+            json!([{ "name": NAME_D }]),
+            501,
+        ),
+        (
+            "beside another alias",
+            vec![stage("select", vec![beside.clone()])],
+            json!([{ "name": NAME_D, "fields": { "a": int(1) } }]),
+            501,
+        ),
+        (
+            "before a limit",
+            vec![stage("select", vec![beside]), stage("limit", vec![int(1)])],
+            json!([{ "name": NAME_D, "fields": { "a": int(1) } }]),
+            501,
+        ),
+        (
+            "another alias holding the name keeps the document out of the name",
+            vec![stage("select", vec![map(vec![("nm", field("__name__"))])])],
+            json!([{ "fields": { "nm": { "referenceValue": NAME_D } } }]),
+            200,
+        ),
+    ]);
+}
+
+#[test]
+fn select_of_the_document_name_from_another_value_or_overlapping_is_still_refused() {
+    let emulator = seeded(false);
+    for (label, entries) in [
+        ("from a field", vec![("__name__", field("i"))]),
+        (
+            "with a child",
+            vec![("__name__", field("__name__")), ("__name__.x", field("i"))],
+        ),
+        (
+            "with a field and its child",
+            vec![
+                ("__name__", field("__name__")),
+                ("a.b", field("i")),
+                ("a", field("n")),
+            ],
+        ),
+    ] {
+        let (status, body) = run(&emulator, &[stage("select", vec![map(entries)])]);
+        assert_eq!(status, 400, "{label}: {body}");
+    }
+    let (_, body) = run(
+        &emulator,
+        &[stage("select", vec![map(vec![("__name__", field("i"))])])],
+    );
+    assert_eq!(
+        body[0]["error"]["message"],
+        "Stage 'select': field name '__name__' is reserved and can not be overwritten."
+    );
+}
+
+/// Strict answers `UNIMPLEMENTED`, not fireemu's own stage-registry text, for the argument
+/// checks of stages fireemu does not run: no production row holds `sort("bogus")` or
+/// `remove_fields(1)` (issue strict-pipeline-answers-own-validator-texts-for-unsupported-stages,
+/// probes P6 and P7). The emulator profile does not run those stages either.
+#[test]
+fn strict_does_not_answer_fireemus_own_argument_texts_for_stages_it_does_not_run() {
+    let empty = || stage("select", vec![map(vec![])]);
+    let sort_bogus = || stage("sort", vec![string("bogus")]);
+    let remove_one = || stage("remove_fields", vec![int(1)]);
+    let sort_unrun = "pipeline stage \"sort\" is unsupported locally";
+    let remove_unrun = "pipeline stage \"remove_fields\" is unsupported locally";
+    check(vec![
+        Case {
+            label: "sort(\"bogus\")",
+            stages: vec![sort_bogus()],
+            strict: None,
+            emulator: (501, sort_unrun),
+        },
+        Case {
+            label: "sort(\"bogus\") then select {}",
+            stages: vec![sort_bogus(), empty()],
+            strict: None,
+            emulator: (501, sort_unrun),
+        },
+        Case {
+            label: "remove_fields(1)",
+            stages: vec![remove_one()],
+            strict: None,
+            emulator: (501, remove_unrun),
+        },
+        Case {
+            label: "select {} then remove_fields(1)",
+            stages: vec![empty(), remove_one()],
+            strict: None,
+            emulator: (501, remove_unrun),
+        },
+    ]);
+}

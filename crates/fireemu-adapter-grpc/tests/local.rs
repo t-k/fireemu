@@ -6221,25 +6221,30 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
     handle.abort();
 }
 
+/// Reads a pipeline answer to its end. `results` is the number of documents expected (1 for an
+/// answer with no result, which is one response holding only the execution time): production
+/// packs a small answer into a single response (FS-ENT-ORACLE O-1), so the answer is one
+/// response unless it exceeds the batch size.
 async fn drain_pipeline(
     mut stream: tonic::Streaming<pb::ExecutePipelineResponse>,
-    messages: usize,
+    results: usize,
 ) -> Vec<pb::Document> {
     let mut documents = Vec::new();
     let mut received = 0;
     while let Some(response) = stream.next().await {
         let response = response.unwrap();
-        assert!(
-            response.results.len() <= 1,
-            "one document per wire response"
-        );
         // Every response carries the snapshot's execution time; which results are whole
         // documents is pinned by execute_pipeline_results_carry_document_metadata_without_select.
         assert!(response.execution_time.is_some());
         documents.extend(response.results);
         received += 1;
     }
-    assert_eq!(received, messages);
+    assert_eq!(received, 1, "a small answer is one response");
+    assert!(
+        documents.len() == results || (documents.is_empty() && results == 1),
+        "{} results, expected {results}",
+        documents.len()
+    );
     documents
 }
 
@@ -13112,6 +13117,78 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
         assert!(empty[0].execution_time.is_some(), "{policy:?}");
         handle.abort();
     }
+}
+
+/// `select` of `__name__` as itself answers the document name next to the other selected
+/// fields under the emulator profile, as the official emulator 1.22.0 does; production has not
+/// answered it alone (O5), so strict refuses the form beside other aliases as unobserved.
+#[tokio::test]
+async fn execute_pipeline_select_of_the_name_as_itself_carries_the_document_name() {
+    let (mut client, _, handle) = start_with_edition_and_policy(
+        FirestoreEdition::Enterprise,
+        IndexValidationPolicy::Emulator,
+    )
+    .await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("selname/a", &[("n", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut stream = client
+        .execute_pipeline(pipeline_request(vec![
+            pipeline_stage("collection", collection_ref("selname")),
+            pipeline_select_map(vec![
+                ("__name__", pipeline_field("__name__")),
+                ("v", pipeline_field("n")),
+            ]),
+        ]))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut results = Vec::new();
+    while let Some(response) = stream.message().await.unwrap() {
+        results.extend(response.results);
+    }
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].name, format!("{DOCS}/selname/a"));
+    assert_eq!(
+        results[0]
+            .fields
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["v"]
+    );
+    assert!(results[0].create_time.is_none() && results[0].update_time.is_none());
+    handle.abort();
+    let (mut strict, _, handle) = start_with_edition_and_policy(
+        FirestoreEdition::Enterprise,
+        IndexValidationPolicy::Production,
+    )
+    .await;
+    let refused = strict
+        .execute_pipeline(pipeline_request(vec![
+            pipeline_stage("collection", collection_ref("selname")),
+            pipeline_select_map(vec![
+                ("__name__", pipeline_field("__name__")),
+                ("v", pipeline_field("n")),
+            ]),
+        ]))
+        .await;
+    let code = match refused {
+        Err(status) => status.code(),
+        Ok(response) => response
+            .into_inner()
+            .message()
+            .await
+            .expect_err("strict refuses an unobserved select")
+            .code(),
+    };
+    assert_eq!(code, tonic::Code::Unimplemented);
+    handle.abort();
 }
 
 /// The execution time is the input snapshot's read time: every response of one answer carries

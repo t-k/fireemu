@@ -652,14 +652,7 @@
             ],
             "conformance": [
               {
-                "fixture": "firestore/rest-error-shapes",
-                "excludedSteps": [
-                  {
-                    "step": "runQuery-with-an-unknown-operator",
-                    "issue": "docs.local/issues/open/close-firestore-emulator-compatibility-gaps.md",
-                    "reason": "status and canonical code agree; the message differs (the official emulator says \"Payload isn't valid for request.\", production says \"Invalid value at 'structured_query.where.field_filter.op' ...\" with a BadRequest detail, and fireemu answers its own \"unknown field filter operator\" in a one-element array without the detail)"
-                  }
-                ]
+                "fixture": "firestore/rest-error-shapes"
               },
               {
                 "fixture": "firestore/lite-rest-transport"

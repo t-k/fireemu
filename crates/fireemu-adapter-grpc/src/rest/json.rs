@@ -1144,6 +1144,10 @@ fn field_reference(v: Option<&Value>) -> Result<Option<sq::FieldReference>, Json
     }))
 }
 
+/// The refusal of an operator name that names no `FieldFilter.Operator`; the emulator profile
+/// answers such a body in production's words instead (`RestState::query_parse_status`).
+pub const UNKNOWN_FIELD_FILTER_OPERATOR: &str = "unknown field filter operator";
+
 fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::field_filter::Operator as O;
     // An absent operator is the proto default. An unknown enum number passes through as it
@@ -1158,7 +1162,7 @@ fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
             .and_then(|number| i32::try_from(number).ok()),
         _ => return err("fieldFilter.op must be a string or enum number"),
     };
-    operator.ok_or_else(|| JsonError("unknown field filter operator".into()))
+    operator.ok_or_else(|| JsonError(UNKNOWN_FIELD_FILTER_OPERATOR.into()))
 }
 
 /// An enum given by number passes through as it does on the wire; the query decoder refuses an

@@ -619,21 +619,21 @@ fn the_scan_ignores_a_digit_run_inside_a_longer_identifier() {
         "\"requestId\": \"8586123456789de3\"",
         "validity 261015000000Z end",
         "CANARY0123456789abcd",
-        "x592603257417/b",
-        "a/592603257417z",
+        "x407182936504/b",
+        "a/407182936504z",
     ] {
         let token = encode(text.as_bytes(), true, false);
         assert!(ascii_numbers_in(token.as_bytes()).is_empty(), "{text}");
     }
     // Any delimiter, or the edge of the data, still counts.
     for (text, number) in [
-        ("592603257417", "592603257417"),
-        ("a/592603257417/b", "592603257417"),
-        ("a-592603257417-b", "592603257417"),
-        ("a 592603257417\n", "592603257417"),
-        ("\"592603257417\"", "592603257417"),
-        ("p=592603257417&q=1", "592603257417"),
-        ("a_592603257417_b", "592603257417"),
+        ("407182936504", "407182936504"),
+        ("a/407182936504/b", "407182936504"),
+        ("a-407182936504-b", "407182936504"),
+        ("a 407182936504\n", "407182936504"),
+        ("\"407182936504\"", "407182936504"),
+        ("p=407182936504&q=1", "407182936504"),
+        ("a_407182936504_b", "407182936504"),
         ("2987654321", "2987654321"),
         ("5987654321012", "5987654321012"),
     ] {
@@ -706,7 +706,7 @@ fn the_varint_scan_covers_the_shortest_run_and_a_long_run_behind_a_glued_word() 
 #[test]
 fn the_scan_ignores_noise_and_ordinary_text() {
     assert!(ascii_numbers_in(b"").is_empty());
-    assert!(ascii_numbers_in(b"592603257417").is_empty());
+    assert!(ascii_numbers_in(b"407182936504").is_empty());
     assert!(
         ascii_numbers_in(b"just some words and spaces of ordinary text, nothing encoded")
             .is_empty()

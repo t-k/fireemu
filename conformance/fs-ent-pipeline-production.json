@@ -54522,6 +54522,1736 @@
         }
       }
     },
+    "fs-ent-pipeline/o9b/cg-parent": {
+      "corpusDigest": "1853338be9e123a859123058f537df0cac0f43fdcae81dac6ad005f64c6555b4",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T23:03:01.925Z",
+      "gitSha": "3b21008a2b7378a6452c7cd964586e30f4733c4d",
+      "steps": {
+        "group-bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pitems/tu2",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pitems/tu3",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pitems/tu1",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/cc6",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/ff3",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/hh1",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/gg2",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "4"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/ee4",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/dd5",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/b/pitems/v1",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/b/pitems/v3",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/b/pitems/v2",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "top-bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pitems/tu2",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pitems/tu3",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pitems/tu1",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "a-bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/cc6",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/ff3",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/hh1",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/gg2",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "4"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/ee4",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/a/pitems/dd5",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "b-bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/b/pitems/v1",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/b/pitems/v3",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pp/b/pitems/v2",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o9b/order-fresh": {
+      "corpusDigest": "b7f6c182b4ecd4e18e29bb74e68dfd1dd41a190cd59fe360bbeeef0481c4cb52",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T23:03:01.925Z",
+      "gitSha": "3b21008a2b7378a6452c7cd964586e30f4733c4d",
+      "steps": {
+        "oc1-bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "8"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/hotel",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/bravo",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/echo",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/foxtrot",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "9"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/india",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "10"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/juliet",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "4"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/charlie",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/delta",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/kilo",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "7"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/golf",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/alpha",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "12"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc1/lima",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "oc2-bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/2",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/100",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "10"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/600",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "9"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/77",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "4"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/1",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/9",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "7"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/30",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/10",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "12"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/11",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/4",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "8"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/8",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc2/25",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "oc3-bare": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "9"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/m.n",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "4"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/a_b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/a-b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "6"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/p5",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "8"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/B2",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "10"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/Q7",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "12"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/x-y",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/P5",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/Zed",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/q7",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "7"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/b2",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/oc3/zed",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o9b/types-matrix": {
+      "corpusDigest": "45c084c4634c5262911002f675c1c292e6269bd8a56c4473a22b889b20c61898",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T23:03:01.925Z",
+      "gitSha": "3b21008a2b7378a6452c7cd964586e30f4733c4d",
+      "steps": {
+        "missing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "nullValue": null
+                    },
+                    "boolean": {
+                      "nullValue": null
+                    },
+                    "bson_timestamp": {
+                      "nullValue": null
+                    },
+                    "bytes": {
+                      "nullValue": null
+                    },
+                    "decimal128": {
+                      "nullValue": null
+                    },
+                    "float64": {
+                      "nullValue": null
+                    },
+                    "geo_point": {
+                      "nullValue": null
+                    },
+                    "int32": {
+                      "nullValue": null
+                    },
+                    "int64": {
+                      "nullValue": null
+                    },
+                    "map": {
+                      "nullValue": null
+                    },
+                    "max_key": {
+                      "nullValue": null
+                    },
+                    "min_key": {
+                      "nullValue": null
+                    },
+                    "null": {
+                      "nullValue": null
+                    },
+                    "number": {
+                      "nullValue": null
+                    },
+                    "object_id": {
+                      "nullValue": null
+                    },
+                    "reference": {
+                      "nullValue": null
+                    },
+                    "regex": {
+                      "nullValue": null
+                    },
+                    "string": {
+                      "nullValue": null
+                    },
+                    "timestamp": {
+                      "nullValue": null
+                    },
+                    "vector": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "missing-not": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "nullValue": null
+                    },
+                    "boolean": {
+                      "nullValue": null
+                    },
+                    "bson_timestamp": {
+                      "nullValue": null
+                    },
+                    "bytes": {
+                      "nullValue": null
+                    },
+                    "decimal128": {
+                      "nullValue": null
+                    },
+                    "float64": {
+                      "nullValue": null
+                    },
+                    "geo_point": {
+                      "nullValue": null
+                    },
+                    "int32": {
+                      "nullValue": null
+                    },
+                    "int64": {
+                      "nullValue": null
+                    },
+                    "map": {
+                      "nullValue": null
+                    },
+                    "max_key": {
+                      "nullValue": null
+                    },
+                    "min_key": {
+                      "nullValue": null
+                    },
+                    "null": {
+                      "nullValue": null
+                    },
+                    "number": {
+                      "nullValue": null
+                    },
+                    "object_id": {
+                      "nullValue": null
+                    },
+                    "reference": {
+                      "nullValue": null
+                    },
+                    "regex": {
+                      "nullValue": null
+                    },
+                    "string": {
+                      "nullValue": null
+                    },
+                    "timestamp": {
+                      "nullValue": null
+                    },
+                    "vector": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "missing-is-error": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": true
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-bool": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": true
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-int": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": true
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": true
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-double": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": true
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": true
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-string": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": true
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": true
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-ts": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": true
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-geo": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": true
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-arr": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": true
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": true
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": false
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "present-ref": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "array": {
+                      "booleanValue": false
+                    },
+                    "boolean": {
+                      "booleanValue": false
+                    },
+                    "bson_timestamp": {
+                      "booleanValue": false
+                    },
+                    "bytes": {
+                      "booleanValue": false
+                    },
+                    "decimal128": {
+                      "booleanValue": false
+                    },
+                    "float64": {
+                      "booleanValue": false
+                    },
+                    "geo_point": {
+                      "booleanValue": false
+                    },
+                    "int32": {
+                      "booleanValue": false
+                    },
+                    "int64": {
+                      "booleanValue": false
+                    },
+                    "map": {
+                      "booleanValue": false
+                    },
+                    "max_key": {
+                      "booleanValue": false
+                    },
+                    "min_key": {
+                      "booleanValue": false
+                    },
+                    "null": {
+                      "booleanValue": false
+                    },
+                    "number": {
+                      "booleanValue": false
+                    },
+                    "object_id": {
+                      "booleanValue": false
+                    },
+                    "reference": {
+                      "booleanValue": true
+                    },
+                    "regex": {
+                      "booleanValue": false
+                    },
+                    "string": {
+                      "booleanValue": false
+                    },
+                    "timestamp": {
+                      "booleanValue": false
+                    },
+                    "vector": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
     "fs-ent-pipeline/px0/aliases": {
       "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
       "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",

@@ -355,3 +355,88 @@ test("the predicted read orders are the ones the packet states", () => {
     "tu2 tu3 tu1 | cc6 ff3 hh1 gg2 ee4 dd5 | v1 v3 v2",
   );
 });
+
+// --- the recorded O-9b programs ---
+
+const recorded = (name) => production.programs[`${O9B_PREFIX}${name}`];
+const resultsOf = (answer) => (answer.body ?? []).flatMap((element) => element.results ?? []);
+const kindName = (value) => (value === undefined ? "absent" : Object.keys(value)[0]);
+
+test("the recorded O-9b programs are in the fixture with their own digests, every step answered 200, both recordings equal", () => {
+  for (const p of O9B_PROGRAMS) {
+    const row = production.programs[p.id];
+    assert.ok(row, p.id);
+    assert.equal(row.corpusDigest, programDigest(p), p.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), p.steps.map((s) => s.id).toSorted());
+    assert.equal(row.second, undefined, p.id);
+    for (const [stepId, answer] of Object.entries(row.steps))
+      assert.equal(answer.status, 200, `${p.id}#${stepId}`);
+  }
+});
+
+test("is_type: a missing value answers null for every type name (not and is_error included), a present value is true for its own kind and number, never an error", () => {
+  const steps = recorded("types-matrix").steps;
+  const fieldsOf = (stepId) => resultsOf(steps[stepId])[0].fields;
+  const as = (stepId, expected) => {
+    const fields = fieldsOf(stepId);
+    assert.deepEqual(Object.keys(fields).toSorted(), TYPE_NAMES.toSorted(), stepId);
+    for (const name of TYPE_NAMES)
+      assert.deepEqual(fields[name], expected(name), `${stepId}.${name}`);
+  };
+  // A missing field has no type: null for each of the twenty names, also for "null".
+  as("missing", () => ({ nullValue: null }));
+  as("missing-not", () => ({ nullValue: null }));
+  as("missing-is-error", () => ({ booleanValue: false }));
+  // A stored value is of one type, and an integer or a double is also a "number".
+  const truth = {
+    null: ["null"],
+    bool: ["boolean"],
+    int: ["int64", "number"],
+    double: ["float64", "number"],
+    string: ["string"],
+    bytes: ["bytes"],
+    ts: ["timestamp"],
+    geo: ["geo_point"],
+    arr: ["array"],
+    map: ["map"],
+    ref: ["reference"],
+  };
+  for (const [kind, names] of Object.entries(truth))
+    as(`present-${kind}`, (name) => ({ booleanValue: names.includes(name) }));
+  // The seven names no stored value can have are false for every kind.
+  for (const name of [
+    "int32",
+    "decimal128",
+    "max_key",
+    "min_key",
+    "object_id",
+    "regex",
+    "bson_timestamp",
+  ]) {
+    for (const [stepId] of Object.entries(steps).filter(([id]) => id.startsWith("present-")))
+      assert.equal(kindName(fieldsOf(stepId)[name]), "booleanValue", `${stepId}.${name}`);
+  }
+});
+
+test("the scan-order rule holds out of sample: three collections of fresh ids read in the predicted CRC-32 order, and the same inside a parent", () => {
+  const idsOf = (name, stepId) =>
+    resultsOf(recorded(name).steps[stepId]).map((r) => r.name.split("/documents/")[1]);
+  for (const coll of Object.keys(FRESH_ID_SETS)) {
+    const got = idsOf("order-fresh", `${coll}-bare`).map((path) => path.split("/")[1]);
+    assert.deepEqual(got, predictedOrder(FRESH_ID_SETS[coll]), coll);
+  }
+  for (const [key, stepId] of [
+    ["top", "top-bare"],
+    ["a", "a-bare"],
+    ["b", "b-bare"],
+  ]) {
+    const got = idsOf("cg-parent", stepId).map((path) => path.split("/").at(-1));
+    assert.deepEqual(got, predictedOrder(GROUP_IDS[key]), stepId);
+  }
+  // A collection group is read by parent path (top level, pp/a, pp/b), each parent in CRC-32 order.
+  assert.deepEqual(idsOf("cg-parent", "group-bare"), [
+    ...predictedOrder(GROUP_IDS.top).map((id) => `pitems/${id}`),
+    ...predictedOrder(GROUP_IDS.a).map((id) => `pp/a/pitems/${id}`),
+    ...predictedOrder(GROUP_IDS.b).map((id) => `pp/b/pitems/${id}`),
+  ]);
+});

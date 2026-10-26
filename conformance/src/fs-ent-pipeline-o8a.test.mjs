@@ -700,7 +700,7 @@ test("the recorded O-8A programs are in the fixture with their own digests and e
   }
   // The earlier packets' rows are still there: 28 + O-6's 16 + O-7's 11 + these 5.
   assert.equal(
-    Object.keys(fixture.programs).filter((id) => !/^fs-ent-pipeline\/(o8[b-d]|o9)\//.test(id)).length,
+    Object.keys(fixture.programs).filter((id) => !/^fs-ent-pipeline\/(o8[b-d]|o9b?)\//.test(id)).length,
     60,
   );
   // Production answered the duplicate quoted path with a server error, every time (O-5, O-8A).

@@ -2327,6 +2327,12 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         logging: logging_addr.map(|a| a.to_string()),
                         pubsub: pubsub_addr.map(|a| a.to_string()),
                         hub: hub_addr.map(|a| a.to_string()),
+                        admin_app_check: admin_app_check_verifier(
+                            &cfg,
+                            app_check_gate.as_ref(),
+                            &barrier,
+                            &clock,
+                        ),
                     },
                     &runner_secret,
                     callable_trusted_protocol,
@@ -2408,6 +2414,33 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     }
 }
 
+/// The verifier that answers the Admin SDK App Check questions of the Functions runners: the
+/// callable boundary's verifier over the project's current epoch and app registry, under the
+/// session admission barrier. `None` without App Check, which leaves the runners untouched.
+fn admin_app_check_verifier(
+    cfg: &crate::config::RuntimeConfig,
+    gate: Option<&fireemu_core_app_check::AppCheckGate>,
+    barrier: &Arc<fireemu_core_session::barrier::AdmissionBarrier>,
+    clock: &Arc<Mutex<VirtualClock>>,
+) -> Option<Arc<dyn fireemu_adapter_functions::admin_app_check::AdminAppCheckVerifier>> {
+    let gate = gate?.clone();
+    let clock = clock.clone();
+    Some(Arc::new(
+        fireemu_adapter_functions::admin_app_check::BarrierVerifier::new(
+            gate,
+            barrier.clone(),
+            cfg.auth_project.clone(),
+            Arc::new(move || {
+                clock
+                    .lock()
+                    .ok()
+                    .map(|c| fireemu_core_types::determinism::Clock::now(&*c))
+            }),
+            fireemu_core_app_check::admin::AdminPolicy::OWNER_RULINGS,
+        ),
+    ))
+}
+
 fn configured_pubsub_handle(
     handle: fireemu_adapter_pubsub::PubSubHandle,
     cfg: &crate::config::RuntimeConfig,
@@ -2429,6 +2462,83 @@ fn configured_pubsub_handle(
 
 #[cfg(test)]
 mod tests {
+    /// The Admin SDK verifier is the callable boundary's verifier for the configured project, on
+    /// the virtual clock, with the owner rulings applied in every profile: a future `iat`
+    /// verifies (as in production) and an unknown or disabled app does not.
+    #[test]
+    fn the_admin_app_check_verifier_follows_project_clock_and_rulings() {
+        use crate::sessions::tests::{gate, token_for, APP_ID};
+        use fireemu_adapter_functions::admin_app_check::Reply;
+        use fireemu_core_app_check::admin::{AdminRejection, AdminVerdict};
+        use fireemu_core_session::barrier::AdmissionBarrier;
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::time::LogicalInstant;
+        use std::sync::{Arc, Mutex};
+
+        let issued_at = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let config = |profile: &str, project: &str| {
+            let mut cfg = crate::config::RuntimeConfig::from_json(&serde_json::json!({
+                "schemaVersion": 1, "profile": profile,
+            }))
+            .unwrap();
+            cfg.auth_project = project.to_owned();
+            cfg
+        };
+        let gate = gate();
+        let token = token_for(&gate, "demo-app", APP_ID);
+        let barrier = Arc::new(AdmissionBarrier::new());
+        let at = |instant| Arc::new(Mutex::new(VirtualClock::new(instant)));
+        let verifier = |cfg: &crate::config::RuntimeConfig, clock: &Arc<Mutex<VirtualClock>>| {
+            super::admin_app_check_verifier(cfg, Some(&gate), &barrier, clock).unwrap()
+        };
+        let accept = Reply::Verdict(AdminVerdict::Accept);
+        let refuse = |reason| Reply::Verdict(AdminVerdict::Reject(reason));
+
+        // Without App Check there is no verifier at all.
+        let cfg = config("strict", "demo-app");
+        assert!(super::admin_app_check_verifier(&cfg, None, &barrier, &at(issued_at)).is_none());
+        // The configured project, on the virtual clock.
+        let now = at(issued_at);
+        assert_eq!(verifier(&cfg, &now).verify("demo-app", &token), accept);
+        assert_eq!(
+            verifier(&cfg, &now).verify("demo-second", &token),
+            refuse(AdminRejection::NoMatchingKid)
+        );
+        let late = at(LogicalInstant::from_unix_seconds(1_788_004_860 + 3600));
+        assert_eq!(
+            verifier(&cfg, &late).verify("demo-app", &token),
+            refuse(AdminRejection::TokenExpired)
+        );
+        // A verifier built for another project never reads demo-app's state.
+        assert_eq!(
+            verifier(&config("strict", "demo-second"), &now).verify("demo-app", &token),
+            refuse(AdminRejection::NoMatchingKid)
+        );
+        // D3 in every profile and under productionExact: a future iat verifies.
+        let early = at(LogicalInstant::from_unix_seconds(1_788_004_860 - 60));
+        let mut exact = config("strict", "demo-app");
+        exact.set_production_exact(true);
+        for cfg in [
+            config("strict", "demo-app"),
+            config("emulator", "demo-app"),
+            exact,
+        ] {
+            assert_eq!(verifier(&cfg, &early).verify("demo-app", &token), accept);
+        }
+        // An unreadable clock is unavailable, never an acceptance.
+        let poisoned = at(issued_at);
+        let held = poisoned.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("poison the clock");
+        })
+        .join();
+        assert_eq!(
+            verifier(&cfg, &poisoned).verify("demo-app", &token),
+            Reply::Unavailable
+        );
+    }
+
     /// PS-01: the configuration decides whether dead-letter forwarding needs production's
     /// grants. Strict forwards without them by default; `productionExact` (and the key) ask for
     /// them; the emulator profile never does.

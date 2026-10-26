@@ -20,11 +20,14 @@ use std::sync::{Arc, PoisonError, RwLock};
 
 use fireemu_core_types::time::LogicalInstant;
 
+use crate::admin::{admin_rejection_for, AdminPolicy, AdminVerdict};
 use crate::crypto::AppCheckSigner;
 use crate::header::HeaderClassification;
-use crate::observe::Observation;
+use crate::observe::{Observation, FUNCTIONS_SERVICE};
 use crate::registry::{AppCheckRegistry, ProjectEpoch};
-use crate::verify::{classify, AdmissionDecision, AppCheckCredentialState, BaselineMode};
+use crate::verify::{
+    classify, verify_token_with, AdmissionDecision, AppCheckCredentialState, BaselineMode,
+};
 
 /// The privileged credential a route verified before asking for a bypass (section 12.2).
 ///
@@ -171,6 +174,54 @@ impl AppCheckGate {
         for (project, epoch) in epochs {
             registry.set_project_epoch(project, *epoch);
         }
+    }
+
+    /// Verifies a token for an Admin SDK `verifyToken` call and records one secret-free
+    /// observation.
+    ///
+    /// The verdict and the observation come from one read of the registry, so the call sees one
+    /// coherent app registry and epoch (`INV-APPCHECK-005`); another project's epoch never
+    /// enters it. Callers hold the session admission barrier shared, which keeps a reset from
+    /// straddling the decision.
+    #[must_use]
+    pub fn verify_for_admin(
+        &self,
+        project_id: &str,
+        token: &str,
+        now: LogicalInstant,
+        policy: AdminPolicy,
+    ) -> AdminVerdict {
+        let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+        let result = verify_token_with(
+            token,
+            &registry,
+            project_id,
+            self.signer.as_ref(),
+            now,
+            policy.options(),
+        );
+        let (verdict, state) = match result {
+            Ok(identity) => (
+                AdminVerdict::Accept,
+                AppCheckCredentialState::Valid(identity),
+            ),
+            Err(failure) => (
+                AdminVerdict::Reject(admin_rejection_for(failure)),
+                AppCheckCredentialState::Invalid(failure),
+            ),
+        };
+        registry.record_observation(Observation::new(
+            project_id,
+            FUNCTIONS_SERVICE,
+            "http",
+            "verifyToken",
+            BaselineMode::Unenforced,
+            &state,
+            now,
+            registry.policy_generation(project_id),
+            verdict == AdminVerdict::Accept,
+        ));
+        verdict
     }
 
     /// Captures the dynamic debug tokens of every project `accept` returns true for.

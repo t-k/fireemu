@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,6 +17,10 @@ use tokio::sync::{oneshot, Mutex as AsyncMutex};
 #[cfg(windows)]
 use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommandWrap};
 
+use crate::admin_app_check::{
+    answer, malformed_frame, parse_request, reply_frame, AdminAppCheckVerifier, Reply,
+    MAX_IN_FLIGHT,
+};
 use crate::protocol::{read_frame, write_frame};
 
 /// What the runner announced in its `hello`.
@@ -40,6 +44,9 @@ pub struct Hello {
     pub app_check: Option<Value>,
     /// Clock protocol capabilities advertised by this runner.
     pub clock: Option<Value>,
+    /// The runner's Admin SDK App Check report: whether `firebase-admin`'s `verifyToken` was
+    /// instrumented to ask the daemon, and why not when it was not.
+    pub admin_app_check: Option<Value>,
 }
 
 /// Outcome of one invocation.
@@ -346,6 +353,77 @@ async fn read_bounded_stderr_line<R: AsyncBufRead + Unpin>(
     Ok(Some((line, truncated)))
 }
 
+/// How a verdict gets back to one runner, and how many may be pending for it.
+struct AdminReplyChannel {
+    stdin: Arc<AsyncMutex<Option<ChildStdin>>>,
+    alive: Arc<AtomicBool>,
+    in_flight: Arc<AtomicUsize>,
+    label: String,
+}
+
+/// How long a verdict may wait for the runner's stdin before it is dropped: a runner that stopped
+/// reading cannot hold up the daemon, and one that never gets its verdict fails the call itself.
+const ADMIN_REPLY_DEADLINE: Duration = Duration::from_secs(10);
+
+impl AdminReplyChannel {
+    async fn send(self, frame: Value) {
+        let Ok(mut stdin) = tokio::time::timeout(ADMIN_REPLY_DEADLINE, self.stdin.lock()).await
+        else {
+            return;
+        };
+        let Some(pipe) = stdin.as_mut() else {
+            return;
+        };
+        let written = matches!(
+            tokio::time::timeout(ADMIN_REPLY_DEADLINE, write_frame(pipe, &frame)).await,
+            Ok(Ok(()))
+        );
+        if !written {
+            // A frame that could not be written in full would desynchronize the protocol.
+            *stdin = None;
+            self.alive.store(false, Ordering::SeqCst);
+            eprintln!("{} runner stopped reading its stdin", self.label);
+        }
+    }
+}
+
+/// Answers one `appCheck:verify` frame from the runner without blocking the reader: the
+/// verification itself may wait for a session reset to finish, so it runs on a blocking
+/// thread and the reply is written when it completes.
+fn dispatch_admin_verify(
+    frame: &Value,
+    verifier: Option<Arc<dyn AdminAppCheckVerifier>>,
+    channel: AdminReplyChannel,
+) {
+    let request = match parse_request(frame) {
+        Ok(request) => request,
+        Err(Some(id)) => {
+            tokio::spawn(channel.send(malformed_frame(&id)));
+            return;
+        }
+        Err(None) => return,
+    };
+    if channel.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+        channel.in_flight.fetch_sub(1, Ordering::SeqCst);
+        tokio::spawn(channel.send(reply_frame(&request.request_id, Reply::Unavailable)));
+        return;
+    }
+    tokio::spawn(async move {
+        let reply = match verifier {
+            Some(verifier) => {
+                let request = request.clone();
+                tokio::task::spawn_blocking(move || answer(&request, Some(&*verifier)))
+                    .await
+                    .unwrap_or(Reply::Unavailable)
+            }
+            None => answer(&request, None),
+        };
+        channel.in_flight.fetch_sub(1, Ordering::SeqCst);
+        let frame = reply_frame(&request.request_id, reply);
+        channel.send(frame).await;
+    });
+}
+
 /// How to start (and restart) a runner.
 #[derive(Clone)]
 pub struct SpawnSpec {
@@ -376,7 +454,7 @@ pub struct Runner {
     child: AsyncMutex<Option<RunnerChild>>,
     #[cfg(unix)]
     _lifetime_guard: RunnerLifetimeGuard,
-    stdin: AsyncMutex<Option<ChildStdin>>,
+    stdin: Arc<AsyncMutex<Option<ChildStdin>>>,
     hello: Hello,
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
     logs: Arc<Mutex<LogBuffer>>,
@@ -510,11 +588,22 @@ pub struct Invocation {
 impl Runner {
     /// Spawns a runner from its spec.
     pub async fn spawn_spec(spec: &SpawnSpec) -> Result<Self, String> {
-        Self::spawn(
+        Self::spawn_spec_with(spec, None).await
+    }
+
+    /// Spawns a runner from its spec, answering its Admin SDK App Check questions with
+    /// `admin_app_check`. A runner without one answers every such question as unavailable
+    /// (never as an acceptance).
+    pub async fn spawn_spec_with(
+        spec: &SpawnSpec,
+        admin_app_check: Option<Arc<dyn AdminAppCheckVerifier>>,
+    ) -> Result<Self, String> {
+        Self::spawn_with(
             &spec.command,
             spec.cwd.as_deref(),
             &spec.env,
             spec.hello_timeout,
+            admin_app_check,
         )
         .await
     }
@@ -543,12 +632,24 @@ impl Runner {
     }
 
     /// Spawns `command` (program + args) with `env`, in `cwd`, and waits for its `hello`.
-    #[allow(clippy::too_many_lines)]
     pub async fn spawn(
         command: &[String],
         cwd: Option<&str>,
         env: &[(String, String)],
         hello_timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::spawn_with(command, cwd, env, hello_timeout, None).await
+    }
+
+    /// [`Self::spawn`] with the verifier that answers the runner's Admin SDK App Check
+    /// questions.
+    #[allow(clippy::too_many_lines)]
+    pub async fn spawn_with(
+        command: &[String],
+        cwd: Option<&str>,
+        env: &[(String, String)],
+        hello_timeout: Duration,
+        admin_app_check: Option<Arc<dyn AdminAppCheckVerifier>>,
     ) -> Result<Self, String> {
         let (program, args) = command
             .split_first()
@@ -598,6 +699,7 @@ impl Runner {
             .stdin()
             .take()
             .ok_or_else(|| "functions runner: no stdin".to_owned())?;
+        let stdin_shared = Arc::new(AsyncMutex::new(Some(stdin)));
         #[cfg(not(windows))]
         let stdout_source = child
             .stdout
@@ -680,6 +782,8 @@ impl Runner {
             let logs = logs.clone();
             let alive = alive.clone();
             let clock_status = clock_status.clone();
+            let stdin_shared = stdin_shared.clone();
+            let in_flight = Arc::new(AtomicUsize::new(0));
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut hello_tx = Some(hello_tx);
@@ -712,6 +816,7 @@ impl Runner {
                                 params: frame.get("params").cloned(),
                                 app_check: frame.get("appCheck").cloned(),
                                 clock: frame.get("clock").cloned(),
+                                admin_app_check: frame.get("adminAppCheck").cloned(),
                             };
                             if let Some(tx) = hello_tx.take() {
                                 let _ = tx.send(hello);
@@ -744,6 +849,16 @@ impl Runner {
                                 let _ = tx.send(outcome);
                             }
                         }
+                        Some("appCheck:verify") => dispatch_admin_verify(
+                            &frame,
+                            admin_app_check.clone(),
+                            AdminReplyChannel {
+                                stdin: stdin_shared.clone(),
+                                alive: alive.clone(),
+                                in_flight: in_flight.clone(),
+                                label: label.clone(),
+                            },
+                        ),
                         Some("log") => {
                             let level =
                                 frame.get("level").and_then(Value::as_str).unwrap_or("info");
@@ -848,7 +963,7 @@ impl Runner {
             child: AsyncMutex::new(Some(child)),
             #[cfg(unix)]
             _lifetime_guard: lifetime_guard,
-            stdin: AsyncMutex::new(Some(stdin)),
+            stdin: stdin_shared,
             hello,
             waiters,
             logs,

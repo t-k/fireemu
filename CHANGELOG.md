@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `getAppCheck().verifyToken()` of `firebase-admin` 13 and 14 inside a Functions runner now verifies Fireemu App Check tokens: the runner keeps the SDK's own decoding and claim checks and asks the daemon for the signature step, which decides it with the callable boundary's verifier against the project's current session epoch and app registry on the virtual clock. A token minted before an in-place session reset or snapshot restore is rejected with the SDK's own "does not correspond to a known public key" error. `verifyToken(token, { consume: true })` is refused with `app-check/unimplemented` and never calls Google. Outside those SDK majors, or if the SDK's internals changed, nothing is patched and the SDK rejects Fireemu tokens. Production accepts a token for an unregistered or disabled app until it expires; Fireemu rejects it in every profile. A token issued in the future verifies, as in production.
+
 ### Changed
 
 - The README, and with it the npm package page, is now a short overview with a quick start, a scope summary and links. The configuration and usage details it carried are on the [documentation site](https://t-k.github.io/fireemu/), which gains the parts it lacked: `fireemu config show` and `init --reference`, the remaining discovery ownership rules, Auth authorized domains, provider declarations, tenant and MFA declaration details and the unsigned-token rules, schedule and manual-run semantics, Firestore history and Storage stored-byte limit details, macOS export ACL rules, and the container exposure rules.

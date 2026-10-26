@@ -14,3 +14,6 @@ fireemu-core-auth = { path = "../fireemu-core-auth" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

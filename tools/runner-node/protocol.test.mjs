@@ -132,3 +132,33 @@ test('failure results fit protocol strings and preserve normal errors',()=>{
   assert.equal(large.message.isWellFormed(),true);assert.equal(large.diagnostic.isWellFormed(),true);
   assert.equal(invocationFailure(new Error('\ud800')).message,'�');
 });
+
+// The daemon's answer to an Admin SDK App Check question (admin-app-check.mjs).
+for (const verdict of [
+  { type: 'appCheck:verdict', requestId: 'admin-1', ok: true },
+  { type: 'appCheck:verdict', requestId: 'admin-2', ok: false, reason: 'token-expired' },
+  { type: 'appCheck:verdict', requestId: 'x'.repeat(128), ok: false, reason: 'r'.repeat(64) },
+]) {
+  test(`an appCheck:verdict frame ${JSON.stringify(verdict).slice(0, 60)} is accepted`, () => {
+    const values = [];
+    const parser = new FrameDecoder(v => values.push(v));
+    parser.push(encode(verdict));
+    assert.deepEqual(values, [verdict]);
+  });
+}
+
+for (const bad of [
+  { type: 'appCheck:verdict', ok: true },
+  { type: 'appCheck:verdict', requestId: '', ok: true },
+  { type: 'appCheck:verdict', requestId: 7, ok: true },
+  { type: 'appCheck:verdict', requestId: 'x'.repeat(129), ok: true },
+  { type: 'appCheck:verdict', requestId: 'a' },
+  { type: 'appCheck:verdict', requestId: 'a', ok: 'true' },
+  { type: 'appCheck:verdict', requestId: 'a', ok: false, reason: 5 },
+  { type: 'appCheck:verdict', requestId: 'a', ok: false, reason: 'r'.repeat(65) },
+]) {
+  test(`a malformed appCheck:verdict frame ${JSON.stringify(bad).slice(0, 60)} is terminal`, () => {
+    const parser = new FrameDecoder(() => assert.fail('must not dispatch'));
+    assert.throws(() => parser.push(encode(bad)), ProtocolError);
+  });
+}

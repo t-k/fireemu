@@ -17,7 +17,7 @@ import {
   PROJECT,
   REGION,
   createBudget,
-  expectedFunctionName,
+  resolveTarget,
   invalidSignatureToken,
   validateCorpus,
   validateFunctionRecord,
@@ -289,7 +289,8 @@ export function retryAccounting(requests) {
 
 export function assertOwnedImage(image, target) {
   const name = packageId(target);
-  const prefix = `${REGION}-docker.pkg.dev/${PROJECT}/gcf-artifacts/${name}`;
+  const { region, project } = resolveTarget(target);
+  const prefix = `${region}-docker.pkg.dev/${project}/gcf-artifacts/${name}`;
   if (!image?.startsWith(prefix))
     throw new Error("image differs from the owned function and repository");
   const suffix = image.slice(prefix.length);
@@ -307,7 +308,8 @@ function packageId(target) {
       .replaceAll("-", "--")
       .replace(/^[A-Z]/, (letter) => `${letter.toLowerCase()}-${letter.toLowerCase()}`)
       .replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-  return [PROJECT, REGION, expectedFunctionName(target)].map(encodePart).join("__");
+  const { project, region, functionName } = resolveTarget(target);
+  return [project, region, functionName].map(encodePart).join("__");
 }
 
 export function assertPublicReadback(readbackPolicy, expectedPublic) {
@@ -821,13 +823,35 @@ export async function cli(
   return summary;
 }
 
-const functionUrl = (target) =>
-  `${FUNCTION_HOST}/v2/${RESOURCE}/functions/${expectedFunctionName(target)}`;
-const serviceName = (target) =>
-  `${RESOURCE}/services/${expectedFunctionName(target).toLowerCase()}`;
+const locationOf = ({ project, region }) => `projects/${project}/locations/${region}`;
+const functionUrl = (target) => {
+  const spec = resolveTarget(target);
+  return `${FUNCTION_HOST}/v2/${locationOf(spec)}/functions/${spec.functionName}`;
+};
+const serviceName = (target) => {
+  const spec = resolveTarget(target);
+  return `${locationOf(spec)}/services/${spec.functionName.toLowerCase()}`;
+};
 const serviceUrl = (target) => `${RUN_HOST}/v2/${serviceName(target)}`;
 const policyUrl = (target, operation) => `${serviceUrl(target)}:${operation}`;
-const packageName = (target) => `${REPOSITORY}/packages/${packageId(target)}`;
+const packageName = (target) => {
+  const spec = resolveTarget(target);
+  return `${locationOf(spec)}/repositories/gcf-artifacts/packages/${packageId(target)}`;
+};
+
+/** The resource names and CLI arguments of one target (a named target or a target spec). */
+export function targetResources(target) {
+  const spec = resolveTarget(target);
+  return {
+    functionUrl: functionUrl(target),
+    serviceName: serviceName(target),
+    serviceUrl: serviceUrl(target),
+    packageName: packageName(target),
+    imagePrefix: `${spec.region}-docker.pkg.dev/${spec.project}/gcf-artifacts/${packageId(target)}`,
+    deployArgs: ["deploy", "--only", `functions:${spec.codebase}:${spec.functionName}`],
+    deleteArgs: ["functions:delete", spec.functionName, "--region", spec.region, "--force"],
+  };
+}
 
 export async function preflightCliSideEffects(control) {
   const services = await control(
@@ -1108,13 +1132,7 @@ export async function cleanupTarget(
       }
     }
     if (!current.functionAbsent || !current.serviceAbsent) {
-      await run(
-        ["functions:delete", expectedFunctionName(target), "--region", REGION, "--force"],
-        adcPath,
-        budget,
-        "cliDelete",
-        runDir,
-      );
+      await run(targetResources(target).deleteArgs, adcPath, budget, "cliDelete", runDir);
       await log("function-deleted", `${functionUrl(target)}; Firebase CLI completed`);
     }
     const absent = await inspectAbsence(control, target, "cleanup");
@@ -1208,7 +1226,7 @@ export async function deployTarget(
   run = cli,
   tap = () => {},
 ) {
-  const upload = await uploads.beginDeploy(`${programId}:${target}`);
+  const upload = await uploads.beginDeploy(`${programId}:${resolveTarget(target).key}`);
   // `tap` sees every upload event with its raw line (the stage 1 probe records the line forms).
   const deployTrack = {
     onEvent: (event, line) => {
@@ -1217,14 +1235,7 @@ export async function deployTarget(
     },
   };
   Object.assign(state, { upload, deployTrack, started: true, exposureStart: Date.now() });
-  await run(
-    ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
-    adcPath,
-    budget,
-    "cliDeploy",
-    runDir,
-    deployTrack,
-  );
+  await run(targetResources(target).deployArgs, adcPath, budget, "cliDeploy", runDir, deployTrack);
 }
 
 /** The reserved function, service and image package must not exist before a deploy. */

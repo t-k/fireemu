@@ -59,9 +59,75 @@ const SECRET_KEYS = new Set([
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 export function expectedFunctionName(target) {
-  const name = FUNCTION_NAMES[target];
-  if (!name) throw new Error(`unreviewed target ${target}`);
+  const name =
+    typeof target === "string" && Object.hasOwn(FUNCTION_NAMES, target)
+      ? FUNCTION_NAMES[target]
+      : undefined;
+  if (!name) throw new Error(`unreviewed target ${String(target)}`);
   return name;
+}
+
+const SPEC_KEYS = new Set([
+  "functionName",
+  "region",
+  "codebase",
+  "generation",
+  "project",
+  "runtime",
+  "entryPoint",
+]);
+
+/**
+ * A target is a named fixture function (`http`, `callable`) or a spec object for another reviewed 2nd gen
+ * function of this project: `{ functionName, region, codebase, generation: "gcfv2" }` with optional
+ * `project` (this project only), `runtime` (default nodejs22) and `entryPoint` (default the function name).
+ * The result is frozen and complete; a named target resolves exactly as before.
+ */
+export function resolveTarget(target) {
+  if (typeof target === "string" || typeof target !== "object") {
+    const functionName = expectedFunctionName(target);
+    return Object.freeze({
+      key: target,
+      project: PROJECT,
+      region: REGION,
+      codebase: "functions-http-oracle",
+      generation: "gcfv2",
+      functionName,
+      entryPoint: functionName,
+      runtime: "nodejs22",
+    });
+  }
+  if (target === null || Array.isArray(target)) throw new Error("invalid target spec");
+  for (const key of Object.keys(target)) {
+    if (!SPEC_KEYS.has(key)) throw new Error(`invalid target spec: unknown field ${key}`);
+  }
+  if (target.generation === "gcfv1")
+    throw new Error("1st gen targets are not supported by this recorder");
+  if (target.generation !== "gcfv2") throw new Error("invalid target spec: generation");
+  const { functionName, region, codebase } = target;
+  const project = target.project ?? PROJECT;
+  const runtime = target.runtime ?? "nodejs22";
+  const entryPoint = target.entryPoint ?? functionName;
+  const bad = (field) => new Error(`invalid target spec: ${field}`);
+  if (project !== PROJECT) throw new Error("unreviewed target project");
+  if (typeof functionName !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,62}$/u.test(functionName))
+    throw bad("functionName");
+  if (typeof region !== "string" || !/^[a-z]+-[a-z]+\d+$/u.test(region)) throw bad("region");
+  if (typeof codebase !== "string" || !/^[a-z][a-z0-9-]{0,62}$/u.test(codebase))
+    throw bad("codebase");
+  if (typeof runtime !== "string" || !/^[a-z]+\d+$/u.test(runtime)) throw bad("runtime");
+  if (typeof entryPoint !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,126}$/u.test(entryPoint))
+    throw bad("entryPoint");
+  return Object.freeze({
+    key: functionName,
+    project,
+    region,
+    codebase,
+    generation: "gcfv2",
+    functionName,
+    entryPoint,
+    runtime,
+  });
 }
 
 export function validateCorpus(corpus) {
@@ -170,15 +236,15 @@ export function createBudget(caps = {}) {
 }
 
 export function validateFunctionRecord(record, target) {
-  const name = expectedFunctionName(target);
-  const resource = `projects/${PROJECT}/locations/${REGION}/functions/${name}`;
+  const { functionName: name, project, region, runtime, entryPoint } = resolveTarget(target);
+  const resource = `projects/${project}/locations/${region}/functions/${name}`;
   if (record?.name !== resource)
     throw new Error("function name differs from the reviewed resource");
   if (record.environment !== "GEN_2") throw new Error("function generation is not GEN_2");
-  if (record.buildConfig?.runtime !== "nodejs22" || record.buildConfig?.entryPoint !== name) {
+  if (record.buildConfig?.runtime !== runtime || record.buildConfig?.entryPoint !== entryPoint) {
     throw new Error("function runtime or entry point differs from the fixture");
   }
-  const service = `projects/${PROJECT}/locations/${REGION}/services/${name.toLowerCase()}`;
+  const service = `projects/${project}/locations/${region}/services/${name.toLowerCase()}`;
   if (record.serviceConfig?.service?.toLowerCase() !== service.toLowerCase()) {
     throw new Error("Cloud Run service differs from the reviewed resource");
   }
@@ -191,7 +257,7 @@ export function validateFunctionRecord(record, target) {
   const host = uri.hostname.toLowerCase();
   const runHost = host.startsWith(`${name.toLowerCase()}-`) && host.endsWith(".run.app");
   const functionsHost =
-    host === `${REGION}-${PROJECT}.cloudfunctions.net` && uri.pathname === `/${name}`;
+    host === `${region}-${project}.cloudfunctions.net` && uri.pathname === `/${name}`;
   if (
     uri.protocol !== "https:" ||
     uri.username ||

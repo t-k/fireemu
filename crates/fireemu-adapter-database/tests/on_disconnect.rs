@@ -208,7 +208,10 @@ fn a_connection_end_writes_its_operations_as_one_update() {
                 ("o", r#"{"p":"/c26","d":5}"#),
                 ("om", r#"{"p":"/c26","d":{"c":3}}"#),
             ],
-            merge_push(r#"{"c25":{"b":2,"c":3},"c26":{"c":3},"c7":{"b":3},"c8":{"b":3}}"#),
+            // Four children come out in the order they were registered (probed again on the jar,
+            // 2026-10-27, with these frames and a listener at the root; production-5 agrees on a
+            // six-key set): not in key order.
+            merge_push(r#"{"c7":{"b":3},"c8":{"b":3},"c25":{"b":2,"c":3},"c26":{"c":3}}"#),
             r#"{"c25":{"b":2,"c":3},"c26":{"c":3},"c7":{"b":3},"c8":{"b":3}}"#,
         ),
         // Cancelling below a registered value splits it into its children; below a leaf it

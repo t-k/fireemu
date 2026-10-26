@@ -637,3 +637,73 @@ test("the O-8A table is the frozen one", () => {
     FROZEN,
   );
 });
+
+// --- the recorded O-8A rows ---
+
+import { readFileSync } from "node:fs";
+
+const readJson = (name) => JSON.parse(readFileSync(new URL(`../${name}`, import.meta.url), "utf8"));
+
+test("the framing programs are kept as a summary of the recorded rows, not as rows", () => {
+  const fixture = readJson("fs-ent-pipeline-production.json");
+  const summary = readJson("fs-ent-pipeline-framing.json");
+  assert.equal(summary.version, 1);
+  assert.deepEqual(Object.keys(summary.programs).toSorted(), [...SUMMARY_ONLY].toSorted());
+  for (const id of SUMMARY_ONLY) {
+    assert.equal(fixture.programs[id], undefined, `${id} is in the fixture`);
+    const program = O8A_PROGRAMS.find((p) => p.id === id);
+    const kept = summary.programs[id];
+    // The summary is of this corpus: same digest, one entry per step.
+    assert.equal(kept.corpusDigest, programDigest(program), id);
+    assert.deepEqual(Object.keys(kept.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    for (const [step, row] of Object.entries(kept.steps)) {
+      assert.equal(
+        row.units.reduce((n, u) => n + u.results, 0),
+        row.results,
+        `${id}#${step}`,
+      );
+    }
+  }
+  // Both recordings agree on what was read, and a step whose two recordings were cut
+  // differently keeps both cuts.
+  const small = summary.programs[`${O8A_PREFIX}framing-small`].steps;
+  for (const [step, count] of [
+    ["f5-rest", 5],
+    ["f50-grpc", 50],
+    ["f500-rest", 500],
+    ["f5000-grpc", 5000],
+    ["f5000-limit-rest", 1500],
+  ]) {
+    assert.equal(small[step].results, count, step);
+    if (small[step].second) assert.equal(small[step].second.results, count, `${step} second`);
+  }
+  assert.ok(
+    Object.values(small).some((row) => row.second),
+    "no differing second recording kept",
+  );
+  const large = summary.programs[`${O8A_PREFIX}framing-large`].steps;
+  assert.deepEqual(
+    [large["l12-rest"].results, large["l3-grpc"].results, large["m30-rest"].results],
+    [12, 3, 30],
+  );
+});
+
+test("the recorded O-8A programs are in the fixture with their own digests and every step", () => {
+  const fixture = readJson("fs-ent-pipeline-production.json");
+  const recorded = O8A_PROGRAMS.filter((p) => !SUMMARY_ONLY.has(p.id));
+  assert.equal(recorded.length, 5);
+  for (const program of recorded) {
+    const row = fixture.programs[program.id];
+    assert.ok(row, program.id);
+    assert.equal(row.corpusDigest, programDigest(program), program.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+  }
+  // The earlier packets' rows are still there: 28 + O-6's 16 + O-7's 11 + these 5.
+  assert.equal(Object.keys(fixture.programs).length, 60);
+  // Production answered the duplicate quoted path with a server error, every time (O-5, O-8A).
+  const dup = fixture.programs[`${O8A_PREFIX}dupquote-main`].steps;
+  for (const id of ["same-1", "same-2", "same-3", "different-values", "swapped-order"]) {
+    assert.equal(dup[id].status, 500, id);
+  }
+  for (const id of ["dotted", "quoted-alone", "plain-pair"]) assert.equal(dup[id].status, 200, id);
+});

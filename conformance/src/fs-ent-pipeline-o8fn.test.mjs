@@ -480,3 +480,30 @@ test("the O-8B to O-8D tables are the frozen ones", () => {
     FROZEN,
   );
 });
+
+test("the functions whose refusal names no count are called with the counts production accepted", () => {
+  // O-5 called array_reverse(i) and array_slice(i, i) and was answered with a type message,
+  // not a count message: so 1 and 2 arguments are counts production accepts. The cases of kind
+  // `arity` must not use them, and the other cases must include them.
+  const requests = JSON.parse(
+    readFileSync(new URL("../fs-ent-pipeline-requests.json", import.meta.url), "utf8"),
+  );
+  const program = requests.programs.find((p) => p.id === "fs-ent-pipeline/o5/function-names");
+  const accepted = {};
+  for (const name of ["array_reverse", "array_slice"]) {
+    const step = program.steps.find((s) => s.id === `fn-${name}`);
+    accepted[name] = calls(step.body).find((call) => call.name === name).args.length;
+    const answer = production.programs["fs-ent-pipeline/o5/function-names"].steps[`fn-${name}`];
+    const element = Array.isArray(answer.body) ? answer.body[0] : answer.body;
+    assert.match(element.error.message, /requires `Array` but got `LONG`/);
+  }
+  assert.deepEqual(accepted, { array_reverse: 1, array_slice: 2 });
+  for (const [name, count] of Object.entries(accepted)) {
+    const cases = COLLECTION_FUNCTIONS[name];
+    assert.ok(
+      cases.some((k) => k.kind !== "arity" && k.args.length === count),
+      name,
+    );
+    assert.ok(!cases.some((k) => k.kind === "arity" && k.args.length === count), name);
+  }
+});

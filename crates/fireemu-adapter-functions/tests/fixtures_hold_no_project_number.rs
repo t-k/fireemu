@@ -175,7 +175,7 @@ fn base64_runs(text: &[u8], min_len: usize) -> Vec<&[u8]> {
     runs
 }
 
-const LONG_WORDS_FROM: usize = 32;
+const LONG_WORDS_FROM: usize = 48;
 
 /// A run that is not a token: a subresource integrity digest (`sha512-` and the like, as in a lockfile) or a
 /// lower case identifier or path (lower case letters, digits, `_`, `-` and `/` only: a random token of 24
@@ -184,7 +184,8 @@ const LONG_WORDS_FROM: usize = 32;
 /// so these runs are not decoded as protobuf.
 ///
 /// A long run of letters and separators with no digit and no `+` is words too (`CamelCaseNames`, a slug with
-/// a repeated letter): a random token of 32 characters is one in 500.
+/// a repeated letter): a random token of 48 characters is one in 20,000. (At 32 characters a real 42 character
+/// token of the tests, which happens to hold no digit, was skipped.)
 fn is_digest_or_identifier(run: &[u8]) -> bool {
     let digest = run.strip_prefix(b"sha").is_some_and(|rest| {
         let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
@@ -357,6 +358,11 @@ fn corpus_files(root: &Path) -> Vec<PathBuf> {
         "crates",
         "conformance",
     ]));
+    parse_listing(root, &names)
+}
+
+/// The paths in a NUL separated listing of `git ls-files -z`, joined to `root`, sorted, each once.
+fn parse_listing(root: &Path, names: &[u8]) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = names
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())
@@ -719,7 +725,7 @@ fn the_listing_holds_every_tracked_file_and_the_unignored_new_files_of_crates_an
         ],
         "crates/ignored/\nnode_modules/\n",
     );
-    let mut listed: Vec<String> = corpus_files(&dir)
+    let listed: Vec<String> = corpus_files(&dir)
         .iter()
         .map(|path| {
             path.strip_prefix(&dir)
@@ -728,7 +734,6 @@ fn the_listing_holds_every_tracked_file_and_the_unignored_new_files_of_crates_an
                 .to_string()
         })
         .collect();
-    listed.sort();
     // A tracked file that was deleted from the work tree is listed too: the scan skips what it cannot read.
     std::fs::remove_file(dir.join("tools/a.txt")).expect("remove");
     let after = corpus_files(&dir).len();
@@ -1163,6 +1168,42 @@ fn the_number_in_the_committed_source_token_shape_is_found_when_it_is_not_the_ma
 }
 
 #[test]
+fn a_run_of_letters_is_words_from_48_characters_on() {
+    for (run, words) in [
+        ("Ab".repeat(24), true),
+        ("Ab".repeat(23) + "A", false),
+        ("Ab".repeat(25), true),
+        ("A-".repeat(24), true),
+        ("A/".repeat(23) + "A", false),
+        ("Ab".repeat(23) + "A1", false),
+        ("Ab".repeat(23) + "A+", false),
+        // lower case runs of any length, with separators
+        ("a-".repeat(12), true),
+        ("a/".repeat(11), true),
+    ] {
+        assert_eq!(is_digest_or_identifier(run.as_bytes()), words, "{run}");
+    }
+}
+
+#[test]
+fn the_listing_parser_drops_empty_names_sorts_and_removes_duplicates() {
+    let root = Path::new("/r");
+    assert_eq!(
+        parse_listing(root, b"b\0a\0b\0\0c/d\0a\0"),
+        [root.join("a"), root.join("b"), root.join("c/d")]
+    );
+    assert!(parse_listing(root, b"").is_empty());
+    assert!(parse_listing(root, b"\0\0").is_empty());
+    // A name with a newline or a space is one name (the list is NUL separated).
+    assert_eq!(parse_listing(root, b"x y\nz\0"), [root.join("x y\nz")]);
+}
+
+#[test]
+fn scanning_nothing_is_clean() {
+    assert_eq!(scan(&[], MAX_FILE_BYTES), Corpus::default());
+}
+
+#[test]
 fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
     for run in [
         "sha512-r1w81DpR".as_bytes(),
@@ -1173,8 +1214,10 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"tools/compat-check/src/inventory/render",
         b"zzz_aaa",
         b"changed-ccccccccccccccccccccccccccccccccPrincipal",
-        b"schemasGoogleFirestoreAdminIndexConfigDelta",
-        b"Words/With/Upper_And_Lower-Case_Only_Here",
+        b"schemas/GoogleFirestoreAdminIndexConfigDeltaAndMore",
+        b"Words/With/Upper_And_Lower-Case_Only_Here_Again_Long",
+        b"auth-refusal-precedence",
+        b"tools/compat-check/src",
         b"___",
         b"0123456789",
     ] {
@@ -1192,7 +1235,6 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"a_snake_Case_identifier_9",
         b"a_snake_case+identifier_9",
         b"A_SNAKE",
-        b"ShortWordsOnlyHereLessThanThirt",
         b"WordsWithOneDigit1AndLongEnoughToCount",
         b"WordsWithAPlusAndLongEnough+ToCountOk",
     ] {

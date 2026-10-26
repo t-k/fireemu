@@ -86,8 +86,33 @@ describe("the upload bucket (T1)", () => {
   });
 
   it("refuses a malformed project number or region when building the name", () => {
-    assert.throws(() => uploadBucketName("12ab", FAKE_REGION), /project number/);
-    assert.throws(() => uploadBucketName(FAKE_PROJECT_NUMBER, "US-CENTRAL1"), /region/);
+    for (const number of [
+      "12ab",
+      "12345",
+      "1234567890123456789",
+      "123456789012x",
+      "x123456789012",
+      " 123456789012",
+      "",
+      123456789012,
+      undefined,
+    ]) {
+      assert.throws(() => uploadBucketName(number, FAKE_REGION), /project number/, String(number));
+    }
+    assert.doesNotThrow(() => uploadBucketName("123456", FAKE_REGION));
+    assert.doesNotThrow(() => uploadBucketName("1234567890123456", FAKE_REGION));
+    for (const region of [
+      "US-CENTRAL1",
+      "us-central",
+      "us-central1x",
+      "xus central1",
+      "us-central1/",
+      "-central1",
+      "",
+      undefined,
+    ]) {
+      assert.throws(() => uploadBucketName(FAKE_PROJECT_NUMBER, region), /region/, String(region));
+    }
   });
 });
 
@@ -115,6 +140,26 @@ describe("receipts", () => {
     );
   });
 
+  it("reads every recorded Gen2 function record the way the record says", () => {
+    const recorded = JSON.parse(
+      readFileSync(
+        new URL(
+          "../functions-events/record/recorded/v4-run/0029-lists.functions-v2.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    assert.ok(recorded.body.functions.length > 0);
+    for (const record of recorded.body.functions) {
+      const source = record.buildConfig.source.storageSource;
+      assert.deepEqual(uploadReceiptFromFunctionRecord(record), {
+        bucket: source.bucket,
+        object: source.object,
+      });
+    }
+  });
+
   it("reads the generateUploadUrl answer from debug output and ignores other lines", () => {
     const body = JSON.stringify({
       uploadUrl: `https://storage.googleapis.com/${FAKE_BUCKET}/${OBJECT}?X-Goog-Signature=${SECRET_MARKER}`,
@@ -127,6 +172,10 @@ describe("receipts", () => {
       `[2026-10-26T01:02:04.000Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions ${body}`,
       `[2026-10-26T01:02:04.100Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrl not json`,
       `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrl {"uploadUrl":"x"}`,
+      `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrl {not: json}`,
+      `<<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrl ${body}`,
+      `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions ${body}`,
+      `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrlX ${body}`,
     ].join("\n");
     assert.deepEqual(uploadReceiptsFromCliOutput(output), [receiptOf()]);
   });
@@ -275,13 +324,37 @@ describe("ownership (T2)", () => {
     const world = createFakeGcs();
     const { uploads } = open(world);
     const deploy = await uploads.beginDeploy("program-1:http");
-    for (const object of ["../x.zip", "a/b.zip", "", "a?b.zip", "a b.zip"]) {
-      deploy.receipt(receiptOf(object));
-    }
+    const bad = [
+      "../x.zip",
+      "a/b.zip",
+      "",
+      "a?b.zip",
+      "a b.zip",
+      ".hidden.zip",
+      "-x.zip",
+      "a#b.zip",
+      5,
+    ];
+    for (const object of bad) deploy.receipt(receiptOf(object));
     const result = await deploy.finish({ cliExited: true });
     assert.equal(result.clean, false);
     assert.ok(result.reasons.includes("receipt-object-invalid"));
     assert.equal(world.count("DELETE"), 0);
+    // each name alone is refused, not only the set
+    for (const object of bad) {
+      const single = openSourceUploads({
+        ledgerPath: join(dir, `bad-${bad.indexOf(object)}.jsonl`),
+        runId: "run-b",
+        projectNumber: FAKE_PROJECT_NUMBER,
+        region: FAKE_REGION,
+        send: (method, url) => world.send(method, url),
+        requestsLeft: () => 1000,
+      });
+      const one = await single.beginDeploy("program-b:http");
+      one.receipt(receiptOf(object));
+      const outcome = await one.finish({ cliExited: true });
+      assert.ok(outcome.reasons.includes("receipt-object-invalid"), String(object));
+    }
   });
 
   it("refuses a receipt that names an object already in the bucket before the deploy", async () => {
@@ -620,6 +693,17 @@ describe("stop and resume (T6)", () => {
     const result = await deploy.finish({ cliExited: false });
     assert.equal(result.clean, false);
     assert.equal(uploads.report().closureReady, false);
+  });
+
+  it("a killed CLI with no receipt cannot rule out an upload in flight", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    const result = await deploy.finish({ cliExited: false });
+    assert.equal(result.clean, false);
+    assert.ok(result.reasons.includes("killed-without-receipt"));
+    assert.equal(uploads.report().closureReady, false);
+    assert.equal(world.count("DELETE"), 0);
   });
 
   it("a finished deploy is not finished twice, and a started key is not started twice", async () => {

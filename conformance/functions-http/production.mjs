@@ -1155,6 +1155,33 @@ export async function cleanupTarget(
   }
 }
 
+/**
+ * Starts the target's source upload ledger entry, then runs the deploy. From the first receipt on,
+ * `state.upload` holds the responsibility for what the deploy uploads, whatever the CLI does next.
+ */
+export async function deployTarget(
+  target,
+  programId,
+  state,
+  uploads,
+  adcPath,
+  budget,
+  runDir,
+  run = cli,
+) {
+  const upload = await uploads.beginDeploy(`${programId}:${target}`);
+  const deployTrack = { onReceipt: (receipt) => upload.receipt(receipt) };
+  Object.assign(state, { upload, deployTrack, started: true, exposureStart: Date.now() });
+  await run(
+    ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
+    adcPath,
+    budget,
+    "cliDeploy",
+    runDir,
+    deployTrack,
+  );
+}
+
 async function observeProgram(
   program,
   control,
@@ -1191,23 +1218,11 @@ async function observeProgram(
       ) {
         throw new Error("reserved function, service or image package already exists");
       }
-      const upload = await uploads.beginDeploy(`${program.id}:${target}`);
-      const deployTrack = { onReceipt: (receipt) => upload.receipt(receipt) };
-      Object.assign(states[target], { upload, deployTrack });
-      states[target].started = true;
-      states[target].exposureStart = Date.now();
-      await cli(
-        ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
-        adcPath,
-        budget,
-        "cliDeploy",
-        runDir,
-        deployTrack,
-      );
+      await deployTarget(target, program.id, states[target], uploads, adcPath, budget, runDir);
       await logChange("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
       const functionRecord = (await control("GET", functionUrl(target), undefined, "control"))
         .value;
-      upload.receipt(uploadReceiptFromFunctionRecord(functionRecord));
+      states[target].upload.receipt(uploadReceiptFromFunctionRecord(functionRecord));
       states[target].url = validateFunctionRecord(functionRecord, target);
       const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
       if (

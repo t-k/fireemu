@@ -1130,3 +1130,105 @@ test("only a deploy gets --debug; a delete CLI is run as before", async () => {
     await rm(without.dir, { recursive: true, force: true });
   }
 });
+
+// ---- deploy to terminal decision, with the deploy CLI replaced by a harmless child ----
+
+async function deployThenCleanUp({ script, putObject }) {
+  const world = await uploadWorld();
+  const scriptPath = join(world.dir, "fake-cli.mjs");
+  await writeFile(scriptPath, script);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(join(world.dir, "run")));
+  const run = (args, adc, budget, kind, runDir, track) => {
+    // the upload happens while the CLI runs, after the baseline was taken
+    if (putObject) world.gcs.put(UPLOAD_OBJECT);
+    return production.cli(args, adc, budget, kind, runDir, track, [process.execPath, scriptPath]);
+  };
+  const state = { started: false, cleaned: false };
+  let deployError;
+  try {
+    await production.deployTarget(
+      "http",
+      "functions-http/http/request-shape",
+      state,
+      world.uploads,
+      "/adc",
+      world.budget,
+      join(world.dir, "run"),
+      run,
+    );
+  } catch (error) {
+    deployError = error;
+  }
+  await production.cleanupTarget(
+    world.control,
+    "http",
+    "/adc",
+    world.budget,
+    join(world.dir, "run"),
+    state,
+    world.deps,
+  );
+  return { world, state, deployError };
+}
+
+test("a deploy that failed after the upload is cleaned from the CLI receipt and the run may close", async () => {
+  const { world, state, deployError } = await deployThenCleanUp({
+    script: FAKE_RECEIPT_SCRIPT(
+      'console.error("Error: Failed to create function"); process.exit(1);',
+    ),
+    putObject: true,
+  });
+  try {
+    assert.equal(deployError.indeterminate, true);
+    assert.equal(state.started, true);
+    assert.equal(state.cleanupError, undefined);
+    assert.equal(state.cleaned, true);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
+    const closed = production.withUploadClosure(world.uploads.report(), {
+      outcome: "recorded",
+      reason: undefined,
+      residual: false,
+    });
+    assert.equal(closed.residual, false);
+    assert.equal(world.budget.snapshot().cliDeploy, 1);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a deploy CLI that dies after the receipt but before the upload keeps the run open", async () => {
+  const { world, state } = await deployThenCleanUp({
+    script: FAKE_RECEIPT_SCRIPT(
+      'process.kill(process.pid, "SIGKILL"); await new Promise(() => {});',
+    ),
+    putObject: false,
+  });
+  try {
+    assert.equal(state.cleaned, false);
+    assert.match(state.cleanupError, /source upload not cleaned/);
+    const closed = production.withUploadClosure(world.uploads.report(), {
+      outcome: "recorded",
+      reason: undefined,
+      residual: false,
+    });
+    assert.equal(closed.residual, true);
+    assert.equal(closed.outcome, "stopped-needs-review");
+    assert.equal(world.gcs.count("DELETE"), 0);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a deploy that never reached the upload leaves nothing to clean", async () => {
+  const { world, state } = await deployThenCleanUp({
+    script: 'console.error("Error: auth failed"); process.exit(1);',
+    putObject: false,
+  });
+  try {
+    assert.equal(state.cleaned, true);
+    assert.equal(world.gcs.count("DELETE"), 0);
+    assert.equal(world.uploads.report().closureReady, true);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});

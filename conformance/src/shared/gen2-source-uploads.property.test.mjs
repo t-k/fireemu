@@ -245,6 +245,7 @@ async function run(seed) {
       UPLOAD_BOUNDS.pageSize * UPLOAD_BOUNDS.maxPages;
     const expectClean =
       !s.shortAtFinish &&
+      (s.cliExited || modelled.size > 0) &&
       objectsOk &&
       receiptFaults.length === 0 &&
       s.foreign === 0 &&

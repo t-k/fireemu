@@ -58,8 +58,7 @@ export function assertUploadBucket(bucket, { projectNumber, region }) {
   }
 }
 
-const validObject = (object) =>
-  typeof object === "string" && OBJECT_NAME.test(object) && !object.includes("..");
+const validObject = (object) => typeof object === "string" && OBJECT_NAME.test(object);
 
 /** The upload a function record names, or null. Only bucket and object are read. */
 export function uploadReceiptFromFunctionRecord(record) {
@@ -307,6 +306,8 @@ export function openSourceUploads({
       if (typeof cliExited !== "boolean") throw new Error("finish needs cliExited");
       finished = true;
       const reasons = [...faults];
+      // A CLI that was killed before any receipt was seen may have an upload in flight.
+      if (!cliExited && receipts.size === 0) reasons.push("killed-without-receipt");
       const need = UPLOAD_BOUNDS.maxPages + 3 * receipts.size;
       if (requestsLeft() < need) {
         reasons.push("upload-budget");

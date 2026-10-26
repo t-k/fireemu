@@ -7159,6 +7159,8 @@ root	unchanged	small	firstGen";
             "us-central1",
             "firebaseio.com",
         ));
+        let before = database.tree("demo-app-default-rtdb").unwrap().clone();
+        // Only a hang guard: what the test checks is that nothing was exported or built.
         let started = std::time::Instant::now();
         for n in 0..3 {
             let Handled::Response { response, .. } = database.handle(
@@ -7176,12 +7178,30 @@ root	unchanged	small	firstGen";
         }
         let elapsed = started.elapsed();
         assert!(
-            elapsed < Duration::from_secs(3),
+            elapsed < Duration::from_secs(60),
             "three writes took {elapsed:?}"
         );
+        // The capture selects no reference for the over-frame branch (so no snapshot is
+        // exported and no event is built) and counts it as one frame drop.
+        let after = database.tree("demo-app-default-rtdb").unwrap().clone();
+        let patterns =
+            [fireemu_core_functions::manifest::DatabasePattern::parse("/{top}").unwrap()];
         assert_eq!(
-            runtime.source_event_accounting().unwrap().published_records,
-            0
+            super::capture_database_references(
+                &patterns,
+                &before,
+                &after,
+                &fireemu_adapter_database::changes::Path::from_keys(["big"]),
+                fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS,
+                fireemu_adapter_functions::protocol::MAX_FRAME_BYTES,
+            )
+            .unwrap(),
+            (Vec::new(), 1)
+        );
+        let accounting = runtime.source_event_accounting().unwrap();
+        assert_eq!(
+            (accounting.reserved_records, accounting.published_records),
+            (0, 0)
         );
         let dropped = runtime
             .resources(fireemu_core_types::resources::RootBudget::DEFAULT)

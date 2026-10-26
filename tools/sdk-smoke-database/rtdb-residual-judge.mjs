@@ -42,7 +42,8 @@ export function stepStrictness(round1, round2) {
   const a = stepGroups(round1), b = stepGroups(round2), out = new Map();
   for (const [i, g] of a.entries()) {
     const h = b[i];
-    out.set(g.id, h && h.id === g.id ? (sameOrdered(g.keys, h.keys) ? 'ordered' : sameSorted(g.keys, h.keys) ? 'sorted' : 'unsettled') : 'unsettled');
+    // A step name is part of every row key, so a different step at the same position is unsettled too.
+    out.set(g.id, h ? (sameOrdered(g.keys, h.keys) ? 'ordered' : sameSorted(g.keys, h.keys) ? 'sorted' : 'unsettled') : 'unsettled');
   }
   if (b.length > a.length) for (const h of b.slice(a.length)) out.set(h.id, 'unsettled');
   return out;
@@ -84,7 +85,7 @@ export function judgeProfile(production, local, strictness, localHow = new Map()
   }
   const localUnknown = unknownRows(local.journal);
   if (localUnknown.length && !productionUnknown.length) differences.push({ step: null, index: 0, left: null, right: `local recorded ${localUnknown.map((u) => u.type).join()}` });
-  const verdict = differences.length ? 'differences' : productionUnknown.length || unsettled.length || localRaced.length ? 'needs-review' : 'match';
+  const verdict = differences.length ? 'differences' : unsettled.length || localRaced.length ? 'needs-review' : 'match';
   return { name: production.name, verdict, differences, unsettled, localRaced, productionUnknown };
 }
 

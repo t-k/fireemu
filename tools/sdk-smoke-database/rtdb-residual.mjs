@@ -209,12 +209,14 @@ export async function runScenario(o) {
   const sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   run.sleep = sleep;
   const profiles = [];
+  // Local runs may be narrowed (--scenarios, --transports); production always runs all eight.
+  const scenarios = o.scenarios ?? SCENARIOS, profilesToRun = o.profiles ?? PROFILES;
   try {
     if (o.mode === 'production') await setupProduction(run, sleep);
     await installRules(run, o);
     run.propagation = false;
-    for (const scenario of SCENARIOS) {
-      for (const prof of PROFILES) {
+    for (const scenario of scenarios) {
+      for (const prof of profilesToRun) {
         if (run.errors.length || o.stop?.requested) break;
         profiles.push(await runProfile(run, o, scenario, prof));
       }
@@ -228,7 +230,7 @@ export async function runScenario(o) {
   const restored = Object.values(run.state).every((s) => s === 'baseline');
   // An unexpected error or an unwritten log row means a sent request may be unaccounted for.
   const accounted = admin.counts.logFailures === 0 && !run.errors.some((e) => e.startsWith('unexpected'));
-  return { status: run.unresolved.length === 0 && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: admin.unknownAnswers, observationComplete: profiles.length === SCENARIOS.length * PROFILES.length && !run.errors.length, profiles, state: run.state, unresolved: run.unresolved, errors: run.errors, counts: admin.counts };
+  return { status: run.unresolved.length === 0 && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: admin.unknownAnswers, observationComplete: profiles.length === scenarios.length * profilesToRun.length && !run.errors.length, profiles, state: run.state, unresolved: run.unresolved, errors: run.errors, counts: admin.counts };
 }
 
 /** Compares a production and a local journal file's profiles; the timing verdict is part of `match`. */
@@ -328,6 +330,24 @@ export function writeOutputs(out, mode, result, prefixRoot, secrets) {
   return 'needs-recovery';
 }
 
+/** `--scenarios cv08,cv10` and `--transports ws,lp` narrow a local run (the mutation harness uses it). */
+export function narrowing(scenarios, transports) {
+  const pick = (spec, all, what) => {
+    const want = spec.split(',');
+    if (!want.length || want.some((w) => !all.includes(w))) throw Error(`${what} must be a comma-separated subset of ${all.join(',')}`);
+    return all.filter((a) => want.includes(a));
+  };
+  return {
+    ...(scenarios ? { scenarios: pick(scenarios, SCENARIOS, '--scenarios') } : {}),
+    ...(transports ? { profiles: PROFILES.filter((p) => pick(transports, ['ws', 'lp'], '--transports').includes(p.transport)) } : {}),
+  };
+}
+
+/** Production always runs all eight profiles: narrowing is for local runs. */
+export function refuseNarrowing(mode, scenarios, transports) {
+  if (mode === 'production' && (scenarios || transports)) throw Error('--scenarios and --transports are for local runs only');
+}
+
 async function waitFor(check, what, tries = 150) {
   for (let i = 0; i < tries; i++) {
     if (await check()) return;
@@ -347,6 +367,7 @@ async function main(argv) {
   }
   const mode = argv[0], out = opt('--out');
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
+  refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
   mkdirSync(out); // refuses an existing directory
   const secrets = [], stop = { requested: false };
@@ -378,7 +399,7 @@ async function main(argv) {
       }
       const dbPort = new URL(db).port;
       const browser = browserRunner({ modules: opt('--modules') ?? path.join(here, 'node_modules'), stop, page: { projectId: 'demo-rtdb-residual', databaseURL: `${db}/?ns=${ns}`, emulator: true, allowHost: (h) => h === `127.0.0.1:${dbPort}` } });
-      o = { mode, local: { db, ns }, headers: { authorization: 'Bearer owner' }, browser, ...common };
+      o = { mode, local: { db, ns }, headers: { authorization: 'Bearer owner' }, browser, ...common, ...narrowing(opt('--scenarios'), opt('--transports')) };
     } else {
       const token = execFileSync(packet.gcloud, ['auth', 'application-default', 'print-access-token'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
       if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');

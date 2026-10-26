@@ -294,3 +294,44 @@ test('axes: every strictness x local change x production timeout x transport giv
   }
   assert.equal(cases, 72);
 });
+
+test('fire timing: a string, a row of another step, a negative or missing WebSocket value and a missing long-polling value are not fine', () => {
+  assert.equal(fireSeconds([{ step: 'fire', type: 'timing', seconds: '3' }]), null);
+  assert.equal(fireSeconds([{ step: 'other', type: 'timing', seconds: 3 }, { step: 'fire', type: 'timing', seconds: 4 }]), 4);
+  assert.equal(fireSeconds([{ step: 'other', type: 'timing', seconds: 3 }]), null);
+  const production = [profile('cv10', 'r1-ws', [{ step: 'fire', type: 'timing', seconds: 0.1 }]), profile('cv10', 'r1-lp', [{ step: 'fire', type: 'timing', seconds: 104 }]), profile('cv10', 'r2-ws', [{ step: 'fire', type: 'timing', seconds: 0.2 }]), profile('cv10', 'r2-lp', [{ step: 'fire', type: 'timing', seconds: 100.8 }])];
+  const local = (ws, lp) => [profile('cv10', 'r1-ws', ws), profile('cv10', 'r1-lp', lp), profile('cv10', 'r2-ws', ws), profile('cv10', 'r2-lp', lp)];
+  const t = (seconds) => [{ step: 'fire', type: 'timing', seconds }];
+  assert.equal(judgeFireTiming(production, local(t(0.3), t(102))).within, true);
+  assert.equal(judgeFireTiming(production, local(t(-0.1), t(102))).within, false, 'a negative WebSocket delay is outside');
+  assert.equal(judgeFireTiming(production, local([], t(102))).within, false, 'a missing WebSocket timing is outside');
+  assert.equal(judgeFireTiming(production, local(t('0.3'), t(102))).within, false, 'a string is not a delay');
+  const lpMissing = production.map((p) => (p.name === 'r1-lp' ? { ...p, journal: [] } : p));
+  assert.equal(judgeFireTiming(lpMissing, local(t(0.3), t(50))).within, false, 'a production profile without timing does not widen the range down to zero');
+  assert.equal(judgeFireTiming(lpMissing, local(t(0.3), t(100.8))).within, true);
+});
+
+test('a production with one transport only, or with one round only, is never a match', () => {
+  const wsOnly = runOf('cv08').filter((p) => p.name.endsWith('-ws'));
+  const r = judgeRuns(wsOnly, runOf('cv08'));
+  assert.equal(r.verdict, 'needs-review');
+  assert.ok(r.profiles.every((p) => p.verdict === 'match'), 'what exists is judged');
+  const oneRound = runOf('cv08').filter((p) => p.name !== 'r2-ws');
+  const o = judgeRuns(oneRound, runOf('cv08'));
+  assert.equal(o.profiles.find((p) => p.name === 'r1-ws').verdict, 'needs-review', 'strictness cannot be derived from one round');
+  assert.ok(o.profiles.find((p) => p.name === 'r1-ws').unsettled.length > 0);
+});
+
+test('sanitizeProfiles drops fields that are undefined', () => {
+  const [p] = sanitizeProfiles([profile('cv08', 'r1-ws', [{ step: 's', type: 'value', label: undefined, key: 'k' }])]);
+  assert.deepEqual(Object.keys(p.journal[0]), ['step', 'type', 'key']);
+});
+
+test('rows without an actor (runner, transport) sort before the actors (which sort by name) and keep their order', () => {
+  const a = [row('s', 'x'), row('s', 'ack', { actor: 'w' }), row('s', 'v', { actor: 'o' })];
+  const b = [row('s', 'ack', { actor: 'w' }), row('s', 'v', { actor: 'o' }), row('s', 'x')];
+  assert.deepEqual(stepGroups(a)[0].keys, stepGroups(b)[0].keys);
+  assert.deepEqual(stepGroups(a)[0].keys, [rowKey(a[0]), rowKey(a[2]), rowKey(a[1])]);
+  const c = [row('s', 'v', { actor: 'o' }), row('s', 'x'), row('s', 'ack', { actor: 'w' })];
+  assert.deepEqual(stepGroups(c)[0].keys, stepGroups(a)[0].keys);
+});

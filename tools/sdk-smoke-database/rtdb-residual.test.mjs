@@ -3,14 +3,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LAUNCH } from './cv11-genuine-auth.mjs';
-import { CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, profileTimeout, rulesFor, runScenario, transportOf, urls, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
+import { CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}', PREFIX = 'parity1/rr1';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
+const FORBIDDEN = JSON.stringify({ error: { code: 403, message: 'denied for ya29.a0secret and AIzaSyA-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', status: 'PERMISSION_DENIED' } });
 
 // A fake of the production APIs. A fault {method, path (regexp), kind, applied, skip} fires once, on the
 // (skip+1)th match; kind 'lie' answers 200 with a plausible body without applying the request.
@@ -41,6 +43,7 @@ function fakeWorld(faults = []) {
   w.fetch = async (url, init) => {
     const u = new URL(url), body = init.body === undefined ? undefined : /rules/.test(u.pathname) ? init.body : JSON.parse(init.body);
     w.sent.push(`${init.method} ${u.pathname}`);
+    if (init.method === 'GET' && w.forbid?.path.test(u.pathname) && w.forbid.remaining-- > 0) return json(w.forbid.status ?? 403, FORBIDDEN);
     const f = faults.find((x) => !x.used && x.method === init.method && x.path.test(u.pathname) && !(x.skip-- > 0));
     if (!f) return apply(init.method, u, body);
     f.used = true;
@@ -286,4 +289,153 @@ test('compareFiles is a match only when the verdict is a match and the fire timi
   assert.equal(compareFiles(mk(0.1, 104), mk(0.2, 103)).match, true);
   assert.equal(compareFiles(mk(0.1, 104), mk(9, 103)).match, false);
   assert.equal(compareFiles(mk(0.1, 104), mk(0.2, 103).slice(0, 3)).match, false);
+});
+
+test('the caps are the ones the packet states', () => {
+  assert.deepEqual(CAPS, { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation: 12, browserHttp: 400, browserWs: 24, browserFrames: 2500 });
+});
+
+// production-1 of the CV11 recorder (2026-10-25 14:22Z): after the API enable, the instance GET answered 200
+// and the active-instance list answered 403. Read-only GETs are retried for up to 120 s, never mutations.
+const PRODUCTION_1 = ['api-before', 'api-enable', 'api-enable-poll-0', 'api-enabled', 'instance-before', 'active-before'];
+const clocked = () => { const c = { slept: [] }; c.sleep = async (ms) => { c.slept.push(ms); }; return c; };
+test('production-1 replay: a 403 list that clears within 120 s is retried and the run completes', async () => {
+  const w = fakeWorld(), c = clocked(), rows = [];
+  w.forbid = { path: /\/-\/instances$/, remaining: 3 };
+  const r = await prod(w, { sleep: c.sleep, log: (x) => rows.push(x) });
+  assert.equal(r.status, 'closed'); assert.ok(r.observationComplete);
+  assert.deepEqual(rows.slice(0, 9).map((x) => x.step), [...PRODUCTION_1, 'active-before-retry-1', 'active-before-retry-2', 'active-before-retry-3']);
+  const denied = rows.filter((x) => x.status === 403);
+  assert.equal(denied.length, 3);
+  for (const x of denied) { assert.match(x.body, /PERMISSION_DENIED/); assert.doesNotMatch(x.body, /ya29\.a0|AIzaSy/); }
+  assert.deepEqual(c.slept.slice(1, 4), [2000, 4000, 8000]);
+});
+
+test('production-1 replay: a 403 that outlasts 120 s stops before any instance write and restores the API', async () => {
+  const w = fakeWorld(), c = clocked(), rows = [];
+  w.forbid = { path: /\/-\/instances$/, remaining: Infinity };
+  const r = await prod(w, { sleep: c.sleep, log: (x) => rows.push(x) });
+  const steps = rows.map((x) => x.step), retries = steps.filter((x) => x.startsWith('active-before-retry-'));
+  assert.deepEqual(steps.slice(0, 6), PRODUCTION_1);
+  assert.deepEqual(steps.slice(6 + retries.length), ['api-disable', 'api-disabled']);
+  assert.ok(retries.length >= 3 && retries.length <= 7, String(retries.length));
+  assert.equal(c.slept.slice(1).reduce((a, b) => a + b, 0), 120000, 'the whole 120 s budget is used and not exceeded');
+  assert.equal(r.status, 'closed'); assert.ok(!r.observationComplete); assert.ok(w.baseline());
+  assert.ok(!w.sent.some((x) => x.startsWith('POST') && x.includes('instances')));
+});
+
+test('a 403 on a mutation, on a 404, before the API enable or after setup is never retried', async () => {
+  const w1 = fakeWorld([{ method: 'POST', path: /:undelete$/, kind: '4xx' }]);
+  await prod(w1, { sleep: clocked().sleep });
+  assert.equal(w1.sent.filter((x) => x.endsWith(':undelete')).length, 1);
+  const w2 = fakeWorld();
+  w2.forbid = { path: /firebasedatabase\.googleapis\.com$/, remaining: 1 };
+  await prod(w2, { sleep: clocked().sleep });
+  assert.deepEqual(w2.sent, ['GET /v1/projects/000000000000/services/firebasedatabase.googleapis.com']);
+  const w3 = fakeWorld(), rows3 = [];
+  w3.forbid = { path: /\/-\/instances$/, remaining: 1, status: 404 };
+  await prod(w3, { sleep: clocked().sleep, log: (x) => rows3.push(x.step) });
+  assert.ok(!rows3.some((x) => x.includes('-retry-')), 'a 404 is not propagation');
+  const w4 = fakeWorld(), rows4 = [];
+  const r4 = await prod(w4, { sleep: clocked().sleep, log: (x) => rows4.push(x.step), browser: async (c, h) => { w4.forbid = { path: /fireemu-q-rtdb2$/, remaining: 1 }; return fakeBrowser(w4)(c, h); } });
+  assert.ok(!rows4.some((x) => x.includes('-retry-')), 'no retry after setup'); assert.equal(r4.status, 'needs-recovery');
+});
+
+test('an operation done with an error, or a poll naming another operation, is unknown; one that never reads done stops at the poll cap', async () => {
+  for (const answer of [(name) => ({ name, done: true, error: { code: 9 } }), () => ({ name: 'operations/other', done: true })]) {
+    const w = fakeWorld(), base = w.fetch;
+    w.fetch = async (url, init) => (url.includes('/operations/') ? json(200, answer(new URL(url).pathname.slice(4))) : base(url, init));
+    const r = await prod(w);
+    assert.equal(r.status, 'needs-recovery'); assert.equal(r.unresolved[0].step, 'api-enable'); assert.ok(!w.sent.some((x) => x.includes(':undelete')));
+  }
+  const w = fakeWorld(), base = w.fetch;
+  w.fetch = async (url, init) => (url.includes('/operations/') ? (w.sent.push('GET /operations/'), json(200, { name: new URL(url).pathname.slice(4), done: false })) : base(url, init));
+  const r = await prod(w);
+  assert.equal(r.status, 'needs-recovery');
+  assert.equal(w.sent.filter((s) => s.includes('/operations/')).length, CAPS.pollsPerOperation);
+});
+
+test('a Rules read-back that differs from what was written, or a foreign instance at the end, stops safely', async () => {
+  const w2 = fakeWorld(), base = w2.fetch;
+  w2.fetch = async (url, init) => (init.method === 'GET' && url.includes('rules') && w2.rules !== BASE ? json(200, '{"rules":{}}') : base(url, init));
+  const r2 = await prod(w2);
+  assert.ok(!r2.observationComplete); assert.equal(r2.profiles.length, 0, 'the install read-back failed before any profile');
+  const w3 = fakeWorld(), r3 = await prod(w3, { browser: async (c, h) => { w3.foreign = true; return fakeBrowser(w3)(c, h); } });
+  assert.equal(r3.status, 'needs-recovery'); assert.equal(w3.api, 'ENABLED'); assert.ok(r3.errors.some((e) => /active-after/.test(e)));
+});
+
+test('a hook failure that the page runner swallows is still an error of the run and stops later profiles', async () => {
+  const w = fakeWorld([{ method: 'PUT', path: /rules/, kind: '4xx', skip: 2 }]);
+  const swallowing = async (cfg, hooks) => {
+    w.data[`${cfg.base}/seed`] = 1;
+    const journal = [];
+    try { if (cfg.scenario === 'cv10') { await hooks.rulesOpen(); await hooks.rulesDeny(); } } catch { journal.push({ scenario: cfg.scenario, step: 'runner', type: 'error', code: 'hook' }); }
+    return { journal, counts: {} };
+  };
+  const r = await prod(w, { browser: swallowing });
+  assert.ok(r.errors.some((e) => /rules-deny-.*refused/.test(e)), r.errors.join());
+  assert.equal(r.profiles.length, 5, 'four cv08 profiles and the failing cv10 profile; nothing after it');
+  assert.ok(!r.observationComplete); assert.ok(w.baseline());
+});
+
+test('the wait for pending onDisconnect writes is sticky: a later profile that fired does not cancel it', async () => {
+  const slept = [];
+  const w = fakeWorld(), fireOnlyAfterFirst = (() => { let n = 0; return async (cfg, hooks) => fakeBrowser(w, { noFire: cfg.scenario === 'cv10' && n++ === 0 })(cfg, hooks); })();
+  await prod(w, { browser: fireOnlyAfterFirst, sleep: async (ms) => { slept.push(ms); } });
+  assert.ok(slept.includes(FIRE_GRACE_MS));
+});
+
+test('a stop requested after the first profile leaves the run incomplete even with no error', async () => {
+  const w = fakeWorld(), stop = { requested: false };
+  const r = await prod(w, { stop, browser: async (cfg, hooks) => { const out = await fakeBrowser(w)(cfg, hooks); stop.requested = true; return out; } });
+  assert.equal(r.profiles.length, 1); assert.deepEqual(r.errors, []); assert.equal(r.observationComplete, false);
+});
+
+test('a request whose log row cannot be written, or an unexpected error, is never closed even when the world is back at baseline', async () => {
+  const w = fakeWorld(), r = await prod(w, { log: (x) => { if (x.step === 'rules-open-cv10-r1-ws-1-read') throw Error('output refused'); } });
+  assert.ok(w.baseline()); assert.equal(r.counts.logFailures, 1); assert.equal(r.status, 'needs-recovery');
+  assert.deepEqual(r.unresolved, []);
+  const w2 = fakeWorld();
+  let calls = 0;
+  const r2 = await prod(w2, { sleep: async () => { if (++calls === 1) throw Error('boom'); } });
+  assert.ok(w2.baseline()); assert.equal(r2.status, 'needs-recovery'); assert.ok(r2.errors.some((e) => e === 'unexpected: boom'));
+  const w3 = fakeWorld(), base3 = w3.fetch;
+  w3.fetch = async (url, init) => { const x = await base3(url, init); return url.endsWith(':disable') && url.includes('serviceusage') ? json(200, { name: 'operations/slow' }) : x; };
+  let n3 = 0;
+  const r3 = await prod(w3, { sleep: async () => { if (++n3 === 2) throw Error('boom in cleanup'); } });
+  assert.equal(r3.status, 'needs-recovery'); assert.ok(r3.errors.some((e) => e === 'unexpected: boom in cleanup'));
+});
+
+test('narrowing: --scenarios and --transports pick subsets in order, anything else is refused', () => {
+  assert.deepEqual(narrowing(undefined, undefined), {});
+  assert.deepEqual(narrowing('cv10', undefined), { scenarios: ['cv10'] });
+  assert.deepEqual(narrowing('cv10,cv08', 'lp'), { scenarios: ['cv08', 'cv10'], profiles: PROFILES.filter((p) => p.transport === 'lp') });
+  for (const bad of ['cv11', 'cv08,x', '']) assert.throws(() => narrowing(bad || ',', undefined), /--scenarios/);
+  assert.throws(() => narrowing(undefined, 'http'), /--transports/);
+});
+
+test('a narrowed local run is complete when its own profiles ran, and the full run still needs all eight', async () => {
+  const w = fakeWorld(), r = await local(w, { scenarios: ['cv08'], profiles: PROFILES.filter((p) => p.transport === 'ws') });
+  assert.deepEqual(r.profiles.map((p) => `${p.scenario}:${p.name}`), ['cv08:r1-ws', 'cv08:r2-ws']);
+  assert.ok(r.observationComplete); assert.equal(r.status, 'closed');
+  const full = await local(fakeWorld());
+  assert.equal(full.profiles.length, 8);
+});
+
+test('production refuses a narrowed run before any request; local accepts it', () => {
+  assert.throws(() => refuseNarrowing('production', 'cv08', undefined), /local runs only/);
+  assert.throws(() => refuseNarrowing('production', undefined, 'ws'), /local runs only/);
+  assert.doesNotThrow(() => refuseNarrowing('production', undefined, undefined));
+  assert.doesNotThrow(() => refuseNarrowing('local', 'cv08', 'ws'));
+});
+
+test('the command line refuses a narrowed production run before the packet is even read, and an unknown mode', () => {
+  const run = (...args) => spawnSync(process.execPath, [new URL('./rtdb-residual.mjs', import.meta.url).pathname, ...args], { encoding: 'utf8' });
+  const dir = mkdtempSync(path.join(tmpdir(), 'rr-cli-'));
+  const narrowed = run('production', '--scenarios', 'cv08', '--out', path.join(dir, 'a'));
+  assert.equal(narrowed.status, 2); assert.match(narrowed.stderr, /local runs only/);
+  const plain = run('production', '--out', path.join(dir, 'b'));
+  assert.equal(plain.status, 2); assert.match(plain.stderr, /--packet/);
+  const bad = run('bogus', '--out', path.join(dir, 'c'));
+  assert.equal(bad.status, 2); assert.match(bad.stderr, /usage/);
 });

@@ -2974,6 +2974,7 @@ pub fn database_sink(
         daemon_project: daemon_project.to_owned(),
         location: location.to_owned(),
         host: host.to_owned(),
+        pending_frame_drops: Mutex::new(0),
     })
 }
 
@@ -2982,6 +2983,9 @@ struct FunctionsDatabaseSink {
     daemon_project: String,
     location: String,
     host: String,
+    /// References the last capture left out because their snapshot can never fit a frame,
+    /// counted only once the write is admitted (merge review R2-S1).
+    pending_frame_drops: Mutex<usize>,
 }
 
 impl std::fmt::Debug for FunctionsDatabaseSink {
@@ -3007,6 +3011,15 @@ impl fireemu_adapter_database::changes::Publication for FunctionsDatabasePublica
 }
 
 impl FunctionsDatabaseSink {
+    fn count_frame_drops(&self, namespace: &str, count: usize) {
+        for _ in 0..count {
+            let _ = self.runtime.drop_database_fanout(
+                namespace,
+                "one changed reference's snapshot is larger than an invocation frame",
+            );
+        }
+    }
+
     fn patterns(&self, instance: &str) -> Vec<fireemu_core_functions::manifest::DatabasePattern> {
         let project = crate::database_rules::project_of_instance(instance, &self.daemon_project);
         self.runtime
@@ -3036,6 +3049,7 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
         Option<Vec<fireemu_adapter_database::changes::Path>>,
         fireemu_core_types::admission::EventAdmissionError,
     > {
+        use fireemu_adapter_functions::protocol::MAX_FRAME_BYTES;
         use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_RECORDS;
         match capture_database_references(
             &self.patterns(namespace),
@@ -3043,8 +3057,24 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
             after,
             scope,
             MAX_ACTIVE_EVENT_RECORDS,
+            MAX_FRAME_BYTES,
         ) {
-            Ok(references) => Ok(Some(references)),
+            Ok((references, frame_drops)) => {
+                if references.is_empty() {
+                    // Nothing is reserved, so the write is applied now.
+                    self.count_frame_drops(namespace, frame_drops);
+                    *self
+                        .pending_frame_drops
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
+                } else {
+                    *self
+                        .pending_frame_drops
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = frame_drops;
+                }
+                Ok(Some(references))
+            }
             // Every changed reference yields at least one event, so more references than the
             // whole event budget can never be admitted; production accepts the write (review
             // S4), so it proceeds without them. Byte sizes are not judged here: the runtime
@@ -3105,8 +3135,15 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
             auth_id: change.context.principal.auth_id.clone(),
             auth: change.context.principal.auth.clone(),
         };
+        let frame_drops = std::mem::take(
+            &mut *self
+                .pending_frame_drops
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         self.runtime
             .reserve_database_events(&commit)
+            .inspect(|_| self.count_frame_drops(&change.context.namespace, frame_drops))
             .map(|reservation| {
                 Box::new(FunctionsDatabasePublication(Some(reservation)))
                     as Box<dyn fireemu_adapter_database::changes::Publication>
@@ -3120,17 +3157,41 @@ impl fireemu_adapter_database::changes::ChangeSink for FunctionsDatabaseSink {
 // runtime, which measures the serialized events: a heap-size estimate here dropped events that
 // fit (merge review M1, 2026-10-26). The snapshots exported for the selected references are
 // bounded by the namespace already in memory times the pattern depth.
+//
+// A reference whose snapshot alone is provably larger than an invocation frame is left out
+// and counted, before anything is exported: building that event cost seconds and gigabytes
+// under the database lock only to drop it (merge review R2-M1, 2026-10-26).
 struct DatabaseReferenceCapture {
     references: BTreeSet<fireemu_adapter_database::changes::Path>,
     record_limit: usize,
+    frame_limit: usize,
+    frame_drops: usize,
 }
 
 impl DatabaseReferenceCapture {
     fn insert(
         &mut self,
         path: &fireemu_adapter_database::changes::Path,
+        before: Option<&fireemu_adapter_database::changes::Node>,
+        after: Option<&fireemu_adapter_database::changes::Node>,
     ) -> Result<(), fireemu_core_types::admission::EventAdmissionError> {
         if self.references.contains(path) {
+            return Ok(());
+        }
+        // An event carries `before` as its data and, unless both sides are objects, `after`
+        // whole as its delta.
+        let objects = |node: Option<&fireemu_adapter_database::changes::Node>| {
+            matches!(
+                node.map(|node| &node.content),
+                Some(fireemu_adapter_database::changes::Content::Children(_))
+            )
+        };
+        let mut bound = database_json_lower_bound(before, self.frame_limit);
+        if !(objects(before) && objects(after)) {
+            bound = bound.saturating_add(database_json_lower_bound(after, self.frame_limit));
+        }
+        if bound > self.frame_limit {
+            self.frame_drops += 1;
             return Ok(());
         }
         if self.references.len() >= self.record_limit {
@@ -3145,6 +3206,41 @@ impl DatabaseReferenceCapture {
     }
 }
 
+/// A lower bound of the compact JSON length of `node`, never allocating: key and string
+/// bytes plus the quotes, colons, commas and braces around them; every other leaf counts one
+/// byte, and priorities and escapes are left out. It stops counting once past `limit`.
+fn database_json_lower_bound(
+    node: Option<&fireemu_adapter_database::changes::Node>,
+    limit: usize,
+) -> usize {
+    use fireemu_adapter_database::changes::Content;
+    let Some(node) = node else {
+        return 4; // null
+    };
+    let mut total = 0usize;
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match &node.content {
+            Content::Leaf(fireemu_adapter_database::changes::Leaf::String(text)) => {
+                total = total.saturating_add(text.len() + 2);
+            }
+            Content::Leaf(_) => total = total.saturating_add(1),
+            Content::Children(children) => {
+                // Braces, and a key with its quotes, colon and comma per child.
+                total = total.saturating_add(2 + children.len().saturating_sub(1));
+                for (key, child) in children {
+                    total = total.saturating_add(key.len() + 3);
+                    pending.push(child);
+                }
+            }
+        }
+        if total > limit {
+            break;
+        }
+    }
+    total
+}
+
 fn database_node_children(
     node: Option<&fireemu_adapter_database::changes::Node>,
 ) -> Option<&BTreeMap<String, fireemu_adapter_database::changes::Node>> {
@@ -3155,7 +3251,8 @@ fn database_node_children(
 }
 
 /// The changed trigger references of a write confined to `scope` (see
-/// `ChangeSink::capture_references_within`): above `scope` only the branch leading to it is
+/// `ChangeSink::capture_references_within`), and how many were left out because their
+/// snapshot can never fit `frame_limit`: above `scope` only the branch leading to it is
 /// followed, without comparing its unchanged siblings.
 fn capture_database_references(
     patterns: &[fireemu_core_functions::manifest::DatabasePattern],
@@ -3163,13 +3260,16 @@ fn capture_database_references(
     after: &fireemu_adapter_database::changes::Tree,
     scope: &fireemu_adapter_database::changes::Path,
     record_limit: usize,
+    frame_limit: usize,
 ) -> Result<
-    Vec<fireemu_adapter_database::changes::Path>,
+    (Vec<fireemu_adapter_database::changes::Path>, usize),
     fireemu_core_types::admission::EventAdmissionError,
 > {
     let mut capture = DatabaseReferenceCapture {
         references: BTreeSet::new(),
         record_limit,
+        frame_limit,
+        frame_drops: 0,
     };
     for pattern in patterns {
         let parts: Vec<_> = pattern
@@ -3197,7 +3297,10 @@ fn capture_database_references(
             &mut capture,
         )?;
     }
-    Ok(capture.references.into_iter().collect())
+    Ok((
+        capture.references.into_iter().collect(),
+        capture.frame_drops,
+    ))
 }
 
 fn walk_database_references(
@@ -3215,7 +3318,7 @@ fn walk_database_references(
         return Ok(());
     }
     if path.depth() == prefixes.len() {
-        return capture.insert(path);
+        return capture.insert(path, before, after);
     }
     let prefix = &prefixes[path.depth()];
     let segment = prefix
@@ -6517,12 +6620,13 @@ while True:
             .map(|pattern| DatabasePattern::parse(pattern).unwrap());
         // Three references fit a budget of three records although the unrelated branches are
         // large. Duplicate patterns must not charge twice.
-        let references = super::capture_database_references(
+        let (references, _) = super::capture_database_references(
             &patterns,
             &before,
             &after,
             &fireemu_adapter_database::changes::Path::root(),
             3,
+            usize::MAX,
         )
         .unwrap();
         assert_eq!(
@@ -6537,9 +6641,11 @@ while True:
             &before,
             &before,
             &fireemu_adapter_database::changes::Path::root(),
-            0
+            0,
+            usize::MAX
         )
         .unwrap()
+        .0
         .is_empty());
     }
 
@@ -6553,14 +6659,34 @@ while True:
         let after = database_bridge_tree(&json!({"users":{"a":"x".repeat(4 * 1024 * 1024),"b":2}}));
         let patterns = [DatabasePattern::parse("/users/{uid}").unwrap()];
         assert!(matches!(
-            super::capture_database_references(&patterns, &before, &after, &root, 1),
+            super::capture_database_references(&patterns, &before, &after, &root, 1, usize::MAX),
             Err(EventAdmissionError::Capacity(_))
         ));
         assert_eq!(
-            super::capture_database_references(&patterns, &before, &after, &root, 2)
+            super::capture_database_references(&patterns, &before, &after, &root, 2, usize::MAX)
+                .unwrap(),
+            (
+                vec![
+                    root.child("users").child("a"),
+                    root.child("users").child("b")
+                ],
+                0
+            )
+        );
+        // R2-M1: a snapshot provably larger than the frame is left out and counted, before
+        // any export; one at the bound is kept, as its event may still fit.
+        // A leaf's event carries `before` ("before": 8 bytes) and `after` whole.
+        let at_bound = 8 + 4 * 1024 * 1024 + 2;
+        assert_eq!(
+            super::capture_database_references(&patterns, &before, &after, &root, 2, at_bound)
                 .unwrap()
-                .len(),
-            2
+                .1,
+            0
+        );
+        assert_eq!(
+            super::capture_database_references(&patterns, &before, &after, &root, 2, at_bound - 1)
+                .unwrap(),
+            (vec![root.child("users").child("b")], 1)
         );
     }
 
@@ -6639,14 +6765,14 @@ while True:
             }
             let patterns = ["/users", "/users/{uid}", "/{top}/{uid=*-test}", "/a/b/v", "/"]
                 .map(|pattern| DatabasePattern::parse(pattern).unwrap());
-            let whole = super::capture_database_references(&patterns, &before, &after, &Path::root(), usize::MAX).unwrap();
-            let scoped = super::capture_database_references(&patterns, &before, &after, &scope, usize::MAX).unwrap();
+            let whole = super::capture_database_references(&patterns, &before, &after, &Path::root(), usize::MAX, usize::MAX).unwrap().0;
+            let scoped = super::capture_database_references(&patterns, &before, &after, &scope, usize::MAX, usize::MAX).unwrap().0;
             proptest::prop_assert_eq!(&scoped, &whole);
             // A write no pattern overlaps (the sink's `affects` is false) changes no reference.
             // ("/" overlaps everything, so the check leaves it out.)
             let narrow = &patterns[..4];
             if !narrow.iter().any(|pattern| pattern.overlaps(&scope.to_string())) {
-                let unaffected = super::capture_database_references(narrow, &before, &after, &Path::root(), usize::MAX).unwrap();
+                let unaffected = super::capture_database_references(narrow, &before, &after, &Path::root(), usize::MAX, usize::MAX).unwrap().0;
                 proptest::prop_assert!(unaffected.is_empty(), "{unaffected:?}");
             }
         }
@@ -6958,6 +7084,71 @@ root	unchanged	small	firstGen";
             .find(|refusal| refusal.reason == format!("admission.{DATABASE_FANOUT_DROPPED}"))
             .map_or(0, |refusal| refusal.count);
         assert_eq!(dropped, 0);
+        runtime.shutdown().await;
+    }
+
+    /// Merge review round 2 R2-M1 (2026-10-26): under a broad trigger (`/{top}`), a one-value
+    /// write into a branch whose JSON is larger than an invocation frame used to export and
+    /// serialize the whole branch under the database lock before the event was dropped. A cheap
+    /// lower bound of the snapshot's JSON size now proves the event can never fit, so the
+    /// write stays fast; the event is counted as dropped.
+    #[tokio::test]
+    async fn database_bridge_drops_a_frame_sized_snapshot_without_exporting_it() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        use fireemu_adapter_functions::runtime::DATABASE_FANOUT_DROPPED;
+        let runtime = database_bridge_runtime_with(
+            &json!({"functions":[{"name":"topChanged","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/{top}"
+            }}]}),
+        )
+        .await;
+        let mut database = Database::new(RestOptions::default(), 1);
+        // About 18 MB of JSON in 200,000 small objects: more than the 16 MiB frame.
+        let big: serde_json::Map<_, _> = (0..200_000)
+            .map(|n| (format!("k{n:06}"), json!({"v": "x".repeat(70)})))
+            .collect();
+        assert_eq!(
+            database_bridge_write(&mut database, &json!({"big": big})),
+            200
+        );
+        database.set_change_sink(super::database_sink(
+            &runtime,
+            "demo-app",
+            "us-central1",
+            "firebaseio.com",
+        ));
+        let started = std::time::Instant::now();
+        for n in 0..3 {
+            let Handled::Response { response, .. } = database.handle(
+                &HttpRequest {
+                    method: "PUT".to_owned(),
+                    target: format!("/big/new{n}.json?ns=demo-app-default-rtdb"),
+                    headers: Vec::new(),
+                    body: b"1".to_vec(),
+                },
+                100_000,
+            ) else {
+                panic!("a PUT must not create a stream")
+            };
+            assert_eq!(response.status, 200);
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "three writes took {elapsed:?}"
+        );
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().published_records,
+            0
+        );
+        let dropped = runtime
+            .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+            .unwrap()
+            .refusals
+            .into_iter()
+            .find(|refusal| refusal.reason == format!("admission.{DATABASE_FANOUT_DROPPED}"))
+            .map_or(0, |refusal| refusal.count);
+        assert_eq!(dropped, 3);
         runtime.shutdown().await;
     }
 

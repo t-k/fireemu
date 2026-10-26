@@ -393,6 +393,44 @@ async fn only_the_event_larger_than_a_frame_is_dropped() {
     runtime.shutdown().await;
 }
 
+/// Merge review R2-S1: a write refused while the queue is full is not applied, so its
+/// over-frame event is neither counted nor warned about; the retry counts it once.
+#[tokio::test]
+async fn a_refused_write_counts_no_dropped_event() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    let (runtime, _) = runtime(false).await;
+    let mut held = commit();
+    held.data = user_changes(MAX_ACTIVE_EVENT_RECORDS);
+    let holding = runtime.reserve_database_events(&held).unwrap();
+    let mut change = commit();
+    change.data = DatabaseChangeData::References(vec![
+        DatabaseReferenceChange {
+            reference: "/users/big".to_owned(),
+            before: json!("a".repeat(8 * 1024 * 1024)),
+            after: json!("b".repeat(8 * 1024 * 1024)),
+        },
+        DatabaseReferenceChange {
+            reference: "/users/small".to_owned(),
+            before: serde_json::Value::Null,
+            after: json!(1),
+        },
+    ]);
+    assert!(matches!(
+        runtime.reserve_database_events(&change),
+        Err(SourceEventAdmissionError::Capacity)
+    ));
+    assert_eq!(dropped_fanouts(&runtime), 0);
+    drop(holding);
+    let reservation = runtime.reserve_database_events(&change).unwrap();
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    assert!(
+        !runtime.drop_database_fanout("app-first", "probe"),
+        "the warning was spent once"
+    );
+    drop(reservation);
+    runtime.shutdown().await;
+}
+
 #[tokio::test]
 async fn only_the_first_dropped_fanout_of_a_session_is_printed() {
     let (runtime, _) = runtime(false).await;

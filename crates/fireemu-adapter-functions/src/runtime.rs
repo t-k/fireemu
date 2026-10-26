@@ -2588,7 +2588,9 @@ impl FunctionsRuntime {
             let _ = self.drop_database_fanout(&commit.instance, reason);
             return Ok(self.empty_event_reservation());
         }
-        for function in &oversized_events {
+        // Only an admitted write is applied, so only then are its over-frame events dropped
+        // (merge review R2-S1): a 503 neither counts nor spends the session's warning.
+        for function in oversized_events.iter().filter(|_| result.is_ok()) {
             let _ = self.drop_database_fanout(
                 &commit.instance,
                 &format!("one event for {function} exceeds the invocation frame limit"),

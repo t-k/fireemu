@@ -4,7 +4,7 @@ use std::fmt;
 
 use fireemu_core_database::DatabaseError;
 /// Database types required by source-event capture implementations.
-pub use fireemu_core_database::{Content, Node, Path, Tree};
+pub use fireemu_core_database::{Content, Leaf, Node, Path, Tree};
 use fireemu_core_types::admission::EventAdmissionError;
 use serde_json::Value;
 

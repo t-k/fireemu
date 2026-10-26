@@ -509,6 +509,30 @@ test("the summary of a fixture covers the summary-only programs and the strip re
   // The input is not changed.
   assert.equal(Object.keys(fixture.programs).length, 3);
   assert.throws(() => summarizeFixture({ version: 1, programs: {} }), /summary-only program/);
+  // A differing second recording is kept beside the first: a first success followed by a
+  // refusal, or other message boundaries, must not disappear with the stripped raw rows.
+  const withSecond = structuredClone(fixture);
+  withSecond.programs[ids[0]].second = {
+    "f5-grpc": { transport: "grpc", code: 8, details: "x", messages: [] },
+    "f5-rest": { status: 200, body: [unit(2), unit(3)] },
+  };
+  const kept = summarizeFixture(withSecond).programs[ids[0]].steps;
+  assert.deepEqual(kept["f5-grpc"].second, { transport: "grpc", code: 8, results: 0, units: [] });
+  assert.deepEqual(
+    kept["f5-rest"].second.units.map((u) => u.results),
+    [2, 3],
+  );
+  assert.deepEqual(
+    kept["f5-rest"].units.map((u) => u.results),
+    [5],
+  );
+  // A step whose two recordings agree has no `second`, and the other program has none either.
+  assert.equal("second" in summarizeFixture(fixture).programs[ids[0]].steps["f5-rest"], false);
+  assert.equal("second" in summarizeFixture(withSecond).programs[ids[1]].steps["l3-rest"], false);
+  // A second row for a step the first recording lacks is refused, not dropped.
+  const orphan = structuredClone(fixture);
+  orphan.programs[ids[1]].second = { nope: { status: 200, body: [] } };
+  assert.throws(() => summarizeFixture(orphan), /second row without a first/);
 });
 
 // --- the plan ---

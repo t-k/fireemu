@@ -2,7 +2,8 @@
 // the committed production fixture (up to 5000 documents, and 4.8 MB of documents), and what
 // they decide is how a response is cut, not what it holds. So the committed record is, per step,
 // the number of response units (REST array elements, gRPC messages) with the number of results
-// and the JSON size of each, and the program's digest; the raw recordings stay in the run's
+// and the JSON size of each (and the same for the second recording where the two differed), and
+// the program's digest; the raw recordings stay in the run's
 // private directory.
 //
 //   node framing-summary.mjs <fixture-after.json> <summary-out.json> <fixture-out.json>
@@ -43,10 +44,20 @@ export function summarizeFixture(fixture) {
   for (const id of SUMMARY_ONLY) {
     const program = fixture.programs?.[id];
     if (!program) throw new Error(`the fixture has no summary-only program ${id}`);
+    for (const step of Object.keys(program.second ?? {})) {
+      if (!(step in program.steps)) throw new Error(`${id}#${step}: a second row without a first`);
+    }
     programs[id] = {
       corpusDigest: program.corpusDigest,
       steps: Object.fromEntries(
-        Object.entries(program.steps).map(([step, row]) => [step, summarizeStep(row)]),
+        Object.entries(program.steps).map(([step, row]) => [
+          step,
+          {
+            ...summarizeStep(row),
+            // The other recording of a step whose two recordings differed.
+            ...(program.second?.[step] ? { second: summarizeStep(program.second[step]) } : {}),
+          },
+        ]),
       ),
     };
   }

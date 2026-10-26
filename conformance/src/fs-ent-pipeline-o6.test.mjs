@@ -31,13 +31,8 @@ import {
   validateCorpus,
 } from "./fs-ent-pipeline/harness.mjs";
 import { runCorpus } from "./fs-ent-pipeline/session.mjs";
-import {
-  ceilings,
-  estimatedUsd,
-  localConfigPath,
-  programDigest,
-  selectPrograms,
-} from "./fs-query-index/run.mjs";
+import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
+import { ceilings, estimatedUsd, programDigest, selectPrograms } from "./fs-query-index/run.mjs";
 
 const LANE = "fs-ent-pipeline";
 const steps = (program, rpc = "executePipeline") => program.steps.filter((s) => s.rpc === rpc);
@@ -572,19 +567,19 @@ test("seed/wipe plan: counts for an empty program, a seed of 501 documents and w
   assert.equal(written.harnessRequests, 2);
 });
 
-test("the dry run has both profiles' configs and the runner reads the override", async () => {
+test("the dry run has both profiles' configs, as lanes that differ only by the config", async () => {
   const read = async (name) => JSON.parse(await readFile(new URL(`../${name}`, import.meta.url)));
   const strict = await read("fs-ent-pipeline.fireemu.json");
   const emulator = await read("fs-ent-pipeline.emulator.fireemu.json");
   assert.equal(strict.profile, "strict");
   assert.equal(emulator.profile, "emulator");
   assert.deepEqual(emulator.firestore, strict.firestore);
-  const lane = { localConfig: "fs-ent-pipeline.fireemu.json" };
-  const own = localConfigPath({}, lane);
-  assert.ok(own.endsWith("/conformance/fs-ent-pipeline.fireemu.json"), own);
-  assert.equal(localConfigPath({ FS_QUERY_INDEX_LOCAL_CONFIG: "" }, lane), own);
-  assert.equal(localConfigPath({ FS_QUERY_INDEX_LOCAL_CONFIG: "/x/e.json" }, lane), "/x/e.json");
-  assert.ok(localConfigPath({ FS_QUERY_INDEX_LOCAL_CONFIG: "e.json" }, lane).startsWith("/"));
+  const own = LANES[LANE];
+  const dry = LANES["fs-ent-pipeline-emulator"];
+  assert.equal(own.localConfig, "fs-ent-pipeline.fireemu.json");
+  assert.equal(dry.localConfig, "fs-ent-pipeline.emulator.fireemu.json");
+  assert.deepEqual({ ...dry, localConfig: own.localConfig }, own);
+  assert.equal(selectLane("fs-ent-pipeline-emulator"), dry);
 });
 
 // --- the case table decoded back ---

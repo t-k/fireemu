@@ -63,6 +63,14 @@ export const LANES = {
   },
 };
 
+// The pipeline lane against the emulator profile, for a local dry run only: the lane's id,
+// corpus, fixture and database, with the emulator profile's fireemu config. A recording or a
+// comparison always uses `fs-ent-pipeline`.
+LANES["fs-ent-pipeline-emulator"] = {
+  ...LANES["fs-ent-pipeline"],
+  localConfig: "fs-ent-pipeline.emulator.fireemu.json",
+};
+
 export function selectLane(name = process.env.FIREEMU_SANDBOX_LANE ?? "fs-query-index") {
   const lane = LANES[name];
   if (!lane) throw new Error(`unknown sandbox lane ${name}`);

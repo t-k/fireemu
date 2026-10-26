@@ -38,7 +38,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -81,16 +81,7 @@ const FIXTURE = join(CONFORMANCE_DIR, LANE.fixture);
 // A lane without an index file (the Enterprise pipeline lane) records without index checks.
 const INDEXES = LANE.indexes ? join(CONFORMANCE_DIR, LANE.indexes) : null;
 const DATABASE_ID = LANE.database ?? DATABASE;
-/**
- * The fireemu config of a local run: the lane's, or the one FS_QUERY_INDEX_LOCAL_CONFIG names
- * (the emulator profile's, for the pipeline lane's dry run).
- */
-export function localConfigPath(env = process.env, lane = LANE) {
-  return env.FS_QUERY_INDEX_LOCAL_CONFIG
-    ? resolvePath(env.FS_QUERY_INDEX_LOCAL_CONFIG)
-    : join(CONFORMANCE_DIR, lane.localConfig);
-}
-const LOCAL_CONFIG = localConfigPath();
+const LOCAL_CONFIG = join(CONFORMANCE_DIR, LANE.localConfig);
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", LANE.id);
 const TASK_ID = LANE.taskId;
 const ADMIN_ORIGIN = "https://firestore.googleapis.com/v1";

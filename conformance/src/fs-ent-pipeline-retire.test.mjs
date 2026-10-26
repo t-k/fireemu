@@ -59,6 +59,14 @@ const recordedDelete = () => {
   return ok(body);
 };
 
+test("the constants are the literal names, and the read-back waits ten minutes", () => {
+  assert.equal(PROJECT, "fireemu-oracle-query");
+  assert.equal(DATABASE, "entpipe1");
+  assert.equal(DB, "projects/fireemu-oracle-query/databases/entpipe1");
+  assert.equal(ORIGIN, "https://firestore.googleapis.com/v1");
+  assert.equal(READ_BACK_AFTER_MS, 600_000);
+});
+
 test("the plan builds nine planned requests, each to this database only", () => {
   assert.equal(PLAN.length, 9);
   for (const step of PLAN) {
@@ -94,6 +102,13 @@ test("the guard refuses everything that is not a planned request for this databa
     ["GET", `${ORIGIN}/projects/${PROJECT}/databases/${DATABASE}x/operations/a`],
     ["GET", `${ORIGIN}/${OTHER}/operations/a`],
     ["GET", `${ORIGIN}/${DB}/documents/x/y`],
+    ["GET", `x${ORIGIN}/${DB}/operations`],
+    ["GET", `x${ORIGIN}/${DB}/operations/a`],
+    ["GET", `x${ORIGIN}/${DB}`],
+    ["GET", `x${ORIGIN}/${DB}/collectionGroups/-/indexes`],
+    ["GET", `x${ORIGIN}/projects/${PROJECT}/databases`],
+    ["POST", `x${ORIGIN}/${DB}/documents:listCollectionIds`],
+    ["DELETE", `x${ORIGIN}/${DB}`],
   ];
   for (const [method, url] of refused)
     assert.throws(() => guardRequest({ method, url }), /not a planned request/, `${method} ${url}`);
@@ -304,6 +319,7 @@ function fakeService({
         ],
       });
     if (path === DB) {
+      if (failDescribe) return respond(503, {});
       if (state.deleted && describeAfterDelete === 404)
         return respond(404, {
           error: { code: 404, message: "Requested database was not found.", status: "NOT_FOUND" },
@@ -361,6 +377,16 @@ test("S0 stops at the first answer that is not a complete 200, and an S4 after i
   assert.equal(second.code, 1);
   assert.equal(service.state.deletes, 0);
   assert.ok(!existsSync(join(s0, "s4-sent")));
+});
+
+test("S0 stops at the first read that fails: nothing after it is sent", async () => {
+  const service = fakeService({ failDescribe: true });
+  const { code, verdict } = await PHASES.s0(
+    ctxFor(service, { out: join(scratch(), "s0") }, { now: 0 }),
+  );
+  assert.equal(code, 1);
+  assert.equal(verdict.ok, false);
+  assert.deepEqual(service.state.requests, [`GET projects/${PROJECT}/databases`, `GET ${DB}`]);
 });
 
 test("S4 sends one delete, then reads the operation and the database; a second S4 sends nothing", async () => {

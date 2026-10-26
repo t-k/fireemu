@@ -485,6 +485,9 @@ pub struct CompiledExecution {
     pub input: pb::RunQueryRequest,
     /// The stages the executor runs over the input rows.
     pub stages: Vec<Stage>,
+    /// Whether the select kept `__name__` as itself, so that each result carries the document
+    /// name next to the selected fields (see [`selected_result`]).
+    pub select_keeps_name: bool,
     /// A local lexical search before the existing streaming suffix.
     pub search: Option<crate::text_search::SearchPlan>,
 }
@@ -544,6 +547,7 @@ pub fn compile_pipeline_in_order(
     // Whether the pipeline was refused only for a stage fireemu does not run, after every part
     // of it passed a check production made (strict answers the deferred empty map only then).
     let mut validated_unrun = false;
+    let mut select_keeps_name = false;
     let compiled = (|| -> Result<(), Status> {
         for (position, stage) in pipeline.stages.iter().enumerate().skip(1) {
             let rank = stage_rank(&stage.name);
@@ -588,7 +592,10 @@ pub fn compile_pipeline_in_order(
                     }
                     let aliases = select_wire_order(order, position);
                     match decode_select(stage, unrecorded, aliases) {
-                        Ok(select) => stages.push(Stage::Select(select)),
+                        Ok((select, keeps_name)) => {
+                            select_keeps_name = keeps_name;
+                            stages.push(Stage::Select(select));
+                        }
                         // A reserved alias and a `map(...)` key type are answered after a
                         // later stage's argument type, as an empty map is (the official
                         // emulator 1.22.0: `select {__x__: i}` then `limit("x")` gives the
@@ -677,6 +684,7 @@ pub fn compile_pipeline_in_order(
     Ok(CompiledExecution {
         input: collection_query(query_parent, collection_id, pushdown, projection, 0, None),
         stages,
+        select_keeps_name,
         search,
     })
 }
@@ -1589,12 +1597,14 @@ fn decode_condition(
 /// Decodes `select({alias: operand, ...})`. An alias is a field path, as production and the
 /// official emulator read it (FS-ENT-ORACLE O-1 recorded the same answers from both): a
 /// dotted alias nests, a quoted one unquotes, and an invalid path, a reserved name, a
-/// repeated path and an alias inside another are refused.
+/// repeated path and an alias inside another are refused. `__name__` selected as itself is no
+/// alias but the request to keep the document name in the result (strict: alone only): the flag
+/// is the second part of the answer.
 fn decode_select(
     stage: &pb::pipeline::Stage,
     unrecorded: Unrecorded,
     wire_order: Option<&[String]>,
-) -> Result<Vec<(FieldPath, Expr)>, Status> {
+) -> Result<(Vec<(FieldPath, Expr)>, bool), Status> {
     let Some(pb::value::ValueType::MapValue(map)) =
         stage.args.first().and_then(|v| v.value_type.as_ref())
     else {
@@ -1608,17 +1618,9 @@ fn decode_select(
             map.fields.len()
         )));
     }
-    // The official emulator keeps `__name__` selected as itself (the result carries the name
-    // and no field); production has not answered it, and fireemu refuses it as an alias in the
-    // emulator profile (a known difference), so strict refuses it as unobserved.
-    if unrecorded == Unrecorded::Refuse
-        && map.fields.iter().any(|(alias, value)| {
-            parse_alias(alias).is_ok_and(|path| path.segments() == ["__name__"])
-                && matches!(&value.value_type, Some(pb::value::ValueType::FieldReferenceValue(f)) if f == "__name__")
-        })
-    {
+    if unrecorded == Unrecorded::Refuse && !name_select_recorded(&map.fields) {
         return Err(Status::unimplemented(
-            "selecting __name__ as itself is not observed locally",
+            "selecting __name__ as itself, other than alone, is not observed locally",
         ));
     }
     // Every alias is checked before any value, as the official emulator does, in the request's
@@ -1664,7 +1666,16 @@ fn decode_select(
     }
     let mut aliases = Vec::with_capacity(entries.len());
     for ((alias, _), expr) in entries.iter().zip(exprs) {
-        aliases.push((*alias, decode_alias(alias)?, expr));
+        // `__name__` set from `__name__` takes part in the overlap checks like any alias, but
+        // sets no field.
+        let identity = matches!(&expr, Expr::Field(path) if path.is_document_name())
+            && parse_alias(alias).is_ok_and(|path| path.segments() == ["__name__"]);
+        let path = if identity {
+            parse_alias(alias)?
+        } else {
+            decode_alias(alias)?
+        };
+        aliases.push((*alias, path, expr, identity));
     }
     if aliases.is_empty() {
         // FS-ENT-ORACLE O-4 `o4/stages#select-empty-map`.
@@ -1679,8 +1690,8 @@ fn decode_select(
     // An alias inside another names the alias set later, which is the child in path order
     // (FS-ENT-ORACLE O-1 `px0/aliases#overlap`, `{m, m.r}`) and, in the request's order, the
     // later of the two (the official emulator 1.22.0: `{a.b, a}` names `a`).
-    for (at, (alias, path, _)) in aliases.iter().enumerate() {
-        for (earlier_alias, earlier, _) in &aliases[..at] {
+    for (at, (alias, path, _, _)) in aliases.iter().enumerate() {
+        for (earlier_alias, earlier, _, _) in &aliases[..at] {
             if earlier == path {
                 return Err(Status::invalid_argument(format!(
                     "select aliases {earlier_alias:?} and {alias:?} set the same field"
@@ -1691,10 +1702,50 @@ fn decode_select(
             }
         }
     }
-    Ok(aliases
-        .into_iter()
-        .map(|(_, path, expr)| (path, expr))
-        .collect())
+    let keeps_name = aliases.iter().any(|(_, _, _, identity)| *identity);
+    Ok((
+        aliases
+            .into_iter()
+            .filter(|(_, _, _, identity)| !identity)
+            .map(|(_, path, expr, _)| (path, expr))
+            .collect(),
+        keeps_name,
+    ))
+}
+
+/// A select's result for a source document: the selected fields, and under the emulator
+/// profile the document name when the select kept `__name__` as itself.
+#[must_use]
+pub fn selected_result(
+    fields: &std::collections::BTreeMap<String, fireemu_core_firestore::value::Value>,
+    source_name: &str,
+    keeps_name: bool,
+) -> pb::Document {
+    let mut result = result_document(fields);
+    if keeps_name {
+        source_name.clone_into(&mut result.name);
+    }
+    result
+}
+
+/// Whether a strict select may name the document: it holds no `__name__` selected as itself,
+/// or only that, alone and unquoted. Production answered the alone form with the name only
+/// (FS-ENT-ORACLE O5 `appendix#proposed-select-name-field`); beside other aliases or quoted it is
+/// unobserved. (The emulator profile answers every form as the official emulator does.)
+fn name_select_recorded(fields: &std::collections::HashMap<String, pb::Value>) -> bool {
+    let names_document =
+        |text: &str| parse_alias(text).is_ok_and(|path| path.segments() == ["__name__"]);
+    let selects_itself = fields.iter().any(|(alias, value)| {
+        names_document(alias)
+            && matches!(&value.value_type, Some(pb::value::ValueType::FieldReferenceValue(f))
+                if names_document(f))
+    });
+    !selects_itself
+        || matches!(
+            fields.iter().collect::<Vec<_>>()[..],
+            [(alias, pb::Value { value_type: Some(pb::value::ValueType::FieldReferenceValue(field)) })]
+                if alias == "__name__" && field == "__name__"
+        )
 }
 
 /// The wire order of the aliases of the `select` stage at `position`, where the body kept it.
@@ -3455,6 +3506,90 @@ mod tests {
             let responses = pack_results(documents, Some(time));
             assert_eq!(responses.len(), 2);
             assert!(responses.iter().all(|r| r.execution_time == Some(time)));
+        }
+    }
+    mod select_name {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn field(name: &str) -> pb::Value {
+            pb::Value {
+                value_type: Some(pb::value::ValueType::FieldReferenceValue(name.to_owned())),
+            }
+        }
+
+        fn select(entries: &[(&str, &str)]) -> pb::pipeline::Stage {
+            pb::pipeline::Stage {
+                name: "select".to_owned(),
+                args: vec![pb::Value {
+                    value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                        fields: entries
+                            .iter()
+                            .map(|(alias, source)| ((*alias).to_owned(), field(source)))
+                            .collect(),
+                    })),
+                }],
+                ..Default::default()
+            }
+        }
+
+        proptest! {
+            /// Under the emulator profile `__name__` selected as itself sets no field and asks
+            /// for the name; every other alias is a field, in any combination and order.
+            #[test]
+            fn the_identity_alias_asks_for_the_name_and_sets_no_field(
+                pool in proptest::sample::subsequence(vec!["a", "b", "c.d", "e"], 0..=4),
+                identity in any::<bool>(),
+                shuffle in any::<u64>(),
+            ) {
+                let mut entries: Vec<(&str, &str)> = pool.iter().map(|alias| (*alias, "n")).collect();
+                if identity {
+                    entries.push(("__name__", "__name__"));
+                }
+                prop_assume!(!entries.is_empty());
+                let rotation = usize::try_from(shuffle % u64::try_from(entries.len()).unwrap()).unwrap();
+                entries.rotate_left(rotation);
+                let (aliases, keeps_name) =
+                    decode_select(&select(&entries), Unrecorded::OfficialEmulator, None).unwrap();
+                prop_assert_eq!(keeps_name, identity);
+                let mut set: Vec<String> = aliases.iter().map(|(path, _)| path.canonical()).collect();
+                set.sort();
+                let mut want: Vec<String> = pool.iter().map(|alias| (*alias).to_owned()).collect();
+                want.sort();
+                prop_assert_eq!(set, want);
+            }
+
+            /// `__name__` set from any other value is refused, and strict refuses even the
+            /// identity as unobserved.
+            #[test]
+            fn only_the_identity_may_set_the_name(source in "[a-z]{1,4}") {
+                let refused = decode_select(
+                    &select(&[("__name__", &source)]),
+                    Unrecorded::OfficialEmulator,
+                    None,
+                ).unwrap_err();
+                prop_assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+                prop_assert!(refused.message().contains("can not be overwritten"));
+            }
+        }
+
+        #[test]
+        fn strict_answers_the_identity_alone_as_production_did_and_refuses_the_rest() {
+            let (aliases, keeps_name) = decode_select(
+                &select(&[("__name__", "__name__")]),
+                Unrecorded::Refuse,
+                None,
+            )
+            .unwrap();
+            assert!(aliases.is_empty() && keeps_name);
+            for entries in [
+                vec![("__name__", "__name__"), ("a", "n")],
+                vec![("`__name__`", "__name__")],
+            ] {
+                let refused =
+                    decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap_err();
+                assert_eq!(refused.code(), tonic::Code::Unimplemented, "{entries:?}");
+            }
         }
     }
 }

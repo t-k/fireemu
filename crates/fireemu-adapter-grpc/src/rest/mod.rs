@@ -1657,6 +1657,7 @@ impl RestState {
         let whole_documents =
             fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages).is_none();
         let execution_time = responses.iter().find_map(|r| r.read_time);
+        let keeps_name = compiled.select_keeps_name;
         let mut cursor =
             fireemu_core_firestore::pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
         let mut results = Vec::new();
@@ -1672,7 +1673,7 @@ impl RestState {
                 results.push(if whole_documents {
                     document.clone()
                 } else {
-                    crate::pipeline::result_document(&fields)
+                    crate::pipeline::selected_result(&fields, &document.name, keeps_name)
                 });
             }
         }

@@ -708,27 +708,16 @@ impl Firestore for GatewayService {
                 ))));
             }
             let response = self
-                .run_query_with_caller(caller, compiled.input)
+                .run_query_with_caller(caller, compiled.input.clone())
                 .await
                 .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
-            let whole_documents =
-                fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages)
-                    .is_none();
-            return Ok(Response::new(Box::pin(PipelineResponseStream {
-                inner: Some(response.into_inner()),
-                whole_documents,
-                read_time: None,
-                cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(
-                    compiled.stages,
-                    unrecorded,
-                ),
+            return Ok(Response::new(Box::pin(PipelineResponseStream::running(
+                response.into_inner(),
+                compiled,
+                unrecorded,
                 canonical,
                 gate,
-                emitted: false,
-                batcher: crate::pipeline::ResultBatcher::default(),
-                failure: None,
-                done: false,
-            })));
+            ))));
         }
         let mut status = Status::unimplemented(format!(
             "FS-PIPE-RPC-1 strict-validation-only: the pipeline is valid ({}) but pipelines are not executed locally",
@@ -1094,6 +1083,16 @@ pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
     error
 }
 
+/// What a pipeline result holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultShape {
+    /// No select: the source document itself, name and times included.
+    Whole,
+    /// A select: the selected fields, and the document name when the select kept `__name__` as
+    /// itself.
+    Selected { keeps_name: bool },
+}
+
 // Own the inner receiver directly: reaching the limit or dropping the public stream
 // releases backpressure/transaction ownership without draining the remaining query. The
 // inner stream is the input scan; the cursor runs the pipeline's stages over its rows, and
@@ -1102,8 +1101,8 @@ pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
 struct PipelineResponseStream {
     inner: Option<BoxStream<pb::RunQueryResponse>>,
     cursor: fireemu_core_firestore::pipeline_exec::Cursor,
-    /// Without a select a result is the source document itself (name and times included).
-    whole_documents: bool,
+    /// What a result holds.
+    shape: ResultShape,
     /// The input snapshot's read time, sent as every response's execution time.
     read_time: Option<prost_types::Timestamp>,
     canonical: String,
@@ -1126,10 +1125,44 @@ impl PipelineResponseStream {
         Self {
             inner: Some(inner),
             cursor,
-            whole_documents: false,
+            shape: ResultShape::Selected { keeps_name: false },
             read_time: None,
             canonical: "collection(items)".to_owned(),
             gate: crate::pipeline_shape::RefusalGate::Open,
+            emitted: false,
+            batcher: crate::pipeline::ResultBatcher::default(),
+            failure: None,
+            done: false,
+        }
+    }
+
+    /// A stream over the input scan of a compiled pipeline.
+    fn running(
+        inner: BoxStream<pb::RunQueryResponse>,
+        compiled: crate::pipeline::CompiledExecution,
+        unrecorded: fireemu_core_firestore::pipeline_exec::Unrecorded,
+        canonical: String,
+        gate: crate::pipeline_shape::RefusalGate,
+    ) -> Self {
+        let shape = if fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages)
+            .is_none()
+        {
+            ResultShape::Whole
+        } else {
+            ResultShape::Selected {
+                keeps_name: compiled.select_keeps_name,
+            }
+        };
+        Self {
+            inner: Some(inner),
+            cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(
+                compiled.stages,
+                unrecorded,
+            ),
+            shape,
+            read_time: None,
+            canonical,
+            gate,
             emitted: false,
             batcher: crate::pipeline::ResultBatcher::default(),
             failure: None,
@@ -1213,10 +1246,11 @@ impl tokio_stream::Stream for PipelineResponseStream {
                         Ok(None) => continue,
                         Err(error) => return Poll::Ready(this.fail(error)),
                     };
-                    let result = if this.whole_documents {
-                        document
-                    } else {
-                        crate::pipeline::result_document(&fields)
+                    let result = match this.shape {
+                        ResultShape::Whole => document,
+                        ResultShape::Selected { keeps_name } => {
+                            crate::pipeline::selected_result(&fields, &document.name, keeps_name)
+                        }
                     };
                     let finished = this.batcher.push(result);
                     if this.cursor.is_exhausted() {
@@ -1933,7 +1967,7 @@ mod tests {
             Box::pin(tokio_stream::iter(input)),
             Cursor::new(Vec::new()),
         );
-        stream.whole_documents = true;
+        stream.shape = ResultShape::Whole;
         let mut out = Vec::new();
         while let Some(item) = stream.next().await {
             out.push(

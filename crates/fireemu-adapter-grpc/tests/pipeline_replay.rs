@@ -665,10 +665,10 @@ fn o5_debt_schema_rejects_missing_unknown_duplicate_and_wrong_types() {
 
 fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = parse_o5_differences(include_str!("pipeline_o5_known_differences.json"));
-    assert_eq!(rows.len(), 272, "finite O5 debt inventory");
+    assert_eq!(rows.len(), 271, "finite O5 debt inventory");
     assert_eq!(
         rows.iter().filter(|row| row.emulator.is_some()).count(),
-        199,
+        198,
         "finite emulator debt inventory"
     );
     assert_eq!(KNOWN_DIFFERENCES.len(), 83, "original debt inventory");
@@ -694,7 +694,6 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
                     | "arity-wording"
                     | "environment-reference-comparison"
                     | "missing-error-info"
-                    | "self-name-projection-gap"
                     | "unsupported-current-document"
                     | "unknown-production-outcome"
             ),

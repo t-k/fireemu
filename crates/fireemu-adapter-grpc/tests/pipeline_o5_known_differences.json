@@ -9788,41 +9788,6 @@
     }
   },
   {
-    "row": "fs-ent-pipeline/o5/appendix#proposed-select-name-field",
-    "category": "self-name-projection-gap",
-    "reason": "Production accepts selecting the document name as itself; local emulator rejects it and strict returns UNIMPLEMENTED. This pre-existing projection bug remains unresolved.",
-    "production": {
-      "results": [
-        "{\"name\":\"{docs}/ap5/d\"}"
-      ],
-      "status": 200
-    },
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "selecting __name__ as itself is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "Stage 'select': field name '__name__' is reserved and can not be overwritten.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    }
-  },
-  {
     "row": "fs-ent-pipeline/o5/appendix#proposed-docid-map",
     "category": "unsupported-subset",
     "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",

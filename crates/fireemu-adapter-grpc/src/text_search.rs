@@ -310,6 +310,7 @@ fn execute_at_snapshot(
         eprintln!("[firestore] text search uses fireemu-lexical-v1: approximate BM25, language-neutral tokenization; no stemming, synonyms, typo correction or language autodetection");
     }
     let whole = pipeline_exec::referenced_fields(&compiled.stages).is_none();
+    let keeps_name = compiled.select_keeps_name;
     let mut cursor = pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
     let mut results = Vec::new();
     for hit in hits {
@@ -338,7 +339,7 @@ fn execute_at_snapshot(
                     .collect();
                 result
             } else {
-                crate::pipeline::result_document(&fields)
+                crate::pipeline::selected_result(&fields, &document.name, keeps_name)
             };
             results.push(result);
         }

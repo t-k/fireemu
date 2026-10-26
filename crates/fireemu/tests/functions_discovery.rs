@@ -1078,7 +1078,10 @@ fn a_trigger_of_a_product_the_daemon_does_not_serve_fails_discovery_by_name() {
     // The served exports are not the reason the run failed, and are not named as unserved:
     // Realtime Database triggers run locally in both the v2 and the v1 spelling.
     for name in ["fxHealth", "fxOnValueWritten", "fxV1DatabaseWrite"] {
-        assert!(!err.contains(&format!("{name} (")), "{name} is named as unserved:\n{err}");
+        assert!(
+            !err.contains(&format!("{name} (")),
+            "{name} is named as unserved:\n{err}"
+        );
     }
 }
 

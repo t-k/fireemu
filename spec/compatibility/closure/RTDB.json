@@ -13,15 +13,28 @@
   "type": "USER_DATABASE"
  },
  "closureReview": {
-  "decision": "PENDING",
-  "submittedSourceCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+  "decision": "APPROVED",
+  "decidedOn": "2026-10-26",
+  "decider": "project coordinator (delegated by the owner)",
+  "decisionRef": "docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review)",
+  "reviewedCommit": "12fdeff75f334773484f436abe0b0b0321f67dc2",
   "submittedFinalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
-  "priorReview": {
-   "reportPath": "docs.local/reviews/2026-10-26-rtdb-closure-review.md",
-   "reportSha256": "9d4b3891ecaa86426c1803e98ac4ef59bb1dfd5891d1c531a09886e5f9d513ed",
-   "outcome": "CHANGES REQUESTED (Must 3, Should 5); M1-M3, S3-S5 addressed, S1/S2 filed as issues"
-  },
-  "note": "The coordinator runs the independent clean-context closure review and fills this entry. The submitted binary was built from the tool commit; its Rust sources equal origin/main 5a15d1631 except the two committed replay tests (no product, Cargo or toolchain change on the branch), and rebuilding in the same worktree path gave the same SHA-256; a build in another path differs only in LC_UUID and the code signature (see buildPath in the build receipt)."
+  "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
+  "reviews": [
+   {
+    "reportPath": "docs.local/reviews/2026-10-26-rtdb-closure-review.md",
+    "reportSha256": "9d4b3891ecaa86426c1803e98ac4ef59bb1dfd5891d1c531a09886e5f9d513ed",
+    "reviewedCommit": "27f7e2663f028e48b72cacd5a2fc8226ab67c50e",
+    "outcome": "Opus independent closure review: CHANGES REQUESTED (Must 3: CV11 comparator too wide, public scope wider than the recordings, CHANGELOG known differences incomplete; Should 5)"
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-26-rtdb-closure-review.md",
+    "reportSha256": "6149a83a3d8649955620ad53246ad9e7f995ee764d2baefba46a9f8d36f4e209",
+    "reviewedCommit": "12fdeff75f334773484f436abe0b0b0321f67dc2",
+    "outcome": "delta review: APPROVE, Must 0 (the report file was extended in place; the first entry's digest is the initial version)"
+   }
+  ],
+  "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md)."
  },
  "scopeDecisions": [
   {
@@ -394,7 +407,7 @@
     "fixture": "tools/sdk-smoke-database/fixtures/production-cv11-genuine-auth.json",
     "comparisonTool": "tools/sdk-smoke-database/cv11-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "comparisonSha256": "19a923d50833ac508334b5d16d17b21903b08f0e45bf26048fda1a675a542818",
+    "comparisonSha256": "eb45b2a04c4806c8ad01f476efcb390ca6e5dbcc0fa6a8f03d239b247a088933",
     "rows": {
      "MATCH": 92
     },
@@ -584,7 +597,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "sha256": "19a923d50833ac508334b5d16d17b21903b08f0e45bf26048fda1a675a542818",
+    "sha256": "eb45b2a04c4806c8ad01f476efcb390ca6e5dbcc0fa6a8f03d239b247a088933",
     "rows": 92,
     "summary": {
      "match": true,

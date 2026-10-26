@@ -64,6 +64,7 @@
    "gone"
   ]
  },
+ "judgeCommit": "16171856982f0916c755e82c81959900241c4d99",
  "judging": "cv11-fixture.mjs compareRecorded: profiles and events in recorded order, except the events of step write-after-delete (the admin acknowledgement and the listener value, which production delivered in both orders), compared sorted; millisecond timings and transport request counts are not compared.",
  "summary": {
   "match": true,

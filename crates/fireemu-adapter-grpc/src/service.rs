@@ -1969,7 +1969,9 @@ mod tests {
         );
         stream.shape = ResultShape::Whole;
         let mut out = Vec::new();
+        // A stream that never ends is a failure here, not a hang.
         while let Some(item) = stream.next().await {
+            assert!(out.len() < 16, "the stream does not end");
             out.push(
                 item.map(|response| response.results.len())
                     .map_err(|e| e.code()),

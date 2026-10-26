@@ -1713,8 +1713,8 @@ fn decode_select(
     ))
 }
 
-/// A select's result for a source document: the selected fields, and under the emulator
-/// profile the document name when the select kept `__name__` as itself.
+/// A select's result for a source document: the selected fields, and the document name when
+/// the select kept `__name__` as itself.
 #[must_use]
 pub fn selected_result(
     fields: &std::collections::BTreeMap<String, fireemu_core_firestore::value::Value>,
@@ -3494,6 +3494,23 @@ mod tests {
                 let documents: Vec<_> = (0..count).map(|i| document(i, padding)).collect();
                 prop_assert_eq!(pack_results(documents, None).len(), 1);
             }
+        }
+
+        /// A batch that reaches the target exactly is still one response; one byte more is cut.
+        #[test]
+        fn a_batch_may_fill_the_target_exactly() {
+            let first = document(0, 500_000);
+            let want = RESULT_BATCH_BYTES - RESPONSE_OVERHEAD_BYTES - weight(&first);
+            let fitting = (want.saturating_sub(400)..want)
+                .map(|padding| document(1, padding))
+                .find(|candidate| weight(candidate) == want)
+                .expect("a padding that fills the target exactly");
+            let over = (want.saturating_sub(400)..=want)
+                .map(|padding| document(1, padding))
+                .find(|candidate| weight(candidate) == want + 1)
+                .expect("a padding one byte over the target");
+            assert_eq!(pack_results(vec![first.clone(), fitting], None).len(), 1);
+            assert_eq!(pack_results(vec![first, over], None).len(), 2);
         }
 
         #[test]

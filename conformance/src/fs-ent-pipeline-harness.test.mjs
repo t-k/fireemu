@@ -41,9 +41,9 @@ import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
 
-// The O-6 and O-7 programs join the pinned counts below after their recording;
-// fs-ent-pipeline-o6.test.mjs and fs-ent-pipeline-o7.test.mjs cover them until then.
-const PROGRAMS = ALL_PROGRAMS.filter((program) => !/^fs-ent-pipeline\/o[67]\//.test(program.id));
+// The O-7 programs join the pinned counts below after their recording;
+// fs-ent-pipeline-o7.test.mjs covers them until then.
+const PROGRAMS = ALL_PROGRAMS.filter((program) => !program.id.startsWith("fs-ent-pipeline/o7/"));
 
 const production = (database = lane.database) =>
   createContext({
@@ -146,7 +146,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 694);
+  assert.equal(requests, 861);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get"]);
   // The only writes are single-document commits into the program's own collection: the order
@@ -157,6 +157,9 @@ test("the corpus validates, stays within its budget and only reads pipelines or 
     "fs-ent-pipeline/o4/documents": /^\{docs\}\/geo4\/[a-z-]+$/,
   };
   for (const program of PROGRAMS) {
+    // The O-6 programs write their own collections too (vector seeds, ordering writes); their
+    // commits are checked in fs-ent-pipeline-o6.test.mjs.
+    if (program.id.startsWith("fs-ent-pipeline/o6/")) continue;
     for (const step of program.steps.filter((s) => s.rpc === "commit")) {
       assert.ok(own[program.id], program.id);
       assert.equal(step.body.writes.length, 1);
@@ -205,7 +208,7 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
       await import("node:fs/promises")
     ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
-  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[2345]\//.test(p.id));
+  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[23456]\//.test(p.id));
   assert.equal(o1.length, 6);
   for (const program of o1) {
     assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
@@ -557,7 +560,7 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 28);
+  assert.equal(recordedPrograms.length, 44);
   assert.deepEqual(recordedIds.toSorted(), PROGRAMS.map((p) => p.id).toSorted());
   assert.deepEqual(exported.programs.map((p) => p.id).toSorted(), recordedIds.toSorted());
   const rest = recordedPrograms
@@ -911,7 +914,7 @@ test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", a
   }
   const earlier = Object.fromEntries(
     Object.entries(recorded)
-      .filter(([id]) => !id.startsWith("fs-ent-pipeline/o5/"))
+      .filter(([id]) => !/^fs-ent-pipeline\/o[56]\//.test(id))
       .sort(([a], [b]) => a.localeCompare(b)),
   );
   assert.equal(Object.keys(earlier).length, 20);

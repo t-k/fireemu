@@ -31,6 +31,7 @@ fn every_recorded_refusal_has_a_shape() {
     let table = recorded();
     let mut original = 0;
     let mut o5 = 0;
+    let mut o6 = 0;
     let mut eligible = 0;
     let mut excluded_500 = 0;
     for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
@@ -63,6 +64,8 @@ fn every_recorded_refusal_has_a_shape() {
             }
             if id.starts_with("fs-ent-pipeline/o5/") {
                 o5 += 1;
+            } else if id.starts_with("fs-ent-pipeline/o6/") {
+                o6 += 1;
             } else {
                 original += 1;
             }
@@ -88,10 +91,10 @@ fn every_recorded_refusal_has_a_shape() {
             );
         }
     }
-    assert_eq!((original, o5), (98, 291));
-    let refused = original + o5;
-    assert_eq!(refused, 389);
-    assert_eq!(eligible, 389);
+    assert_eq!((original, o5, o6), (98, 291, 21));
+    let refused = original + o5 + o6;
+    assert_eq!(refused, 410);
+    assert_eq!(eligible, 410);
     assert_eq!(excluded_500, 1);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.

@@ -1372,6 +1372,18 @@ impl DatabasePattern {
         self.segments.len()
     }
 
+    /// Whether a write at the concrete `path` can change a reference this pattern matches:
+    /// one is a prefix of the other, so the shorter side matches the other's leading segments.
+    #[must_use]
+    pub fn overlaps(&self, path: &str) -> bool {
+        let trimmed = path.trim_matches('/');
+        let parts = trimmed.split('/').filter(|_| !trimmed.is_empty());
+        self.segments
+            .iter()
+            .zip(parts)
+            .all(|((_, pattern), value)| database_glob_matches(pattern, value))
+    }
+
     /// Captures a concrete reference; descendants are projected by the event adapter.
     #[must_use]
     pub fn matches(&self, path: &str) -> Option<BTreeMap<String, String>> {

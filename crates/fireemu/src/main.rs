@@ -2612,13 +2612,23 @@ fn start_rules_reload_supervisor(
     });
 }
 
+/// The text indexes an index reload also replaces: those of `project` on an Enterprise
+/// database (review S10).
+#[derive(Debug, Clone)]
+struct FileTextReload {
+    project: String,
+    production_exact: bool,
+}
+
 fn start_index_reload_supervisor(
     path: String,
     database: String,
     backend: &Arc<LocalBackend>,
     checks: control::IndexFileChecks,
+    text: Option<FileTextReload>,
 ) {
     let weak = Arc::downgrade(backend);
+    let text_reload = text;
     let initial = watched_file(&path).ok();
     let mut observed_stamp = initial.as_ref().map(|(stamp, _, _)| *stamp);
     let mut observed_signature = initial.as_ref().map(|(_, signature, _)| *signature);
@@ -2668,7 +2678,16 @@ fn start_index_reload_supervisor(
                 }
             };
             match control::parse_index_file(&path, &text, checks) {
-                Ok((indexes, ttl_policies, notes)) => {
+                Ok((indexes, ttl_policies, mut notes)) => {
+                    match reload_file_text_indexes(&backend, text_reload.as_ref(), &database, &path, &text) {
+                        Ok(text_notes) => notes.extend(text_notes),
+                        Err(error) => {
+                            eprintln!(
+                                "warning: Firestore index reload failed; keeping the last-known-good indexes: {error}"
+                            );
+                            continue;
+                        }
+                    }
                     if backend.replace_database_indexes(&database, indexes) {
                         backend.replace_shared_ttl_catalog(&database, ttl_policies);
                         observed_stamp = Some(stable_stamp);
@@ -2689,6 +2708,46 @@ fn start_index_reload_supervisor(
             }
         }
     });
+}
+
+/// The text indexes an index reload replaces: only an Enterprise database has any.
+fn file_text_reload(cfg: &RuntimeConfig) -> Option<FileTextReload> {
+    (cfg.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise).then(|| {
+        FileTextReload {
+            project: cfg.auth_project.clone(),
+            production_exact: cfg.production_exact,
+        }
+    })
+}
+
+/// Replaces the reloaded file's text indexes in the attached catalog, under its lock, and
+/// returns the notes for the entries it skipped. Without a text reload or a catalog there is
+/// nothing to replace.
+fn reload_file_text_indexes(
+    backend: &LocalBackend,
+    text: Option<&FileTextReload>,
+    database: &str,
+    path: &str,
+    body: &str,
+) -> Result<Vec<String>, String> {
+    let (Some(text), Some(catalog)) = (text, backend.text_index_catalog()) else {
+        return Ok(Vec::new());
+    };
+    let mut catalog = catalog
+        .lock()
+        .map_err(|_| "text index catalog lock poisoned".to_owned())?;
+    let (changed, mut notes) = control::replace_file_text_indexes(
+        &mut catalog,
+        &text.project,
+        database,
+        path,
+        body,
+        text.production_exact,
+    )?;
+    if changed {
+        notes.push(format!("{path}: text indexes for {database} replaced"));
+    }
+    Ok(notes)
 }
 
 fn start_firestore_config_reload_supervisors(
@@ -2720,9 +2779,16 @@ fn start_firestore_config_reload_supervisors(
         start_rules_reload_supervisor(path.clone(), "Storage rules", slot, barrier);
     }
     let checks = cfg.index_file_checks();
+    let text = file_text_reload(cfg);
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.indexes {
-            start_index_reload_supervisor(path.clone(), database.clone(), backend, checks);
+            start_index_reload_supervisor(
+                path.clone(),
+                database.clone(),
+                backend,
+                checks,
+                text.clone(),
+            );
         }
     }
     if cfg.firestore_databases.is_empty() {
@@ -2732,6 +2798,7 @@ fn start_firestore_config_reload_supervisors(
                 fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
                 backend,
                 checks,
+                text,
             );
         }
     }
@@ -4766,6 +4833,7 @@ mod config_reload_tests {
             "staging".to_owned(),
             &backend,
             control::IndexFileChecks::Deploy,
+            None,
         );
 
         let mut malformed = INDEXES_TWO.as_bytes().to_vec();
@@ -4799,6 +4867,7 @@ mod config_reload_tests {
             "staging".to_owned(),
             &backend,
             control::IndexFileChecks::Deploy,
+            None,
         );
 
         let mut invalid_utf8 = INDEXES_TWO.as_bytes().to_vec();
@@ -4841,6 +4910,7 @@ mod config_reload_tests {
                 "staging".to_owned(),
                 &backend,
                 checks,
+                None,
             );
             std::fs::write(&path, SINGLE_FIELD).unwrap();
             if reloaded {
@@ -4873,6 +4943,7 @@ mod config_reload_tests {
             "staging".to_owned(),
             &backend,
             control::IndexFileChecks::Deploy,
+            None,
         );
 
         let mut malformed = INDEXES_TWO.as_bytes().to_vec();
@@ -4927,6 +4998,7 @@ mod config_reload_tests {
             "staging".to_owned(),
             &backend,
             control::IndexFileChecks::Deploy,
+            None,
         );
         wait_for_ttl(&backend, "sessions", false).await;
 
@@ -4982,6 +5054,7 @@ mod config_reload_tests {
             "staging".to_owned(),
             &backend,
             control::IndexFileChecks::Deploy,
+            None,
         );
         std::fs::write(
             &path,
@@ -4999,6 +5072,91 @@ mod config_reload_tests {
             backend.indexes_for_database("staging").composites().len(),
             1
         );
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Only an Enterprise daemon reloads text indexes, for its own project and profile.
+    #[test]
+    fn only_an_enterprise_daemon_reloads_text_indexes() {
+        let mut cfg = RuntimeConfig {
+            auth_project: "demo-app".to_owned(),
+            production_exact: true,
+            ..Default::default()
+        };
+        assert!(file_text_reload(&cfg).is_none());
+        cfg.edition = FirestoreEdition::Enterprise;
+        let text = file_text_reload(&cfg).unwrap();
+        assert_eq!(text.project, "demo-app");
+        assert!(text.production_exact);
+    }
+
+    /// Review S10: an Enterprise index reload replaces the file's text indexes in the catalog
+    /// search uses, and keeps them when the new generation is refused.
+    #[tokio::test]
+    async fn index_reload_replaces_the_files_text_indexes() {
+        let dir = scratch("text-indexes");
+        let path = dir.join("firestore.indexes.json");
+        let text_index = |field: &str| {
+            format!(
+                r#"{{"indexes":[{{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{{"fieldPath":"{field}","searchConfig":{{"textSpec":{{"indexSpecs":[{{"indexType":"TOKENIZED","matchType":"MATCH_GLOBALLY"}}]}}}}}}]}}],"fieldOverrides":[]}}"#
+            )
+        };
+        std::fs::write(&path, text_index("title")).unwrap();
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Enterprise,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        let mut catalog = fireemu_core_firestore::text_index::TextIndexCatalog::default();
+        control::add_file_text_indexes(
+            &mut catalog,
+            "demo-app",
+            "staging",
+            &path.display().to_string(),
+            &text_index("title"),
+            false,
+        )
+        .unwrap();
+        let catalog = Arc::new(Mutex::new(catalog));
+        backend
+            .set_text_indexes(Arc::clone(&catalog), false)
+            .unwrap();
+        start_index_reload_supervisor(
+            path.display().to_string(),
+            "staging".to_owned(),
+            &backend,
+            control::IndexFileChecks::Deploy,
+            Some(FileTextReload {
+                project: "demo-app".to_owned(),
+                production_exact: false,
+            }),
+        );
+        let field = || {
+            catalog
+                .lock()
+                .unwrap()
+                .get("demo-app", "staging", "file-text-0")
+                .map(|definition| definition.fields[0].path.canonical())
+        };
+        assert_eq!(field().as_deref(), Some("title"));
+        std::fs::write(&path, text_index("summary")).unwrap();
+        for _ in 0..30 {
+            if field().as_deref() == Some("summary") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(field().as_deref(), Some("summary"));
         drop(backend);
         let _ = std::fs::remove_dir_all(dir);
     }

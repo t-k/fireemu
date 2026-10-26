@@ -2535,6 +2535,17 @@ fn native_text_state_for(
     Arc<Mutex<VirtualClock>>,
     Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
 ) {
+    native_text_state_exact(strict, false)
+}
+
+fn native_text_state_exact(
+    strict: bool,
+    production_exact: bool,
+) -> (
+    RestState,
+    Arc<Mutex<VirtualClock>>,
+    Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+) {
     let (state, clock) = enterprise_native_state(strict);
     state
         .local
@@ -2546,7 +2557,7 @@ fn native_text_state_for(
     ));
     state
         .local
-        .set_text_indexes(Arc::clone(&catalog), false)
+        .set_text_indexes(Arc::clone(&catalog), production_exact)
         .unwrap();
     (state, clock, catalog)
 }
@@ -2780,8 +2791,10 @@ fn native_text_admin_cross_group_list_is_database_scoped_and_keeps_item_scope() 
 }
 
 #[test]
-fn native_text_admin_cross_group_list_validates_every_visible_source_before_publication() {
-    let (state, clock, catalog) = native_text_state();
+fn native_text_admin_cross_group_list_leaves_an_unverified_source_pending() {
+    // Review S2: under productionExact a source language without recorded production support
+    // leaves only its own build pending; the listing answers and completes the others.
+    let (state, clock, catalog) = native_text_state_exact(true, true);
     let base = "/v1/projects/p/databases/(default)";
     for group in ["good", "bad"] {
         let (status, initial) = call(
@@ -2803,16 +2816,26 @@ fn native_text_admin_cross_group_list_validates_every_visible_source_before_publ
         200
     );
     advance(&clock, 3600);
-    let before = catalog.lock().unwrap().clone();
-    let operations = state.local.admin().operations().list("p", "(default)");
     let list = format!("{base}/collectionGroups/good/indexes");
     let (status, answer) = call(&state, "GET", &list, Value::Null);
-    assert_eq!(status, 501, "{answer}");
-    assert_eq!(*catalog.lock().unwrap(), before);
+    assert_eq!(status, 200, "{answer}");
+    let index_states: Vec<_> = answer["indexes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|index| index["state"].as_str().unwrap())
+        .collect();
     assert_eq!(
-        state.local.admin().operations().list("p", "(default)"),
-        operations
+        index_states.iter().filter(|s| **s == "READY").count(),
+        1,
+        "{answer}"
     );
+    assert_eq!(
+        index_states.iter().filter(|s| **s == "CREATING").count(),
+        1,
+        "{answer}"
+    );
+    let _ = &catalog;
     assert_eq!(
         call(
             &state,
@@ -3049,7 +3072,9 @@ fn native_text_admin_cross_group_list_unrenderable_ready_metadata_preserves_due_
         let before = catalog.lock().unwrap().clone();
         let operations = state.local.admin().operations().list("p", "(default)");
         let (status, observed) = call(&state, "GET", &list, Value::Null);
-        let refused = foreign_ready || (scope == "SameDatabase" && metadata != "ExplicitEn");
+        // Review S2: in the default profile an unrenderable definition is listed with the
+        // options it has; only a foreign epoch refuses the listing.
+        let refused = foreign_ready;
         if refused {
             assert_eq!(status, 501, "row {row}: {observed}");
             assert_eq!(
@@ -3487,26 +3512,28 @@ fn native_text_admin_language_failures_use_the_actual_typed_source_value() {
         let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
         advance(&clock, 3600);
         let (status, answer) = call(&state, "GET", &operation, Value::Null);
-        let malformed = language
-            .get("stringValue")
-            .and_then(Value::as_str)
-            .is_some_and(|text| text.contains('!'));
-        if malformed {
-            assert_eq!(status, 200, "{answer}");
-            assert_eq!(
+        assert_eq!(status, 200, "{answer}");
+        // Review S2: the default profile builds a valid tag language-neutral and fails a
+        // non-string value like a malformed tag.
+        match (
+            language.get("stringValue").and_then(Value::as_str),
+            language.get("integerValue"),
+        ) {
+            (Some("fr"), _) => {
+                assert_eq!(answer["metadata"]["state"], "SUCCESSFUL", "{answer}");
+                assert_eq!(
+                    catalog.lock().unwrap().entries().next().unwrap().2.state,
+                    fireemu_core_firestore::text_index::TextIndexState::Ready
+                );
+            }
+            (Some(text), _) => assert_eq!(
                 answer["error"],
-                json!({"code":3,"message":"Invalid text language: another invalid language!"})
-            );
-        } else {
-            assert_eq!(status, 501, "{answer}");
-            assert!(answer["error"]["message"]
-                .as_str()
-                .unwrap()
-                .starts_with("FS_TEXT_ADMIN_UNVERIFIED:"));
-            assert_eq!(
-                catalog.lock().unwrap().entries().next().unwrap().2.state,
-                fireemu_core_firestore::text_index::TextIndexState::Creating
-            );
+                json!({"code":3,"message":format!("Invalid text language: {text}")})
+            ),
+            (None, _) => assert_eq!(
+                answer["error"],
+                json!({"code":3,"message":"Invalid text language: 7"})
+            ),
         }
     }
 }
@@ -3639,7 +3666,11 @@ fn native_text_admin_unsupported_collection_does_not_block_another_target() {
     let good = good.unwrap();
     let bad = bad.unwrap();
     let bad_operation = format!("/v1/{}", bad["name"].as_str().unwrap());
-    assert_eq!(call(&state, "GET", &bad_operation, Value::Null).0, 501);
+    // Review S2: the default profile builds `fr` language-neutral.
+    assert_eq!(
+        call(&state, "GET", &bad_operation, Value::Null).1["metadata"]["state"],
+        "SUCCESSFUL"
+    );
     let good_operation = format!("/v1/{}", good["name"].as_str().unwrap());
     assert_eq!(
         call(&state, "GET", &good_operation, Value::Null).1["metadata"]["state"],
@@ -3655,7 +3686,7 @@ fn native_text_admin_unsupported_collection_does_not_block_another_target() {
             Value::Null
         )
         .0,
-        501
+        200
     );
     let (status, hits) = call(
         &state,
@@ -4173,7 +4204,9 @@ fn native_text_admin_operation_observers_resolve_retained_local_targets_only() {
 
 #[test]
 fn native_text_admin_operation_list_prepares_all_selected_sources_before_publication() {
-    for foreign_epoch in [false, true] {
+    // A source language no longer refuses a list (review S2); a foreign epoch still does.
+    {
+        let foreign_epoch = true;
         let (state, clock, catalog) = native_text_state();
         call(
             &state,
@@ -4498,5 +4531,338 @@ proptest::proptest! {
             _=>request["unknown"]=json!(true),
         }
         proptest::prop_assert_eq!(call(&state,"POST","/v1/projects/p/databases/(default)/collectionGroups/items/indexes",request).0,501);
+    }
+}
+
+/// Review S2 (PICT 2-way over language value, productionExact and observation; seed rows in
+/// docs.local): a document's language never poisons the database. In the default profile a
+/// valid tag builds language-neutral; under productionExact a tag without recorded production
+/// support (only `en` and `ja` have one) or a non-string value is refused only by the requests
+/// that name that build. A malformed tag fails the build as production recorded.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn native_text_admin_language_values_never_poison_the_database() {
+    const ROWS: [(&str, bool, &str); 44] = [
+        ("ja", false, "list-indexes"),
+        ("ja", true, "list-indexes"),
+        ("non-string", false, "get-operation"),
+        ("ja", true, "get-operation"),
+        ("fr", false, "composite-list-other-group"),
+        ("absent", false, "list-indexes"),
+        ("invalid-string", false, "get-operation"),
+        ("fr", true, "search"),
+        ("non-string", true, "search"),
+        ("ja", false, "search"),
+        ("non-string", false, "search"),
+        ("fr", false, "get-operation"),
+        ("en", false, "list-indexes"),
+        ("non-string", true, "get-index"),
+        ("invalid-string", true, "get-index"),
+        ("absent", true, "list-operations"),
+        ("fr", false, "get-index"),
+        ("non-string", true, "composite-list-other-group"),
+        ("fr", true, "delete-operation"),
+        ("absent", false, "composite-list-other-group"),
+        ("fr", true, "list-indexes"),
+        ("non-string", false, "list-operations"),
+        ("non-string", false, "list-indexes"),
+        ("en", true, "search"),
+        ("non-string", false, "delete-operation"),
+        ("absent", true, "search"),
+        ("ja", true, "composite-list-other-group"),
+        ("en", false, "list-operations"),
+        ("en", true, "delete-operation"),
+        ("en", false, "get-index"),
+        ("invalid-string", true, "list-operations"),
+        ("ja", true, "delete-operation"),
+        ("fr", true, "list-operations"),
+        ("invalid-string", false, "composite-list-other-group"),
+        ("en", false, "get-operation"),
+        ("invalid-string", true, "search"),
+        ("absent", false, "delete-operation"),
+        ("invalid-string", false, "delete-operation"),
+        ("absent", false, "get-operation"),
+        ("ja", true, "list-operations"),
+        ("invalid-string", false, "list-indexes"),
+        ("ja", true, "get-index"),
+        ("en", false, "composite-list-other-group"),
+        ("absent", false, "get-index"),
+    ];
+    for (row, (language, production_exact, observation)) in ROWS.into_iter().enumerate() {
+        let label = format!("row {row}: {language}/exact={production_exact}/{observation}");
+        let (state, clock, _) = native_text_state_exact(true, production_exact);
+        let base = "/v1/projects/p/databases/(default)";
+        let mut fields = json!({"title":{"stringValue":"marker"}});
+        match language {
+            "absent" => {}
+            "non-string" => fields["language"] = json!({"integerValue":"7"}),
+            "invalid-string" => fields["language"] = json!({"stringValue":"bad tag!"}),
+            tag => fields["language"] = json!({"stringValue":tag}),
+        }
+        let (status, _) = call(
+            &state,
+            "PATCH",
+            &format!("{base}/documents/items/doc"),
+            json!({"fields":fields}),
+        );
+        assert_eq!(status, 200, "{label}");
+        let (status, composite) = call(
+            &state,
+            "POST",
+            &format!("{base}/collectionGroups/other/indexes"),
+            json!({"queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"ASCENDING"}]}),
+        );
+        assert_eq!(status, 200, "{label}: {composite}");
+        let (status, initial) = call(
+            &state,
+            "POST",
+            &format!("{base}/collectionGroups/items/indexes"),
+            native_text_body(),
+        );
+        assert_eq!(status, 200, "{label}: {initial}");
+        advance(&clock, 3600);
+        let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+        let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+        let refused = production_exact && matches!(language, "fr" | "non-string");
+        let failure = match language {
+            "invalid-string" => Some("Invalid text language: bad tag!"),
+            "non-string" if !production_exact => Some("Invalid text language: 7"),
+            _ => None,
+        };
+        let (status, answer) = match observation {
+            "list-indexes" => call(
+                &state,
+                "GET",
+                &format!("{base}/collectionGroups/items/indexes"),
+                Value::Null,
+            ),
+            "get-index" => call(&state, "GET", &index, Value::Null),
+            "get-operation" => call(&state, "GET", &operation, Value::Null),
+            "list-operations" => call(&state, "GET", &format!("{base}/operations"), Value::Null),
+            "composite-list-other-group" => call(
+                &state,
+                "GET",
+                &format!("{base}/collectionGroups/other/indexes"),
+                Value::Null,
+            ),
+            "search" => call(
+                &state,
+                "POST",
+                &format!("{base}/documents:executePipeline"),
+                json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/items"}]},{"name":"search","options":{"query":{"functionValue":{"name":"document_matches","args":[{"stringValue":"marker"}]}}}}]}}}),
+            ),
+            _ => call(&state, "DELETE", &operation, Value::Null),
+        };
+        if observation == "search" {
+            // Review M1: productionExact never answers a search with a definite result or a
+            // definite "no READY index"; the default profile serves a built index and reports a
+            // failed one as not READY.
+            let error = if answer.is_array() {
+                &answer[0]["error"]
+            } else {
+                &answer["error"]
+            };
+            if production_exact {
+                assert_eq!(status, 501, "{label}: {answer}");
+                assert!(
+                    error["message"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("FS_TEXT_UNOBSERVED"),
+                    "{label}: {answer}"
+                );
+            } else if failure.is_some() {
+                assert_eq!(status, 400, "{label}: {answer}");
+                assert_eq!(error["status"], "FAILED_PRECONDITION", "{label}: {answer}");
+            } else {
+                assert_eq!(status, 200, "{label}: {answer}");
+                assert_eq!(
+                    answer[0]["results"].as_array().unwrap().len(),
+                    1,
+                    "{label}: {answer}"
+                );
+            }
+            continue;
+        }
+        let direct = matches!(
+            observation,
+            "get-index" | "get-operation" | "delete-operation"
+        );
+        if refused && direct {
+            assert_eq!(status, 501, "{label}: {answer}");
+            assert!(
+                answer["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("FS_TEXT_ADMIN_UNVERIFIED:"),
+                "{label}: {answer}"
+            );
+            continue;
+        }
+        assert_eq!(status, 200, "{label}: {answer}");
+        let expected_state = if refused {
+            "CREATING"
+        } else if failure.is_some() {
+            "NEEDS_REPAIR"
+        } else {
+            "READY"
+        };
+        match observation {
+            "list-indexes" => {
+                let text = answer["indexes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|i| i.get("searchIndexOptions").is_some())
+                    .unwrap();
+                assert_eq!(text["state"], expected_state, "{label}: {answer}");
+            }
+            "get-index" => assert_eq!(answer["state"], expected_state, "{label}: {answer}"),
+            "get-operation" => {
+                assert_eq!(answer["done"], true, "{label}: {answer}");
+                match failure {
+                    Some(message) => assert_eq!(
+                        answer["error"],
+                        json!({"code":3,"message":message}),
+                        "{label}: {answer}"
+                    ),
+                    None => assert_eq!(
+                        answer["metadata"]["state"], "SUCCESSFUL",
+                        "{label}: {answer}"
+                    ),
+                }
+            }
+            "list-operations" => {
+                let text = answer["operations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|op| op["name"] == initial["name"])
+                    .unwrap();
+                assert_eq!(text.get("done").is_some(), !refused, "{label}: {answer}");
+            }
+            "composite-list-other-group" => {
+                let composites = answer["indexes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|i| i.get("searchIndexOptions").is_none())
+                    .count();
+                assert_eq!(composites, 1, "{label}: {answer}");
+            }
+            _ => assert_eq!(answer, json!({}), "{label}"),
+        }
+    }
+}
+
+/// Review S9: deleting a text-index operation after its build deadline needs no prior read;
+/// before the deadline it is still running.
+#[test]
+fn native_text_admin_delete_finished_operation_without_prior_read() {
+    let (state, clock, _) = native_text_state();
+    let base = "/v1/projects/p/databases/(default)";
+    let (_, initial) = call(
+        &state,
+        "POST",
+        &format!("{base}/collectionGroups/items/indexes"),
+        native_text_body(),
+    );
+    let operation = format!("/v1/{}", initial["name"].as_str().unwrap());
+    let (status, answer) = call(&state, "DELETE", &operation, Value::Null);
+    assert_eq!(status, 400, "{answer}");
+    assert_eq!(answer["error"]["status"], "FAILED_PRECONDITION");
+    advance(&clock, 3600);
+    assert_eq!(
+        call(&state, "DELETE", &operation, Value::Null),
+        (200, json!({}))
+    );
+    assert_eq!(call(&state, "GET", &operation, Value::Null).0, 404);
+    let index = format!("/v1/{}", initial["metadata"]["index"].as_str().unwrap());
+    assert_eq!(call(&state, "GET", &index, Value::Null).1["state"], "READY");
+}
+
+/// The index-file reload reaches the very catalog both transports search.
+#[test]
+fn text_index_catalog_is_the_attached_search_catalog() {
+    let (state, _) = enterprise_native_state(true);
+    assert!(state.local.text_index_catalog().is_none());
+    let catalog = Arc::new(Mutex::new(
+        fireemu_core_firestore::text_index::TextIndexCatalog::default(),
+    ));
+    state
+        .local
+        .set_text_indexes(Arc::clone(&catalog), false)
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &state.local.text_index_catalog().unwrap(),
+        &catalog
+    ));
+}
+
+/// Merge review S-a: a definition without the options production always reports (here, from
+/// the index file without `searchIndexOptions`) is listed with the options it has in the
+/// default profile. productionExact leaves it out of the listing (documented) and refuses a
+/// request that names it.
+#[test]
+fn native_text_admin_unrenderable_definitions_by_profile() {
+    use fireemu_core_firestore::text_index::{DefaultTextLanguage, LanguageOverridePolicy};
+    for production_exact in [false, true] {
+        let (state, clock, catalog) = native_text_state_exact(true, production_exact);
+        let base = "/v1/projects/p/databases/(default)";
+        let (_, initial) = call(
+            &state,
+            "POST",
+            &format!("{base}/collectionGroups/items/indexes"),
+            native_text_body(),
+        );
+        advance(&clock, 3600);
+        let id = initial["metadata"]["index"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        let mut file = catalog
+            .lock()
+            .unwrap()
+            .get("p", "(default)", &id)
+            .unwrap()
+            .clone();
+        file.id = "file-text-0".into();
+        file.language = DefaultTextLanguage::Autodetect;
+        file.language_override = LanguageOverridePolicy::Disabled;
+        file.state = fireemu_core_firestore::text_index::TextIndexState::Ready;
+        catalog.lock().unwrap().add("p", "(default)", file).unwrap();
+        let (status, listed) = call(
+            &state,
+            "GET",
+            &format!("{base}/collectionGroups/items/indexes"),
+            Value::Null,
+        );
+        assert_eq!(status, 200, "{listed}");
+        let file_view = listed["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|index| index["name"].as_str().unwrap().ends_with("/file-text-0"));
+        let (status, direct) = call(
+            &state,
+            "GET",
+            &format!("{base}/collectionGroups/items/indexes/file-text-0"),
+            Value::Null,
+        );
+        if production_exact {
+            assert!(file_view.is_none(), "{listed}");
+            assert_eq!(status, 501, "{direct}");
+        } else {
+            let view = file_view.unwrap();
+            assert_eq!(
+                view["searchIndexOptions"],
+                json!({"textLanguageOverrideFieldPath":""})
+            );
+            assert_eq!(status, 200, "{direct}");
+            assert_eq!(direct, *view);
+        }
     }
 }

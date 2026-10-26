@@ -2919,6 +2919,17 @@ impl LocalBackend {
         Ok(())
     }
 
+    /// The attached text catalog both pipeline transports search, for index-file reloads.
+    #[must_use]
+    pub fn text_index_catalog(
+        &self,
+    ) -> Option<Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>> {
+        self.text_search_configuration()
+            .ok()
+            .flatten()
+            .map(|config| config.catalog)
+    }
+
     pub(crate) fn text_search_configuration(
         &self,
     ) -> Result<Option<crate::text_search::Configuration>, Status> {

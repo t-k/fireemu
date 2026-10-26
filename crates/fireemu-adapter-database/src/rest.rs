@@ -423,7 +423,7 @@ impl Database {
         context: ServerValueContext,
         principal: crate::changes::Principal,
     ) -> Result<Option<Node>, crate::changes::ChangeError> {
-        self.commit_change(namespace, context, principal, |tree| {
+        self.commit_change(namespace, path, context, principal, |tree| {
             tree.set(path, value, context)
         })
     }
@@ -436,22 +436,31 @@ impl Database {
         context: ServerValueContext,
         principal: crate::changes::Principal,
     ) -> Result<(), crate::changes::ChangeError> {
-        self.commit_change(namespace, context, principal, |tree| {
+        self.commit_change(namespace, path, context, principal, |tree| {
             tree.update(path, entries, context)
         })
     }
 
+    /// Applies `operation`, a set or an update at `path`, coupling it to the change sink when
+    /// the sink watches what it can change.
     fn commit_change<R>(
         &mut self,
         namespace: &str,
+        path: &Path,
         context: ServerValueContext,
         principal: crate::changes::Principal,
         operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
     ) -> Result<R, crate::changes::ChangeError> {
+        // A `.priority` path sets the priority of its parent.
+        let scope = if path.is_priority() {
+            path.parent().unwrap_or_default()
+        } else {
+            path.clone()
+        };
         let sink = self
             .change_sink
             .clone()
-            .filter(|sink| sink.interested(namespace));
+            .filter(|sink| sink.interested(namespace) && sink.affects(namespace, &scope));
         if sink.is_none() {
             return operation(self.tree_mut(namespace))
                 .map_err(crate::changes::ChangeError::Database);
@@ -471,7 +480,7 @@ impl Database {
         };
         let tree = self.tree_mut(namespace);
         let (result, candidate) =
-            crate::changes::prepare(tree, change, sink.as_deref(), operation)?;
+            crate::changes::prepare_within(tree, &scope, change, sink.as_deref(), operation)?;
         candidate.commit(tree);
         self.next_change = next;
         Ok(result)
@@ -2349,14 +2358,15 @@ value(undefined,true);
 const boundaries=Array.from(new Set([0,source.length,...ranges.flatMap(range=>[range.start,range.end])])).sort((a,b)=>a-b);
 const container=document.getElementById('rules'),details=document.getElementById('details');
 function description(node) {
-  return node.text+'\n'+(node.values.length?node.values.map(item=>JSON.stringify(item.value)+' × '+item.count).join('\n'):'No recorded result');
+  const omitted=node['values-omitted']?'\n'+node['values-omitted']+' more result(s) with other values (not kept)':'';
+  return node.text+'\n'+(node.values.length?node.values.map(item=>JSON.stringify(item.value)+' × '+item.count).join('\n'):'No recorded result')+omitted;
 }
 for(let i=0;i<boundaries.length-1;i++) {
   const start=boundaries[i],end=boundaries[i+1];
   const matches=ranges.filter(range=>range.start<=start && range.end>=end).sort((a,b)=>(a.end-a.start)-(b.end-b.start));
   if(!matches.length) { container.append(document.createTextNode(source.slice(start,end)));continue; }
   const node=matches[0].node,span=document.createElement('span');
-  span.className='expression '+(node.values.length?'observed':'unrecorded');
+  span.className='expression '+(node.values.length||node['values-omitted']?'observed':'unrecorded');
   span.textContent=source.slice(start,end);span.title=description(node);span.tabIndex=0;
   span.dataset.start=String(start);span.dataset.end=String(end);
   span.addEventListener('mouseenter',()=>{details.textContent=description(node);});

@@ -1229,6 +1229,43 @@ fn page_like_tokens_are_never_skipped_as_digests_or_words() {
 }
 
 #[test]
+fn a_run_of_lower_case_letters_digits_and_separators_is_an_identifier_whatever_its_share_of_letters(
+) {
+    // Hex digests, dates and numbered paths: few letters, so they are not words, but they are not tokens.
+    for run in [
+        "12-34-56-78-90-ab-cd-ef-12-34",
+        "12/34/56/78/90/ab/cd/ef/12/34",
+        "12_34_56_78_90_ab_cd_ef_12_34",
+        "0123456789z0123456789z0123456789z",
+        "0123456789abcdef0123456789abcdef",
+    ] {
+        assert!(is_digest_or_identifier(run.as_bytes()), "{run}");
+    }
+    // One upper case letter or a `+` is a token.
+    for run in [
+        "12-34-56-78-90-aB-cd-ef-12-34",
+        "12/34/56/78/90/a+-cd-ef-12-34",
+        "0123456789Z0123456789z0123456789z",
+    ] {
+        assert!(!is_digest_or_identifier(run.as_bytes()), "{run}");
+    }
+}
+
+#[test]
+fn four_glued_characters_are_beyond_the_tolerance_at_some_token_lengths() {
+    // Three glued characters are covered at every length (see above); four complete an extra byte at some
+    // lengths, and then the run no longer parses.
+    let number = 407_182_936_504;
+    let found = (9..17)
+        .filter(|filler| {
+            let text = format!("{}/abc", encode(&message_of(number, *filler), true, false));
+            project_numbers_in(text.as_bytes()) == [number]
+        })
+        .count();
+    assert!((1..8).contains(&found), "{found} of 8");
+}
+
+#[test]
 fn a_run_is_words_when_four_fifths_of_it_is_lower_case_letters() {
     for (run, words) in [
         // 24 characters: 20 lower case is words, 19 is not.

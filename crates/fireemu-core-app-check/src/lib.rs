@@ -10,6 +10,7 @@
 //! - [`registry`]: the project-scoped app registry, project epochs and debug-token digests;
 //! - [`claims`]: the production-shaped token claims and their canonical JSON;
 //! - [`jwt`]: compact-JWT encoding and splitting (base64url comes from `fireemu_core_auth::jwt`);
+//! - [`admin`]: the verdict the Admin SDK instrumentation inside a Functions runner is answered with;
 //! - [`verify`]: the verifier, the credential states and the admission decision;
 //! - [`exchange`]: the debug-token exchange decision (constant-time, no early exit);
 //! - [`header`]: the canonical, transport-neutral `X-Firebase-AppCheck` classification;
@@ -18,6 +19,7 @@
 //! Milestone AC0 delivers `APPCHECK-CORE-1`, `APPCHECK-DEBUG-EXCHANGE-1` and
 //! `APPCHECK-JWKS-1`. No Firebase product enforces App Check yet.
 
+pub mod admin;
 pub mod admission;
 pub mod claims;
 pub mod crypto;

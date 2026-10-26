@@ -2648,6 +2648,120 @@
         "fixture": "conformance/fixtures/firestore/rest-error-shapes.json#runQuery-needing-a-composite-index",
         "approvalRecord": "README.md, \"Gap from the official Firebase Emulator Suite\""
       }
+    },
+    "firestore/rules-decisions#anonymous-read-of-a-closed-document": {
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/firestore/security/get-started",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-27",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/firestore/rules-decisions.json#anonymous-read-of-a-closed-document",
+        "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/principals/grpc#none-get-a-own (gRPC get, recorded 2026-09-25); same text on get-missing-grpc in fs-rules/document-access/reads-and-writes"
+      }
+    },
+    "firestore/rules-decisions#anonymous-write-to-an-owner-document": {
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/firestore/security/get-started",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-27",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/firestore/rules-decisions.json#anonymous-write-to-an-owner-document",
+        "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied-grpc (gRPC commit, recorded 2026-09-25)"
+      }
+    },
+    "firestore/rules-decisions#owner-cannot-write-another-document": {
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/firestore/security/get-started",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-27",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/firestore/rules-decisions.json#owner-cannot-write-another-document",
+        "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied-grpc (gRPC commit, recorded 2026-09-25)"
+      }
+    },
+    "firestore/rules-decisions#after-sign-out-the-document-is-protected-again": {
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/firestore/security/get-started",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-27",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/firestore/rules-decisions.json#after-sign-out-the-document-is-protected-again",
+        "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/principals/grpc#none-get-a-own (gRPC get, recorded 2026-09-25); same text on get-missing-grpc in fs-rules/document-access/reads-and-writes"
+      }
+    },
+    "firestore/lite-rest-transport#write-into-a-rules-closed-collection-is-denied": {
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/firestore/security/get-started",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-27",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/firestore/lite-rest-transport.json#write-into-a-rules-closed-collection-is-denied",
+        "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (REST commit, recorded 2026-09-25)"
+      }
+    },
+    "firestore/rest-error-shapes#get-a-missing-document": {
+      "documents": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; README.md, \"Gap from the official Firebase Emulator Suite\"",
+      "reason": "Production answers a missing document with `Document \"projects/.../documents/...\" not found.` (recorded 2026-09-07); the official emulator says `Document (projects/.../documents/...) not found.`. fireemu follows production (567565bdd).",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/firestore/reference/rest/v1/projects.databases.documents/get",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-27",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/firestore/rest-error-shapes.json#get-a-missing-document",
+        "approvalRecord": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; commit 567565bdd (match observed GetDocument missing diagnostic)",
+        "productionObservation": "conformance/firestore-production-matrix.json#errors/rest-shapes#get-missing-document (recorded 2026-09-07); same diagnostic in queries/projection-and-listing#get-missing-parent-document"
+      }
     }
   },
   "firestoreMatrixDivergences": {

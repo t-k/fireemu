@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `getAppCheck().verifyToken()` of `firebase-admin` 13 and 14 inside a Functions runner now verifies Fireemu App Check tokens: the runner keeps the SDK's own decoding and claim checks and asks the daemon for the signature step, which decides it with the callable boundary's verifier against the project's current session epoch and app registry on the virtual clock. A token minted before an in-place session reset or snapshot restore is rejected with the SDK's own "does not correspond to a known public key" error. `verifyToken(token, { consume: true })` is refused with `app-check/unimplemented` and never calls Google. Outside those SDK majors, or if the SDK's internals changed, nothing is patched and the SDK rejects Fireemu tokens. Production accepts a token for an unregistered or disabled app until it expires; Fireemu rejects it in every profile. A token issued in the future verifies, as in production.
+
 ### Changed
 
 - Realtime Database: the entries of a multi-path write (a REST `PATCH`, a realtime merge, and the writes registered with `onDisconnect` when the connection ends) reach a connection's listens in the order of the official emulator and production, not in key or registration order. Up to four entries come in the order they were sent or registered; from five on, in the order of the hash of their keys (production-5 fired `e6`, `e5`, `marker`, `e4`, `e3`, `e2` for the keys `e2` to `marker`). Entries whose keys are paths (`a/x`) are gathered by their first key in the hash order of the keys as sent, and the children an onDisconnect value splits into when a cancel falls below it go in key order; a cancel of a path the value does not hold leaves the value whole, and null children are dropped when a value is registered, as the official emulator does. A listen at or above the write hears first, a listen above an entry before the one at it, and the members of a merge frame follow the same order.

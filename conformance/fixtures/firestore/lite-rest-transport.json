@@ -10,8 +10,8 @@
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
     "parity": 8,
-    "documented-divergence": 0,
-    "debt": 1,
+    "documented-divergence": 1,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
@@ -85,7 +85,7 @@
     },
     {
       "id": "write-into-a-rules-closed-collection-is-denied",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "thrown": true,
         "code": "permission-denied",
@@ -94,8 +94,10 @@
       "testd": {
         "thrown": true,
         "code": "permission-denied",
-        "message": "Request failed with error: create on conf_rules_closed/lite denied by Security Rules: no allow statement evaluated to true"
-      }
+        "message": "Request failed with error: Missing or insufficient permissions."
+      },
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces."
     },
     {
       "id": "query-needing-a-composite-index",

@@ -164,7 +164,34 @@ Tokens are signed with a key that belongs to one daemon instance and are invalid
 
 Unlike a callable, an `onRequest` handler receives the `X-Firebase-AppCheck` header without automatic verification or `request.app`. Your handler must verify it and decide what a verified app may do. `enforceAppCheck` on a callable does not protect a separate HTTP endpoint.
 
-The Node Admin SDK's `getAppCheck().verifyToken()` uses Google's JWKS, including in firebase-admin 14.5.0; it has no App Check emulator host switch. A token signed by Fireemu therefore fails that verification. See the [Admin SDK verifier](https://github.com/firebase/firebase-admin-node/blob/v14.5.0/src/app-check/token-verifier.ts). Keep the Admin SDK verification path in production.
+### Verify with the Admin SDK (`getAppCheck().verifyToken()`)
+
+The code you deploy works unchanged: `getAppCheck().verifyToken(token)` inside an `onRequest` function is answered by the daemon, not by Google's keys.
+
+```js
+import { onRequest } from 'firebase-functions/v2/https';
+import { initializeApp } from 'firebase-admin/app';
+import { getAppCheck } from 'firebase-admin/app-check';
+
+initializeApp();
+
+export const api = onRequest(async (req, res) => {
+  try {
+    const { appId } = await getAppCheck().verifyToken(req.get('X-Firebase-AppCheck'));
+    // application logic for a verified app
+  } catch {
+    res.status(401).send('Unauthorized');
+  }
+});
+```
+
+The runner patches the `firebase-admin` it resolves from your codebase before your code loads. The SDK still decodes the token and checks the algorithm, audience, issuer and subject itself; only the signature step is replaced by a question to the daemon over the runner's private pipe. The daemon answers with the same verifier it uses for callable functions, against the current project epoch and app registry, on the virtual clock, and nothing is cached. A token minted before an in-place session reset or snapshot restore is therefore rejected, exactly like a token the daemon no longer holds the key for (`app-check/invalid-argument`, "... does not correspond to a known public key ..."). Errors are the SDK's own, produced by its own error mapper.
+
+- Supported: `firebase-admin` 13 and 14, resolved from the Functions codebase. Tested with 14.3.0 (CI) and 13.10.0; 14.5.0 is not installed in CI because its App Check code is identical to 14.3.0 (the files `token-verifier.js`, `app-check.js`, `app-check-api-client-internal.js` and `utils/jwt.js` differ only in the version banner), and a test pins the content of those files so a dependency bump that changes them fails CI. Outside that range, or if the SDK's internals changed so that the startup self-test fails, nothing is patched, the daemon prints a startup note, and `verifyToken` rejects Fireemu tokens (it never accepts one it cannot check). A second copy of `firebase-admin` elsewhere in `node_modules` is not the one the runner resolves and stays stock.
+- `verifyToken(token, { consume: true })` is refused with `app-check/unimplemented` after the token verified. Limited-use consumption is not implemented, and the production App Check API is never called. `getAppCheck().createToken()` is a different call and still goes to Google's exchange endpoint.
+- The daemon verifies for the project the Functions runner belongs to. A call whose app names another project ID is answered as an unknown key.
+- Divergence from production: production accepts a token for an app that is not registered or is disabled until the token expires. Fireemu rejects it, in every profile. A token whose `iat` is in the future verifies, as in production.
+- Nothing here makes `onRequest` verify automatically. Your handler still decides what a verified app may do, and App Check identifies an app, not a user.
 
 ### Endpoint discovery in each process
 
@@ -176,9 +203,9 @@ The Node Admin SDK's `getAppCheck().verifyToken()` uses Google's JWKS, including
 
 Use `FIREEMU_APP_CHECK_JWKS_URL` inside the runner. Do not derive the key URL from a request header or an unverified token. This example deliberately supports loopback only. In v0.23.0 the runner does not receive the App Check variables: selecting Auth and deriving `/v1/jwks` from `FIREBASE_AUTH_EMULATOR_HOST` is a version-specific workaround, not a requirement of App Check itself.
 
-### Local signature and claim verification example
+### Local signature and claim verification without the Admin SDK
 
-Install `jose` in the Functions package. The project number, project ID and allowed app IDs below must come from your test configuration. The allowed app set must reflect the enabled apps you intend this endpoint to admit.
+If your middleware verifies with a JWKS library instead of the Admin SDK, install `jose` in the Functions package. The project number, project ID and allowed app IDs below must come from your test configuration. The allowed app set must reflect the enabled apps you intend this endpoint to admit.
 
 ```js
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -229,6 +256,6 @@ Call this from your `onRequest` handler with `req.get('X-Firebase-AppCheck')`. R
 
 The example's `new Date()` must use the same clock as token exchange. Test worlds default to virtual Date in Functions; a plain daemon using a pinned clock also needs `functions.clock.date = "virtual"`. The parent test process and `world.run` children retain native Date, so copying this verifier there requires explicitly supplying the world time.
 
-**This is signature and claim verification, not Fireemu's full verifier.** A JWKS does not expose the current project epoch or app registry. The example cannot reject a previously issued token after an in-place session reset, snapshot restore, project deletion or app disablement while the same signing key remains usable. Checking only that `fireemu_epoch` exists would not fix this. It also does not implement token consumption or replay protection.
+**This is signature and claim verification, not Fireemu's full verifier.** A JWKS does not expose the current project epoch or app registry; the Admin SDK path above does. The example cannot reject a previously issued token after an in-place session reset, snapshot restore, project deletion or app disablement while the same signing key remains usable. Checking only that `fireemu_epoch` exists would not fix this. It also does not implement token consumption or replay protection.
 
 For tests using this recipe, recreate the whole world with `world.reset()` (or dispose and create another world), including the Functions runner, and obtain a fresh token. That replaces the daemon keys and verifier cache. Do not treat this workaround as proof of the daemon's epoch invalidation behavior; use its callable verification boundary to test that behavior.

@@ -10,8 +10,8 @@
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
     "parity": 0,
-    "documented-divergence": 1,
-    "debt": 2,
+    "documented-divergence": 2,
+    "debt": 1,
     "pending": 0
   },
   "steps": [
@@ -68,7 +68,7 @@
         "status": 200
       },
       "documents": "README.md, \"Gap from the official Firebase Emulator Suite\"",
-      "reason": "The query itself is served on both sides since index merging landed. The official emulator ends the REST runQuery stream with `done: true` on the last response; production omits `done` (probed against the oracle project on 2026-09-08) and fireemu follows production."
+      "reason": "The official emulator ends a REST runQuery stream with `done: true` on the last response; production omits the field and fireemu follows production."
     },
     {
       "id": "runQuery-with-an-unknown-operator",
@@ -84,19 +84,21 @@
         "status": 400
       },
       "testd": {
-        "body": {
-          "error": {
-            "code": 400,
-            "message": "unknown field filter operator \"NOT_A_REAL_OPERATOR\"",
-            "status": "INVALID_ARGUMENT"
+        "body": [
+          {
+            "error": {
+              "code": 400,
+              "message": "unknown field filter operator",
+              "status": "INVALID_ARGUMENT"
+            }
           }
-        },
+        ],
         "status": 400
       }
     },
     {
       "id": "get-a-missing-document",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "body": {
           "error": {
@@ -111,12 +113,14 @@
         "body": {
           "error": {
             "code": 404,
-            "message": "Document not found: projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing",
+            "message": "Document \"projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing\" not found.",
             "status": "NOT_FOUND"
           }
         },
         "status": 404
-      }
+      },
+      "documents": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; README.md, \"Gap from the official Firebase Emulator Suite\"",
+      "reason": "Production answers a missing document with `Document \"projects/.../documents/...\" not found.` (recorded 2026-09-07); the official emulator says `Document (projects/.../documents/...) not found.`. fireemu follows production (567565bdd)."
     }
   ]
 }

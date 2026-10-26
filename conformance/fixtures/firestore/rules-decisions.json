@@ -10,14 +10,14 @@
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
     "parity": 3,
-    "documented-divergence": 0,
-    "debt": 4,
+    "documented-divergence": 4,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
     {
       "id": "anonymous-read-of-a-closed-document",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "thrown": true,
         "code": "permission-denied",
@@ -26,8 +26,10 @@
       "testd": {
         "thrown": true,
         "code": "permission-denied",
-        "message": "get on conf_rules_closed/x denied by Security Rules: no allow statement evaluated to true"
-      }
+        "message": "Missing or insufficient permissions."
+      },
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces."
     },
     {
       "id": "anonymous-read-of-a-public-collection",
@@ -38,7 +40,7 @@
     },
     {
       "id": "anonymous-write-to-an-owner-document",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "thrown": true,
         "code": "permission-denied",
@@ -47,8 +49,10 @@
       "testd": {
         "thrown": true,
         "code": "permission-denied",
-        "message": "7 PERMISSION_DENIED: create on conf_rules_owner/nobody denied by Security Rules: no allow statement evaluated to true"
-      }
+        "message": "7 PERMISSION_DENIED: Missing or insufficient permissions."
+      },
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces."
     },
     {
       "id": "sign-up",
@@ -66,7 +70,7 @@
     },
     {
       "id": "owner-cannot-write-another-document",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "thrown": true,
         "code": "permission-denied",
@@ -75,12 +79,14 @@
       "testd": {
         "thrown": true,
         "code": "permission-denied",
-        "message": "7 PERMISSION_DENIED: create on conf_rules_owner/someone-else denied by Security Rules: no allow statement evaluated to true"
-      }
+        "message": "7 PERMISSION_DENIED: Missing or insufficient permissions."
+      },
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces."
     },
     {
       "id": "after-sign-out-the-document-is-protected-again",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "thrown": true,
         "code": "permission-denied",
@@ -89,8 +95,10 @@
       "testd": {
         "thrown": true,
         "code": "permission-denied",
-        "message": "get on conf_rules_owner/<uid> denied by Security Rules: no allow statement evaluated to true"
-      }
+        "message": "Missing or insufficient permissions."
+      },
+      "documents": "spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)",
+      "reason": "Production answers every Security Rules denial with PERMISSION_DENIED \"Missing or insufficient permissions.\" and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces."
     }
   ]
 }

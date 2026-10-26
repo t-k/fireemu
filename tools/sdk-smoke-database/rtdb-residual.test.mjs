@@ -43,7 +43,7 @@ function fakeWorld(faults = []) {
   w.fetch = async (url, init) => {
     const u = new URL(url), body = init.body === undefined ? undefined : /rules/.test(u.pathname) ? init.body : JSON.parse(init.body);
     w.sent.push(`${init.method} ${u.pathname}`);
-    if (init.method === 'GET' && w.forbid?.path.test(u.pathname) && w.forbid.remaining-- > 0) return json(w.forbid.status ?? 403, FORBIDDEN);
+    if (init.method === 'GET' && w.forbid?.path.test(u.pathname) && w.forbid.remaining-- > 0) return json(w.forbid.status ?? 403, w.forbid.body ?? FORBIDDEN);
     const f = faults.find((x) => !x.used && x.method === init.method && x.path.test(u.pathname) && !(x.skip-- > 0));
     if (!f) return apply(init.method, u, body);
     f.used = true;
@@ -483,4 +483,45 @@ test('the command line stops on a bundle that differs from the packet before cre
   const r = spawnSync(process.execPath, [new URL('./rtdb-residual.mjs', import.meta.url).pathname, 'production', '--packet', file, '--packet-sha256', sha(packet), '--out', out], { encoding: 'utf8' });
   assert.equal(r.status, 2); assert.match(r.stderr, /SDK bundle differs from the packet: firebase-database.js/);
   assert.throws(() => readFileSync(out), /ENOENT/, 'the output directory was not created');
+});
+
+// production-1 of the residual recorder (2026-10-26 11:26Z): after the API enable, the undelete, the reenable and an
+// ACTIVE instance read (all 200), the first Rules GET on the instance host answered 401 with this body. CV11's
+// identical flow got 200. The instance host had not started accepting the token yet; the setup window covers it.
+const UNAUTHORIZED = '{\n  "error" : "Unauthorized request."\n}\n';
+test('production-1 replay: a 401 on the first Rules GET is retried inside the setup window and the run completes', async () => {
+  const w = fakeWorld(), c = clocked(), rows = [];
+  w.forbid = { path: /\.settings\/rules\.json$/, remaining: 3, status: 401, body: UNAUTHORIZED };
+  const r = await prod(w, { sleep: c.sleep, log: (x) => rows.push(x) });
+  assert.equal(r.status, 'closed'); assert.ok(r.observationComplete); assert.ok(w.baseline());
+  const steps = rows.map((x) => x.step);
+  assert.deepEqual(steps.slice(8, 15), ['instance-active', 'rules-before', 'rules-before-retry-1', 'rules-before-retry-2', 'rules-before-retry-3', 'prefix-before', 'rules-install-put']);
+  assert.deepEqual(rows.filter((x) => x.status === 401).map((x) => x.body), [UNAUTHORIZED, UNAUTHORIZED, UNAUTHORIZED]);
+  assert.deepEqual(c.slept.slice(1, 4), [2000, 4000, 8000]);
+});
+
+test('production-1 replay: a 401 that outlasts 120 s stops before any Rules or data write and retires the instance and the API', async () => {
+  const w = fakeWorld(), c = clocked(), rows = [];
+  w.forbid = { path: /\.settings\/rules\.json$/, remaining: Infinity, status: 401, body: UNAUTHORIZED };
+  const r = await prod(w, { sleep: c.sleep, log: (x) => rows.push(x) });
+  assert.equal(c.slept.slice(1).reduce((a, b) => a + b, 0), 120000);
+  assert.equal(r.status, 'closed'); assert.ok(!r.observationComplete); assert.ok(w.baseline());
+  assert.ok(!w.sent.some((x) => x.startsWith('PUT')), 'no Rules or data write');
+});
+
+test('a 401 is retried only for read-only GETs during setup: not a mutation, not after setup, and a 404 stays unretried', async () => {
+  const w1 = fakeWorld(), rows1 = [];
+  w1.forbid = { path: /\.settings\/rules\.json$/, remaining: 1, status: 401, body: UNAUTHORIZED };
+  const base1 = w1.fetch;
+  w1.fetch = async (url, init) => (init.method === 'PUT' && url.includes('rules') && !w1.putSeen ? (w1.putSeen = true, w1.sent.push('PUT /.settings/rules.json'), json(401, UNAUTHORIZED)) : base1(url, init));
+  await prod(w1, { sleep: clocked().sleep, log: (x) => rows1.push(x.step) });
+  assert.ok(!rows1.some((x) => x.startsWith('rules-install-put-retry')), 'a refused PUT is not re-sent');
+  assert.equal(w1.sent.filter((x) => x === 'PUT /.settings/rules.json').length >= 1, true);
+  const w2 = fakeWorld(), rows2 = [];
+  const r2 = await prod(w2, { sleep: clocked().sleep, log: (x) => rows2.push(x.step), browser: async (c, h) => { w2.forbid = { path: /\.settings\/rules\.json$/, remaining: 1, status: 401, body: UNAUTHORIZED }; return fakeBrowser(w2)(c, h); } });
+  assert.ok(!rows2.some((x) => x.includes('-retry-')), 'no retry after setup'); assert.ok(r2.errors.length > 0);
+  const w3 = fakeWorld(), rows3 = [];
+  w3.forbid = { path: /\.settings\/rules\.json$/, remaining: 1, status: 404, body: UNAUTHORIZED };
+  await prod(w3, { sleep: clocked().sleep, log: (x) => rows3.push(x.step) });
+  assert.ok(!rows3.some((x) => x.includes('-retry-')), 'a 404 is not propagation');
 });

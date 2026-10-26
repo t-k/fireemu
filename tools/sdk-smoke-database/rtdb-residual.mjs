@@ -82,7 +82,9 @@ async function read(run, step, method, url, accept, body) {
   const options = { raw: method === 'GET' && url.includes('.settings/rules') };
   let r = await run.call(step, method, url, body, options);
   // Bounded backoff 2, 4, 8, 16, 30, 30, 30 s (120 s in all), counted against the caps; GETs only.
-  for (let k = 1; method === 'GET' && run.propagation && r.outcome === 'refused' && r.status === 403; k++) {
+  // 403: the management API list right after the enable (CV11 production-1). 401: the instance host's first
+  // Rules GET right after the reenable (this recorder's production-1, body "Unauthorized request.").
+  for (let k = 1; method === 'GET' && run.propagation && r.outcome === 'refused' && (r.status === 403 || r.status === 401); k++) {
     const wait = Math.min(2000 * 2 ** (k - 1), 30000, PROPAGATION_MS - run.propagationWaited);
     if (wait <= 0) break;
     run.propagationWaited += wait;

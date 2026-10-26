@@ -16,8 +16,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
+import { runPreflight } from './adc-preflight.mjs';
+
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const SOURCES = ['cv11-genuine-auth.mjs', 'cv11-genuine-auth-page.js'];
+export const SOURCES = ['cv11-genuine-auth.mjs', 'cv11-genuine-auth-page.js', 'adc-preflight.mjs'];
 export const PROFILES = [[1, 'ws'], [1, 'lp'], [2, 'ws'], [2, 'lp']].map(([round, transport]) => ({ round, transport, name: `r${round}-${transport}` }));
 // observe/cleanup: admin requests per phase; mutations: admin writes overall; browser caps per profile.
 export const CAPS = { observe: 80, cleanup: 30, mutations: 45, pollsPerOperation: 12, browserHttp: 150, browserWs: 6 };
@@ -416,6 +418,9 @@ async function main(argv) {
       const token = execFileSync(packet.gcloud, ['auth', 'application-default', 'print-access-token'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
       if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');
       secrets.push(apiKey, token);
+      // Before the first sandbox request: a token without userinfo.email makes the instance host answer 401 after the API enable, the undelete and the reenable are spent (RTDB residual production-1 and -2, 2026-10-26).
+      const stopped = await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets));
+      if (stopped) return stopped;
       const browser = browserRunner({ modules: packet.modules, allowHost: (h) => ['identitytoolkit.googleapis.com', 'securetoken.googleapis.com'].includes(h) || /^[a-z0-9-]+\.firebaseio\.com$/.test(h), stop, page: { apiKey, projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com` } });
       o = { mode, packet, headers: { authorization: `Bearer ${token}`, 'x-goog-user-project': packet.projectId }, browser, ...common };
     }

@@ -216,8 +216,11 @@ export async function deployWorld({ deployScript, deleteStatus, caps }) {
     ) {
       result = reply(200, deployed.versionExists ? { versions: [{ name: FH_VERSION }] } : {});
     } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_VERSION}?force=true`) {
-      deployed.versionExists = false;
-      result = reply(200);
+      if (deployed.versionDeleteStatus) result = reply(deployed.versionDeleteStatus);
+      else {
+        deployed.versionExists = false;
+        result = reply(200);
+      }
     } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_VERSION}`) {
       result = deployed.versionExists ? reply(200, { name: FH_VERSION }) : reply(404);
     } else {

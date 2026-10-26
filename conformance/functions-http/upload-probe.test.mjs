@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { BOUNDS, createBudget } from "./harness.mjs";
-import { FAKE_RECEIPT_SCRIPT, UPLOAD_OBJECT, deployWorld } from "./production.fake.mjs";
+import { assertTargetAbsent } from "./production.mjs";
+import { FAKE_RECEIPT_SCRIPT, FH_PACKAGE, UPLOAD_OBJECT, deployWorld } from "./production.fake.mjs";
 import {
   PROBE_LIMITS,
   assertProbeApproval,
@@ -126,9 +127,11 @@ test("the packet's request caps can lower a budget and never raise it", () => {
   );
 });
 
-async function probe({ script, deleteStatus, loggingState }) {
+async function probe({ script, deleteStatus, loggingState, versionDeleteStatus, usedUploads = 0 }) {
   const world = await deployWorld({ deployScript: script, deleteStatus, caps: PROBE_LIMITS });
   if (loggingState) world.deployed.loggingState = loggingState;
+  if (versionDeleteStatus) world.deployed.versionDeleteStatus = versionDeleteStatus;
+  for (let n = 0; n < usedUploads; n += 1) world.budget.take("upload");
   const result = await runUploadProbe({
     control: world.control,
     adcPath: "/adc",
@@ -277,4 +280,122 @@ test("the result and the journal name no bucket, object, project number or URL",
   } finally {
     await rm(world.dir, { recursive: true, force: true });
   }
+});
+
+test("masking removes a signed URL outside the uploadUrl field, and the field even without markers", () => {
+  const put = `x PUT https://storage.googleapis.com/${BUCKET}/${UPLOAD_OBJECT}?GoogleAccessId=a%40b&Signature=SECRET-MARKER-9f3a done`;
+  assert.doesNotMatch(maskProbeLine(put, NUMBER), /SECRET-MARKER|GoogleAccessId|Signature=/);
+  const plain = '{"uploadUrl":"https://example.test/plain-path","storageSource":{}}';
+  assert.equal(
+    maskProbeLine(plain, NUMBER),
+    '{"uploadUrl":"[REDACTED UPLOAD URL]","storageSource":{}}',
+  );
+});
+
+test("the collector keeps the length of the PUT line, ignores other events and returns copies", () => {
+  const collector = createFormsCollector(NUMBER);
+  collector.observe({ type: "put-status", status: 200 }, "twelve bytes");
+  collector.observe({ type: "other" }, "ignored line");
+  collector.observe(null, "ignored line");
+  const summary = collector.summary();
+  assert.equal(summary.putStatusLineBytes, 12);
+  assert.equal(collector.maskedLines().length, 1);
+  summary.putStatusCodes.push(999);
+  collector.maskedLines().push("x");
+  assert.deepEqual(collector.summary().putStatusCodes, [200]);
+  assert.equal(collector.maskedLines().length, 1);
+});
+
+test("an approval with a second decision on the line right after the packet is refused", () => {
+  assert.throws(
+    () =>
+      assertProbeApproval(
+        "Decision: APPROVE\ngitSha: a\npacketSha256: b\nDecision: APPROVE\n",
+        "a",
+        "b",
+      ),
+    /APPROVE must bind/,
+  );
+});
+
+test("the Cloud Logging read trusts only a 200 answer with a state and survives a thrown error", async () => {
+  assert.equal(
+    await loggingApiState(async () => ({ status: 404, value: { state: "ENABLED" } })),
+    "UNKNOWN",
+  );
+  assert.equal(
+    await loggingApiState(async () => {
+      throw new Error("reset");
+    }),
+    "UNKNOWN",
+  );
+  assert.equal(
+    await loggingApiState(async () => ({ status: 200, value: { state: 5 } })),
+    "UNKNOWN",
+  );
+  let allowed;
+  await loggingApiState(async (_method, _url, _body, _kind, list) => {
+    allowed = list;
+    return { status: 200, value: { state: "ENABLED" } };
+  });
+  assert.deepEqual(allowed, [200, 403, 404]);
+});
+
+test("a negative request cap is refused", () => {
+  assert.throws(() => createBudget({ cliDeploy: -1 }), /invalid request cap/);
+});
+
+test("the upload requests already spent bind the probe's own bound: no deploy when 15 are not left", async () => {
+  const { world, result } = await probe({
+    script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    usedUploads: 1,
+  });
+  try {
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.deepEqual(world.calls, [], "no deploy was started");
+    assert.equal(result.requests.cliDeploy, 0);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a clean upload with an image that cannot be removed is still a run that needs review", async () => {
+  const { world, result } = await probe({
+    script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    versionDeleteStatus: 403,
+  });
+  try {
+    assert.equal(result.uploadsClosureReady, true, "the upload itself was cleaned");
+    assert.equal(result.residual, true);
+    assert.equal(result.outcome, "stopped-needs-review");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed deploy is a residual run even when everything was cleaned", async () => {
+  const { world, result } = await probe({
+    script: FAKE_RECEIPT_SCRIPT('console.error("Error: Failed"); process.exit(1);', 200),
+  });
+  try {
+    assert.equal(result.uploadsClosureReady, true);
+    assert.equal(result.residual, true);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a reserved function, service or image package that already exists stops before any deploy", async () => {
+  const reply = (status, value = {}) => ({ status, value });
+  for (const present of ["function", "service", "package"]) {
+    const control = async (_method, url) => {
+      const hit =
+        (present === "function" && url.includes("/functions/")) ||
+        (present === "service" && url.includes("/services/")) ||
+        (present === "package" && url.includes("/packages/"));
+      return hit ? reply(200, url.includes("/packages/") ? { name: FH_PACKAGE } : {}) : reply(404);
+    };
+    await assert.rejects(() => assertTargetAbsent(control, "http"), /already exists/, present);
+  }
+  await assert.doesNotReject(() => assertTargetAbsent(async () => reply(404), "http"));
 });

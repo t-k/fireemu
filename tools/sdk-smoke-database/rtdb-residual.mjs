@@ -23,12 +23,12 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
 import { adminClient, assertNoSecrets, LAUNCH, redact } from './cv11-genuine-auth.mjs';
-import { ADC_ARGS, adcPreflight } from './adc-preflight.mjs';
+import { ADC_ARGS, runPreflight } from './adc-preflight.mjs';
 import { DEFAULT_JAR, startJar } from './jar.mjs';
 import { judgeRuns, sanitizeProfiles, SCENARIOS } from './rtdb-residual-judge.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const SOURCES = ['rtdb-residual.mjs', 'rtdb-residual-page.js', 'rtdb-residual-judge.mjs', 'adc-preflight.mjs'];
+export const SOURCES = ['rtdb-residual.mjs', 'rtdb-residual-page.js', 'rtdb-residual-judge.mjs', 'adc-preflight.mjs', 'cv11-genuine-auth.mjs'];
 export const PROFILES = [[1, 'ws'], [1, 'lp'], [2, 'ws'], [2, 'lp']].map(([round, transport]) => ({ round, transport, name: `r${round}-${transport}` }));
 // observe/cleanup: admin requests per phase; mutations: admin writes overall; browser caps per profile.
 export const CAPS = { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation: 12, browserHttp: 400, browserWs: 24, browserFrames: 2500 };
@@ -63,17 +63,6 @@ export function rulesFor(prefix, { deny = false } = {}) {
 export { ADC_ARGS };
 /** Every management and data request carries the token as a Bearer header (never in the URL) and the quota project. */
 export const productionHeaders = (token, projectId) => ({ authorization: `Bearer ${token}`, 'x-goog-user-project': projectId });
-
-/** Runs the preflight and writes preflight.json (and result.json when it stops). Returns the exit code, 0 to go on. */
-export async function runPreflight(out, token, fetchImpl, secrets = []) {
-  const pre = await adcPreflight(fetchImpl, token);
-  const write = (f, v) => writeFileSync(path.join(out, f), assertNoSecrets(`${JSON.stringify(v, null, 2)}\n`, secrets));
-  write('preflight.json', pre);
-  if (pre.ok) return 0;
-  write('result.json', { status: 'stopped', reason: pre.reason, missing: pre.missing, changed: 'nothing: no admin request was sent' });
-  console.log(`production: ${pre.reason}`);
-  return 4;
-}
 
 /** Chromium may reach loopback and Firebase hosts only: the page and SDK bundles are served locally. */
 export const hostRules = () => '--host-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE *.firebaseio.com';
@@ -433,7 +422,7 @@ async function main(argv) {
       const token = execFileSync(packet.gcloud, ADC_ARGS, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
       if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');
       secrets.push(token);
-      const stopped = await runPreflight(out, token, fetch, secrets);
+      const stopped = await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets));
       if (stopped) return stopped;
       const browser = browserRunner({ modules: packet.modules, stop, page: { projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com`, allowHost: (h) => /^[a-z0-9-]+\.firebaseio\.com$/.test(h) } });
       o = { mode, packet, headers: productionHeaders(token, packet.projectId), browser, ...common };

@@ -1,12 +1,12 @@
 // node --test adc-preflight.test.mjs: the ADC scope verdict (pure), the tokeninfo request, and the command line.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { ADC_ARGS, API_SCOPES, EMAIL_SCOPE, TOKENINFO_URL, adcPreflight, adcScopeVerdict, cli } from './adc-preflight.mjs';
+import { ADC_ARGS, API_SCOPES, EMAIL_SCOPE, TOKENINFO_URL, adcPreflight, adcScopeVerdict, cli, runPreflight } from './adc-preflight.mjs';
 
 const G = 'https://www.googleapis.com/auth/';
 const EMAIL = 'owner@example.com';
@@ -120,4 +120,39 @@ test('command line: exit 0 for an accepted token, 4 for a refused or unverified 
   assert.equal(await cli([], { err: () => {} }), 2);
   assert.equal(await cli(['--gcloud'], { err: () => {} }), 2);
   assert.equal(await cli(['--gcloud', 'g'], { mint: () => 'short', err: () => {} }), 2);
+});
+
+test('verdict: firebase.database alone is not enough (RTDB REST needs the email identity), and neither is an empty email', () => {
+  assert.deepEqual(adcScopeVerdict(doc([`${G}firebase.database`])), { ok: false, reason: 'adc-scopes-missing', missing: [`${G}userinfo.email`] });
+  assert.deepEqual(adcScopeVerdict(doc([`${G}firebase.database`], '')).missing, [`${G}userinfo.email`, 'email']);
+  assert.deepEqual(adcScopeVerdict(doc([`${G}userinfo.email`, `${G}firebase.database`], '')), { ok: false, reason: 'adc-scopes-missing', missing: ['email'] });
+  assert.deepEqual(adcScopeVerdict(doc([`${G}userinfo.email`, `${G}firebase.database`])), { ok: true, missing: [] });
+  assert.deepEqual(adcScopeVerdict(doc([`${G}userinfo.email`, `${G}cloud-platform`], '')), { ok: false, reason: 'adc-scopes-missing', missing: ['email'] });
+});
+
+const GOOD = doc(['openid', `${G}userinfo.email`, `${G}cloud-platform`]);
+test('runPreflight: a stop writes preflight.json and result.json and returns 4; a pass writes preflight.json only and returns 0', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'adc-run-'));
+  const bad = path.join(dir, 'bad'); mkdirSync(bad);
+  assert.equal(await runPreflight(bad, TOK, answer(200, { scope: `${G}cloud-platform`, email: EMAIL })), 4);
+  const result = JSON.parse(readFileSync(path.join(bad, 'result.json'), 'utf8'));
+  assert.deepEqual([result.status, result.reason, result.missing], ['stopped', 'adc-scopes-missing', [`${G}userinfo.email`]]);
+  assert.match(result.changed, /nothing/);
+  assert.equal(JSON.parse(readFileSync(path.join(bad, 'preflight.json'), 'utf8')).ok, false);
+  assert.ok(!readFileSync(path.join(bad, 'result.json'), 'utf8').includes(EMAIL) && !readFileSync(path.join(bad, 'preflight.json'), 'utf8').includes(EMAIL));
+  const unknown = path.join(dir, 'unknown'); mkdirSync(unknown);
+  assert.equal(await runPreflight(unknown, TOK, answer(500, '')), 4);
+  assert.equal(JSON.parse(readFileSync(path.join(unknown, 'result.json'), 'utf8')).reason, 'adc-scopes-unverified');
+  const good = path.join(dir, 'good'); mkdirSync(good);
+  assert.equal(await runPreflight(good, TOK, answer(200, GOOD)), 0);
+  assert.equal(JSON.parse(readFileSync(path.join(good, 'preflight.json'), 'utf8')).ok, true);
+  assert.throws(() => readFileSync(path.join(good, 'result.json')), /ENOENT/);
+});
+
+test('runPreflight: every text goes through the guard before it is written', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'adc-guard-'));
+  const seen = [];
+  await runPreflight(dir, TOK, answer(200, { scope: 'x' }), (text) => { seen.push(text); return text; });
+  assert.equal(seen.length, 2);
+  await assert.rejects(runPreflight(dir, TOK, answer(200, GOOD), () => { throw Error('refused'); }), /refused/);
 });

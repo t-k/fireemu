@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LAUNCH } from './cv11-genuine-auth.mjs';
-import { ADC_ARGS, runPreflight, CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, productionHeaders, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
+import { ADC_ARGS, CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, productionHeaders, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}', PREFIX = 'parity1/rr1';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
@@ -252,7 +252,7 @@ test('production refuses without a packet whose SHA-256 and all three source pin
   const dir = mkdtempSync(path.join(tmpdir(), 'rr-'));
   const file = path.join(dir, 'packet.json'), body = JSON.stringify({ sources: Object.fromEntries(SOURCES.map((s) => [s, '0'.repeat(64)])) });
   writeFileSync(file, body);
-  assert.deepEqual(SOURCES, ['rtdb-residual.mjs', 'rtdb-residual-page.js', 'rtdb-residual-judge.mjs', 'adc-preflight.mjs']);
+  assert.deepEqual(SOURCES, ['rtdb-residual.mjs', 'rtdb-residual-page.js', 'rtdb-residual-judge.mjs', 'adc-preflight.mjs', 'cv11-genuine-auth.mjs']);
   assert.throws(() => verifyPacket(undefined, undefined), /--packet/);
   assert.throws(() => verifyPacket(file, 'f'.repeat(64)), /packet SHA-256/);
   assert.throws(() => verifyPacket(file, createHash('sha256').update(body).digest('hex')), /source pin differs: rtdb-residual.mjs/);
@@ -558,29 +558,9 @@ test('the token is asked of gcloud ADC with no scopes argument, and travels only
 });
 
 // Preflight of the ADC scopes: the verdict and the request are tested in adc-preflight.test.mjs; here the recorder's use.
-const GOOD = { scope: 'openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform', email: 'someone@example.com' };
-const tokeninfo = (status, doc) => async () => ({ status, text: async () => (typeof doc === 'string' ? doc : JSON.stringify(doc)) });
-const TOK = 'ya29.TESTTOKEN-not-real';
-test('preflight: a failure writes preflight.json and result.json, returns 4, and a pass writes preflight.json only', async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'rr-pre-'));
-  const bad = path.join(dir, 'bad'); mkdirSync(bad);
-  assert.equal(await runPreflight(bad, TOK, tokeninfo(200, { scope: 'https://www.googleapis.com/auth/cloud-platform', email: 'a@b.c' }), [TOK]), 4);
-  const result = JSON.parse(readFileSync(path.join(bad, 'result.json'), 'utf8'));
-  assert.deepEqual([result.status, result.reason, result.missing], ['stopped', 'adc-scopes-missing', ['https://www.googleapis.com/auth/userinfo.email']]);
-  assert.match(result.changed, /nothing/);
-  assert.equal(JSON.parse(readFileSync(path.join(bad, 'preflight.json'), 'utf8')).ok, false);
-  const unknown = path.join(dir, 'unknown'); mkdirSync(unknown);
-  assert.equal(await runPreflight(unknown, TOK, tokeninfo(500, ''), [TOK]), 4);
-  assert.equal(JSON.parse(readFileSync(path.join(unknown, 'result.json'), 'utf8')).reason, 'adc-scopes-unverified');
-  const good = path.join(dir, 'good'); mkdirSync(good);
-  assert.equal(await runPreflight(good, TOK, tokeninfo(200, GOOD), [TOK]), 0);
-  assert.equal(JSON.parse(readFileSync(path.join(good, 'preflight.json'), 'utf8')).ok, true);
-  assert.throws(() => readFileSync(path.join(good, 'result.json')), /ENOENT/);
-});
-
 test('preflight: main() runs it right after the token and before any admin request', () => {
   const own = readFileSync(new URL('./rtdb-residual.mjs', import.meta.url), 'utf8');
   const at = (x) => own.indexOf(x);
-  assert.ok(at('const token = execFileSync') > 0 && at('const token = execFileSync') < at('await runPreflight(out, token, fetch, secrets)') && at('await runPreflight(out, token, fetch, secrets)') < at('await runScenario(o)'));
+  assert.ok(at('const token = execFileSync') > 0 && at('const token = execFileSync') < at('await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets))') && at('await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets))') < at('await runScenario(o)'));
   assert.ok(own.includes('if (stopped) return stopped;'));
 });

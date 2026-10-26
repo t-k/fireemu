@@ -10,6 +10,8 @@
 // One POST to tokeninfo (the token in the form body, never in a URL) before the first sandbox request stops that
 // with nothing changed. Only the verdict and the names of missing scopes are returned or written.
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ADC_ARGS = ['auth', 'application-default', 'print-access-token'];
@@ -39,6 +41,21 @@ export async function adcPreflight(fetchImpl, token) {
     if (res.status >= 200 && res.status < 300) doc = JSON.parse(await res.text());
   } catch { /* unverified */ }
   return adcScopeVerdict(doc);
+}
+
+/**
+ * For a recorder's production branch: runs the preflight, writes preflight.json (and, when it stops, result.json with
+ * status 'stopped' and what is missing) into the new output directory, and returns the exit code to stop with, or 0 to
+ * go on. No admin request has been sent when this returns 4. `guard` vets each text before it is written.
+ */
+export async function runPreflight(out, token, fetchImpl, guard = (text) => text) {
+  const pre = await adcPreflight(fetchImpl, token);
+  const write = (f, v) => writeFileSync(path.join(out, f), guard(`${JSON.stringify(v, null, 2)}\n`));
+  write('preflight.json', pre);
+  if (pre.ok) return 0;
+  write('result.json', { status: 'stopped', reason: pre.reason, missing: pre.missing, changed: 'nothing: no sandbox request was sent' });
+  console.log(`production: ${pre.reason}`);
+  return 4;
 }
 
 /** The token from gcloud ADC; its scopes are those of the last `application-default login`. */

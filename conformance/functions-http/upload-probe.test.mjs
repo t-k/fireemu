@@ -509,6 +509,26 @@ test("the image residue check looks at the target's two package names exactly", 
       () => assertNoImageResidue(world.control, "http", "cleanup"),
       /owned image version remains in fireemu--oracle--query__us--central1__fireemu_http_probe$/,
     );
+    // an incomplete version list is not an empty one
+    world.deployed.versionExists = false;
+    world.deployed.cacheVersion = false;
+    world.deployed.cacheVersionsNext = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /owned image version remains in .*%2Fcache/,
+    );
+    world.deployed.cacheVersionsNext = false;
+    // the checks are counted in the cleanup budget, not the control budget
+    const kinds = [];
+    await assertNoImageResidue(
+      async (method, url, body, kind, allowed) => {
+        kinds.push(kind);
+        return world.control(method, url, body, kind, allowed);
+      },
+      "http",
+      "cleanup",
+    );
+    assert.ok(kinds.length >= 1 && kinds.every((kind) => kind === "cleanup"));
     // an incomplete package list is not an empty one
     world.deployed.versionExists = false;
     world.deployed.packagesNextPage = true;

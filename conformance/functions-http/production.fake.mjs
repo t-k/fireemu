@@ -222,7 +222,7 @@ export async function deployWorld({ deployScript, deleteStatus, caps, buildsImag
     ) {
       const names = [];
       if (deployed.versionExists || deployed.packageRemains) names.push(FH_PACKAGE);
-      if (deployed.cacheVersion) names.push(`${FH_PACKAGE}%2Fcache`);
+      if (deployed.cacheVersion || deployed.cacheVersionsNext) names.push(`${FH_PACKAGE}%2Fcache`);
       if (deployed.otherPackage) names.push(`${FH_PACKAGE}_two`);
       result = reply(200, {
         packages: names.map((name) => ({ name })),
@@ -236,7 +236,9 @@ export async function deployWorld({ deployScript, deleteStatus, caps, buildsImag
         200,
         deployed.cacheVersion
           ? { versions: [{ name: `${FH_PACKAGE}%2Fcache/versions/${FH_DIGEST}` }] }
-          : {},
+          : deployed.cacheVersionsNext
+            ? { nextPageToken: "t" }
+            : {},
       );
     } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}`) {
       result = deployed.versionExists ? reply(200, { name: FH_PACKAGE }) : reply(404);

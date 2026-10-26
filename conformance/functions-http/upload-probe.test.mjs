@@ -2,12 +2,13 @@
 // two `--debug` line forms (the generateUploadUrl answer and the upload's PUT status) and clean up.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import { BOUNDS, createBudget } from "./harness.mjs";
-import { assertTargetAbsent } from "./production.mjs";
+import { assertNoImageResidue, assertTargetAbsent } from "./production.mjs";
 import { FAKE_RECEIPT_SCRIPT, FH_PACKAGE, UPLOAD_OBJECT, deployWorld } from "./production.fake.mjs";
 import {
   PROBE_LIMITS,
@@ -36,9 +37,9 @@ test("a recorded line is masked: the project number, the signed URL and nothing 
   assert.ok(masked.includes(UPLOAD_OBJECT), "the object name is kept");
   assert.ok(masked.includes('"uploadUrl":"[REDACTED UPLOAD URL]"'));
   assert.equal(maskProbeLine(B_LINE.replaceAll(NUMBER, REAL_LOOKING), REAL_LOOKING), B_LINE);
-  // a number of another length is masked with a prefix of the fixture digits, never kept
-  assert.equal(maskProbeLine("x 1234567890 y", "1234567890"), "x 1234567890 y");
-  assert.equal(maskProbeLine("x 4444444444 y", "4444444444"), "x 1234567890 y");
+  // a number of another length is still masked with the fixture number, never kept
+  assert.equal(maskProbeLine("x 4444444444 y", "4444444444"), "x 123456789012 y");
+  assert.equal(maskProbeLine("x 4444444444444 y", "4444444444444"), "x 123456789012 y");
 });
 
 test("the forms collector records only the shapes: seen or not, codes, byte lengths, masked lines", () => {
@@ -180,7 +181,11 @@ test("both lines seen: the upload is deleted by generation, nothing else is touc
     assert.equal(result.loggingApiState, "ENABLED");
     assert.deepEqual(world.calls, ["cliDeploy", "cliDelete"]);
     assert.doesNotMatch(await journalOf(world), /public-invoker-granted/);
-    assert.deepEqual(world.deployed.bindings, [], "no IAM binding was ever written");
+    // the CLI's allUsers invoker binding is removed by exactly one setIamPolicy, and nothing else is written
+    assert.equal(world.deployed.setPolicyCalls, 1);
+    assert.deepEqual(world.deployed.bindings, []);
+    assert.match(await journalOf(world), /public-invoker-revoked/);
+    assert.equal(result.iamRevocationError, null);
     assert.match(await journalOf(world), /source-upload-deleted/);
     // the masked lines are what the lane turns into a replay fixture
     assert.equal(result.maskedLines.length, 2);
@@ -411,4 +416,153 @@ test("a reserved function, service or image package that already exists stops be
     await assert.rejects(() => assertTargetAbsent(control, "http"), /already exists/, present);
   }
   await assert.doesNotReject(() => assertTargetAbsent(async () => reply(404), "http"));
+});
+
+test("a failed removal of the CLI's public invoker binding is shown in the result and the journal", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  world.deployed.setPolicyStatus = 403;
+  try {
+    const result = await runUploadProbe({
+      control: world.control,
+      adcPath: "/adc",
+      budget: world.budget,
+      runDir: join(world.dir, "run"),
+      projectNumber: NUMBER,
+      run: world.run,
+    });
+    assert.match(result.iamRevocationError, /403/);
+    assert.equal(world.deployed.setPolicyCalls, 1, "not retried");
+    assert.match(await journalOf(world), /iam-revocation-failed/);
+    assert.equal(world.deployed.present, false, "the function is still deleted");
+    assert.equal(result.uploadsClosureReady, true);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the deployed fixture function has no invoker option, so the CLI makes it public and cleanup must undo that", () => {
+  const source = readFileSync(new URL("./fixtures/index.js", import.meta.url), "utf8");
+  assert.match(source, /onRequest\(/);
+  assert.doesNotMatch(source, /invoker/);
+});
+
+test("a Gen2 delete that removes the image package service-side is the expected, recorded outcome", async () => {
+  // stage 1, 2026-10-26: the package was absent after `functions:delete`; FE stage 2 (2026-09-30) saw the
+  // image and the `/cache` package removed service-side too. The fake models it: no package is listed.
+  const { world, result } = await probe({ script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200) });
+  try {
+    assert.equal(result.outcome, "recorded");
+    assert.equal(world.deployed.versionExists, false);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a version left in the target's /cache package after the delete is a residue that stops the run", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  world.deployed.cacheVersion = true;
+  try {
+    const result = await runUploadProbe({
+      control: world.control,
+      adcPath: "/adc",
+      budget: world.budget,
+      runDir: join(world.dir, "run"),
+      projectNumber: NUMBER,
+      run: world.run,
+    });
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.equal(result.residual, true);
+    assert.equal(result.uploadsClosureReady, true, "the upload itself was cleaned");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the image residue check looks at the target's two package names exactly", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  try {
+    // another function whose package id merely starts with ours is not ours
+    world.deployed.otherPackage = true;
+    await assert.doesNotReject(() => assertNoImageResidue(world.control, "http", "cleanup"));
+    // an empty package is no residue
+    world.deployed.packageRemains = true;
+    await assert.doesNotReject(() => assertNoImageResidue(world.control, "http", "cleanup"));
+    // a version in the cache package is
+    world.deployed.cacheVersion = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /owned image version remains in fireemu--oracle--query__us--central1__fireemu_http_probe%2Fcache/,
+    );
+    // a version in the main package is
+    world.deployed.cacheVersion = false;
+    world.deployed.versionExists = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /owned image version remains in fireemu--oracle--query__us--central1__fireemu_http_probe$/,
+    );
+    // an incomplete version list is not an empty one
+    world.deployed.versionExists = false;
+    world.deployed.cacheVersion = false;
+    world.deployed.cacheVersionsNext = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /owned image version remains in .*%2Fcache/,
+    );
+    world.deployed.cacheVersionsNext = false;
+    // the checks are counted in the cleanup budget, not the control budget
+    const kinds = [];
+    await assertNoImageResidue(
+      async (method, url, body, kind, allowed) => {
+        kinds.push(kind);
+        return world.control(method, url, body, kind, allowed);
+      },
+      "http",
+      "cleanup",
+    );
+    assert.ok(kinds.length >= 1 && kinds.every((kind) => kind === "cleanup"));
+    // an incomplete package list is not an empty one
+    world.deployed.versionExists = false;
+    world.deployed.packagesNextPage = true;
+    await assert.rejects(
+      () => assertNoImageResidue(world.control, "http", "cleanup"),
+      /package list is incomplete/,
+    );
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the image residue check runs in cleanup and is counted in the cleanup budget", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  const seen = [];
+  try {
+    await runUploadProbe({
+      control: async (method, url, body, kind, allowed) => {
+        seen.push([kind, url]);
+        return world.control(method, url, body, kind, allowed);
+      },
+      adcPath: "/adc",
+      budget: world.budget,
+      runDir: join(world.dir, "run"),
+      projectNumber: NUMBER,
+      run: world.run,
+    });
+    const listing = seen.filter(([, url]) => url.endsWith("/gcf-artifacts/packages?pageSize=1000"));
+    assert.equal(listing.length, 1);
+    assert.equal(listing[0][0], "cleanup");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
 });

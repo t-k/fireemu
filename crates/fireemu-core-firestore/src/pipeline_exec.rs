@@ -859,8 +859,13 @@ impl Cursor {
             .iter()
             .map(|stage| match stage {
                 Stage::Offset(n) | Stage::Limit(n) => StageState::Remaining(*n),
-                stage if stage.is_blocking() => StageState::Buffer(Vec::new()),
-                _ => StageState::Idle,
+                Stage::Sort(_) | Stage::Distinct(_) | Stage::Aggregate { .. } => {
+                    StageState::Buffer(Vec::new())
+                }
+                Stage::Where(_)
+                | Stage::Select { .. }
+                | Stage::AddFields(_)
+                | Stage::RemoveFields(_) => StageState::Idle,
             })
             .collect();
         Self {

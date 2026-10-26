@@ -880,3 +880,343 @@ proptest! {
         }
     }
 }
+
+// ---- tests that pin the details the mutation run showed unpinned ----
+
+fn strict(function_name: &str, args: &[Eval]) -> Eval {
+    (function(function_name).unwrap().eval)(
+        args,
+        Context {
+            unrecorded: Unrecorded::Refuse,
+            condition: false,
+        },
+    )
+}
+
+fn emulator(function_name: &str, args: &[Eval]) -> Eval {
+    eval_function(function_name, args.to_vec())
+}
+
+fn is_unobserved(eval: &Eval) -> bool {
+    matches!(eval, Eval::Error(EvalError::Unobserved { .. }))
+}
+
+#[test]
+fn group_keys_compare_by_value_not_by_representation() {
+    let key = |v: Value| GroupKey(vec![v]);
+    assert!(key(int(1)) == key(Value::Double(1.0)));
+    assert!(key(Value::Double(-0.0)) == key(int(0)));
+    assert!(key(Value::Double(f64::NAN)) == key(Value::Double(f64::NAN)));
+    assert!(key(int(1)) != key(int(2)));
+    assert_eq!(key(int(1)).partial_cmp(&key(int(2))), Some(Ordering::Less));
+    assert_eq!(
+        key(Value::Null).partial_cmp(&key(Value::Null)),
+        Some(Ordering::Equal)
+    );
+}
+
+#[test]
+fn a_group_shows_its_key_with_negative_zero_as_zero_and_other_doubles_as_they_are() {
+    let rows = vec![
+        doc("a", &[("g", Value::Double(1.5))]),
+        doc("b", &[("g", Value::Double(-0.0))]),
+        doc("c", &[("g", Value::Double(0.0))]),
+        doc("d", &[("g", Value::Double(-2.5))]),
+    ];
+    let out = run(
+        vec![Stage::Distinct(vec![("g".to_owned(), field("g"))])],
+        rows,
+    );
+    let shown: Vec<f64> = out
+        .iter()
+        .map(|row| match row.fields["g"] {
+            Value::Double(d) => d,
+            ref other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(shown, [1.5, 0.0, -2.5]);
+    assert!(shown[1].is_sign_positive());
+}
+
+#[test]
+fn doubles_sum_and_average_as_doubles() {
+    let rows: Vec<Row> = [1.5, 2.5, 3.0]
+        .iter()
+        .enumerate()
+        .map(|(i, d)| doc(&format!("d{i}"), &[("v", Value::Double(*d))]))
+        .collect();
+    let out = run(
+        vec![Stage::Aggregate {
+            accumulators: vec![
+                ("s".to_owned(), accumulate(AccumulatorKind::Sum, "v")),
+                ("a".to_owned(), accumulate(AccumulatorKind::Average, "v")),
+            ],
+            groups: vec![],
+        }],
+        rows,
+    );
+    assert_eq!(out[0].fields["s"], Value::Double(7.0));
+    assert_eq!(out[0].fields["a"], Value::Double(7.0 / 3.0));
+    // An integer after a double adds to it, as a double.
+    let rows = vec![
+        doc("a", &[("v", Value::Double(0.5))]),
+        doc("b", &[("v", int(2))]),
+        doc("c", &[("v", Value::Double(0.25))]),
+    ];
+    let out = run(
+        vec![Stage::Aggregate {
+            accumulators: vec![("s".to_owned(), accumulate(AccumulatorKind::Sum, "v"))],
+            groups: vec![],
+        }],
+        rows,
+    );
+    assert_eq!(out[0].fields["s"], Value::Double(2.75));
+}
+
+#[test]
+fn strict_refuses_what_it_cannot_attribute_inside_a_blocking_stage() {
+    let rows = vec![doc("a", &[("v", int(1))])];
+    let failing = Expr::call("not", vec![field("v")], Placement::Value).unwrap();
+    for stage in [
+        Stage::Sort(vec![ascending(failing.clone())]),
+        Stage::Distinct(vec![("k".to_owned(), failing.clone())]),
+        Stage::Aggregate {
+            accumulators: vec![("c".to_owned(), count_all())],
+            groups: vec![("k".to_owned(), failing.clone())],
+        },
+    ] {
+        let error = execute_in(vec![stage.clone()], rows.clone(), Unrecorded::Refuse).unwrap_err();
+        assert!(matches!(error, EvalError::Unobserved { .. }), "{error:?}");
+        let error =
+            execute_in(vec![stage], rows.clone(), Unrecorded::OfficialEmulator).unwrap_err();
+        assert!(matches!(error, EvalError::WrongType { .. }), "{error:?}");
+    }
+}
+
+#[test]
+fn xor_and_nor_of_more_than_two_operands_are_unobserved_under_strict_only() {
+    let t = || Eval::Value(Value::Boolean(true));
+    let f = || Eval::Value(Value::Boolean(false));
+    assert!(is_unobserved(&strict("xor", &[t(), t(), t()])));
+    assert!(is_unobserved(&strict("nor", &[f(), f(), f()])));
+    assert_eq!(emulator("xor", &[t(), t(), t()]), t());
+    assert_eq!(emulator("xor", &[t(), t(), f(), t()]), t());
+    assert_eq!(emulator("xor", &[t(), f()]), t());
+    assert_eq!(emulator("xor", &[t(), t()]), f());
+    assert_eq!(emulator("nor", &[f(), f(), f()]), t());
+    assert_eq!(emulator("nor", &[f(), t(), f()]), f());
+    // Two operands stay answered under strict.
+    assert_eq!(strict("xor", &[t(), f()]), t());
+    assert_eq!(strict("nor", &[f(), f()]), t());
+}
+
+#[test]
+fn a_wrong_operand_beside_a_deciding_one_is_unobserved_under_strict_only() {
+    let t = || Eval::Value(Value::Boolean(true));
+    let f = || Eval::Value(Value::Boolean(false));
+    let one = || Eval::Value(int(1));
+    // strict: `and` with a false operand, `nor` with a true one
+    assert!(is_unobserved(&strict("and", &[f(), one()])));
+    assert!(is_unobserved(&strict("nor", &[t(), one()])));
+    // an `and` beside true, an `or` beside anything: production failed the call
+    assert!(matches!(
+        strict("and", &[t(), one()]),
+        Eval::Error(EvalError::WrongType {
+            function: "and",
+            ..
+        })
+    ));
+    assert!(matches!(
+        strict("or", &[t(), one()]),
+        Eval::Error(EvalError::WrongType { function: "or", .. })
+    ));
+    // the emulator profile fails the call in every case
+    for (name, args) in [
+        ("and", vec![f(), one()]),
+        ("nor", vec![t(), one()]),
+        ("or", vec![t(), one()]),
+    ] {
+        assert!(
+            matches!(
+                emulator(name, &args),
+                Eval::Error(EvalError::WrongType { .. })
+            ),
+            "{name}"
+        );
+    }
+}
+
+fn sample_values() -> Vec<(Value, &'static str)> {
+    vec![
+        (Value::Null, "null"),
+        (Value::Boolean(true), "boolean"),
+        (int(1), "int64"),
+        (Value::Double(1.5), "float64"),
+        (Value::Double(f64::NAN), "float64"),
+        (Value::Timestamp(Timestamp::new(1, 0).unwrap()), "timestamp"),
+        (Value::String("a".into()), "string"),
+        (Value::Bytes(vec![1]), "bytes"),
+        (
+            Value::Reference("projects/p/databases/d/documents/c/d".into()),
+            "reference",
+        ),
+        (
+            Value::GeoPoint(crate::value::GeoPoint::new(1.0, 2.0).unwrap()),
+            "geo_point",
+        ),
+        (Value::Array(vec![int(1)]), "array"),
+        (Value::Map(BTreeMap::new()), "map"),
+        (Value::Vector(vec![1.0]), "vector"),
+    ]
+}
+
+#[test]
+fn type_and_is_type_agree_for_every_kind_and_every_name() {
+    for (value, name) in sample_values() {
+        assert_eq!(
+            emulator("type", &[Eval::Value(value.clone())]),
+            Eval::Value(Value::String(name.to_owned()))
+        );
+        // `type` names every kind under strict too.
+        assert_eq!(
+            strict("type", &[Eval::Value(value.clone())]),
+            Eval::Value(Value::String(name.to_owned()))
+        );
+        for candidate in TYPE_NAMES {
+            let expected =
+                candidate == name || (candidate == "number" && matches!(name, "int64" | "float64"));
+            let answer = emulator(
+                "is_type",
+                &[
+                    Eval::Value(value.clone()),
+                    Eval::Value(Value::String(candidate.to_owned())),
+                ],
+            );
+            assert_eq!(
+                answer,
+                Eval::Value(Value::Boolean(expected)),
+                "{value:?} is {name}, asked {candidate}"
+            );
+        }
+    }
+}
+
+#[test]
+fn strict_answers_only_the_type_names_production_recorded() {
+    let ask = |name: &str| {
+        strict(
+            "is_type",
+            &[
+                Eval::Value(int(1)),
+                Eval::Value(Value::String(name.to_owned())),
+            ],
+        )
+    };
+    for recorded in ["null", "array", "string", "int64", "float64", "number"] {
+        assert!(!is_unobserved(&ask(recorded)), "{recorded}");
+    }
+    for unrecorded in [
+        "boolean",
+        "bytes",
+        "timestamp",
+        "geo_point",
+        "map",
+        "reference",
+        "vector",
+        "int32",
+    ] {
+        assert!(is_unobserved(&ask(unrecorded)), "{unrecorded}");
+    }
+    // A missing value is unknown whatever the name; a name that is no constant string is unobserved.
+    assert_eq!(
+        strict(
+            "is_type",
+            &[Eval::Absent, Eval::Value(Value::String("string".into()))]
+        ),
+        Eval::Value(Value::Null)
+    );
+    assert!(is_unobserved(&strict(
+        "is_type",
+        &[Eval::Value(int(1)), Eval::Absent]
+    )));
+    assert!(matches!(
+        emulator(
+            "is_type",
+            &[
+                Eval::Value(int(1)),
+                Eval::Value(Value::String("bogus".into()))
+            ]
+        ),
+        Eval::Error(EvalError::Invalid(_))
+    ));
+}
+
+#[test]
+fn a_null_array_is_unknown_under_the_emulator_profile_and_unobserved_under_strict() {
+    let null = || Eval::Value(Value::Null);
+    let one = || Eval::Value(int(1));
+    for name in ["array_contains", "array_contains_all", "array_contains_any"] {
+        assert!(is_unobserved(&strict(name, &[null(), one()])), "{name}");
+        assert_eq!(emulator(name, &[null(), one()]), null(), "{name}");
+        assert_eq!(emulator(name, &[Eval::Absent, one()]), null(), "{name}");
+    }
+    // A search list that is no array fails the call, naming its type.
+    assert!(matches!(
+        emulator(
+            "array_contains_any",
+            &[Eval::Value(Value::Array(vec![])), one()]
+        ),
+        Eval::Error(EvalError::WrongType {
+            function: "array_contains_any",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn not_equal_any_of_a_list_that_is_no_array_is_unobserved_under_strict_only() {
+    let one = || Eval::Value(int(1));
+    let list = || Eval::Value(Value::Array(vec![int(1)]));
+    assert!(is_unobserved(&strict("not_equal_any", &[one(), one()])));
+    assert!(matches!(
+        emulator("not_equal_any", &[one(), one()]),
+        Eval::Error(EvalError::WrongType {
+            function: "not_eq_any",
+            ..
+        })
+    ));
+    assert_eq!(
+        strict("not_equal_any", &[one(), list()]),
+        Eval::Value(Value::Boolean(false))
+    );
+    assert_eq!(
+        emulator("equal_any", &[one(), one()]),
+        Eval::Error(EvalError::WrongType {
+            function: "eq_any",
+            expected: "Array",
+            got: "LONG"
+        })
+    );
+}
+
+#[test]
+fn the_registry_checks_the_replace_with_mode() {
+    use crate::pipeline::{canonicalize, Arg, StageSpec};
+    let users = || StageSpec {
+        name: "collection".into(),
+        args: vec![Arg::Reference("/users".into())],
+        options: vec![],
+    };
+    let replace = |mode: Option<&str>| {
+        let mut args = vec![Arg::Field("m".into())];
+        args.extend(mode.map(|m| Arg::String(m.into())));
+        StageSpec {
+            name: "replace_with".into(),
+            args,
+            options: vec![],
+        }
+    };
+    assert!(canonicalize(&[users(), replace(None)]).is_ok());
+    assert!(canonicalize(&[users(), replace(Some("full_replace"))]).is_ok());
+    assert!(canonicalize(&[users(), replace(Some("sideways"))]).is_err());
+}

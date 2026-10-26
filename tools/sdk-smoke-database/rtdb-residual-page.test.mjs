@@ -24,12 +24,12 @@ export const getDatabase = (app) => ({ app });
 export const ref = (db, p) => ({ db, path: p });
 export const query = (r) => r;
 export const orderByChild = () => ({}); export const limitToFirst = () => ({}); export const limitToLast = () => ({});
-export const goOffline = (db) => S().calls.push(['goOffline', db.app.name]);
-export const goOnline = (db) => S().calls.push(['goOnline', db.app.name]);
+export const goOffline = (db) => { S().calls.push(['goOffline', db.app.name]); S().on?.('goOffline', db.app.name); };
+export const goOnline = (db) => { S().calls.push(['goOnline', db.app.name]); S().on?.('goOnline', db.app.name); };
 export const set = (r, v) => S().write(r, v);
 export const remove = (r) => S().write(r, null);
 export const get = async (r) => snap(r.path, S().read(r.path));
-const listen = (kind) => (q, cb, cancel) => { S().listeners.push({ kind, path: q.path, cb, cancel }); return () => {}; };
+const listen = (kind) => (q, cb, cancel) => { const l = { kind, path: q.path, cb, cancel }; S().listeners.push(l); S().initial?.(l, snap); return () => {}; };
 export const onValue = listen('value'); export const onChildAdded = listen('added'); export const onChildChanged = listen('changed'); export const onChildMoved = listen('moved'); export const onChildRemoved = listen('removed');
 export const increment = (n) => ({ '.sv': { increment: n } });
 export const serverTimestamp = () => ({ '.sv': 'timestamp' });
@@ -137,4 +137,49 @@ test('the queued writes of the observer are observer rows; the writer acks are w
   const actors = Object.fromEntries(r.rows.filter((x) => x.type === 'ack').map((x) => [x.label, x.actor]));
   assert.deepEqual([actors['queued-1'], actors['queued-2'], actors['queued-3']], ['o', 'o', 'o']);
   assert.deepEqual([actors['seed-items'], actors['w-a-score'], actors['w-gate'], actors['w-g']], ['w', 'w', 'w', 'w']);
+});
+
+// A cv10 stub that behaves like a healthy server: every value listener first gets the stored value, and the
+// writer going offline fires the onDisconnect writes after `delays` milliseconds.
+const healthy = (delays) => `{
+  denied: false,
+  hook(n) { this.denied = n === 'rulesDeny'; },
+  write: async function (r, v) { this.writes.push([r.path, v]); if (r.path.endsWith('/dprobe') && this.denied) throw Object.assign(new Error('permission_denied'), { code: 'PERMISSION_DENIED' }); },
+  read(p) { return p.endsWith('/marker') ? false : null; },
+  initial(l, snap) { if (l.kind === 'value') Promise.resolve().then(() => l.cb(snap(l.path, this.read(l.path)))); },
+  deliver(path, v) { for (const l of this.listeners) if (l.kind === 'value' && l.path.endsWith(path)) l.cb({ key: path.slice(1), val: () => v, forEach() {} }); },
+  on(kind, name) { if (kind === 'goOffline' && name.startsWith('w-')) for (const [path, v, ms] of ${JSON.stringify(delays)}) setTimeout(() => this.deliver(path, v), ms); },
+}`;
+const order = (rows) => rows.filter((x) => (x.type === 'value' && x.step === 'disconnect') || x.type === 'timing').map((x) => (x.type === 'timing' ? 'timing' : `${x.label}=${x.shape}`));
+
+test('cv10 waits for the marker, then a quiet period, and only then reports the fire time', { skip, timeout: 60000 }, async (t) => {
+  const r = await scenario(t, { scenario: 'cv10', waitScale: 0.05 }, healthy([['/marker', true, 100], ['/e2', { state: 'offline' }, 200]]));
+  if (!r) return;
+  assert.deepEqual(timeouts(r.rows), []);
+  assert.deepEqual(order(r.rows), ['marker=true', 'e2={"state":"offline"}', 'timing'], 'the marker is awaited, and the later fire still lands before the timing row');
+  const seconds = r.rows.find((x) => x.type === 'timing').seconds;
+  assert.ok(seconds >= 0.1 && seconds < 5, String(seconds));
+});
+
+test('cv10 without a marker fire waits out its bound and records the timeout before the timing row', { skip, timeout: 60000 }, async (t) => {
+  const r = await scenario(t, { scenario: 'cv10', waitScale: 0.001, transport: 'lp', name: 'r1-lp' }, healthy([]));
+  if (!r) return;
+  assert.deepEqual(timeouts(r.rows), ['disconnect:marker fire']);
+  assert.ok(r.rows.findIndex((x) => x.type === 'timeout') < r.rows.findIndex((x) => x.type === 'timing'));
+  assert.deepEqual(r.stub.calls.filter((c) => c[0] === 'transport'), [['transport', 'lp']]);
+});
+
+test('the gated listener is silent only if nothing arrives after the reconnect: the absent row says so', { skip, timeout: 60000 }, async (t) => {
+  const arrives = `{ write: async function (r, v) { this.writes.push([r.path, v]); if (r.path.endsWith('/gated/v')) for (const l of this.listeners) if (l.kind === 'value' && l.path.endsWith('/gated')) l.cb({ key: 'gated', val: () => ({ v }), forEach() {} }); } }`;
+  const r = await scenario(t, { scenario: 'cv08' }, arrives);
+  if (!r) return;
+  assert.equal(r.rows.filter((x) => x.type === 'absent').length, 0);
+  assert.ok(r.rows.some((x) => x.type === 'value' && x.label === 'gated' && x.step === 'after-reconnect'));
+});
+
+test('a long message is cut at 160 characters', { skip, timeout: 60000 }, async (t) => {
+  const long = `{ od: async function (kind, r, v) { this.ods.push([kind, r.path, v]); if (r.path.endsWith('/e8')) throw Object.assign(new Error('x'.repeat(300)), { code: 'PERMISSION_DENIED' }); } }`;
+  const r = await scenario(t, { scenario: 'cv10' }, long);
+  if (!r) return;
+  assert.equal(r.rows.find((x) => x.type === 'rejected').shape.length, 160);
 });

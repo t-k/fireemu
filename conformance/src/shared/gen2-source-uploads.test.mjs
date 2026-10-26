@@ -56,6 +56,17 @@ function open(world, extra = {}) {
 
 const receiptOf = (object = OBJECT, bucket = FAKE_BUCKET) => ({ bucket, object });
 
+describe("the reviewed bounds", () => {
+  it("are the numbers a packet binds before it sends", () => {
+    assert.deepEqual(
+      { ...UPLOAD_BOUNDS },
+      { pageSize: 100, maxPages: 3, maxReceiptsPerDeploy: 3, maxResponseBytes: 1_048_576 },
+    );
+    // baseline pages + after pages + a metadata GET, a DELETE and a read-back per receipt
+    assert.equal(REQUESTS_PER_DEPLOY, 3 + 3 + 3 * 3);
+  });
+});
+
 describe("the upload bucket (T1)", () => {
   it("is the dot-separated Gen2 bucket of the project number and region", () => {
     assert.equal(uploadBucketName(FAKE_PROJECT_NUMBER, FAKE_REGION), FAKE_BUCKET);
@@ -208,6 +219,8 @@ describe("receipts", () => {
     ].join("\n");
     const redacted = redactUploadSecrets(text);
     assert.ok(!redacted.includes(SECRET_MARKER), redacted);
+    assert.doesNotMatch(redacted, /X-Goog|GoogleAccessId|Signature=|\?Expires/);
+    assert.match(redacted, /\[REDACTED UPLOAD URL\]/);
     assert.ok(
       redacted.includes(`plain https://storage.googleapis.com/${FAKE_BUCKET}/${OBJECT} stays`),
     );
@@ -261,6 +274,46 @@ describe("a clean deploy (T3)", () => {
     const result = await deploy.finish({ cliExited: true });
     assert.equal(result.clean, true);
     assert.ok(!world.objects.has(OBJECT));
+  });
+
+  it("journals the deploy as one placeholder create over the CLI transport", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    await uploads.beginDeploy("program-1:http");
+    const rows = readFileSync(join(dir, "uploads.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const intent = rows.find((row) => row.phase === "intent");
+    assert.deepEqual(
+      [intent.action, intent.name, intent.transport],
+      ["create", "deploy:program-1:http", "cli"],
+    );
+  });
+
+  it("ignores a null receipt and any receipt after the deploy finished", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    deploy.receipt(null);
+    const result = await deploy.finish({ cliExited: true });
+    assert.equal(result.clean, true, "a null receipt is not a fault");
+    deploy.receipt(receiptOf(OTHER));
+    assert.equal(uploads.report().closureReady, true, "a late receipt opens nothing");
+  });
+
+  it("flags a receipt that cannot be journaled, such as one another deploy already holds", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const first = await uploads.beginDeploy("program-1:http");
+    const second = await uploads.beginDeploy("program-2:http");
+    world.put(OBJECT);
+    first.receipt(receiptOf());
+    second.receipt(receiptOf());
+    const result = await second.finish({ cliExited: true });
+    assert.equal(result.clean, false);
+    assert.ok(result.reasons.includes("receipt-not-journaled"));
+    assert.equal(world.count("DELETE"), 0, "the deploy that holds the receipt has not run yet");
   });
 
   it("accepts the same receipt from the CLI and from the function record once", async () => {
@@ -503,6 +556,90 @@ describe("delete and read-back answers (T4)", () => {
     }
   });
 
+  it("names what failed: a refused DELETE and the reads that were not sent after it", async () => {
+    for (const [reply, reason] of [
+      [answer(403), "delete-refused"],
+      [answer(412), "delete-refused"],
+      [answer(503), "delete-unknown"],
+    ]) {
+      const world = createFakeGcs();
+      const { deploy } = await deployWithObject(world, {
+        ledgerPath: join(dir, `named-${reply.status}.jsonl`),
+      });
+      world.override({ method: "DELETE", url: OBJECT }, reply);
+      const gets = () => world.count("GET");
+      const before = gets();
+      const result = await deploy.finish({ cliExited: true });
+      assert.ok(
+        result.reasons.some((r) => r.startsWith(`${reason}:`)),
+        result.reasons.join(","),
+      );
+      // after-list and metadata only: no read-back after a DELETE that did not succeed
+      assert.equal(gets() - before, 2, String(reply.status));
+    }
+  });
+
+  it("tells a read-back that shows the object from one that cannot be read", async () => {
+    const cases = [
+      [answer(200, { bucket: FAKE_BUCKET, name: OBJECT, generation: "9" }), "deleted-but-present"],
+      [
+        answer(200, { bucket: "other-bucket", name: OBJECT, generation: "9" }),
+        "deleted-unverified",
+      ],
+      [answer(200, { bucket: FAKE_BUCKET, name: OTHER, generation: "9" }), "deleted-unverified"],
+      [answer(503), "deleted-unverified"],
+    ];
+    for (const [index, [reply, reason]] of cases.entries()) {
+      const world = createFakeGcs();
+      const { deploy } = await deployWithObject(world, {
+        ledgerPath: join(dir, `back-${index}.jsonl`),
+      });
+      const send = world.send;
+      let gets = 0;
+      world.send = async (method, url) => {
+        if (method === "GET" && url.includes(`/o/${OBJECT}`) && (gets += 1) === 2) return reply;
+        return send(method, url);
+      };
+      const result = await deploy.finish({ cliExited: true });
+      assert.equal(result.clean, false);
+      assert.ok(
+        result.reasons.some((r) => r.startsWith(`${reason}:`)),
+        `${index}: ${result.reasons.join(",")}`,
+      );
+    }
+  });
+
+  it("an unreadable 404 or a 403 that carries a plausible body is not an absence or a generation", async () => {
+    const plausible = { bucket: FAKE_BUCKET, name: OBJECT, generation: "7" };
+    const replies = [
+      { status: 404, bodyReadable: false, bytes: 2 },
+      { status: 403, bodyReadable: true, value: plausible, bytes: 50 },
+      { status: 200, bodyReadable: false, value: plausible, bytes: 50 },
+      {
+        status: 200,
+        bodyReadable: true,
+        value: plausible,
+        bytes: UPLOAD_BOUNDS.maxResponseBytes + 1,
+      },
+    ];
+    for (const [index, reply] of replies.entries()) {
+      const world = createFakeGcs();
+      const { deploy, uploads } = await deployWithObject(world, {
+        ledgerPath: join(dir, `meta-${index}.jsonl`),
+      });
+      world.override({ method: "GET", url: `/o/${OBJECT}` }, reply);
+      const result = await deploy.finish({ cliExited: true });
+      assert.equal(result.clean, false, String(index));
+      assert.equal(world.count("DELETE"), 0, String(index));
+      const reasons = uploads.report().reasons;
+      assert.ok(
+        reasons.some((r) => r.startsWith(`unsettled-create:${FAKE_BUCKET}/${OBJECT}`)),
+        reasons.join(","),
+      );
+      assert.ok(!reasons.some((r) => r.startsWith("in-flight:")), "every ticket is answered");
+    }
+  });
+
   it("a receipt whose object never arrived is absent only when the CLI exited by itself", async () => {
     for (const [cliExited, clean] of [
       [true, true],
@@ -514,6 +651,10 @@ describe("delete and read-back answers (T4)", () => {
       deploy.receipt(receiptOf());
       const result = await deploy.finish({ cliExited });
       assert.equal(result.clean, clean, `cliExited=${cliExited}`);
+      assert.equal(
+        result.reasons.some((reason) => reason.startsWith("receipt-unconfirmed:")),
+        !cliExited,
+      );
       assert.equal(
         world.count("DELETE"),
         0,
@@ -593,6 +734,52 @@ describe("pagination, counts and budget (T5)", () => {
       world.override({ method: "GET", url: "/o?" }, reply);
       const result = await deploy.finish({ cliExited: true });
       assert.equal(result.clean, false, JSON.stringify(reply).slice(0, 80));
+      assert.ok(result.reasons.includes("list-incomplete"), JSON.stringify(reply).slice(0, 80));
+    }
+  });
+
+  it("refuses a baseline whose later page is missing, unreadable or has a bad token", async () => {
+    const replies = [
+      [{ method: "GET", url: "pageToken" }, answer(404)],
+      [
+        { method: "GET", url: "pageToken" },
+        { status: 404, bodyReadable: false, bytes: 2 },
+      ],
+      [{ method: "GET", url: "pageToken" }, answer(503)],
+      [{ method: "GET", url: "/o?" }, answer(200, { items: [], nextPageToken: null })],
+      [{ method: "GET", url: "/o?" }, answer(200, { items: [], nextPageToken: "" })],
+      [{ method: "GET", url: "/o?" }, answer(200, { items: [], nextPageToken: 5 })],
+      [{ method: "GET", url: "/o?" }, answer(200, { items: [{ name: 5 }] })],
+      [{ method: "GET", url: "/o?" }, answer(200, { items: {} })],
+    ];
+    for (const [index, [match, reply]] of replies.entries()) {
+      const world = createFakeGcs();
+      for (let i = 0; i < UPLOAD_BOUNDS.pageSize + 5; i += 1) {
+        world.put(`base-${String(i).padStart(5, "0")}`);
+      }
+      world.override(match, reply);
+      const { uploads } = open(world, { ledgerPath: join(dir, `page-${index}.jsonl`) });
+      await assert.rejects(() => uploads.beginDeploy("program-1:http"), /baseline/, String(index));
+    }
+  });
+
+  it("a missing bucket is empty only on the first page", async () => {
+    const world = createFakeGcs({ bucketExists: false });
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    assert.ok(deploy);
+  });
+
+  it("an answer that is not an object is a transport failure, not a crash", async () => {
+    for (const reply of [null, undefined, "nope", 5]) {
+      const world = createFakeGcs();
+      const { uploads } = open(world, { ledgerPath: join(dir, `null-${String(reply)}.jsonl`) });
+      const deploy = await uploads.beginDeploy("program-1:http");
+      world.put(OBJECT);
+      deploy.receipt(receiptOf());
+      world.override({ method: "DELETE", url: OBJECT }, reply);
+      const result = await deploy.finish({ cliExited: true });
+      assert.equal(result.clean, false, String(reply));
     }
   });
 
@@ -622,6 +809,53 @@ describe("pagination, counts and budget (T5)", () => {
     assert.ok(used() <= REQUESTS_PER_DEPLOY);
   });
 
+  it("finish needs to be told whether the CLI exited, and can still finish after a bad call", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    for (const bad of [{}, { cliExited: "yes" }, { cliExited: 1 }, { cliExited: undefined }]) {
+      await assert.rejects(() => deploy.finish(bad), /cliExited/);
+    }
+    assert.equal(world.requests.length, 1, "only the baseline list was sent");
+    assert.equal((await deploy.finish({ cliExited: true })).clean, true);
+  });
+
+  it("finish needs the pages and three requests per receipt, no fewer", async () => {
+    for (const receipts of [0, 1, 2]) {
+      const need = UPLOAD_BOUNDS.maxPages + 3 * receipts;
+      for (const [left, proceeds] of [
+        [need - 1, false],
+        [need, true],
+      ]) {
+        const world = createFakeGcs();
+        let budget = REQUESTS_PER_DEPLOY;
+        let used = 0;
+        const uploads = openSourceUploads({
+          ledgerPath: join(dir, `need-${receipts}-${left}.jsonl`),
+          runId: "run-n",
+          projectNumber: FAKE_PROJECT_NUMBER,
+          region: FAKE_REGION,
+          send: (method, url) => {
+            used += 1;
+            return world.send(method, url);
+          },
+          requestsLeft: () => budget - used,
+        });
+        const deploy = await uploads.beginDeploy("program-1:http");
+        for (let i = 0; i < receipts; i += 1) {
+          const object = `0000000${i}-1111-4222-8333-444444444444.zip`;
+          world.put(object);
+          deploy.receipt(receiptOf(object));
+        }
+        budget = used + left;
+        const before = world.requests.length;
+        const result = await deploy.finish({ cliExited: true });
+        assert.equal(result.reasons.includes("upload-budget"), !proceeds, `${receipts}/${left}`);
+        assert.equal(world.requests.length > before, proceeds, `${receipts}/${left}`);
+      }
+    }
+  });
+
   it("finish dispatches nothing and stays unclean when the budget fell short meanwhile", async () => {
     const world = createFakeGcs();
     let left = REQUESTS_PER_DEPLOY;
@@ -643,7 +877,12 @@ describe("pagination, counts and budget (T5)", () => {
     assert.ok(result.reasons.includes("upload-budget"));
     assert.equal(world.requests.length, before);
     assert.ok(world.objects.has(OBJECT));
-    assert.equal(uploads.report().closureReady, false);
+    const report = uploads.report();
+    assert.equal(report.closureReady, false);
+    assert.ok(
+      report.reasons.some((r) => r.startsWith(`unsettled-create:${FAKE_BUCKET}/${OBJECT}`)),
+    );
+    assert.ok(!report.reasons.some((r) => r.startsWith("in-flight:")), "every ticket is answered");
   });
 });
 

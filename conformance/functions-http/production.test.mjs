@@ -1232,3 +1232,286 @@ test("a deploy that never reached the upload leaves nothing to clean", async () 
     await rm(world.dir, { recursive: true, force: true });
   }
 });
+
+// ---- a whole program through observeProgram, with fake REST, a harmless deploy child and a fake fetch ----
+
+const FH_FUNCTION =
+  "projects/fireemu-oracle-query/locations/us-central1/functions/fireemuHttpProbe";
+const FH_SERVICE = "projects/fireemu-oracle-query/locations/us-central1/services/fireemuhttpprobe";
+const FH_PACKAGE =
+  "projects/fireemu-oracle-query/locations/us-central1/repositories/gcf-artifacts/packages/fireemu--oracle--query__us--central1__fireemu_http_probe";
+const FH_DIGEST = `sha256:${"ab".repeat(32)}`;
+const FH_VERSION = `${FH_PACKAGE}/versions/${FH_DIGEST}`;
+
+async function observeWorld({ deployScript, deleteStatus }) {
+  const base = await uploadWorld();
+  const { FAKE_BUCKET } = base;
+  const deployed = { present: false, versionExists: false, bindings: [] };
+  const control = async (method, url, body, kind = "control", allowed = [200]) => {
+    base.budget.take(kind);
+    const reply = (status, value = {}) => ({ status, value, bytes: 10 });
+    let result;
+    if (url.startsWith("https://storage.googleapis.com/")) {
+      result = await base.gcs.send(method, url);
+    } else if (url === `https://cloudfunctions.googleapis.com/v2/${FH_FUNCTION}`) {
+      result = deployed.present
+        ? reply(200, {
+            name: FH_FUNCTION,
+            environment: "GEN_2",
+            buildConfig: {
+              runtime: "nodejs22",
+              entryPoint: "fireemuHttpProbe",
+              source: { storageSource: { bucket: FAKE_BUCKET, object: UPLOAD_OBJECT } },
+            },
+            serviceConfig: {
+              service: FH_SERVICE,
+              uri: "https://fireemuhttpprobe-abc-uc.a.run.app",
+            },
+          })
+        : reply(404);
+    } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}`) {
+      result = deployed.present
+        ? reply(200, {
+            name: FH_SERVICE,
+            template: {
+              containers: [
+                {
+                  image: `us-central1-docker.pkg.dev/fireemu-oracle-query/gcf-artifacts/fireemu--oracle--query__us--central1__fireemu_http_probe@${FH_DIGEST}`,
+                },
+              ],
+            },
+          })
+        : reply(404);
+    } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}:getIamPolicy`) {
+      result = reply(200, { bindings: deployed.bindings });
+    } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}:setIamPolicy`) {
+      deployed.bindings = body.policy.bindings;
+      result = reply(200, body.policy);
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}`) {
+      result = deployed.versionExists ? reply(200, { name: FH_PACKAGE }) : reply(404);
+    } else if (
+      url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}/versions?pageSize=1000`
+    ) {
+      result = reply(200, deployed.versionExists ? { versions: [{ name: FH_VERSION }] } : {});
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_VERSION}?force=true`) {
+      deployed.versionExists = false;
+      result = reply(200);
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_VERSION}`) {
+      result = deployed.versionExists ? reply(200, { name: FH_VERSION }) : reply(404);
+    } else {
+      throw new Error(`unexpected request ${method} ${url}`);
+    }
+    if (allowed !== "any" && !allowed.includes(result.status))
+      throw new Error(`status ${result.status}`);
+    return result;
+  };
+  // a fresh upload helper on the same fake storage, counting through this control
+  const { openSourceUploads } = await import("../src/shared/gen2-source-uploads.mjs");
+  const { BOUNDS } = await import("./harness.mjs");
+  const uploads = openSourceUploads({
+    ledgerPath: join(base.dir, "observe-uploads.jsonl"),
+    runId: "run-o",
+    projectNumber: UPLOAD_NUMBER,
+    region: "us-central1",
+    send: production.storageSend(control),
+    requestsLeft: () => BOUNDS.upload - base.budget.snapshot().upload,
+  });
+  const scriptPath = join(base.dir, "fake-cli.mjs");
+  await writeFile(scriptPath, deployScript);
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(join(base.dir, "run")));
+  const calls = [];
+  const run = async (args, adc, budget, kind, runDir, track) => {
+    calls.push(kind);
+    if (kind === "cliDelete") {
+      budget.take("cliDelete");
+      deployed.present = false;
+      return { exitCode: 0 };
+    }
+    base.gcs.put(UPLOAD_OBJECT);
+    deployed.versionExists = true;
+    deployed.present = /process\.exit\(0\)/.test(deployScript);
+    return production.cli(args, adc, budget, kind, runDir, track, [process.execPath, scriptPath]);
+  };
+  if (deleteStatus)
+    base.gcs.override({ method: "DELETE", url: UPLOAD_OBJECT }, base.answer(deleteStatus));
+  const corpus = JSON.parse(await readFile(new URL("./corpus.json", import.meta.url), "utf8"));
+  const program = corpus.programs[0];
+  const recordings = [{}, {}];
+  const fetchImpl = async () =>
+    new Response('{"ok":1}\n', { status: 200, headers: { "content-type": "application/json" } });
+  let error;
+  try {
+    await production.observeProgram(
+      program,
+      control,
+      "/adc",
+      base.budget,
+      join(base.dir, "run"),
+      recordings,
+      { stopped: false },
+      uploads,
+      { run, log: base.deps.log, fetchImpl },
+    );
+  } catch (caught) {
+    error = caught;
+  }
+  return { ...base, uploads, error, recordings, program, calls };
+}
+
+test("a whole program: deploy, observe, clean up, and the source upload is deleted by generation", async () => {
+  const world = await observeWorld({ deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);") });
+  try {
+    assert.equal(world.error, undefined);
+    assert.ok(world.recordings[0][world.program.id]);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
+    const deletes = world.gcs.requests.filter((request) => request.method === "DELETE");
+    assert.equal(deletes.length, 1);
+    assert.match(deletes[0].url, /ifGenerationMatch=\d+$/);
+    assert.equal(world.uploads.report().closureReady, true);
+    assert.ok(
+      world.logs.includes("function-deployed") && world.logs.includes("source-upload-deleted"),
+    );
+    const used = world.budget.snapshot();
+    assert.ok(used.upload >= 5 && used.upload <= 244, `upload requests ${used.upload}`);
+    assert.deepEqual(world.calls, ["cliDeploy", "cliDelete"]);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a whole program whose deploy failed after the upload still deletes the upload and asks for review", async () => {
+  const world = await observeWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT(
+      'console.error("Error: Failed to create function"); process.exit(1);',
+    ),
+  });
+  try {
+    assert.equal(world.error.residual, true, "a failed deploy is never a clean run");
+    assert.match(world.error.message, /cleanup requires review/);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT), "the upload object is gone");
+    assert.equal(world.uploads.report().closureReady, true);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a whole program whose upload cannot be deleted leaves the responsibility open", async () => {
+  const world = await observeWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);"),
+    deleteStatus: 403,
+  });
+  try {
+    assert.equal(world.error.residual, true);
+    assert.match(world.error.message, /cleanup requires review/);
+    assert.ok(world.gcs.objects.has(UPLOAD_OBJECT));
+    assert.equal(world.uploads.report().closureReady, false);
+    assert.equal(
+      production.withUploadClosure(world.uploads.report(), {
+        outcome: "recorded",
+        reason: undefined,
+        residual: false,
+      }).residual,
+      true,
+    );
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+// ---- the REST control and the deploy child, the parts the fakes above stand in for ----
+
+async function withStubbedFetch(handler, body) {
+  const original = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), method: init?.method });
+    return handler(String(url), init);
+  };
+  try {
+    return await body(seen);
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+test("the REST control reaches Cloud Storage, passes any status when asked and reports bytes", async () => {
+  const { createBudget } = await import("./harness.mjs");
+  const adc = { refresh_token: "r", client_id: "c", client_secret: "s" };
+  const handler = (url) =>
+    url.startsWith("https://oauth2.googleapis.com/")
+      ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
+      : new Response('{"error":{"code":412}}', { status: 412 });
+  await withStubbedFetch(handler, async (seen) => {
+    const budget = createBudget();
+    const control = production.createControl(adc, budget);
+    const reply = await control(
+      "DELETE",
+      "https://storage.googleapis.com/storage/v1/b/b/o/x?ifGenerationMatch=1",
+      undefined,
+      "upload",
+      "any",
+    );
+    assert.equal(reply.status, 412);
+    assert.equal(reply.bytes, '{"error":{"code":412}}'.length);
+    assert.equal(budget.snapshot().upload, 2, "the token refresh and the request");
+    await assert.rejects(
+      () =>
+        control(
+          "GET",
+          "https://storage.googleapis.com/storage/v1/b/b/o",
+          undefined,
+          "upload",
+          [200],
+        ),
+      /returned 412/,
+    );
+    await assert.rejects(
+      () => control("GET", "https://evil.example/storage/v1/b/b/o", undefined, "upload", "any"),
+      /unreviewed REST host/,
+    );
+    assert.ok(seen.every((request) => !request.url.startsWith("https://evil.example")));
+  });
+});
+
+test("a deploy CLI that is stopped by the runner and exits on its own is still not an exit by itself", async () => {
+  const track = { onReceipt() {} };
+  const run = await runFakeCli(
+    `process.on("SIGTERM", () => process.exit(7));
+for (let i = 0; i < 17_000; i += 1) process.stdout.write("x ".repeat(500) + "\\n");
+setInterval(() => {}, 1000);`,
+    "cliDeploy",
+    track,
+  );
+  try {
+    assert.ok(run.error);
+    assert.equal(track.exited, false);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("a receipt on the last line, with no newline, is still read when the CLI ends", async () => {
+  const seen = [];
+  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const run = await runFakeCli(
+    `const body = JSON.stringify({ storageSource: { bucket: "b", object: "${UPLOAD_OBJECT}" } });
+process.stdout.write("<<< [apiv2][body] POST https://x/v2/p/functions:generateUploadUrl " + body);`,
+    "cliDeploy",
+    track,
+  );
+  try {
+    assert.equal(run.error, undefined);
+    assert.equal(seen.length, 1);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("the upload bound is the reviewed number and a budget can be exhausted", async () => {
+  const { BOUNDS, createBudget } = await import("./harness.mjs");
+  assert.equal(BOUNDS.upload, 16 * 15 + 4);
+  const budget = createBudget();
+  for (let n = 0; n < BOUNDS.upload; n += 1) budget.take("upload");
+  assert.throws(() => budget.take("upload"), /upload ceiling 244 reached/);
+  assert.equal(budget.snapshot().upload, 244);
+});

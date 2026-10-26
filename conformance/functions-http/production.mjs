@@ -618,7 +618,7 @@ function safeJsonResponse(body) {
   return body ? JSON.parse(body) : {};
 }
 
-function createControl(adc, budget) {
+export function createControl(adc, budget) {
   let token;
   return async function control(method, url, body, kind = "control", allowed = [200]) {
     if (
@@ -964,7 +964,7 @@ async function policy(control, target, kind) {
   return response.value;
 }
 
-async function publicInvoker(control, target, enabled, kind) {
+async function publicInvoker(control, target, enabled, kind, log = logChange) {
   const current = await policy(control, target, kind);
   if (
     enabled &&
@@ -980,7 +980,7 @@ async function publicInvoker(control, target, enabled, kind) {
   }
   const readback = await policy(control, target, kind);
   assertPublicReadback(readback, enabled);
-  await logChange(
+  await log(
     enabled ? "public-invoker-granted" : "public-invoker-revoked",
     `${serviceName(target)}; service-level policy read back`,
   );
@@ -1074,7 +1074,7 @@ export async function cleanupTarget(
     }
     if (!current.serviceAbsent) {
       try {
-        await publicInvoker(control, target, false, "cleanup");
+        await publicInvoker(control, target, false, "cleanup", log);
       } catch (error) {
         state.iamRevocationError = error.message;
       }
@@ -1092,6 +1092,19 @@ export async function cleanupTarget(
     const absent = await inspectAbsence(control, target, "cleanup");
     if (!absent.functionAbsent || !absent.serviceAbsent)
       throw new Error("function or Cloud Run service remains after delete");
+    // The function and service are gone, so no build still needs the source upload. It is cleaned
+    // before the image, which can stop on an image version that cannot be distinguished.
+    if (state.upload) {
+      const uploads = await state.upload.finish({ cliExited: state.deployTrack?.exited === true });
+      if (uploads.clean) {
+        await log(
+          "source-upload-deleted",
+          `${functionUrl(target)}; owned uploads absence read back`,
+        );
+      } else {
+        state.uploadCleanupError = `source upload not cleaned: ${uploads.reasons.join(", ")}`;
+      }
+    }
     const packageExists = await inspectOwnedPackage(control, target, "cleanup");
     if (packageExists) {
       const versions = await listOwnedVersions(control, target, "cleanup");
@@ -1142,13 +1155,7 @@ export async function cleanupTarget(
       if (after.status !== 404) throw new Error("owned image version remains");
       await log("image-version-deleted", `${state.versionName}; absence read back`);
     }
-    if (state.upload) {
-      const uploads = await state.upload.finish({ cliExited: state.deployTrack?.exited === true });
-      if (!uploads.clean) {
-        throw new Error(`source upload not cleaned: ${uploads.reasons.join(", ")}`);
-      }
-      await log("source-upload-deleted", `${functionUrl(target)}; owned uploads absence read back`);
-    }
+    if (state.uploadCleanupError) throw new Error(state.uploadCleanupError);
     state.cleaned = true;
   } catch (error) {
     state.cleanupError = error.message;
@@ -1182,7 +1189,7 @@ export async function deployTarget(
   );
 }
 
-async function observeProgram(
+export async function observeProgram(
   program,
   control,
   adcPath,
@@ -1191,6 +1198,7 @@ async function observeProgram(
   recordings,
   abort,
   uploads,
+  { run = cli, log = logChange, fetchImpl } = {},
 ) {
   const targets = [...new Set(program.cases.map((step) => step.target))];
   const states = Object.fromEntries(
@@ -1218,8 +1226,8 @@ async function observeProgram(
       ) {
         throw new Error("reserved function, service or image package already exists");
       }
-      await deployTarget(target, program.id, states[target], uploads, adcPath, budget, runDir);
-      await logChange("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
+      await deployTarget(target, program.id, states[target], uploads, adcPath, budget, runDir, run);
+      await log("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
       const functionRecord = (await control("GET", functionUrl(target), undefined, "control"))
         .value;
       states[target].upload.receipt(uploadReceiptFromFunctionRecord(functionRecord));
@@ -1246,7 +1254,7 @@ async function observeProgram(
       }
       if (ownedImage.tag) await assertOwnedTag(control, target, ownedImage.tag, versions[0].name);
       states[target].versionName = versions[0].name;
-      await publicInvoker(control, target, true, "control");
+      await publicInvoker(control, target, true, "control", log);
       states[target].publicSince = Date.now();
     }
     const endpoints = Object.fromEntries(targets.map((target) => [target, states[target].url]));
@@ -1266,6 +1274,7 @@ async function observeProgram(
         throw new Error("signal or public exposure limit stopped observation");
       }
       recordings[pass][program.id] = await runCases(program, endpoints, tokens, budget, {
+        fetchImpl,
         replacements,
         deadline,
       });
@@ -1283,7 +1292,7 @@ async function observeProgram(
     error = caught;
   } finally {
     for (const target of targets.toReversed())
-      await cleanupTarget(control, target, adcPath, budget, runDir, states[target]);
+      await cleanupTarget(control, target, adcPath, budget, runDir, states[target], { run, log });
     if (user) {
       try {
         await deleteUser(control, user, runDir, program.id);

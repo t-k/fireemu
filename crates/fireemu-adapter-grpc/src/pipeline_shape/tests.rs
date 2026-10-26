@@ -25,6 +25,7 @@ const EMPTY_ALIAS: &str = "Invalid empty property path string.";
 const DB: &str = "projects/demo-app/databases/(default)";
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn every_recorded_refusal_has_a_shape() {
     let (requests, order) = json_syntax::parse_with_key_order(REQUESTS.as_bytes()).unwrap();
     let production: Value = serde_json::from_str(PRODUCTION).unwrap();
@@ -37,6 +38,7 @@ fn every_recorded_refusal_has_a_shape() {
     let mut o8b = 0;
     let mut o8c = 0;
     let mut o8d = 0;
+    let mut o9 = 0;
     let mut raw = 0;
     let mut eligible = 0;
     let mut excluded_500 = 0;
@@ -90,6 +92,8 @@ fn every_recorded_refusal_has_a_shape() {
                 o8c += 1;
             } else if id.starts_with("fs-ent-pipeline/o8d/") {
                 o8d += 1;
+            } else if id.starts_with("fs-ent-pipeline/o9/") {
+                o9 += 1;
             } else {
                 original += 1;
             }
@@ -116,12 +120,12 @@ fn every_recorded_refusal_has_a_shape() {
         }
     }
     assert_eq!(
-        (original, o5, o6, o7, o8a, o8b, o8c, o8d, raw),
-        (98, 291, 21, 54, 3, 80, 84, 18, 18)
+        (original, o5, o6, o7, o8a, o8b, o8c, o8d, o9, raw),
+        (98, 291, 21, 54, 3, 80, 84, 18, 46, 18)
     );
-    let refused = original + o5 + o6 + o7 + o8a + o8b + o8c + o8d;
-    assert_eq!(refused, 649);
-    assert_eq!(eligible, 649);
+    let refused = original + o5 + o6 + o7 + o8a + o8b + o8c + o8d + o9;
+    assert_eq!(refused, 695);
+    assert_eq!(eligible, 695);
     assert_eq!(excluded_500, 7);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.

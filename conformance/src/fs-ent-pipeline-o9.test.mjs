@@ -394,3 +394,122 @@ test("the O-9 table is the frozen one", () => {
     FROZEN,
   );
 });
+
+// --- the recorded O-9 programs ---
+
+const recorded = (id) => production.programs[`${O9_PREFIX}${id}`];
+const resultsOf = (answer) => (answer.body ?? []).flatMap((element) => element.results ?? []);
+const idOf = (result) => result.name.split("/").at(-1);
+
+/** CRC-32 (IEEE, as zlib computes it) of the UTF-8 bytes of a string. */
+const crc32 = (text) => {
+  let crc = 0xffffffff;
+  for (const byte of Buffer.from(text)) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+
+test("the recorded O-9 programs are in the fixture with their own digests and every step", () => {
+  for (const program of O9_PROGRAMS) {
+    const row = production.programs[program.id];
+    assert.ok(row, program.id);
+    assert.equal(row.corpusDigest, programDigest(program), program.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    // Both recordings agree on every row: nothing here is random.
+    assert.equal(row.second, undefined, program.id);
+    for (const [stepId, answer] of Object.entries(row.steps))
+      assert.ok(answer.status === 200 || answer.status === 400, `${program.id}#${stepId}`);
+  }
+  // `is_absent` takes a field reference, so the `d` alias of every types step made production
+  // refuse the whole request: no answer about `is_type` of a missing value was recorded.
+  for (const answer of Object.values(recorded("types-main").steps)) {
+    assert.equal(answer.status, 400);
+    assert.match(
+      answer.body[0].error.message,
+      /for function 'is_absent' is required to be a constant field reference\.$/,
+    );
+  }
+});
+
+test("production reads a collection in ascending CRC-32 order of the document id, whatever the collection, the values and the write order", () => {
+  // Every bare read of the order and reps programs, and the O-6 ordering programs.
+  const bare = [];
+  for (const [stepId, answer] of Object.entries(recorded("order-main").steps)) {
+    if (/-bare(-again)?$/.test(stepId)) bare.push([`order-main#${stepId}`, answer]);
+  }
+  for (const [stepId, answer] of Object.entries(recorded("reps-main").steps)) {
+    if (stepId.startsWith("bare-")) bare.push([`reps-main#${stepId}`, answer]);
+  }
+  const earlier = production.programs["fs-ent-pipeline/o6/order-writes"].steps;
+  bare.push(["o6/order-writes#bare", earlier.bare]);
+  bare.push([
+    "o6/order-batch#bare",
+    production.programs["fs-ent-pipeline/o6/order-batch"].steps.bare,
+  ]);
+  assert.equal(bare.length, 8 + 9 + 2);
+  for (const [name, answer] of bare) {
+    const ids = resultsOf(answer).map(idOf);
+    assert.ok(ids.length >= 2, name);
+    assert.deepEqual(
+      ids,
+      ids.toSorted((a, b) => crc32(a) - crc32(b)),
+      name,
+    );
+  }
+  // The same ids in another collection, or written backwards, are read in the same order.
+  const order = recorded("order-main").steps;
+  const idsOf = (stepId) => resultsOf(order[stepId]).map(idOf);
+  assert.deepEqual(idsOf("so1-bare"), idsOf("so2-bare"));
+  assert.deepEqual(idsOf("so1-bare"), idsOf("so4-bare"));
+  assert.deepEqual(idsOf("so3-limit5"), idsOf("so3-bare").slice(0, 5));
+  assert.deepEqual(idsOf("so3-offset45"), idsOf("so3-bare").slice(45));
+});
+
+test("a group or distinct key shows the value of the first member in the scan order", () => {
+  const steps = recorded("reps-main").steps;
+  for (const [name] of REPS_COLLECTIONS) {
+    const first = resultsOf(steps[`bare-${name}`])[0].fields.v;
+    for (const kind of ["agg", "dist"]) {
+      const rows = resultsOf(steps[`${kind}-${name}`]);
+      assert.equal(rows.length, 1, `${kind}-${name}`);
+      assert.deepEqual(rows[0].fields.v, first, `${kind}-${name}`);
+    }
+  }
+});
+
+test("every recorded unsorted read of one collection is in CRC-32 order of the id, in every program", () => {
+  const requests = JSON.parse(
+    readFileSync(new URL("../fs-ent-pipeline-requests.json", import.meta.url), "utf8"),
+  );
+  const unsorted = new Set([
+    "collection",
+    "limit",
+    "select",
+    "where",
+    "add_fields",
+    "remove_fields",
+  ]);
+  let checked = 0;
+  for (const program of requests.programs) {
+    for (const s of program.steps) {
+      if (s.rpc !== "executePipeline" || s.transport === "grpc" || !s.body) continue;
+      const stages = s.body.structuredPipeline?.pipeline?.stages ?? [];
+      if (stages[0]?.name !== "collection" || !stages.every((t) => unsorted.has(t.name))) continue;
+      const answer = production.programs[program.id]?.steps[s.id];
+      if (answer?.status !== 200) continue;
+      const results = resultsOf(answer);
+      // A select leaves the name out, and a limit can keep fewer than two.
+      if (results.length < 2 || !results.every((r) => r.name)) continue;
+      const ids = results.map(idOf);
+      assert.deepEqual(
+        ids,
+        ids.toSorted((a, b) => crc32(a) - crc32(b)),
+        `${program.id}#${s.id}`,
+      );
+      checked++;
+    }
+  }
+  assert.ok(checked >= 70, `${checked}`);
+});

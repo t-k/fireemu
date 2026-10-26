@@ -1064,7 +1064,7 @@
         },
         {
           "id": "FS-CLAIM-PIPELINE",
-          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional single where(condition), optional select of expressions (field references, literals, comparisons, array, map and document functions) under field-path aliases, optional non-negative offset and optional limit, in that order. Offset skips matching rows once before limit while reusing the existing paged stream. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production execution, ordering and exact production error parity are unobserved.",
+          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional single where(condition), optional select of expressions (field references, literals, comparisons, array, map and document functions) under field-path aliases, optional non-negative offset and optional limit, in that order. Offset skips matching rows once before limit while reusing the existing paged stream. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production behavior is observed only as the FS-ENT-ORACLE recordings O-1 to O-8D took it (capabilities FS-PIPELINE), and fireemu does not yet reproduce production's result order without a sort or its error texts beyond the recorded shapes.",
           "capabilities": [
             {
               "id": "FS-PIPE-RPC-1",

@@ -2,13 +2,14 @@
 // against a stub of the Firebase SDK, so the failure paths a healthy fireemu never takes are exercised: a wait
 // that hits its bound is a recorded `timeout` row, a rejection is a `rejected` row, a Rules probe that never
 // sees the change gives up, and the masks. The stub delivers nothing unless a test makes it. The tests are
-// skipped when Chromium cannot be launched. waitScale shortens every wait of the page.
+// skipped when Chromium cannot be launched, and fail instead when FIREEMU_REQUIRE_BROWSER=1 (require-browser.mjs). waitScale shortens every wait of the page.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { launchOrSkip, missingPlaywright } from './require-browser.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PAGE = readFileSync(path.join(here, 'rtdb-residual-page.js'), 'utf8');
@@ -43,8 +44,8 @@ try {
 
 /** Runs one scenario against the stub. `behaviour` is the source of an object literal for window.__stub. */
 async function scenario(t, cfg, behaviour = '{}') {
-  let browser;
-  try { browser = await chromium.launch({ headless: true }); } catch { t.skip('Chromium cannot be launched'); return null; }
+  const browser = await launchOrSkip(chromium, t);
+  if (!browser) return null;
   try {
     const page = await (await browser.newContext()).newPage();
     const rows = [];
@@ -70,7 +71,7 @@ async function scenario(t, cfg, behaviour = '{}') {
   }
 }
 const timeouts = (rows) => rows.filter((r) => r.type === 'timeout').map((r) => `${r.step}:${r.label}`);
-const skip = chromium ? false : 'playwright is not installed';
+const skip = missingPlaywright(chromium);
 
 test('cv08 against an SDK that delivers nothing: every bounded wait is a recorded timeout, and the run still ends', { skip, timeout: 60000 }, async (t) => {
   const r = await scenario(t, { scenario: 'cv08' });

@@ -2,6 +2,8 @@
 
 import { createHash } from "node:crypto";
 
+import { REQUESTS_PER_DEPLOY } from "../src/shared/gen2-source-uploads.mjs";
+
 export const PROJECT = "fireemu-oracle-query";
 export const REGION = "us-central1";
 export const FUNCTION_NAMES = Object.freeze({
@@ -15,6 +17,10 @@ export const BOUNDS = Object.freeze({
   auth: 12,
   cliDeploy: 16,
   cliDelete: 16,
+  // Access token refreshes, counted apart from the request that happened to need one.
+  token: 12,
+  // Source upload bucket requests: the bound of one deploy for each of the 16 deployments.
+  upload: 16 * REQUESTS_PER_DEPLOY,
 });
 
 const ALLOWED_HEADERS = new Set([
@@ -124,8 +130,18 @@ export function validateCorpus(corpus) {
   return { programs: programIds.size, cases, deployments, invocations: cases * 2 };
 }
 
-export function createBudget() {
-  const used = { invocation: 0, control: 0, cleanup: 0, auth: 0, cliDeploy: 0, cliDelete: 0 };
+// `caps` lowers ceilings for one run (a packet's own request lists); it can never raise one.
+export function createBudget(caps = {}) {
+  const used = {
+    invocation: 0,
+    control: 0,
+    cleanup: 0,
+    auth: 0,
+    cliDeploy: 0,
+    cliDelete: 0,
+    token: 0,
+    upload: 0,
+  };
   const limits = {
     invocation: BOUNDS.invocations,
     control: BOUNDS.control,
@@ -133,7 +149,15 @@ export function createBudget() {
     auth: BOUNDS.auth,
     cliDeploy: BOUNDS.cliDeploy,
     cliDelete: BOUNDS.cliDelete,
+    token: BOUNDS.token,
+    upload: BOUNDS.upload,
   };
+  for (const [kind, cap] of Object.entries(caps)) {
+    if (!(kind in limits) || !Number.isInteger(cap) || cap < 0) {
+      throw new Error(`invalid request cap for ${kind}`);
+    }
+    limits[kind] = Math.min(limits[kind], cap);
+  }
   return {
     take(kind) {
       if (!(kind in limits)) throw new Error(`unknown request kind ${kind}`);

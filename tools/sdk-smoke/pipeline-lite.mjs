@@ -1,6 +1,7 @@
 // Web SDK pipeline smoke: `firebase/firestore/lite` executes pipelines over the REST
 // `:executePipeline` route. It runs the finite local subset (nested where/select, document
-// functions, offset/limit) against an Enterprise database and checks each answer.
+// functions, offset/limit) against an Enterprise database and checks each answer. Under the strict
+// profile the offset step expects the unobserved refusal, and every check after it still runs.
 //
 //   fireemu exec --config tools/sdk-smoke/fireemu.pipeline-strict.json --only firestore -- \
 //     node tools/sdk-smoke/pipeline-lite.mjs
@@ -64,7 +65,23 @@ assert.deepEqual(
   await rows(source().where(documentId(field("__name__")).equal("b")).select("name").limit(5)),
   [{ name: "b" }],
 );
-assert.deepEqual(await rows(source().select("name").offset(1).limit(1)), [{ name: "b" }]);
+// An offset: production has no recorded answer for any offset argument yet (FS-PIPELINE), so the strict
+// profile refuses it as unobserved and the emulator profile answers as the official emulator does. The
+// checks after this step run under both profiles; once production records offset forms, strict follows.
+const offsetPipeline = () => rows(source().select("name").offset(1).limit(1));
+if (profile === "strict") {
+  // NOTE: when strict starts accepting recorded offsets (work/pipeline-stages: "strict now accepts every
+  // positive offset"), this refusal stops being the answer for offset(1): flip this branch to the row
+  // below, as the emulator profile expects, and keep one offset form that is still refused (0 or a value
+  // above i32::MAX), whichever the landed rule leaves unrecorded.
+  await assert.rejects(offsetPipeline(), (error) => {
+    assert.equal(error.code, "unimplemented");
+    assert.match(error.message, /this offset argument is not observed locally/);
+    return true;
+  });
+} else {
+  assert.deepEqual(await offsetPipeline(), [{ name: "b" }]);
+}
 assert.deepEqual(await rows(pipeline(db).collection("pipeline-lite-empty")), []);
 // The Lite SDK's executionTime getter throws when the answer lacks it, empty answers included.
 assert.ok((await execute(pipeline(db).collection("pipeline-lite-empty"))).executionTime);

@@ -1331,6 +1331,24 @@ fn a_piece_between_separators_is_a_run_of_its_own_and_has_to_be_as_long_as_one()
 }
 
 #[test]
+fn a_token_before_a_separator_is_found_at_every_length_modulo_four() {
+    // The cut is made before the separator: a character kept would complete an extra byte at some lengths.
+    let number = 407_182_936_504;
+    let lower = "abcdefghijklmnopqrstuvwxyzabcd";
+    for filler in 9..17 {
+        let token = encode(&message_of(number, filler), true, false);
+        for separator in ["/", "-"] {
+            let text = format!("{token}{separator}{lower}");
+            assert_eq!(
+                project_numbers_in(text.as_bytes()),
+                [number],
+                "filler {filler}, {text}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_token_shorter_than_the_minimum_run_is_a_known_gap_left_to_the_pre_push_scan() {
     // Measured on the repository when this was written: a minimum of 12, 16 or 20 characters refused 30 or
     // more files at each (names, generated code and specs parse as messages by chance), so it stays at 24.

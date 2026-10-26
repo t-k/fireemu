@@ -2343,8 +2343,10 @@ fn configured_enterprise_native_admin_preserves_data_access() {
                     pipeline.clone(),
                 );
                 assert_eq!(status, 200, "{strict} {phase}: {body}");
+                // One array element holds every result of a small answer.
+                assert_eq!(body.as_array().unwrap().len(), 1);
                 assert_eq!(
-                    body.as_array().unwrap().len(),
+                    body[0]["results"].as_array().unwrap().len(),
                     if phase == "before" { 1 } else { 2 }
                 );
                 for suffix in ["", "?pageSize=0"] {

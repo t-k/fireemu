@@ -343,42 +343,11 @@ fn execute_at_snapshot(
             results.push(result);
         }
     }
-    let responses = pack_search_results(results, execution_time);
+    let responses = crate::pipeline::pack_results(results, execution_time);
     if barrier.epoch() != epoch {
         return Err(Status::unavailable("session reset during text search"));
     }
     Ok(responses)
-}
-
-fn pack_search_results(
-    documents: Vec<pb::Document>,
-    execution_time: Option<prost_types::Timestamp>,
-) -> Vec<pb::ExecutePipelineResponse> {
-    // Keep small result sets together without growing one gRPC message with every hit.
-    // A single document may exceed this target; it is never split across responses.
-    const BATCH_BYTES: usize = 1_048_576;
-    let mut responses = Vec::new();
-    let mut batch = pb::ExecutePipelineResponse {
-        execution_time,
-        ..Default::default()
-    };
-    let mut batch_bytes = prost::Message::encoded_len(&batch);
-    for document in documents {
-        // One tag plus at most ten bytes for the length-delimited document prefix.
-        let document_bytes = prost::Message::encoded_len(&document).saturating_add(11);
-        if !batch.results.is_empty() && batch_bytes.saturating_add(document_bytes) > BATCH_BYTES {
-            responses.push(batch);
-            batch = pb::ExecutePipelineResponse {
-                execution_time,
-                ..Default::default()
-            };
-            batch_bytes = prost::Message::encoded_len(&batch);
-        }
-        batch_bytes = batch_bytes.saturating_add(document_bytes);
-        batch.results.push(document);
-    }
-    responses.push(batch);
-    responses
 }
 
 fn search_snapshot(

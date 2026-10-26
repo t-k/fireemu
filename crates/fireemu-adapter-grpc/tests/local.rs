@@ -6221,25 +6221,30 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
     handle.abort();
 }
 
+/// Reads a pipeline answer to its end. `results` is the number of documents expected (1 for an
+/// answer with no result, which is one response holding only the execution time): production
+/// packs a small answer into a single response (FS-ENT-ORACLE O-1), so the answer is one
+/// response unless it exceeds the batch size.
 async fn drain_pipeline(
     mut stream: tonic::Streaming<pb::ExecutePipelineResponse>,
-    messages: usize,
+    results: usize,
 ) -> Vec<pb::Document> {
     let mut documents = Vec::new();
     let mut received = 0;
     while let Some(response) = stream.next().await {
         let response = response.unwrap();
-        assert!(
-            response.results.len() <= 1,
-            "one document per wire response"
-        );
         // Every response carries the snapshot's execution time; which results are whole
         // documents is pinned by execute_pipeline_results_carry_document_metadata_without_select.
         assert!(response.execution_time.is_some());
         documents.extend(response.results);
         received += 1;
     }
-    assert_eq!(received, messages);
+    assert_eq!(received, 1, "a small answer is one response");
+    assert!(
+        documents.len() == results || (documents.is_empty() && results == 1),
+        "{} results, expected {results}",
+        documents.len()
+    );
     documents
 }
 

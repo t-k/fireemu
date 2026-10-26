@@ -1558,8 +1558,9 @@ impl RestState {
 
     /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does.
     /// An Enterprise database runs the pipeline through the same validation, compilation and
-    /// executor as gRPC, over one snapshot of the input, and answers one array element per
-    /// result (`[{executionTime}]` when there is none), each with the snapshot's read time as
+    /// executor as gRPC, over one snapshot of the input, and answers the results packed into
+    /// array elements as production frames them (one element for a small answer,
+    /// `[{executionTime}]` when there is none), each with the snapshot's read time as
     /// `executionTime`. A refusal answers no partial results.
     #[allow(clippy::too_many_lines)] // Keep transport validation and refusal mapping in one entry point.
     fn execute_pipeline(
@@ -1658,7 +1659,7 @@ impl RestState {
         let execution_time = responses.iter().find_map(|r| r.read_time);
         let mut cursor =
             fireemu_core_firestore::pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
-        let mut out = Vec::new();
+        let mut results = Vec::new();
         for document in responses.iter().filter_map(|r| r.document.as_ref()) {
             if cursor.is_exhausted() {
                 break;
@@ -1668,28 +1669,18 @@ impl RestState {
                 .push(row)
                 .map_err(|error| refuse(crate::pipeline::eval_status(&error)))?;
             if let Some(fields) = fields {
-                let result = if whole_documents {
+                results.push(if whole_documents {
                     document.clone()
                 } else {
                     crate::pipeline::result_document(&fields)
-                };
-                out.push(pipeline_json::response_to_json(
-                    &pb::ExecutePipelineResponse {
-                        results: vec![result],
-                        execution_time,
-                        ..Default::default()
-                    },
-                ));
+                });
             }
         }
-        if out.is_empty() {
-            out.push(pipeline_json::response_to_json(
-                &pb::ExecutePipelineResponse {
-                    execution_time,
-                    ..Default::default()
-                },
-            ));
-        }
+        // Production packs a small answer into one array element (FS-ENT-ORACLE O-1).
+        let out = crate::pipeline::pack_results(results, execution_time)
+            .iter()
+            .map(pipeline_json::response_to_json)
+            .collect();
         Ok(ok(Value::Array(out)))
     }
 

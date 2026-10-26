@@ -725,6 +725,9 @@ impl Firestore for GatewayService {
                 canonical,
                 gate,
                 emitted: false,
+                batcher: crate::pipeline::ResultBatcher::default(),
+                failure: None,
+                done: false,
             })));
         }
         let mut status = Status::unimplemented(format!(
@@ -1093,7 +1096,9 @@ pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
 
 // Own the inner receiver directly: reaching the limit or dropping the public stream
 // releases backpressure/transaction ownership without draining the remaining query. The
-// inner stream is the input scan; the cursor runs the pipeline's stages over its rows.
+// inner stream is the input scan; the cursor runs the pipeline's stages over its rows, and
+// the results are packed into responses the way production frames them (a small answer is one
+// response).
 struct PipelineResponseStream {
     inner: Option<BoxStream<pb::RunQueryResponse>>,
     cursor: fireemu_core_firestore::pipeline_exec::Cursor,
@@ -1105,15 +1110,68 @@ struct PipelineResponseStream {
     /// Which refusals the stream may answer.
     gate: crate::pipeline_shape::RefusalGate,
     emitted: bool,
+    /// Results not yet sent.
+    batcher: crate::pipeline::ResultBatcher,
+    /// A refusal to answer once the results before it have been sent.
+    failure: Option<Status>,
+    done: bool,
 }
 
 impl PipelineResponseStream {
-    /// The answer of a pipeline with no result.
-    fn empty_response(&self) -> pb::ExecutePipelineResponse {
+    #[cfg(test)]
+    fn new(
+        inner: BoxStream<pb::RunQueryResponse>,
+        cursor: fireemu_core_firestore::pipeline_exec::Cursor,
+    ) -> Self {
+        Self {
+            inner: Some(inner),
+            cursor,
+            whole_documents: false,
+            read_time: None,
+            canonical: "collection(items)".to_owned(),
+            gate: crate::pipeline_shape::RefusalGate::Open,
+            emitted: false,
+            batcher: crate::pipeline::ResultBatcher::default(),
+            failure: None,
+            done: false,
+        }
+    }
+
+    fn response(&self, results: Vec<pb::Document>) -> pb::ExecutePipelineResponse {
         pb::ExecutePipelineResponse {
+            results,
             execution_time: self.read_time,
             ..Default::default()
         }
+    }
+
+    /// Ends the input and answers what is left: the held results, then the refusal that stopped
+    /// the stream, or, for a pipeline with no result, one response with only the execution time.
+    fn end(&mut self) -> Option<Result<pb::ExecutePipelineResponse, Status>> {
+        self.inner = None;
+        if self.done {
+            return None;
+        }
+        if !self.batcher.is_empty() {
+            self.emitted = true;
+            self.done = self.failure.is_none();
+            let results = self.batcher.take();
+            return Some(Ok(self.response(results)));
+        }
+        self.done = true;
+        if let Some(error) = self.failure.take() {
+            return Some(Err(error));
+        }
+        (!self.emitted).then(|| {
+            self.emitted = true;
+            Ok(self.response(Vec::new()))
+        })
+    }
+
+    /// Stops the stream with `error`, sent after the results already held.
+    fn fail(&mut self, error: Status) -> Option<Result<pb::ExecutePipelineResponse, Status>> {
+        self.failure = Some(pipeline_status(self.gate.answer(error), &self.canonical));
+        self.end()
     }
 }
 
@@ -1129,21 +1187,12 @@ impl tokio_stream::Stream for PipelineResponseStream {
         loop {
             let next = match this.inner.as_mut() {
                 Some(inner) => inner.as_mut().poll_next(cx),
-                None => return Poll::Ready(None),
+                None => return Poll::Ready(this.end()),
             };
             match next {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Err(error))) => {
-                    this.inner = None;
-                    return Poll::Ready(Some(Err(pipeline_status(
-                        this.gate.answer(error),
-                        &this.canonical,
-                    ))));
-                }
-                Poll::Ready(None) => {
-                    this.inner = None;
-                    return Poll::Ready((!this.emitted).then(|| Ok(this.empty_response())));
-                }
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(this.fail(error)),
+                Poll::Ready(None) => return Poll::Ready(this.end()),
                 Poll::Ready(Some(Ok(response))) => {
                     if response.read_time.is_some() {
                         this.read_time = response.read_time;
@@ -1152,8 +1201,7 @@ impl tokio_stream::Stream for PipelineResponseStream {
                         continue;
                     };
                     if this.cursor.is_exhausted() {
-                        this.inner = None;
-                        return Poll::Ready((!this.emitted).then(|| Ok(this.empty_response())));
+                        return Poll::Ready(this.end());
                     }
                     let output = crate::pipeline::document_row(&document).and_then(|row| {
                         this.cursor
@@ -1163,28 +1211,25 @@ impl tokio_stream::Stream for PipelineResponseStream {
                     let fields = match output {
                         Ok(Some(fields)) => fields,
                         Ok(None) => continue,
-                        Err(error) => {
-                            this.inner = None;
-                            return Poll::Ready(Some(Err(pipeline_status(
-                                this.gate.answer(error),
-                                &this.canonical,
-                            ))));
-                        }
+                        Err(error) => return Poll::Ready(this.fail(error)),
                     };
-                    this.emitted = true;
-                    if this.cursor.is_exhausted() {
-                        this.inner = None;
-                    }
                     let result = if this.whole_documents {
                         document
                     } else {
                         crate::pipeline::result_document(&fields)
                     };
-                    return Poll::Ready(Some(Ok(pb::ExecutePipelineResponse {
-                        results: vec![result],
-                        execution_time: this.read_time,
-                        ..Default::default()
-                    })));
+                    let finished = this.batcher.push(result);
+                    if this.cursor.is_exhausted() {
+                        // The limit is used up: the input is not polled again.
+                        this.inner = None;
+                    }
+                    if let Some(results) = finished {
+                        this.emitted = true;
+                        return Poll::Ready(Some(Ok(this.response(results))));
+                    }
+                    if this.cursor.is_exhausted() {
+                        return Poll::Ready(this.end());
+                    }
                 }
             }
         }
@@ -1833,53 +1878,113 @@ mod tests {
                 ..Default::default()
             })
         }));
-        let mut stream = PipelineResponseStream {
-            inner: Some(Box::pin(source)),
-            cursor: Cursor::new(vec![Stage::Limit(3)]),
-            whole_documents: false,
-            read_time: None,
-            canonical: "collection(items)".to_owned(),
-            gate: crate::pipeline_shape::RefusalGate::Open,
-            emitted: false,
-        };
-        for _ in 0..3 {
-            assert_eq!(stream.next().await.unwrap().unwrap().results.len(), 1);
-        }
+        let mut stream =
+            PipelineResponseStream::new(Box::pin(source), Cursor::new(vec![Stage::Limit(3)]));
+        // The three results are one response, and the input is not polled past the limit.
+        assert_eq!(stream.next().await.unwrap().unwrap().results.len(), 3);
         assert!(stream.inner.is_none());
         assert!(stream.next().await.is_none());
         assert_eq!(polls.load(Ordering::SeqCst), 3);
-        let mut empty = PipelineResponseStream {
-            inner: Some(Box::pin(tokio_stream::iter([Ok(
-                pb::RunQueryResponse::default(),
-            )]))),
-            cursor: Cursor::new(Vec::new()),
-            whole_documents: false,
-            read_time: None,
-            canonical: "collection(items)".to_owned(),
-            gate: crate::pipeline_shape::RefusalGate::Open,
-            emitted: false,
-        };
+        let mut empty = PipelineResponseStream::new(
+            Box::pin(tokio_stream::iter([Ok(pb::RunQueryResponse::default())])),
+            Cursor::new(Vec::new()),
+        );
         assert_eq!(
             empty.next().await.unwrap().unwrap(),
             pb::ExecutePipelineResponse::default()
         );
         assert!(empty.next().await.is_none());
-        let mut failed = PipelineResponseStream {
-            inner: Some(Box::pin(tokio_stream::iter([Err(Status::unavailable(
+        let mut failed = PipelineResponseStream::new(
+            Box::pin(tokio_stream::iter([Err(Status::unavailable(
                 "fixture error",
-            ))]))),
-            cursor: Cursor::new(Vec::new()),
-            whole_documents: false,
-            read_time: None,
-            canonical: "collection(items)".to_owned(),
-            gate: crate::pipeline_shape::RefusalGate::Open,
-            emitted: false,
-        };
+            ))])),
+            Cursor::new(Vec::new()),
+        );
         assert_eq!(
             failed.next().await.unwrap().unwrap_err().code(),
             tonic::Code::Unavailable
         );
         assert!(failed.next().await.is_none());
+    }
+
+    fn input_document(index: usize, padding: usize) -> pb::RunQueryResponse {
+        pb::RunQueryResponse {
+            document: Some(pb::Document {
+                name: format!("projects/p/databases/(default)/documents/items/{index}"),
+                fields: [(
+                    "pad".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::StringValue("x".repeat(padding))),
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    async fn framing_of(
+        input: Vec<Result<pb::RunQueryResponse, Status>>,
+    ) -> Vec<Result<usize, tonic::Code>> {
+        use fireemu_core_firestore::pipeline_exec::Cursor;
+        use tokio_stream::StreamExt;
+        let mut stream = PipelineResponseStream::new(
+            Box::pin(tokio_stream::iter(input)),
+            Cursor::new(Vec::new()),
+        );
+        stream.whole_documents = true;
+        let mut out = Vec::new();
+        while let Some(item) = stream.next().await {
+            out.push(
+                item.map(|response| response.results.len())
+                    .map_err(|e| e.code()),
+            );
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn execute_pipeline_stream_packs_a_small_answer_into_one_response() {
+        // Production answered 2 to 4 documents in a single response (FS-ENT-ORACLE O-1).
+        for count in [1, 2, 3, 4, 50] {
+            let input = (0..count)
+                .map(|index| Ok(input_document(index, 8)))
+                .collect();
+            assert_eq!(framing_of(input).await, vec![Ok(count)], "{count} results");
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_pipeline_stream_cuts_a_large_answer_at_the_batch_size() {
+        // 400 KB documents: two fit in 1 MiB, the third starts the next response.
+        let input = (0..3)
+            .map(|index| Ok(input_document(index, 400_000)))
+            .collect();
+        assert_eq!(framing_of(input).await, vec![Ok(2), Ok(1)]);
+        // A document over the target is not split and not merged with a neighbour.
+        let input = vec![
+            Ok(input_document(0, 8)),
+            Ok(input_document(1, 1_200_000)),
+            Ok(input_document(2, 8)),
+        ];
+        assert_eq!(framing_of(input).await, vec![Ok(1), Ok(1), Ok(1)]);
+    }
+
+    #[tokio::test]
+    async fn execute_pipeline_stream_sends_the_results_before_a_failure_then_the_failure() {
+        let input = vec![
+            Ok(input_document(0, 8)),
+            Ok(input_document(1, 8)),
+            Err(Status::unavailable("fixture error")),
+            Ok(input_document(2, 8)),
+        ];
+        assert_eq!(
+            framing_of(input).await,
+            vec![Ok(2), Err(tonic::Code::Unavailable)]
+        );
+        let input = vec![Err(Status::unavailable("fixture error"))];
+        assert_eq!(framing_of(input).await, vec![Err(tonic::Code::Unavailable)]);
     }
 
     fn transaction_stats(

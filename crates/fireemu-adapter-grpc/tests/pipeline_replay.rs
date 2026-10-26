@@ -546,6 +546,15 @@ fn answer(status: u16, body: &Value) -> Value {
     json!({"status": 200, "results": results})
 }
 
+/// How an answer is cut into array elements: the number of results in each.
+fn framing(body: &Value) -> Vec<usize> {
+    body.as_array()
+        .into_iter()
+        .flatten()
+        .map(|element| element["results"].as_array().map_or(0, Vec::len))
+        .collect()
+}
+
 // Exact measured compatibility debt, not a production-parity approval.
 struct O5Difference {
     row: String,
@@ -785,6 +794,18 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 };
                 compared += 1;
                 seen.insert(row.clone());
+                if rpc == "executePipeline" && matches && status == 200 {
+                    // Production packs a small answer into one response (FS-ENT-ORACLE O-1,
+                    // results/metadata): the number of array elements and the results each
+                    // holds are part of the answer.
+                    let got = framing(&body);
+                    let want = framing(&expected["body"]);
+                    if got != want {
+                        failures.push(format!(
+                            "strict={strict} {row}: framing {got:?}, production {want:?}"
+                        ));
+                    }
+                }
                 let got = answer(status, &body);
                 let want = answer(
                     u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),

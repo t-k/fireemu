@@ -2223,6 +2223,74 @@ pub fn result_document(
     }
 }
 
+/// The size at which a pipeline answer is cut into another response. Production answered up to
+/// four documents in one response (FS-ENT-ORACLE O-1, `results/metadata` and `results/order`);
+/// where it starts a second one is unobserved, so a response grows to this target and a single
+/// document larger than it is never split.
+pub(crate) const RESULT_BATCH_BYTES: usize = 1_048_576;
+
+/// What a response's `execution_time` and framing add to the size of its documents.
+const RESPONSE_OVERHEAD_BYTES: usize = 16;
+
+/// Packs result documents into responses in arrival order: one response holds every result
+/// until the target size is reached, so a small answer is a single response.
+#[derive(Debug, Default)]
+pub(crate) struct ResultBatcher {
+    results: Vec<pb::Document>,
+    bytes: usize,
+}
+
+impl ResultBatcher {
+    /// Adds `document`. When it would push the held results past the target, those results are
+    /// returned as a finished batch and `document` starts the next one.
+    pub(crate) fn push(&mut self, document: pb::Document) -> Option<Vec<pb::Document>> {
+        // One tag plus at most ten bytes for the length-delimited document prefix.
+        let document_bytes = prost::Message::encoded_len(&document).saturating_add(11);
+        let full = !self.results.is_empty()
+            && RESPONSE_OVERHEAD_BYTES
+                .saturating_add(self.bytes)
+                .saturating_add(document_bytes)
+                > RESULT_BATCH_BYTES;
+        let finished = full.then(|| self.take());
+        self.bytes = self.bytes.saturating_add(document_bytes);
+        self.results.push(document);
+        finished
+    }
+
+    /// Whether no result is held.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+
+    /// The held results, leaving the batcher empty.
+    pub(crate) fn take(&mut self) -> Vec<pb::Document> {
+        self.bytes = 0;
+        std::mem::take(&mut self.results)
+    }
+}
+
+/// The responses for a whole answer: every result in order, cut by [`ResultBatcher`]; a pipeline
+/// with no result answers one response holding only the execution time.
+pub(crate) fn pack_results(
+    documents: Vec<pb::Document>,
+    execution_time: Option<prost_types::Timestamp>,
+) -> Vec<pb::ExecutePipelineResponse> {
+    let response = |results| pb::ExecutePipelineResponse {
+        results,
+        execution_time,
+        ..Default::default()
+    };
+    let mut batcher = ResultBatcher::default();
+    let mut responses = Vec::new();
+    for document in documents {
+        responses.extend(batcher.push(document).map(response));
+    }
+    if !batcher.is_empty() || responses.is_empty() {
+        responses.push(response(batcher.take()));
+    }
+    responses
+}
+
 /// A `RunQuery` result document as an executor row.
 pub fn document_row(document: &pb::Document) -> Result<pipeline_exec::Row, Status> {
     let path = DocumentPath::from_resource_name(&document.name).ok_or_else(|| {
@@ -3301,6 +3369,92 @@ mod tests {
                         pb::structured_query::filter::FilterType::UnaryFilter(pb::structured_query::UnaryFilter { op: actual, operand_type: Some(pb::structured_query::unary_filter::OperandType::Field(field)) })
                     )}), ..
                 })) if actual == op as i32 && field.field_path == "score"));
+        }
+    }
+    mod framing {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn document(index: usize, padding: usize) -> pb::Document {
+            pb::Document {
+                name: format!("projects/p/databases/(default)/documents/c/{index}"),
+                fields: [(
+                    "pad".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::StringValue("x".repeat(padding))),
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            }
+        }
+
+        fn weight(document: &pb::Document) -> usize {
+            prost::Message::encoded_len(document) + 11
+        }
+
+        proptest! {
+            /// The responses carry every result once, in order, and a pipeline with no result
+            /// is one response without results.
+            #[test]
+            fn packing_keeps_every_result_in_order(
+                paddings in proptest::collection::vec(0usize..600_000, 0..12),
+            ) {
+                let documents: Vec<_> = paddings.iter().enumerate().map(|(i, p)| document(i, *p)).collect();
+                let responses = pack_results(documents.clone(), None);
+                let flat: Vec<_> = responses.iter().flat_map(|r| r.results.clone()).collect();
+                prop_assert_eq!(flat, documents.clone());
+                prop_assert!(!responses.is_empty());
+                if documents.is_empty() {
+                    prop_assert_eq!(responses.len(), 1);
+                } else {
+                    prop_assert!(responses.iter().all(|r| !r.results.is_empty()));
+                }
+            }
+
+            /// A response stays within the target unless it holds a single oversized document,
+            /// and the packing is greedy: the next response's first document would not have fit.
+            #[test]
+            fn packing_cuts_only_where_the_next_result_does_not_fit(
+                paddings in proptest::collection::vec(0usize..600_000, 1..12),
+            ) {
+                let documents: Vec<_> = paddings.iter().enumerate().map(|(i, p)| document(i, *p)).collect();
+                let responses = pack_results(documents, None);
+                for response in &responses {
+                    let total: usize = response.results.iter().map(weight).sum();
+                    prop_assert!(
+                        response.results.len() == 1
+                            || total + RESPONSE_OVERHEAD_BYTES <= RESULT_BATCH_BYTES
+                    );
+                }
+                for pair in responses.windows(2) {
+                    let held: usize = pair[0].results.iter().map(weight).sum();
+                    prop_assert!(
+                        held + weight(&pair[1].results[0]) + RESPONSE_OVERHEAD_BYTES
+                            > RESULT_BATCH_BYTES
+                    );
+                }
+            }
+
+            /// An answer that fits the target is one response, as production sent 2 to 4
+            /// documents (FS-ENT-ORACLE O-1).
+            #[test]
+            fn a_small_answer_is_one_response(count in 0usize..200, padding in 0usize..2_000) {
+                let documents: Vec<_> = (0..count).map(|i| document(i, padding)).collect();
+                prop_assert_eq!(pack_results(documents, None).len(), 1);
+            }
+        }
+
+        #[test]
+        fn the_execution_time_is_on_every_response() {
+            let time = prost_types::Timestamp {
+                seconds: 5,
+                nanos: 7,
+            };
+            let documents = (0..3).map(|i| document(i, 400_000)).collect();
+            let responses = pack_results(documents, Some(time));
+            assert_eq!(responses.len(), 2);
+            assert!(responses.iter().all(|r| r.execution_time == Some(time)));
         }
     }
 }

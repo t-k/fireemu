@@ -79,15 +79,20 @@ impl Children {
 }
 
 impl Pending {
-    /// Registers `data` for the path `keys`.
+    /// Registers `data` for the path `keys`. Null children of `data` are dropped, as the official
+    /// emulator does when it stores the value.
     pub(crate) fn remember(&mut self, keys: &[String], data: Json) {
+        self.place(keys, without_nulls(data));
+    }
+
+    fn place(&mut self, keys: &[String], data: Json) {
         if keys.is_empty() {
             self.value = Some(data);
             self.children.clear();
         } else if let Some(value) = self.value.take() {
             self.value = Some(update_child(value, keys, data));
         } else {
-            self.children.child(&keys[0]).remember(&keys[1..], data);
+            self.children.child(&keys[0]).place(&keys[1..], data);
         }
     }
 
@@ -114,7 +119,7 @@ impl Pending {
                 if key == keys[0] && vanishes(&child, &keys[1..]) {
                     continue;
                 }
-                self.remember(&[key], child);
+                self.place(&[key], child);
             }
             return self.forget(keys);
         }
@@ -155,6 +160,25 @@ fn is_leaf(value: &Json) -> bool {
         Json::Object(map) => map.contains_key(VALUE),
         Json::Null => false,
         _ => true,
+    }
+}
+
+/// `value` without its null children, at any depth: an object left without children is null.
+fn without_nulls(value: Json) -> Json {
+    match value {
+        Json::Object(map) => {
+            let map: BTreeMap<String, Json> = map
+                .into_iter()
+                .map(|(key, child)| (key, without_nulls(child)))
+                .filter(|(_, child)| *child != Json::Null)
+                .collect();
+            if map.is_empty() {
+                Json::Null
+            } else {
+                Json::Object(map)
+            }
+        }
+        other => other,
     }
 }
 
@@ -350,6 +374,24 @@ mod tests {
         assert!(pending.entries().is_empty());
     }
 
+    /// The value as the official emulator stores it: null children dropped at any depth, an object
+    /// left empty is null.
+    fn stored(value: &Json) -> Json {
+        let Json::Object(map) = value else {
+            return value.clone();
+        };
+        let kept: std::collections::BTreeMap<String, Json> = map
+            .iter()
+            .map(|(key, child)| (key.clone(), stored(child)))
+            .filter(|(_, child)| *child != Json::Null)
+            .collect();
+        if kept.is_empty() {
+            Json::Null
+        } else {
+            Json::Object(kept)
+        }
+    }
+
     /// The value with the location `keys` removed and the parents it leaves empty pruned; unchanged when the
     /// value holds nothing at the path or a leaf is in the way.
     fn without(value: &Json, keys: &[&str]) -> Json {
@@ -393,7 +435,7 @@ mod tests {
     }
 
     fn nested_value() -> impl Strategy<Value = Json> {
-        let leaf = (0i64..3).prop_map(Json::int);
+        let leaf = prop_oneof![3 => (0i64..3).prop_map(Json::int), 1 => Just(Json::Null)];
         leaf.prop_recursive(3, 24, 6, |inner| {
             prop::collection::btree_map(
                 prop::sample::select(vec!["a", "b", "c", "9", "10", "-1"]).prop_map(str::to_owned),
@@ -428,8 +470,11 @@ mod tests {
             for (at, entry) in pending.entries() {
                 set_at(&mut rebuilt, &at, entry);
             }
-            let want = match without(&value, &cancel) {
-                Json::Null => Json::Null,
+            // A value that is null once stored stays a null entry; a cancel that removes the
+            // last of a value leaves no entry.
+            let stored_value = stored(&value);
+            let want = match without(&stored_value, &cancel) {
+                Json::Null if stored_value != Json::Null => Json::Null,
                 kept => Json::object([("s", kept)]),
             };
             prop_assert_eq!(rebuilt, want);
@@ -535,6 +580,47 @@ mod tests {
                 ("s/a".to_owned(), r#"{"x":1,"y":2}"#.to_owned()),
                 ("s/b".to_owned(), "2".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn null_children_are_dropped_when_a_value_is_registered() {
+        // Order review S6, probed on the official emulator: `o /s {a: null, b: 1}`, `oc /s/a` fires `s: {b: 1}`.
+        let mut pending = Pending::default();
+        pending.remember(&keys("s"), json(r#"{"a":null,"b":1}"#));
+        assert!(!pending.forget(&keys("s/a")));
+        assert_eq!(
+            entries(&pending),
+            vec![("s".to_owned(), r#"{"b":1}"#.to_owned())]
+        );
+        // A child that holds only nulls is gone too, and an object of nulls is a null entry.
+        pending.remember(&keys("t"), json(r#"{"a":{"x":null},"b":null}"#));
+        pending.remember(&keys("u/v"), json(r#"{"x":null,"y":2}"#));
+        assert_eq!(
+            entries(&pending),
+            vec![
+                ("s".to_owned(), r#"{"b":1}"#.to_owned()),
+                ("t".to_owned(), "null".to_owned()),
+                ("u/v".to_owned(), r#"{"y":2}"#.to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn nulls_do_not_count_towards_five() {
+        let mut pending = Pending::default();
+        pending.remember(
+            &keys("s"),
+            json(r#"{"a":{"x":null},"b":1,"c":1,"d":1,"e":1,"f":1}"#),
+        );
+        pending.forget(&keys("s/b"));
+        assert_eq!(
+            pending
+                .entries()
+                .into_iter()
+                .map(|(k, _)| k.join("/"))
+                .collect::<Vec<_>>(),
+            ["s/c", "s/d", "s/e", "s/f"]
         );
     }
 
@@ -682,12 +768,12 @@ mod tests {
         let cases = crate::scala_map::tests::cases();
         let splits = cases["splits"].as_array().unwrap();
         assert!(splits.len() >= 8);
-        // The S4 cases hear the whole value on a listen above its children; the integration test in
-        // tests/multi_path_order.rs replays them.
-        for case in splits
-            .iter()
-            .filter(|case| !case["name"].as_str().unwrap().starts_with("S4:"))
-        {
+        // The S4 and S6 cases hear the whole value on a listen above its children; the integration
+        // test in tests/multi_path_order.rs replays them.
+        for case in splits.iter().filter(|case| {
+            let name = case["name"].as_str().unwrap();
+            !name.starts_with("S4:") && !name.starts_with("S6:")
+        }) {
             let mut pending = Pending::default();
             for op in case["ops"].as_array().unwrap() {
                 let (action, path) = (op[0].as_str().unwrap(), op[1].as_str().unwrap());

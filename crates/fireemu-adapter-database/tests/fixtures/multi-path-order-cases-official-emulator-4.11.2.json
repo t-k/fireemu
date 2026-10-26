@@ -2869,6 +2869,387 @@
     "d:s/c",
     "d:t"
    ]
+  },
+  {
+   "name": "S6: null child cancelled, the value stays whole",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": null,
+      "b": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S6: null child, another child cancelled",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": null,
+      "b": 1,
+      "c": 2
+     }
+    ],
+    [
+     "oc",
+     "s/b"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "m:s{c}",
+    "d:s/c",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S6: nested null only child, parent cancelled",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "x": null
+      },
+      "b": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S6: only nulls",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": null
+     }
+    ],
+    [
+     "oc",
+     "s/a"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S6: six with a null, one cancelled, four left",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": null,
+      "b": 1,
+      "c": 1,
+      "d": 1,
+      "e": 1,
+      "f": 1
+     }
+    ],
+    [
+     "oc",
+     "s/b"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "m:s{c,d,e,f}",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f"
+   ]
+  },
+  {
+   "name": "S6: deep null among five, one cancelled",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "x": null
+      },
+      "b": 1,
+      "c": 1,
+      "d": 1,
+      "e": 1,
+      "f": 1
+     }
+    ],
+    [
+     "oc",
+     "s/b"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "m:s{c,d,e,f}",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f"
+   ]
+  },
+  {
+   "name": "S6: priority, null child, cancel of the null child",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      ".priority": 1,
+      "a": null,
+      "b": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S6: object written below with a null, then a cancel",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": 1,
+      "b": 1
+     }
+    ],
+    [
+     "o",
+     "s/c",
+     {
+      "x": null,
+      "y": 1
+     }
+    ],
+    [
+     "oc",
+     "s/b"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "m:s{a,c}",
+    "d:s/a",
+    "d:s/c",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S6: object of nulls written below, then a cancel of it",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": 1,
+      "b": 1
+     }
+    ],
+    [
+     "o",
+     "s/c",
+     {
+      "x": null
+     }
+    ],
+    [
+     "oc",
+     "s/c"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f",
+    "d:t"
+   ]
   }
  ],
  "covered": [

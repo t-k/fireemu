@@ -389,6 +389,16 @@ test("the exact delete is sent once; an unknown answer, a refusal or a bad opera
     ],
     ["no operation name", { operation: { done: true } }, /unreviewed delete operation/],
     [
+      "an operation of another region",
+      { operation: { name: `projects/${P}/locations/us-central1/operations/op-1`, done: true } },
+      /unreviewed delete operation/,
+    ],
+    [
+      "an operation name with a path",
+      { operation: { name: `${OPERATION}/../../x`, done: true } },
+      /unreviewed delete operation/,
+    ],
+    [
       "an operation with an error",
       { operation: { name: OPERATION, done: true, error: { code: 9 } } },
       /delete operation failed/,
@@ -677,4 +687,37 @@ test("the named targets keep their literal CLI arguments and resource names (gol
     deployArgs: ["deploy", "--only", "functions:functions-http-oracle:fireemuCallableProbe"],
     deleteArgs: ["functions:delete", "fireemuCallableProbe", "--region", "us-central1", "--force"],
   });
+});
+
+test("the exact delete is counted in the cleanup budget, and a missing function is not deleted again", async () => {
+  const target = spec({ region: "europe-west1" });
+  const world = worldFor(target);
+  const state = { started: true, cleaned: false, target: resolveTarget(target) };
+  await production.cleanupTarget(world.control, target, "/adc", {}, "/run", state, {
+    log: async () => {},
+    sleep: async () => {},
+  });
+  assert.ok(world.calls.filter((c) => c.method === "DELETE").every((c) => c.kind === "cleanup"));
+  assert.ok(
+    world.calls.filter((c) => c.url.includes("/operations/")).every((c) => c.kind === "cleanup"),
+  );
+
+  // the function is gone but its service is not: no function DELETE is sent, the run is residual
+  const calls = [];
+  const control = async (method, url, _b, _kind, allowed = [200]) => {
+    calls.push({ method, url });
+    const answer = url.includes("/services/")
+      ? { status: 200, value: {} }
+      : { status: 404, value: {} };
+    if (!allowed.includes(answer.status)) throw new Error(`status ${answer.status}`);
+    return answer;
+  };
+  const residual = { started: true, cleaned: false, target: resolveTarget(target) };
+  await production.cleanupTarget(control, target, "/adc", {}, "/run", residual, {
+    log: async () => {},
+    sleep: async () => {},
+  });
+  assert.equal(residual.cleaned, false);
+  assert.match(residual.cleanupError, /Cloud Run service remains after delete/);
+  assert.equal(calls.filter((c) => c.method === "DELETE").length, 0);
 });

@@ -123,7 +123,7 @@ export function resolveTarget(target) {
     throw new Error("invalid target spec: a plain object is required");
   }
   for (const key of Reflect.ownKeys(target)) {
-    if (typeof key !== "string" || !SPEC_KEYS.has(key)) {
+    if (!SPEC_KEYS.has(key)) {
       throw new Error(`invalid target spec: unknown field ${String(key)}`);
     }
   }

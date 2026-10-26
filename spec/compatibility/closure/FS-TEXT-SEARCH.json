@@ -413,7 +413,7 @@
     }
   },
   "integratedRegression": {
-    "integrationCommit": "d51c9f6994adcf713546b65dbc9d300194a3a2c0",
+    "integrationCommit": "0ace9f6188ecccb440b9ac42e19857ecba627200",
     "kind": "fs-text-search-replay-comparison-v1",
     "comparisons": [
       {

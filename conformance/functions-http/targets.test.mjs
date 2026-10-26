@@ -731,19 +731,18 @@ test("the image residue check follows the target's region and package names (aft
   const seen = [];
   const control = async (_m, url) => {
     seen.push(url);
-    if (url.endsWith("/europe-west1/repositories/gcf-artifacts/packages?pageSize=1000")) {
-      return {
-        status: 200,
-        value: { packages: [{ name: `${pkg}%2Fcache` }, { name: `${pkg}-other` }] },
-      };
+    if (url.endsWith(`/packages/fireemu--oracle--query__europe--west1__cv14_db_created_v2`)) {
+      return { status: 404, value: {} };
     }
+    if (url.endsWith("%2Fcache")) return { status: 200, value: { name: `${pkg}%2Fcache` } };
     return { status: 200, value: { versions: [{ name: `${pkg}%2Fcache/versions/sha256:x` }] } };
   };
   await assert.rejects(
     () => production.assertNoImageResidue(control, target, "cleanup"),
     /owned image version remains in fireemu--oracle--query__europe--west1__cv14_db_created_v2%2Fcache/,
   );
-  assert.ok(seen[0].includes("/locations/europe-west1/repositories/gcf-artifacts/packages?"));
-  assert.ok(seen[1].includes(`${pkg}%2Fcache/versions`));
-  assert.equal(seen.length, 2, "the package with a longer id is not ours and is not read");
+  assert.equal(seen.length, 3);
+  assert.ok(seen[0].includes("/locations/europe-west1/repositories/gcf-artifacts/packages/"));
+  assert.ok(seen[1].endsWith("%2Fcache"));
+  assert.ok(seen[2].includes(`${pkg}%2Fcache/versions?`));
 });

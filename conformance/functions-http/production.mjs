@@ -1001,27 +1001,20 @@ async function listOwnedVersions(control, target, kind) {
 /**
  * After the function delete no image of the target may remain. Observed: a 2nd gen function delete
  * removes the image package and its `/cache` package service-side (FE stage 2, 2026-09-30 and
- * 2026-10-01; the stage 1 probe, 2026-10-26, found the package absent after the delete). The packages
- * of the repository are listed once and the target's two package names are looked at exactly: a
- * version left in either is a residue to name, not to ignore. An empty package is no residue.
+ * 2026-10-01; the stage 1 probe, 2026-10-26, found the package absent after the delete). The target's
+ * two package names are read exactly (a readable 404 is absent; the repository is never listed, so a
+ * large repository cannot overrun the response bound) and a version left in either is a residue to
+ * name, not to ignore. An empty package is no residue.
  */
 export async function assertNoImageResidue(control, target, kind) {
-  const spec = resolveTarget(target);
-  const response = await control(
-    "GET",
-    `${ARTIFACT_HOST}/v1/${locationOf(spec)}/repositories/gcf-artifacts/packages?pageSize=1000`,
-    undefined,
-    kind,
-  );
-  if (response.value.nextPageToken) throw new Error("Artifact Registry package list is incomplete");
-  const owned = new Set([packageName(target), `${packageName(target)}%2Fcache`]);
-  const present = (response.value.packages ?? [])
-    .map((entry) => entry.name)
-    .filter((name) => owned.has(name));
-  for (const name of present) {
+  const base = packageName(target);
+  for (const name of [base, `${base}%2Fcache`]) {
+    const found = await control("GET", `${ARTIFACT_HOST}/v1/${name}`, undefined, kind, [200, 404]);
+    if (found.status === 404) continue;
+    if (found.value.name !== name) throw new Error("Artifact Registry package name changed");
     const versions = await control(
       "GET",
-      `${ARTIFACT_HOST}/v1/${name}/versions?pageSize=1000`,
+      `${ARTIFACT_HOST}/v1/${name}/versions?pageSize=1000&fields=versions.name,nextPageToken`,
       undefined,
       kind,
     );

@@ -2744,6 +2744,25 @@
         "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (recorded 2026-09-25)"
       }
     },
+    "firestore/rest-error-shapes#runQuery-with-an-unknown-operator": {
+      "documents": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; CHANGELOG.md [Unreleased]",
+      "reason": "Production refuses a REST runQuery with an unknown field-filter operator with a 400 INVALID_ARGUMENT whose message is `Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"<name>\"`, a BadRequest detail and the error in a one-element array (recorded 2026-09-07 and 2026-09-24); the official emulator answers `Payload isn't valid for request.`. fireemu follows production in both profiles.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://firebase.google.com/docs/firestore/reference/rest/v1/StructuredQuery",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-10-27",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/fixtures/firestore/rest-error-shapes.json#runQuery-with-an-unknown-operator",
+        "approvalRecord": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; CHANGELOG.md [Unreleased]",
+        "productionObservation": "conformance/fs-query-index-production.json#fs-query-index/filter-validation/operators-and-values#operator-unknown (full body, recorded 2026-09-24); conformance/firestore-production-matrix.json#errors/rest-shapes#unknown-operator (recorded 2026-09-07)"
+      }
+    },
     "firestore/rest-error-shapes#get-a-missing-document": {
       "documents": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; README.md, \"Gap from the official Firebase Emulator Suite\"",
       "reason": "Production answers a missing document with `Document \"projects/.../documents/...\" not found.` (recorded 2026-09-07); the official emulator says `Document (projects/.../documents/...) not found.`. fireemu follows production (567565bdd).",

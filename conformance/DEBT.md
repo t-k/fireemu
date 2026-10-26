@@ -12,13 +12,9 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - **documented divergence** -- a difference that is intended and written down. These are listed
   for completeness; `check` does gate them, against the recorded fireemu value.
 
-## Debt (1)
+## Debt (0)
 
-### `firestore/rest-error-shapes#runQuery-with-an-unknown-operator`
-
-- oracle: `{"body":{"error":{"code":400,"message":"Payload isn't valid for request.","status":"INVALID_ARGUMENT"}},"status":400}`
-- fireemu: `{"body":[{"error":{"code":400,"message":"unknown field filter operator","status":"INVALID_ARGUMENT"}}],"status":400}`
-
+_No undocumented mismatch is outstanding._
 
 ## Pending: needs a real project (6)
 
@@ -53,7 +49,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it.
 
 
-## Documented divergences (40)
+## Documented divergences (41)
 
 - `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
@@ -119,6 +115,8 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
   documented in: spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)
 - `firestore/rest-error-shapes#runQuery-needing-a-composite-index` -- The official emulator ends a REST runQuery stream with `done: true` on the last response; production omits the field and fireemu follows production.
   documented in: README.md, "Gap from the official Firebase Emulator Suite"
+- `firestore/rest-error-shapes#runQuery-with-an-unknown-operator` -- Production refuses a REST runQuery with an unknown field-filter operator with a 400 INVALID_ARGUMENT whose message is `Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), "<name>"`, a BadRequest detail and the error in a one-element array (recorded 2026-09-07 and 2026-09-24); the official emulator answers `Payload isn't valid for request.`. fireemu follows production in both profiles.
+  documented in: conformance/FIRESTORE-PRODUCTION-MATRIX.md; CHANGELOG.md [Unreleased]
 - `firestore/rest-error-shapes#get-a-missing-document` -- Production answers a missing document with `Document "projects/.../documents/..." not found.` (recorded 2026-09-07); the official emulator says `Document (projects/.../documents/...) not found.`. fireemu follows production (567565bdd).
   documented in: conformance/FIRESTORE-PRODUCTION-MATRIX.md; README.md, "Gap from the official Firebase Emulator Suite"
 - `firestore/rules-decisions#anonymous-read-of-a-closed-document` -- Production answers every Security Rules denial with PERMISSION_DENIED "Missing or insufficient permissions." and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.

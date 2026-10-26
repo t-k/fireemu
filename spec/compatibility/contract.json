@@ -652,14 +652,7 @@
             ],
             "conformance": [
               {
-                "fixture": "firestore/rest-error-shapes",
-                "excludedSteps": [
-                  {
-                    "step": "runQuery-with-an-unknown-operator",
-                    "issue": "docs.local/issues/open/close-firestore-emulator-compatibility-gaps.md",
-                    "reason": "status and canonical code agree; the message differs (the official emulator says \"Payload isn't valid for request.\", fireemu names the unknown operator)"
-                  }
-                ]
+                "fixture": "firestore/rest-error-shapes"
               },
               {
                 "fixture": "firestore/lite-rest-transport"

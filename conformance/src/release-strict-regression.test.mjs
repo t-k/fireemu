@@ -26,6 +26,7 @@ import {
   ALLOWED_MODES,
   EXCLUDED_KINDS,
   EXCLUDED_PARTS,
+  FUNCTIONS_HTTP_LOCK_SUCCESSORS,
   RUNS,
   runEntry,
   assertNoOutboundNetwork,
@@ -976,6 +977,48 @@ test("every departure of the FUNCTIONS-HTTP stand-in fails it", () => {
     const observed = passingFunctions();
     breakIt(observed);
     assert.notDeepEqual(judgeFunctionsHttp(functionsHttp(), observed), [], name);
+  }
+});
+
+const OLD_FUNCTIONS_HTTP_LOCK = "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb";
+
+test("the FUNCTIONS-HTTP stand-in accepts only the listed successor of the recorded fixture lock", () => {
+  const sha256File = (path) =>
+    createHash("sha256")
+      .update(readFileSync(repo(path)))
+      .digest("hex");
+  const current = sha256File("conformance/functions-http/fixtures/package-lock.json");
+  const recorded = { ...functionsHttp(), fixturePackageLockSha256: OLD_FUNCTIONS_HTTP_LOCK };
+  const observed = { ...passingFunctions(), fixturePackageLockSha256: current };
+  // The committed fixture lock is the recorded one or its listed successor, never an unlisted file.
+  assert.ok(
+    current === OLD_FUNCTIONS_HTTP_LOCK ||
+      FUNCTIONS_HTTP_LOCK_SUCCESSORS[OLD_FUNCTIONS_HTTP_LOCK]?.some(
+        (item) => item.sha256 === current,
+      ),
+  );
+  assert.deepEqual(judgeFunctionsHttp(recorded, observed), []);
+  // A successor is listed for one recorded lock only.
+  const other = { ...recorded, fixturePackageLockSha256: "1".repeat(64) };
+  assert.notDeepEqual(judgeFunctionsHttp(other, observed), []);
+  // A lock that is neither recorded nor listed fails.
+  assert.notDeepEqual(
+    judgeFunctionsHttp(recorded, { ...observed, fixturePackageLockSha256: "2".repeat(64) }),
+    [],
+  );
+  // Inherited property names are not recorded digests: a difference, never a throw.
+  for (const key of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    assert.notDeepEqual(
+      judgeFunctionsHttp({ ...recorded, fixturePackageLockSha256: key }, observed),
+      [],
+      key,
+    );
+  }
+  for (const items of Object.values(FUNCTIONS_HTTP_LOCK_SUCCESSORS)) {
+    for (const item of items) {
+      assert.match(item.sha256, /^[0-9a-f]{64}$/);
+      assert.ok(item.reason.length > 20);
+    }
   }
 });
 

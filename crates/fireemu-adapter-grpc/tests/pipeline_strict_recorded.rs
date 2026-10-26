@@ -1985,3 +1985,42 @@ fn a_literal_field_path_past_1500_bytes_is_refused_in_every_position() {
     });
     check(cases);
 }
+
+/// Strict answers `UNIMPLEMENTED`, not fireemu's own stage-registry text, for the argument
+/// checks of stages fireemu does not run: no production row holds `sort("bogus")` or
+/// `remove_fields(1)` (issue strict-pipeline-answers-own-validator-texts-for-unsupported-stages,
+/// probes P6 and P7). The emulator profile does not run those stages either.
+#[test]
+fn strict_does_not_answer_fireemus_own_argument_texts_for_stages_it_does_not_run() {
+    let empty = || stage("select", vec![map(vec![])]);
+    let sort_bogus = || stage("sort", vec![string("bogus")]);
+    let remove_one = || stage("remove_fields", vec![int(1)]);
+    let sort_unrun = "pipeline stage \"sort\" is unsupported locally";
+    let remove_unrun = "pipeline stage \"remove_fields\" is unsupported locally";
+    check(vec![
+        Case {
+            label: "sort(\"bogus\")",
+            stages: vec![sort_bogus()],
+            strict: None,
+            emulator: (501, sort_unrun),
+        },
+        Case {
+            label: "sort(\"bogus\") then select {}",
+            stages: vec![sort_bogus(), empty()],
+            strict: None,
+            emulator: (501, sort_unrun),
+        },
+        Case {
+            label: "remove_fields(1)",
+            stages: vec![remove_one()],
+            strict: None,
+            emulator: (501, remove_unrun),
+        },
+        Case {
+            label: "select {} then remove_fields(1)",
+            stages: vec![empty(), remove_one()],
+            strict: None,
+            emulator: (501, remove_unrun),
+        },
+    ]);
+}

@@ -43248,6 +43248,2585 @@
         }
       }
     },
+    "fs-ent-pipeline/o8d/stages-main": {
+      "corpusDigest": "329185673ac3519de8c51b429510c7d5547e714b2c86529224fd70bbf42fe050",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T16:32:16.197Z",
+      "gitSha": "55bc85c3f5eb063ed7ca06656ea785e881952092",
+      "steps": {
+        "union-other": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "r"
+                    },
+                    "n": {
+                      "integerValue": "10"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "z"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/z",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/y",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-itself": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-then-sort": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "r"
+                    },
+                    "n": {
+                      "integerValue": "10"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "z"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/z",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/y",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-then-limit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-inner-where": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/y",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-inner-select": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "10"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "union-empty-input": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-of-union": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "r"
+                    },
+                    "n": {
+                      "integerValue": "10"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "z"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/z",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/y",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-after-select": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "3"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "2"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "4"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "1"
+                    }
+                  }
+                },
+                {
+                  "fields": {
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  }
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "r"
+                    },
+                    "n": {
+                      "integerValue": "10"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "z"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/z",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "n": {
+                      "integerValue": "11"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sv/y",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "union-int-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected other to be PIPELINE_VALUE, but was INTEGER_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "union-no-arguments": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'union(other: Pipeline)' takes [1..1] argument(s), received 0.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "union-two-arguments": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'union(other: Pipeline)' takes [1..1] argument(s), received 2.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "union-no-stages": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'union(...)' stage must have at least one stage.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unnest-tags": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "t": {
+                      "nullValue": null
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "t": {
+                      "stringValue": "str"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "x"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "y"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-empty-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "unnest-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "t": {
+                      "nullValue": null
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-string": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "t": {
+                      "stringValue": "str"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-index-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "idx": {
+                      "integerValue": "0"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "x"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "idx": {
+                      "integerValue": "1"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "y"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-alias-is-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "stringValue": "x"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "stringValue": "y"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-alias-is-other-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "x"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "y"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-dotted-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "field": "a.b"
+                    },
+                    "reason": "TOP_LEVEL_PROPERTY_PATH_ONLY"
+                  }
+                ],
+                "message": "The nested field reference 'a.b' is not supported in its current use case.\n\nCertain stages like `aggregate(...)` or `unnest(...)` only support assigning to top-level fields. This means you cannot use an alias like 'foo.bar' to assign the result to a nested field. If you want to use an alias that has a dot in it, escape the path with backticks, like `foo.bar`.\n\nDepending on the SDK, this can be done like so:`.distinct(field(\"address.city\").as(\"`address.city`\"))`",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unnest-reserved-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'unnest': field name '__name__' is reserved and can not be overwritten.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unnest-index-is-alias": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Index field `t` cannot be the same name as the alias `t`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unnest-literal-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    },
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    },
+                    "v": {
+                      "integerValue": "2"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-then-where": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "x"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-twice": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "x"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    },
+                    "u": {
+                      "stringValue": "x"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "x"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    },
+                    "u": {
+                      "stringValue": "y"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "y"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    },
+                    "u": {
+                      "stringValue": "x"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "t": {
+                      "stringValue": "y"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    },
+                    "u": {
+                      "stringValue": "y"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "unnest-one-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'unnest(field: Expr, alias: FieldReference, index_field: FieldReference?)' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unnest-three-arguments": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'unnest(field: Expr, alias: FieldReference, index_field: FieldReference?)' takes [2..2] argument(s), received 3.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-documents-2": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-documents-0": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "sample-documents-10": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-documents-negative": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'size' parameter must be non-negative.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-documents-fraction": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected size to be INTEGER_VALUE, but was DOUBLE_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-percent-0": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>"
+            }
+          ]
+        },
+        "sample-percent-50": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-percent-100": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-percent-150": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'size' parameter must be between 0.0 and 1.0.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-percent-negative": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The 'size' parameter must be between 0.0 and 1.0.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-mode-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported Sample Mode: rows",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-mode-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected SampleMode to be STRING_VALUE, but was INTEGER_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-rate-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Expected size to be INTEGER_VALUE, but was STRING_VALUE.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-one-argument": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'sample(size: int64 | double, mode: SampleMode)' takes [2..2] argument(s), received 1.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-three-arguments": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'sample(size: int64 | double, mode: SampleMode)' takes [2..2] argument(s), received 3.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "sample-after-where": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-then-limit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "second": {
+        "sample-documents-2": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-documents-10": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "1"
+                    },
+                    "tags": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "x"
+                          },
+                          {
+                            "stringValue": "y"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/a",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-percent-50": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "2"
+                    },
+                    "tags": {
+                      "arrayValue": {}
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/b",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-after-where": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "3"
+                    },
+                    "tags": {
+                      "nullValue": null
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/c",
+                  "updateTime": "<t2>"
+                },
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "q"
+                    },
+                    "n": {
+                      "integerValue": "4"
+                    },
+                    "tags": {
+                      "stringValue": "str"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/d",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        },
+        "sample-then-limit": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "g": {
+                      "stringValue": "p"
+                    },
+                    "n": {
+                      "integerValue": "5"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/su/e",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
     "fs-ent-pipeline/px0/aliases": {
       "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
       "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",

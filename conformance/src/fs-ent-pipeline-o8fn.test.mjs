@@ -548,3 +548,25 @@ test("the recorded O-8C programs are in the fixture with their own digests and e
   assert.deepEqual(Object.keys(timestamps.second ?? {}), ["timestamp-diff-now"]);
   assert.equal(production.programs["fs-ent-pipeline/o8c/collections-main"].second, undefined);
 });
+
+test("the recorded O-8D program is in the fixture with its own digest and every step", () => {
+  assert.equal(O8D_PROGRAMS.length, 1);
+  for (const program of O8D_PROGRAMS) {
+    const row = production.programs[program.id];
+    assert.ok(row, program.id);
+    assert.equal(row.corpusDigest, programDigest(program), program.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    for (const [step, answer] of Object.entries(row.steps)) {
+      assert.ok(answer.status === 200 || answer.status === 400, `${program.id}#${step}`);
+    }
+  }
+  // Only the five sample rows differ between the two recordings: sample picks at random.
+  const stages = production.programs["fs-ent-pipeline/o8d/stages-main"];
+  assert.deepEqual(Object.keys(stages.second ?? {}).toSorted(), [
+    "sample-after-where",
+    "sample-documents-10",
+    "sample-documents-2",
+    "sample-percent-50",
+    "sample-then-limit",
+  ]);
+});

@@ -16,5 +16,10 @@
     "sharp": "^0.35.3"
   },
   "private": true,
-  "description": "The fireemu documentation site (Astro Starlight), published to GitHub Pages."
+  "description": "The fireemu documentation site (Astro Starlight), published to GitHub Pages.",
+  "pnpm": {
+    "overrides": {
+      "postcss-selector-parser": "^7.1.6"
+    }
+  }
 }

@@ -31,7 +31,13 @@ import {
   validateCorpus,
 } from "./fs-ent-pipeline/harness.mjs";
 import { runCorpus } from "./fs-ent-pipeline/session.mjs";
-import { ceilings, estimatedUsd, programDigest, selectPrograms } from "./fs-query-index/run.mjs";
+import {
+  ceilings,
+  estimatedUsd,
+  localConfigPath,
+  programDigest,
+  selectPrograms,
+} from "./fs-query-index/run.mjs";
 
 const LANE = "fs-ent-pipeline";
 const steps = (program, rpc = "executePipeline") => program.steps.filter((s) => s.rpc === rpc);
@@ -229,6 +235,17 @@ test("O-6 corpus carries no private or run-window values", () => {
   for (const [digits] of text.matchAll(/\b\d{9,}\b/g)) assert.ok(boundaries.has(digits), digits);
   // The only stand-in for a name is the placeholder the harness resolves.
   for (const match of text.matchAll(/\{[a-z]+\}/g)) assert.equal(match[0], "{docs}");
+});
+
+test("a gRPC twin is named for its transport", () => {
+  const twins = O6_PROGRAMS.flatMap((p) => p.steps.filter((s) => s.transport === "grpc"));
+  assert.equal(twins.length, 4);
+  for (const twin of twins) assert.match(twin.id, /-grpc$/);
+  for (const program of O6_PROGRAMS) {
+    for (const s of program.steps) {
+      if (s.id.endsWith("-grpc")) assert.equal(s.transport, "grpc", s.id);
+    }
+  }
 });
 
 test("O-6 programs are deterministic and JSON stable", async () => {
@@ -508,6 +525,18 @@ test("seed/wipe plan: the planned requests equal a simulated run and the databas
   // Every program: a wipe, its seed batches, a wipe; plus the run's final wipe.
   assert.equal(out.harnessRequests, plan.reduce((n, p) => n + p.harnessRequests, 0) + 1);
   assert.equal(fake.calls.length, out.requests + out.harnessRequests);
+  // The plan's totals are the simulated run's: the harness side, the seed and a whole packet.
+  const totals = o6Plan(restOnly);
+  assert.equal(totals.harnessExpected, out.harnessRequests);
+  assert.equal(totals.expectedRequests, 5 + 2 * (out.requests + out.harnessRequests));
+  assert.equal(
+    plan.reduce((n, p) => n + p.seedDocs, 0),
+    totals.seedDocs,
+  );
+  assert.equal(
+    totals.seedDocs,
+    restOnly.reduce((n, p) => n + p.seed.length, 0),
+  );
   for (const program of plan) {
     assert.deepEqual(program.operations.at(0), "wipe");
     assert.deepEqual(program.operations.at(-1), "wipe");
@@ -544,15 +573,287 @@ test("seed/wipe plan: counts for an empty program, a seed of 501 documents and w
 });
 
 test("the dry run has both profiles' configs and the runner reads the override", async () => {
-  const strict = JSON.parse(
-    await readFile(new URL("../fs-ent-pipeline.fireemu.json", import.meta.url)),
-  );
-  const emulator = JSON.parse(
-    await readFile(new URL("../fs-ent-pipeline.emulator.fireemu.json", import.meta.url)),
-  );
+  const read = async (name) => JSON.parse(await readFile(new URL(`../${name}`, import.meta.url)));
+  const strict = await read("fs-ent-pipeline.fireemu.json");
+  const emulator = await read("fs-ent-pipeline.emulator.fireemu.json");
   assert.equal(strict.profile, "strict");
   assert.equal(emulator.profile, "emulator");
   assert.deepEqual(emulator.firestore, strict.firestore);
-  const runner = await readFile(new URL("./fs-query-index/run.mjs", import.meta.url), "utf8");
-  assert.match(runner, /FS_QUERY_INDEX_LOCAL_CONFIG/);
+  const lane = { localConfig: "fs-ent-pipeline.fireemu.json" };
+  const own = localConfigPath({}, lane);
+  assert.ok(own.endsWith("/conformance/fs-ent-pipeline.fireemu.json"), own);
+  assert.equal(localConfigPath({ FS_QUERY_INDEX_LOCAL_CONFIG: "" }, lane), own);
+  assert.equal(localConfigPath({ FS_QUERY_INDEX_LOCAL_CONFIG: "/x/e.json" }, lane), "/x/e.json");
+  assert.ok(localConfigPath({ FS_QUERY_INDEX_LOCAL_CONFIG: "e.json" }, lane).startsWith("/"));
+});
+
+// --- the case table decoded back ---
+
+const stagesOf = (s) => s.body.structuredPipeline.pipeline.stages;
+const literalInt = (value) => Number(value.integerValue);
+
+test("each sort combination step decodes back to its PICT row", () => {
+  const combos = O6_AREAS.sort.find((p) => p.id === `${O6_PREFIX}sort-combos`);
+  const keyPaths = {
+    tied: { plain: "g", aliased: "g2" },
+    unique: { plain: "n", aliased: "n2" },
+    name: { plain: "__name__", aliased: "__name__" },
+  };
+  for (const [index, row] of SORT_COMBOS.entries()) {
+    const [pre, direction, key, post] = row;
+    const list = stagesOf(combos.steps[index]);
+    assert.equal(list[0].args[0].referenceValue, "/cb");
+    const at = list.findIndex((s) => s.name === "sort");
+    // Before the sort: nothing, a where on n, an aliasing select, or a select that drops n and g.
+    const before = list.slice(1, at);
+    if (pre === "none") assert.deepEqual(before, []);
+    if (pre === "where") {
+      assert.deepEqual(
+        before.map((s) => s.name),
+        ["where"],
+      );
+      assert.equal(before[0].args[0].functionValue.name, "greater_than");
+      assert.deepEqual(before[0].args[0].functionValue.args, [
+        { fieldReferenceValue: "n" },
+        { integerValue: "1" },
+      ]);
+    }
+    if (pre === "select-alias") {
+      assert.deepEqual(before[0].args[0].mapValue.fields, {
+        n2: { fieldReferenceValue: "n" },
+        g2: { fieldReferenceValue: "g" },
+      });
+    }
+    if (pre === "select-drop") {
+      assert.deepEqual(before[0].args[0].mapValue.fields, { tag: { fieldReferenceValue: "tag" } });
+    }
+    const path = keyPaths[key][pre === "select-alias" ? "aliased" : "plain"];
+    const order = list[at].args[0].mapValue.fields;
+    assert.equal(list[at].args.length, 1);
+    assert.deepEqual(order.expression, { fieldReferenceValue: path }, row.join("-"));
+    assert.equal(order.direction.stringValue, direction === "asc" ? "ascending" : "descending");
+    // After the sort.
+    const after = list.slice(at + 1);
+    if (post === "none") assert.deepEqual(after, []);
+    if (post === "limit") {
+      assert.deepEqual(
+        after.map((s) => s.name),
+        ["limit"],
+      );
+      assert.equal(literalInt(after[0].args[0]), 3);
+    }
+    if (post === "offset-limit") {
+      assert.deepEqual(
+        after.map((s) => s.name),
+        ["offset", "limit"],
+      );
+      assert.deepEqual(
+        after.map((s) => literalInt(s.args[0])),
+        [1, 3],
+      );
+    }
+    if (post === "select") {
+      assert.deepEqual(
+        after.map((s) => s.name),
+        ["select"],
+      );
+      assert.deepEqual(after[0].args[0].mapValue.fields, { k: { fieldReferenceValue: path } });
+    }
+  }
+});
+
+test("the documents of the kind groups are numbered from 01 and reference their own collection", () => {
+  const within = O6_AREAS.sort.find((p) => p.id === `${O6_PREFIX}sort-kinds-within`);
+  const ids = (collection) =>
+    within.seed.filter(([name]) => name.startsWith(`${collection}/`)).map(([name]) => name);
+  assert.deepEqual(
+    ids("sb"),
+    ["01", "02", "03", "04", "05", "06"].map((n) => `sb/b${n}`),
+  );
+  assert.equal(ids("sn").at(-1), "sn/n15");
+  // Every document of a kind group holds its value in `v`, the field the steps sort by.
+  for (const [name, fields] of within.seed) assert.deepEqual(Object.keys(fields), ["v"], name);
+  assert.equal(ids("sn").at(0), "sn/n01");
+  // The 14 kind documents refer to a sibling of their own collection.
+  for (const [group, prefix] of [
+    ["sort-kinds-cross", "sk"],
+    ["where-functions-kinds", "lk"],
+  ]) {
+    const program = O6_PROGRAMS.find((p) => p.id === `${O6_PREFIX}${group}`);
+    assert.equal(program.seed.length, 15);
+    const reference = program.seed.find(([name]) => name === `${prefix}/d11`)[1].v;
+    assert.deepEqual(reference, { referenceValue: `{docs}/${prefix}/d01` });
+    // The document without `v` has another field, so it is a document, not an empty one.
+    assert.deepEqual(Object.keys(program.seed.find(([name]) => name === `${prefix}/d15`)[1]), [
+      "w",
+    ]);
+  }
+  // The vector group is written by one commit step before its first read.
+  const vectors = within.steps.findIndex((s) => s.id === "seed-sv");
+  assert.equal(vectors, 0);
+  assert.equal(within.steps[0].body.writes.length, 6);
+  assert.equal(within.steps[1].id, "sn-asc");
+});
+
+test("the result-order group writes in a fixed shuffled order and rewrites, deletes and recreates", () => {
+  const writes = O6_PROGRAMS.find((p) => p.id === `${O6_PREFIX}order-writes`);
+  const ids = writes.steps.map((s) => s.id);
+  assert.deepEqual(ids.slice(0, 8), [
+    "write-1-d10",
+    "write-2-d2",
+    "write-3-d1",
+    "write-4-d1",
+    "write-5-a",
+    "write-6-z",
+    "write-7-b9",
+    "write-8-x-y",
+  ]);
+  const names = writes.steps.slice(0, 8).map((s) => s.body.writes[0].update.name);
+  assert.deepEqual(
+    names,
+    ["d10", "d2", "d1", "D1", "a", "z", "b9", "x_y"].map((id) => `{docs}/ow/${id}`),
+  );
+  assert.deepEqual(
+    writes.steps.slice(0, 8).map((s) => literalInt(s.body.writes[0].update.fields.n)),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  // The rewrite touches the first document, the delete and the recreate the second.
+  const byId = Object.fromEntries(writes.steps.map((s) => [s.id, s]));
+  assert.equal(byId["rewrite-d10"].body.writes[0].update.name, "{docs}/ow/d10");
+  assert.equal(literalInt(byId["rewrite-d10"].body.writes[0].update.fields.n), 99);
+  assert.deepEqual(byId["delete-d2"].body, { writes: [{ delete: "{docs}/ow/d2" }] });
+  assert.equal(byId["recreate-d2"].body.writes[0].update.name, "{docs}/ow/d2");
+  assert.ok(ids.indexOf("delete-d2") < ids.indexOf("recreate-d2"));
+  assert.ok(ids.indexOf("rewrite-d10") < ids.indexOf("bare-after-rewrite"));
+  const batch = O6_PROGRAMS.find((p) => p.id === `${O6_PREFIX}order-batch`);
+  assert.equal(batch.seed.length, 12);
+  assert.deepEqual(
+    batch.seed.slice(0, 3).map(([name]) => name),
+    ["ob/k07", "ob/k02", "ob/k11"],
+  );
+});
+
+test("a group without a seed gets an empty one, and an update of a seeded document is not a new document", () => {
+  const [program] = defineArea("x", [{ id: "g", steps: [] }]);
+  assert.deepEqual(program.seed, []);
+  const plan = seedWipePlan({
+    id: `${O6_PREFIX}x-g`,
+    seed: [["o/a", {}]],
+    steps: [
+      {
+        id: "u",
+        rpc: "commit",
+        body: { writes: [{ update: { name: "{docs}/o/a", fields: {} } }] },
+      },
+      { id: "r", rpc: "executePipeline", body: {} },
+    ],
+  });
+  // One document is left to delete: a wipe read, one seed batch, one delete round and a closing
+  // read. The seed's name has no `{docs}/` prefix and the update's has; they are one document.
+  assert.equal(plan.harnessRequests, 1 + 1 + 2 + 1);
+  assert.deepEqual(plan.operations, ["wipe", "seed", "steps", "wipe"]);
+});
+
+test("multi-key sort steps carry their orderings in order", () => {
+  const program = O6_PROGRAMS.find((p) => p.id === `${O6_PREFIX}sort-multi-key`);
+  const keys = (id) =>
+    stagesOf(program.steps.find((s) => s.id === id))[1].args.map((arg) => [
+      arg.mapValue.fields.expression.fieldReferenceValue,
+      arg.mapValue.fields.direction.stringValue,
+    ]);
+  assert.deepEqual(keys("ab-asc-desc"), [
+    ["a", "ascending"],
+    ["b", "descending"],
+  ]);
+  assert.deepEqual(keys("abc"), [
+    ["a", "ascending"],
+    ["b", "ascending"],
+    ["c", "descending"],
+  ]);
+  assert.deepEqual(keys("a-then-name-desc"), [
+    ["a", "ascending"],
+    ["__name__", "descending"],
+  ]);
+  const wire = O6_PROGRAMS.find((p) => p.id === `${O6_PREFIX}sort-wire-errors`);
+  assert.equal(stagesOf(wire.steps.find((s) => s.id === "second-arg-bad"))[1].args.length, 2);
+  assert.equal(stagesOf(wire.steps.find((s) => s.id === "no-args"))[1].args.length, 0);
+});
+
+/**
+ * The frozen table: program ids in recording order and the digest of each program (the fixture's
+ * `corpusDigest` once recorded). Changing a case is a new freeze: update these in the same
+ * commit as the case, so the packet's pins and the corpus never differ unseen.
+ */
+const FROZEN = [
+  [
+    "fs-ent-pipeline/o6/sort-kinds-cross",
+    "dc7c3e2c20609c3dbeeae184a26be14c91052ad43db2ff53781fb9497fb1feb2",
+  ],
+  [
+    "fs-ent-pipeline/o6/sort-kinds-within",
+    "93492c3ec818b372a4153717e9ad9fe7f4dbd0b403be2e2fcc154ca548372b4d",
+  ],
+  [
+    "fs-ent-pipeline/o6/sort-missing-null",
+    "eaffdbd2052014e3a3afe65ea1f4e1c82c33f4cffbbed2f66502d14b11e1fa57",
+  ],
+  [
+    "fs-ent-pipeline/o6/sort-ties",
+    "a0913f10b75ff85dd6b131cdb242b8d772f7634bf77b0b5a99ae07c9a251636d",
+  ],
+  [
+    "fs-ent-pipeline/o6/sort-multi-key",
+    "731b7d0f2ccdf1b5ca4c2c2a4b4da94907a8366c6a88d74e0fa0beb59b146f77",
+  ],
+  [
+    "fs-ent-pipeline/o6/sort-expr-keys",
+    "3cd26cf0a25d3cf113184cbf8699b4227f2822ab31f692154c4883826e3336a0",
+  ],
+  [
+    "fs-ent-pipeline/o6/sort-wire-errors",
+    "6516598dbd13c74ff8191343940d9d66873343697c4282fae2229ca3e761a48f",
+  ],
+  [
+    "fs-ent-pipeline/o6/sort-combos",
+    "cd60ab379f46b4464d68b4146e4270573557b6b4255a10b28d67369d5b9bb20d",
+  ],
+  [
+    "fs-ent-pipeline/o6/stage-order-relaxed",
+    "07598bea674c58d95d70e6ec2470396531de75da2de249ad6d1bdd5cd1ac5465",
+  ],
+  [
+    "fs-ent-pipeline/o6/where-functions-truth",
+    "5582e8524bbdee2e7f3837f6507c40543d6d4667695290ae5c1c1438a59ca422",
+  ],
+  [
+    "fs-ent-pipeline/o6/where-functions-non-boolean",
+    "c56bd0cffc8c119daa2c21781d0fa793cb9d296c25e6d860cda27fb71c628d3d",
+  ],
+  [
+    "fs-ent-pipeline/o6/where-functions-kinds",
+    "2f81c4298516ce68e2e0ae4ff201b8ac7835e5a11da53e5ca881cf68061b9f11",
+  ],
+  [
+    "fs-ent-pipeline/o6/where-functions-arrays",
+    "397a0dd058efffe6d78b364fa414cb4b2ccefcc97b0112f3b5686f565c4d354e",
+  ],
+  [
+    "fs-ent-pipeline/o6/where-functions-equal-any",
+    "e08ebabf527694b7868e34e58d118b53d68b1e59877e5912d7bb512f1fcd8c14",
+  ],
+  [
+    "fs-ent-pipeline/o6/order-writes",
+    "cba5791dc9b12b65dce2f947cb7bc0b8df1bc2187ca0f9e4cacf882d1bbc74fc",
+  ],
+  [
+    "fs-ent-pipeline/o6/order-batch",
+    "ea31f77be51976d3e1690dbdda4a1b3a962b1fd67db85624cec7ee8429ba9ea1",
+  ],
+];
+
+test("the O-6 table is the frozen one", () => {
+  assert.deepEqual(
+    O6_PROGRAMS.map((p) => [p.id, programDigest(p)]),
+    FROZEN,
+  );
 });

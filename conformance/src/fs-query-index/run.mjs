@@ -81,10 +81,16 @@ const FIXTURE = join(CONFORMANCE_DIR, LANE.fixture);
 // A lane without an index file (the Enterprise pipeline lane) records without index checks.
 const INDEXES = LANE.indexes ? join(CONFORMANCE_DIR, LANE.indexes) : null;
 const DATABASE_ID = LANE.database ?? DATABASE;
-// FS_QUERY_INDEX_LOCAL_CONFIG names another fireemu config (the emulator profile's) for a local run.
-const LOCAL_CONFIG = process.env.FS_QUERY_INDEX_LOCAL_CONFIG
-  ? resolvePath(process.env.FS_QUERY_INDEX_LOCAL_CONFIG)
-  : join(CONFORMANCE_DIR, LANE.localConfig);
+/**
+ * The fireemu config of a local run: the lane's, or the one FS_QUERY_INDEX_LOCAL_CONFIG names
+ * (the emulator profile's, for the pipeline lane's dry run).
+ */
+export function localConfigPath(env = process.env, lane = LANE) {
+  return env.FS_QUERY_INDEX_LOCAL_CONFIG
+    ? resolvePath(env.FS_QUERY_INDEX_LOCAL_CONFIG)
+    : join(CONFORMANCE_DIR, lane.localConfig);
+}
+const LOCAL_CONFIG = localConfigPath();
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", LANE.id);
 const TASK_ID = LANE.taskId;
 const ADMIN_ORIGIN = "https://firestore.googleapis.com/v1";

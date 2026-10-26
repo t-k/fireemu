@@ -1066,6 +1066,22 @@ const caseCount = (recording) =>
     0,
   );
 
+/**
+ * Fixture package-lock.json digests that stand in for the one the FUNCTIONS-HTTP comparison recorded,
+ * keyed by the recorded digest. The recorded evidence is history and is not rewritten; a patch-level
+ * dependency update of the fixture is listed here, with the proof that the strict recording is
+ * byte-identical, instead of replacing the recorded digest. Anything not listed is refused.
+ */
+export const FUNCTIONS_HTTP_LOCK_SUCCESSORS = {
+  "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb": [
+    {
+      sha256: "bcec0509ef824246fc0773859a02561ef178cfd59ede9aab5d39fbcfc178485d",
+      reason:
+        "body-parser 2.3.0 to 2.4.0 and qs 6.16.0 to 6.16.1 (security patches inside firebase-functions' ranges); check-local on the new lock under Node 22.22.1 reproduced the recorded strict recording sha256 92e9ea00...",
+    },
+  ],
+};
+
 /** The FUNCTIONS-HTTP stand-in: the local strict recording is the lane's bytes. */
 export function judgeFunctionsHttp(expected, observed) {
   const differences = [];
@@ -1084,11 +1100,16 @@ export function judgeFunctionsHttp(expected, observed) {
     expected.fixtureIndexSha256,
     observed.fixtureIndexSha256,
   );
+  const lockSuccessors = (
+    FUNCTIONS_HTTP_LOCK_SUCCESSORS[expected.fixturePackageLockSha256] ?? []
+  ).map((item) => item.sha256);
   expectEqual(
     differences,
     "fixture package-lock.json",
     expected.fixturePackageLockSha256,
-    observed.fixturePackageLockSha256,
+    lockSuccessors.includes(observed.fixturePackageLockSha256)
+      ? expected.fixturePackageLockSha256
+      : observed.fixturePackageLockSha256,
   );
   if (!/^\s*profile: strict\b/m.test(observed.log ?? "")) {
     differences.push("the daemon did not report the strict profile");

@@ -21,6 +21,43 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
+/// Programs recorded in O-6 and O-7 (2026-10-26: sort, relaxed stage order, logical and recorded
+/// functions in a `where`, result order without a sort; aggregate, distinct, `add_fields`,
+/// `remove_fields`, `collection_group`, documents) that fireemu does not answer like
+/// production yet. They are replayed and compared like the rest, but a difference in them is
+/// not an unexpected one; each program must still differ in at least one row, so remove a
+/// program from this list when the work that makes it match lands. The comparison summary is in
+/// the lane's `o6-comparison.md`; none of these rows is a compatibility claim.
+const PENDING_PROGRAMS: &[&str] = &[
+    "fs-ent-pipeline/o6/sort-kinds-cross",
+    "fs-ent-pipeline/o6/sort-kinds-within",
+    "fs-ent-pipeline/o6/sort-missing-null",
+    "fs-ent-pipeline/o6/sort-ties",
+    "fs-ent-pipeline/o6/sort-multi-key",
+    "fs-ent-pipeline/o6/sort-expr-keys",
+    "fs-ent-pipeline/o6/sort-wire-errors",
+    "fs-ent-pipeline/o6/sort-combos",
+    "fs-ent-pipeline/o6/stage-order-relaxed",
+    "fs-ent-pipeline/o6/where-functions-truth",
+    "fs-ent-pipeline/o6/where-functions-non-boolean",
+    "fs-ent-pipeline/o6/where-functions-kinds",
+    "fs-ent-pipeline/o6/where-functions-arrays",
+    "fs-ent-pipeline/o6/where-functions-equal-any",
+    "fs-ent-pipeline/o6/order-writes",
+    "fs-ent-pipeline/o6/order-batch",
+    "fs-ent-pipeline/o7/aggregate-empty",
+    "fs-ent-pipeline/o7/aggregate-basic",
+    "fs-ent-pipeline/o7/aggregate-numbers",
+    "fs-ent-pipeline/o7/aggregate-kinds",
+    "fs-ent-pipeline/o7/aggregate-group-keys",
+    "fs-ent-pipeline/o7/aggregate-aliases",
+    "fs-ent-pipeline/o7/aggregate-args",
+    "fs-ent-pipeline/o7/distinct-main",
+    "fs-ent-pipeline/o7/fields-main",
+    "fs-ent-pipeline/o7/inputs-collection-group",
+    "fs-ent-pipeline/o7/inputs-documents",
+];
+
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
@@ -503,7 +540,10 @@ fn normalize(value: &Value) -> Value {
             for (key, inner) in map {
                 let inner = match key.as_str() {
                     "doubleValue" | "latitude" | "longitude" => double(inner),
-                    "referenceValue" | "name" => json!(relative(inner.as_str().unwrap())),
+                    // A field may be called `name` (an alias in an aggregate or distinct answer).
+                    "referenceValue" | "name" if inner.is_string() => {
+                        json!(relative(inner.as_str().unwrap()))
+                    }
                     "timestampValue" => json!(timestamp(inner.as_str().unwrap())),
                     "createTime" | "updateTime" => json!("<t>"),
                     "message" if inner.is_string() => json!(message(inner.as_str().unwrap())),
@@ -852,10 +892,25 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         }
         assert!(compared > 200, "{compared}");
         let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
+        let pending = |row: &str| {
+            let program = row.split('#').next().unwrap_or(row);
+            PENDING_PROGRAMS.contains(&program)
+        };
+        for program in PENDING_PROGRAMS {
+            if !differing
+                .iter()
+                .any(|(row, _, _)| row.split('#').next() == Some(*program))
+            {
+                failures.push(format!(
+                    "strict={strict}: pending program no longer differs, remove it: {program}"
+                ));
+            }
+        }
         let unexpected: Vec<_> = differing
             .iter()
             .filter(|(row, _, _)| {
                 !known(row)
+                    && !pending(row)
                     && !debts
                         .get(row)
                         .is_some_and(|debt| strict || debt.emulator.is_some())

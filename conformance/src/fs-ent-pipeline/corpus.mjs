@@ -22,25 +22,22 @@ import {
   ts,
   vec,
 } from "../fs-query-index/values.mjs";
+import {
+  collection,
+  fld,
+  fn,
+  grpcStep,
+  list,
+  pipeline,
+  seedCommit,
+  select,
+  stage,
+  step,
+} from "./builders.mjs";
+import { O6_PROGRAMS } from "./o6-corpus.mjs";
+import { O7_PROGRAMS } from "./o7-corpus.mjs";
 
-// --- expression builders (proto3 JSON `Value`s) ---
-
-/** A function call. */
-export const fn = (name, ...args) => ({ functionValue: { name, args } });
-/** A field reference. */
-export const fld = (path) => ({ fieldReferenceValue: path });
-/** A constant array (arrayValue literal, as the SDK's ListOfExprs sends it). */
-const list = (...values) => ({ arrayValue: { values } });
-
-const pipeline = (...stages) => ({ structuredPipeline: { pipeline: { stages } } });
-const stage = (name, ...args) => ({ name, args });
-const collection = (path) => stage("collection", { referenceValue: `/${path}` });
-const select = (aliases) => stage("select", { mapValue: { fields: aliases } });
-
-/** A REST executePipeline step. */
-const step = (id, body, extra = {}) => ({ id, rpc: "executePipeline", body, ...extra });
-/** The same step over gRPC. */
-const grpcStep = (id, body) => step(id, body, { transport: "grpc" });
+export { fld, fn, seedCommit };
 
 // --- the probe document ---
 
@@ -282,20 +279,6 @@ const resultProgram = {
     grpcStep(`${label}-grpc`, body),
   ]),
 };
-
-/**
- * A seed written by a recorded commit step rather than by the harness: the request and
- * production's answer become rows of the fixture, and a refusal is that step's row instead of a
- * fatal harness error that ends the recording. New programs seed vectors this way.
- */
-export function seedCommit(id, path, fields) {
-  if (path.startsWith("/")) throw new Error(`${id}: a seed path is relative to {docs}`);
-  const segments = path.split("/");
-  if (segments.length % 2 !== 0 || segments.includes("")) {
-    throw new Error(`${id}: ${path} is not a document path`);
-  }
-  return { id, rpc: "commit", body: { writes: [{ update: { name: `{docs}/${path}`, fields } }] } };
-}
 
 const holdsVector = (value) =>
   value !== null &&
@@ -1866,4 +1849,9 @@ export const PROGRAMS = [
   o5FunctionNameProgram,
   o5AppendixProgram,
   o5SubcollectionProgram,
+  // O-6 (sort, stage order, functions in where, result order): see o6-corpus.mjs.
+  ...O6_PROGRAMS,
+  // O-7 (aggregate, distinct, add_fields, remove_fields, the collection_group and documents
+  // inputs): see o7-corpus.mjs.
+  ...O7_PROGRAMS,
 ];

@@ -34,6 +34,7 @@ fn every_recorded_refusal_has_a_shape() {
     let mut o6 = 0;
     let mut o7 = 0;
     let mut o8a = 0;
+    let mut o8b = 0;
     let mut raw = 0;
     let mut eligible = 0;
     let mut excluded_500 = 0;
@@ -80,6 +81,8 @@ fn every_recorded_refusal_has_a_shape() {
                 o7 += 1;
             } else if id.starts_with("fs-ent-pipeline/o8a/") {
                 o8a += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8b/") {
+                o8b += 1;
             } else {
                 original += 1;
             }
@@ -105,10 +108,13 @@ fn every_recorded_refusal_has_a_shape() {
             );
         }
     }
-    assert_eq!((original, o5, o6, o7, o8a, raw), (98, 291, 21, 54, 3, 18));
-    let refused = original + o5 + o6 + o7 + o8a;
-    assert_eq!(refused, 467);
-    assert_eq!(eligible, 467);
+    assert_eq!(
+        (original, o5, o6, o7, o8a, o8b, raw),
+        (98, 291, 21, 54, 3, 80, 18)
+    );
+    let refused = original + o5 + o6 + o7 + o8a + o8b;
+    assert_eq!(refused, 547);
+    assert_eq!(eligible, 547);
     assert_eq!(excluded_500, 6);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.

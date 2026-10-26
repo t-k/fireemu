@@ -507,3 +507,20 @@ test("the functions whose refusal names no count are called with the counts prod
     assert.ok(!cases.some((k) => k.kind === "arity" && k.args.length === count), name);
   }
 });
+
+test("the recorded O-8B programs are in the fixture with their own digests and every step", () => {
+  assert.equal(O8B_PROGRAMS.length, 2);
+  for (const program of O8B_PROGRAMS) {
+    const row = production.programs[program.id];
+    assert.ok(row, program.id);
+    assert.equal(row.corpusDigest, programDigest(program), program.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    // Every step answered: nothing was left unsettled (status 0, or a server error).
+    for (const [step, answer] of Object.entries(row.steps)) {
+      assert.ok(
+        answer.status === 200 || answer.status === 400,
+        `${program.id}#${step}: ${answer.status}`,
+      );
+    }
+  }
+});

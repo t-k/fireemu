@@ -33249,6 +33249,4969 @@
         }
       }
     },
+    "fs-ent-pipeline/o8b/math-main": {
+      "corpusDigest": "88aa0e92db55d61fb7a341f4e4b5ce298fada5fe45bed2a4e3d8bd7034864d48",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T14:36:05.644Z",
+      "gitSha": "45e861687c93964708a7ab9bbea5bc2172349735",
+      "steps": {
+        "add-ints": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-doubles": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 3.75
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-mixed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 2.5
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-overflow": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "add(...) int64 overflow",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-underflow": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "add(...) int64 overflow",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-inf-ninf": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-negative-zeros": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "-0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "add-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "add"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function add(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-bool": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "add"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function add(...) requires `Number` but got `BOOLEAN`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "add-three": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 3 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "subtract-ints": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "subtract-doubles": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1.25
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "subtract-mixed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1.5
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "subtract-underflow": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "subtract(...) int64 overflow",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "subtract-overflow": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "subtract(...) int64 overflow",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "subtract-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "subtract-inf-inf": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "subtract-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "subtract-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "subtract-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "subtract"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function subtract(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "subtract-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'subtract[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "multiply-ints": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "42"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-doubles": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 3
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-mixed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-overflow": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "multiply(...) overflow error",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "multiply-min-times-minus-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "multiply(...) overflow error",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "multiply-zero-times-inf": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-negative-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "-0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "multiply-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "multiply"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function multiply(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "multiply-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'multiply[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "divide-exact": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-inexact": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-3"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-doubles": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 3.5
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-zero-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "divide(...) requires a non-zero right operand",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "divide-zero-double": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "Infinity"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-zero-by-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-min-by-minus-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-9223372036854775808"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "divide-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "divide"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function divide(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "divide-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'divide[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "mod-ints": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-negative-dividend": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-negative-divisor": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-doubles": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1.5
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-zero-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "mod(...) requires a non-zero divisor",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "mod-zero-double": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-min-by-minus-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "mod-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "mod"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function mod(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "mod-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'mod[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "abs-positive": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-min": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "abs(...) cannot be used on minimum Int64 value (-2^63)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "abs-double": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 2.5
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-negative-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 0
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-inf": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "Infinity"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "abs-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "abs"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function abs(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "abs-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'abs[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "round-half-up": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 3
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-half-down": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": -3
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-half-small": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-int": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-places": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1.23
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-negative-places": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1200
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-int-negative-places": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1300"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-huge-places": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1.5
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-double-places": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "round-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "round-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "round"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function round(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "round-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'round' does not accept 0 argument(s). Valid options are:\n- round[T <: number](number: T): T with [1..1] argument(s).\n- round[T <: number](number: T, places: int64): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "round-three": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'round' does not accept 3 argument(s). Valid options are:\n- round[T <: number](number: T): T with [1..1] argument(s).\n- round[T <: number](number: T, places: int64): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "floor-positive": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 2
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "floor-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": -3
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "floor-int": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "floor-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "floor-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "floor-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "floor-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "floor"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function floor(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "floor-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'floor[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "ceil-positive": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 3
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ceil-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": -2
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ceil-int": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "5"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ceil-nan": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "NaN"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ceil-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ceil-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ceil-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "ceil"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function ceil(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "ceil-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'ceil[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "pow-ints": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1024
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-zero-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 1
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-negative-exponent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 0.25
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-fractional-exponent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 2
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-negative-base-fraction": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "pow(...) the base cannot be negative when the exponent is not an integer.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "pow-overflow": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": "Infinity"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-int-result-type": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "doubleValue": 8
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "pow-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "pow"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function pow(...) requires `Number` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "pow-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'pow(base: number, exponent: number): float64' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o8b/strings-main": {
+      "corpusDigest": "2ab16dd711e2b1f806597c3c1aa971c00540967d5f9ff86af9eef7a8dbd57b66",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T14:36:05.644Z",
+      "gitSha": "45e861687c93964708a7ab9bbea5bc2172349735",
+      "steps": {
+        "concat-two": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "abcd"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-three": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "abc"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-fields": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "Hello World!"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "héllo ☃😀x"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "bytesValue": "AQI="
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-arrays": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "concat-string-bytes": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "concat"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function concat(...) requires `STRING` but got `BYTES`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "concat-string-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "concat"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function concat(...) requires `STRING` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "concat-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'concat[T: string | bytes | array[any]](input: T*): T' takes [2..+∞) argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "to-lower-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "abc"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "hello world"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "àé☃"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-dotted-capital-i": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "i̇"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "bytesValue": "AQ=="
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-lower-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "to_lower"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function to_lower(...) requires `String | Bytes` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "to-lower-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'to_lower[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "to-lower-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'to_lower[T: string | bytes](input: T): T' takes [1..1] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "to-upper-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "ABC"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-upper-sharp-s": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "SS"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-upper-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "ÀÉ☃"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-upper-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-upper-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-upper-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-upper-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "bytesValue": "AQ=="
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "to-upper-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "to_upper"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function to_upper(...) requires `String | Bytes` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "to-upper-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'to_upper[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "to-upper-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'to_upper[T: string | bytes](input: T): T' takes [1..1] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "starts-with-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-false": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-empty-prefix": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-empty-value": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-prefix-longer": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-case": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-null-value": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-null-prefix": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-absent-value": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-absent-prefix": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "starts-with-int-value": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "starts_with"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function starts_with(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "starts-with-int-prefix": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "starts_with"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function starts_with(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "starts-with-bytes": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "starts_with"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function starts_with(...) requires `String` but got `BYTES`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "starts-with-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'starts_with(value: string, prefix: string): boolean' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "ends-with-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-false": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-empty-suffix": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-suffix-longer": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-null-value": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-null-suffix": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ends-with-int-value": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "ends_with"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function ends_with(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "ends-with-bytes": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "ends_with"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function ends_with(...) requires `String` but got `BYTES`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "ends-with-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'ends_with(value: string, postfix: string): boolean' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "string-contains-true": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "string-contains-false": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "string-contains-empty-substring": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "string-contains-case": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "string-contains-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "string-contains-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "string-contains-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "string-contains-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "string_contains"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function string_contains(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "string-contains-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_contains(value: string, substring: string): boolean' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "string-contains-three": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'string_contains(value: string, substring: string): boolean' takes [2..2] argument(s), but 3 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "char-length-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "char-length-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "char-length-unicode-field": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "8"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "char-length-emoji": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "char-length-combining": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "char-length-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "char-length-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "char-length-bytes": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "char_length"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function char_length(...) requires `String` but got `BYTES`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "char-length-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "char_length"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function char_length(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "char-length-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'char_length(str: string): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "char-length-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'char_length(str: string): int64' takes [1..1] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "substring-from": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "World"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-with-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "Hello"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-negative-position": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "World"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-position-beyond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-zero-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-negative-length": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "substring(...) length must be non-negative",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "substring-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "él"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-huge-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "Hello World"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-double-position": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "substring-null-input": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-null-position": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-absent-input": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-int-input": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "substring"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function substring(...) requires `String | Bytes` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "substring-bytes-input": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "bytesValue": "AgM="
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "substring-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'substring' does not accept 1 argument(s). Valid options are:\n- substring[T: string | bytes](input: T, position: int64): T with [2..2] argument(s).\n- substring[T: string | bytes](input: T, position: int64, length: int64): T with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "trim-default": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "pad"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-custom-chars": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-multi-char-set": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "c"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-only-spaces": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-tabs-newlines": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-no-break-space": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "trim"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function trim(...) requires `String | Bytes` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "trim-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "bytesValue": "AQ=="
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "trim-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'trim' does not accept 0 argument(s). Valid options are:\n- trim[T: string | bytes](input: T): T with [1..1] argument(s).\n- trim[T: string | bytes](input: T, values_to_trim: T): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "trim-three": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'trim' does not accept 3 argument(s). Valid options are:\n- trim[T: string | bytes](input: T): T with [1..1] argument(s).\n- trim[T: string | bytes](input: T, values_to_trim: T): T with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "ltrim-default": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "pad  "
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ltrim-custom-chars": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "axx"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ltrim-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ltrim-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "ltrim-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "ltrim"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function ltrim(...) requires `String | Bytes` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "rtrim-default": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "  pad"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "rtrim-custom-chars": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "xxa"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "rtrim-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "rtrim-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "rtrim-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "rtrim"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function rtrim(...) requires `String | Bytes` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "split-comma": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "stringValue": "b"
+                          },
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": "c"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-empty-delimiter": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "stringValue": ","
+                          },
+                          {
+                            "stringValue": "b"
+                          },
+                          {
+                            "stringValue": ","
+                          },
+                          {
+                            "stringValue": ","
+                          },
+                          {
+                            "stringValue": "c"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-not-found": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a,b,,c"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-empty-input": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": ""
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-consecutive": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": ""
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-one-argument": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "Hello World"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-bytes": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "bytesValue": ""
+                          },
+                          {
+                            "bytesValue": "AgM="
+                          },
+                          {
+                            "bytesValue": "AgM="
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-multi-char": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "stringValue": "b"
+                          },
+                          {
+                            "stringValue": "c"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "héllo "
+                          },
+                          {
+                            "stringValue": "😀"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-null-input": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-null-delimiter": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "split-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "split"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function split(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "split-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'split' does not accept 0 argument(s). Valid options are:\n- split(input: string): array[string] with [1..1] argument(s).\n- split[T: string | bytes](input: T, delimiter: T): array[T] with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "split-three": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'split' does not accept 3 argument(s). Valid options are:\n- split(input: string): array[string] with [1..1] argument(s).\n- split[T: string | bytes](input: T, delimiter: T): array[T] with [2..2] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-match": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-no-match": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-anchored": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-anchored-no": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-case-sensitive": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-case-flag": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-empty-pattern": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-invalid-pattern": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-unicode": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-null-input": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-null-pattern": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-contains-int-input": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "regex_contains"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function regex_contains(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-int-pattern": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "regex_contains"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function regex_contains(...) requires `String or Regex` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-contains-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'regex_contains[T: string | regex](search_space: string, regexp: T): boolean' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-full": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-partial": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": false
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-anchors": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-empty-pattern": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-invalid-pattern": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-match-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "regex_match"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function regex_match(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-match-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'regex_match[T: string | regex](search_space: string, regexp: T): boolean' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-first": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "o"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-none": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-group": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "W"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-empty-match": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-invalid-pattern": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "regex_find"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function regex_find(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-all": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "o"
+                          },
+                          {
+                            "stringValue": "o"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-none": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-overlapping": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "aa"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-empty-match": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": ""
+                          },
+                          {
+                            "stringValue": ""
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-invalid-pattern": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported regex syntax.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "regex-find-all-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "regex-find-all-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "regex_find_all"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function regex_find_all(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
     "fs-ent-pipeline/px0/aliases": {
       "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
       "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",

@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
-/// Programs recorded in O-6, O-7 and O-8A (2026-10-26: sort, relaxed stage order, logical and recorded
+/// Programs recorded in O-6, O-7, O-8A and O-8B (2026-10-26: sort, relaxed stage order, logical and recorded
 /// functions in a `where`, result order without a sort; aggregate, distinct, `add_fields`,
 /// `remove_fields`, `collection_group`, documents) that fireemu does not answer like
 /// production yet. They are replayed and compared like the rest, but a difference in them is
@@ -61,6 +61,8 @@ const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o8a/dupquote-main",
     "fs-ent-pipeline/o8a/precedence-main",
     "fs-ent-pipeline/o8a/base64-main",
+    "fs-ent-pipeline/o8b/strings-main",
+    "fs-ent-pipeline/o8b/math-main",
 ];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and

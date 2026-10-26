@@ -552,5 +552,7 @@ test('the token is asked of gcloud ADC with no scopes argument, and travels only
   assert.deepEqual(ADC_ARGS, ['auth', 'application-default', 'print-access-token']);
   assert.deepEqual(productionHeaders('T', 'proj'), { authorization: 'Bearer T', 'x-goog-user-project': 'proj' });
   const cv11 = readFileSync(new URL('./cv11-genuine-auth.mjs', import.meta.url), 'utf8');
+  const own = readFileSync(new URL('./rtdb-residual.mjs', import.meta.url), 'utf8');
+  assert.ok(own.includes('execFileSync(packet.gcloud, ADC_ARGS,') && own.includes('headers: productionHeaders(token, packet.projectId)'), 'main() uses them for the production run');
   assert.ok(cv11.includes("['auth', 'application-default', 'print-access-token']") && cv11.includes("headers: { authorization: `Bearer ${token}`, 'x-goog-user-project': packet.projectId }"), 'the CV11 recorder that got 200 builds the same token request');
 });

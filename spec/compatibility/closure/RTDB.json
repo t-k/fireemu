@@ -14,9 +14,9 @@
  },
  "closureReview": {
   "decision": "PENDING",
-  "submittedSourceCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
-  "submittedFinalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
-  "note": "The coordinator runs the independent clean-context closure review and fills this entry. The submitted binary was built from the tool commit; its Rust sources equal origin/main bb81801b4 (no crate, Cargo or toolchain change on the branch), and rebuilding at the tool commit gave the same SHA-256."
+  "submittedSourceCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+  "submittedFinalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
+  "note": "The coordinator runs the independent clean-context closure review and fills this entry. The submitted binary was built from the tool commit; its Rust sources equal origin/main 5a15d1631 except the two committed replay tests (no product, Cargo or toolchain change on the branch), and rebuilding at the tool commit gave the same SHA-256."
  },
  "scopeDecisions": [
   {
@@ -85,7 +85,7 @@
     "fixture": "tools/sdk-smoke-database/fixtures/production-rest.json",
     "comparisonTool": "tools/sdk-smoke-database/rest-replay.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
-    "comparisonSha256": "266dcabd81cea462a9fe391863124cf1c1ab1d4f58a460be9418a8f8cfb8d18d",
+    "comparisonSha256": "0275ac72fe198e68db2de0d4f9ff2123d32a50c6c68a63bf3c247dd6288ff600",
     "rows": {
      "MATCH": 120,
      "KNOWN_DIFFERENCE": 4
@@ -93,9 +93,9 @@
     "knownDifferences": [
      "/knownDifferences/restMemberOrder"
     ],
-    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
-    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
-    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "toolCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+    "rustSourcesEqualTo": "origin/main 5a15d1631a1341457a19ef06a0d09b9b157a6d04 (the branch adds only two test files under crates/fireemu-adapter-database/tests; no product, Cargo, toolchain, ui or npm change)",
+    "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
     "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
     "earlierLocalRun": {
      "receipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/local-rtdb-final-v3/summary.json",
@@ -130,7 +130,7 @@
     ],
     "fixture": "tools/sdk-smoke-database/fixtures/production-rest.json",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
-    "comparisonSha256": "266dcabd81cea462a9fe391863124cf1c1ab1d4f58a460be9418a8f8cfb8d18d",
+    "comparisonSha256": "0275ac72fe198e68db2de0d4f9ff2123d32a50c6c68a63bf3c247dd6288ff600",
     "rows": {
      "exportReads": {
       "MATCH": 6
@@ -140,9 +140,9 @@
      }
     },
     "note": "The Rules sources are uploaded with the bytes the recorder sent (Python json.dumps defaults), because production reports the refusal by column. Runtime evaluation semantics beyond the CV03/CV06/CV11 cases and the four recorded control expressions are not part of this condition.",
-    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
-    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
-    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "toolCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+    "rustSourcesEqualTo": "origin/main 5a15d1631a1341457a19ef06a0d09b9b157a6d04 (the branch adds only two test files under crates/fireemu-adapter-database/tests; no product, Cargo, toolchain, ui or npm change)",
+    "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
     "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu"
    }
   },
@@ -172,7 +172,7 @@
      }
     ],
     "test": "crates/fireemu-adapter-database/tests/rest.rs#admin_auth_override_replays_two_native_uid_rounds",
-    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database --profile pr at the tool commit (docs.local/runs/rtdb-closure/nextest/rtdb-crates.log)",
+    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database -p fireemu-adapter-ui --profile pr at the closure commit (720 passed) (docs.local/runs/rtdb-closure/final-nextest/rtdb-crates.log)",
     "earlierBinaryRun": {
      "envelope": "RTDB-CV03-FINAL-LOCAL-20261025-01",
      "closedReceipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv03-final-local-v1-finite-closed.json",
@@ -263,7 +263,7 @@
     "fixture": "tools/sdk-smoke-database/fixtures/production-sdk-ondisconnect.json",
     "comparisonTool": "tools/sdk-smoke-database/cv07-ondisconnect.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
-    "comparisonSha256": "375fb29273bdea26d052c4a0f927acf4f0cc2bca255fd8f599986eaaff197226",
+    "comparisonSha256": "0ac5226a62ffe9e2d8184517d3c31707b22fc48ddb2081c8f515c2f1020dbde1",
     "rows": {
      "MATCH": 36
     },
@@ -284,9 +284,9 @@
     "knownDifferences": [
      "/knownDifferences/longPollingIdleClose"
     ],
-    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
-    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
-    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "toolCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+    "rustSourcesEqualTo": "origin/main 5a15d1631a1341457a19ef06a0d09b9b157a6d04 (the branch adds only two test files under crates/fireemu-adapter-database/tests; no product, Cargo, toolchain, ui or npm change)",
+    "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
     "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu"
    }
   },
@@ -389,7 +389,7 @@
     "fixture": "tools/sdk-smoke-database/fixtures/production-cv11-genuine-auth.json",
     "comparisonTool": "tools/sdk-smoke-database/cv11-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "comparisonSha256": "6fe651008d7eac845e93936feb25f98de9b07cd0108b4e5a223c104e886ea090",
+    "comparisonSha256": "a77dd7061bc2fbb08d832d532a0d01a2e5cb75e656dbb97b8c62580e7254f9a6",
     "rows": {
      "MATCH": 92
     },
@@ -409,9 +409,9 @@
      "/knownDifferences/cv11WriteAfterDeleteRace"
     ],
     "note": "Local Auth issues its own signed tokens for local users; production's Google-signed ID tokens are not accepted locally. The comparison is of SDK-visible outcomes per credential origin, not literal token acceptance.",
-    "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
-    "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3",
-    "finalArtifactSha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+    "toolCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+    "rustSourcesEqualTo": "origin/main 5a15d1631a1341457a19ef06a0d09b9b157a6d04 (the branch adds only two test files under crates/fireemu-adapter-database/tests; no product, Cargo, toolchain, ui or npm change)",
+    "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
     "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu"
    }
   },
@@ -452,7 +452,7 @@
      "crates/fireemu-core-database/tests/rules.rs#coverage_observation_can_be_disabled_without_changing_authorization",
      "crates/fireemu-core-database/tests/rules.rs#coverage_keeps_local_escaped_literal_and_multiline_spans"
     ],
-    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database --profile pr at the tool commit (docs.local/runs/rtdb-closure/nextest/rtdb-crates.log)",
+    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database -p fireemu-adapter-ui --profile pr at the closure commit (720 passed) (docs.local/runs/rtdb-closure/final-nextest/rtdb-crates.log)",
     "browserRun": {
      "summary": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv12-browser-final-v1/attempt7/summary.json",
      "summarySha256": "32a330148eae8a0acf51181cca2b8972a53c9e572e9c73a7f783173b35a7ee6a",
@@ -494,7 +494,7 @@
      "crates/fireemu-adapter-database/tests/prepared_import.rs",
      "crates/fireemu/tests/database.rs"
     ],
-    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database --profile pr and cargo nextest run -p fireemu --test database --profile pr at the tool commit (docs.local/runs/rtdb-closure/nextest/)",
+    "closureRun": "cargo nextest run -p fireemu-adapter-database -p fireemu-core-database --profile pr and cargo nextest run -p fireemu --test database --profile pr at the tool commit (docs.local/runs/rtdb-closure/final-nextest/)",
     "earlierRun": {
      "receipt": "docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/cv13-final-verification-v2/receipt.json",
      "receiptSha256": "6d61f5399074d028113ddda78c9052a3a41788c83f8c399741f0927c4948fcaf",
@@ -549,13 +549,13 @@
   }
  ],
  "integratedRegression": {
-  "integrationCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
-  "releaseBinarySha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+  "integrationCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+  "releaseBinarySha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
   "buildReceiptPath": "docs.local/runs/rtdb-closure/build/build-receipt.json",
   "comparisons": [
    {
     "path": "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
-    "sha256": "266dcabd81cea462a9fe391863124cf1c1ab1d4f58a460be9418a8f8cfb8d18d",
+    "sha256": "0275ac72fe198e68db2de0d4f9ff2123d32a50c6c68a63bf3c247dd6288ff600",
     "rows": 172,
     "summary": {
      "rest": {
@@ -569,7 +569,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
-    "sha256": "375fb29273bdea26d052c4a0f927acf4f0cc2bca255fd8f599986eaaff197226",
+    "sha256": "0ac5226a62ffe9e2d8184517d3c31707b22fc48ddb2081c8f515c2f1020dbde1",
     "rows": 36,
     "summary": {
      "matched": true,
@@ -578,7 +578,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "sha256": "6fe651008d7eac845e93936feb25f98de9b07cd0108b4e5a223c104e886ea090",
+    "sha256": "a77dd7061bc2fbb08d832d532a0d01a2e5cb75e656dbb97b8c62580e7254f9a6",
     "rows": 92,
     "summary": {
      "match": true,
@@ -588,7 +588,7 @@
   ],
   "productionRequests": 0,
   "result": "MATCH_WITH_KNOWN_DIFFERENCES",
-  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main bb81801b4. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium."
+  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium."
  },
  "knownDifferences": {
   "restMemberOrder": {

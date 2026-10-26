@@ -1,7 +1,7 @@
 {
  "mode": "local",
  "run": "fireemu strict profile, cv11-genuine-auth.mjs local",
- "binarySha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+ "binarySha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
  "profiles": [
   {
    "name": "r1-ws",

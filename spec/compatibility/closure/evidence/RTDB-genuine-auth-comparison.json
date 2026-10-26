@@ -21,7 +21,7 @@
  },
  "localJournal": {
   "path": "tools/sdk-smoke-database/fixtures/local-cv11-genuine-auth.json",
-  "sha256": "52a724e8f91c8167a0e7cbe35221e98b96fbf5cbbf7f2be33b2fbb30ab9bf771"
+  "sha256": "bf90397762cc8a82d32f3e1f5b637660777e14113ecc3cda08646ff7e0f7cc7f"
  },
  "tool": [
   {
@@ -40,9 +40,9 @@
  "command": "node tools/sdk-smoke-database/cv11-genuine-auth.mjs local --fireemu <binary> --out <dir>; node tools/sdk-smoke-database/cv11-fixture.mjs compare <dir>/journal.json",
  "sdk": "firebase 12.18.0, playwright 1.62.1 (headless Chromium)",
  "binding": {
-  "toolCommit": "8fba4a35ec5e3896ad8d2a4ec8c5dfcc7dc718dd",
-  "rustSourcesEqualTo": "bb81801b4e5d666e8af1dc7a48ccaedec74c7ce3 (origin/main; git diff over crates, Cargo.toml, Cargo.lock, rust-toolchain.toml, ui, npm is empty)",
-  "binarySha256": "63cf1cc02cb3f796e3d117a364f3e3185cfd9201b1fd9b31159cbe97a2479df3",
+  "toolCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
+  "rustSourcesEqualTo": "origin/main 5a15d1631a1341457a19ef06a0d09b9b157a6d04 (the branch adds only two test files under crates/fireemu-adapter-database/tests; no product, Cargo, toolchain, ui or npm change)",
+  "binarySha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
   "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "host": "Darwin arm64",

@@ -1,29 +1,34 @@
 //! No committed fixture may hold the number of a sandbox project, in the clear or encoded.
 //!
-//! A page token, a cursor or any other opaque protobuf value that a service hands out can carry a project
-//! number as a varint inside base64: the plain-digit checks of the repository (the pre-commit hook, a search)
-//! do not see it. This test reads every file under `crates/` and `conformance/` (`node_modules`, `target` and
-//! `.git` excluded), decodes every run of base64 or base64url characters that parses as a protobuf message,
-//! and refuses a 12-digit number among its varints (a project number: timestamps are 10 digits in seconds and
-//! 13 in milliseconds) unless it is the mask `123456789012` that the fixtures use.
+//! This test reads every file under `crates/` and `conformance/` (`node_modules`, `target` and `.git`
+//! excluded; files over 40 MB are skipped) and decodes every run of base64 or base64url characters in two ways.
+//! A number that is not the mask `123456789012` that the fixtures use is refused in these two forms:
+//! - As a protobuf varint. A page token, a cursor or any other opaque value that a service hands out can carry
+//!   a project number this way. A run counts when it parses as a protobuf message (it is tried from every
+//!   offset), and the varint has 12 or 13 digits. 10 and 11 digit varints are everyday values (sizes, ids,
+//!   seconds) that random bytes and real tokens both hold, so they are not refused here. A run that is a
+//!   subresource integrity digest (`sha512-...`) or a snake case identifier is not decoded as a message:
+//!   random bytes parse as one now and then. No instant is exempt as a varint, so a token that holds an epoch
+//!   in milliseconds as a varint would be refused.
+//! - As ASCII decimal digits (a GCF v2 `sourceToken` carried the events project number this way): a whole run
+//!   of 10 to 13 digits in the decoded bytes (each run is decoded from its first four characters, so that
+//!   every byte alignment and a word glued to the token are covered). It is not refused when it starts with a
+//!   zero, when it is inside an identifier (a letter beside it that has a letter or a digit behind it: a hex
+//!   id that starts with digits), when it is an X.509 `UTCTime` (`YYMMDDHHMMSSZ`), or when it is an instant in
+//!   the context in which the corpus holds one: epoch seconds of 2020 to 2036 as the value of a JWT time claim
+//!   (`"iat":`, `"exp":`, `"nbf":`, `"auth_time":`), and epoch milliseconds of the same years as the time
+//!   segment of an operation name (`operation-<ms>-`). Those windows are a known blind spot for a new 10 or 13
+//!   digit project number that falls inside one and sits in such a context.
 //!
-//! The same files are also searched for a project number written as ASCII decimal digits inside base64 (a GCF
-//! v2 `sourceToken` carried the events project number that way): a whole run of 10 to 13 digits in the decoded
-//! bytes that is not the mask, does not start with a zero, has no letter next to it and is not an
-//! epoch instant of 2020 to 2036.
+//! The scan is deliberately general: it is not limited to one fixture or to the Eventarc page token. It needs
+//! no private list, so it runs in CI and for everyone who clones the repository, and it refuses a number of a
+//! project that nobody has listed yet.
 //!
-//! The scan is deliberately general: it is not limited to one fixture or to the Eventarc page token.
-//!
-//! Who checks what (the first two live on the maintainers' machines, outside this repository, and read the
-//! exact sandbox numbers from a private list):
-//! - A pre-commit hook refuses a staged line that adds one of those numbers in the clear.
-//! - A pre-push scan looks for the same exact numbers hidden in base64, as a varint and as ASCII digits. It is
-//!   exact: it has no exemptions and no false positives.
-//! - This test needs no private list, so it runs in CI and for everyone who clones the repository, and it
-//!   refuses any number shaped like a project number, one of a project the private list does not know yet
-//!   included. Its price is the exemptions above, which keep it free of false positives on the real corpus;
-//!   a number that falls inside one of them (an instant-shaped one, or one hidden inside an identifier) is
-//!   left to the pre-push scan.
+//! Beside it, on the maintainers' machines and outside this repository, two checks read the exact sandbox
+//! numbers from a private list: a pre-commit hook refuses a staged line that adds one in the clear, and a
+//! pre-push scan looks for them in base64 tokens, as varints and as ASCII digits. They know only the listed
+//! numbers; this test knows only the shape of a number. A number that this test exempts (inside an
+//! identifier, an instant in its context) is left to them.
 
 use std::path::{Path, PathBuf};
 
@@ -132,8 +137,10 @@ fn parses_as_a_message(parsed: usize, total: usize) -> bool {
 /// otherwise: a token can follow a word with no delimiter, as in `pageToken/<token>`).
 const EVERY_OFFSET_UP_TO: usize = 512;
 
+/// 12 and 13 digits. 10 and 11 digit varints are everyday values (sizes, ids, seconds): the real
+/// `sourceToken` of the corpus holds one, so they are left to the ASCII scan and the pre-push scan.
 fn is_project_number(number: u64) -> bool {
-    (100_000_000_000..1_000_000_000_000).contains(&number)
+    (100_000_000_000..10_000_000_000_000).contains(&number)
 }
 
 /// The maximal runs of base64 or base64url characters in `text` that are at least `min_len` long.
@@ -160,10 +167,28 @@ fn base64_runs(text: &[u8], min_len: usize) -> Vec<&[u8]> {
     runs
 }
 
+/// A run that is not a token: a subresource integrity digest (`sha512-` and the like, as in a lockfile) or a
+/// snake case identifier (lower case letters, digits and underscores only: a random token of 24 characters has
+/// no upper case letter once in 250,000). Random bytes parse as a message now and then, and across a corpus of
+/// hashes and identifiers they do, so these runs are not decoded as protobuf.
+fn is_digest_or_identifier(run: &[u8]) -> bool {
+    let digest = run.strip_prefix(b"sha").is_some_and(|rest| {
+        let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        digits > 0 && rest.get(digits) == Some(&b'-')
+    });
+    digest
+        || run
+            .iter()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+}
+
 /// The 12-digit numbers that the base64 runs of `text` carry as protobuf varints.
 fn project_numbers_in(text: &[u8]) -> Vec<u64> {
     let mut numbers = Vec::new();
     for run in base64_runs(text, MIN_RUN) {
+        if is_digest_or_identifier(run) {
+            continue;
+        }
         let offsets = if run.len() <= EVERY_OFFSET_UP_TO {
             run.len() - MIN_RUN
         } else {
@@ -187,32 +212,64 @@ fn project_numbers_in(text: &[u8]) -> Vec<u64> {
 const ASCII_DIGITS: std::ops::RangeInclusive<usize> = 10..=13;
 /// Ten digits take 14 base64 characters.
 const MIN_ASCII_RUN: usize = 14;
-/// Fixtures hold recent instants: epoch seconds (10 digits) and milliseconds (13 digits) from 2020 up to 2036
-/// are not project numbers (a JWT `iat`, the time in an operation name). Every sandbox number that is 10 or 13
-/// digits long is outside both windows (checked against the private list when the windows were chosen); the
-/// pre-push scan stays the exact check for any that a future window change would let through.
+/// Instants the real corpus holds as ASCII digits, and only in the contexts it holds them in: epoch seconds
+/// (10 digits) as the value of a JWT time claim, and epoch milliseconds (13 digits) as the time segment of an
+/// operation name (`operation-<ms>-<id>`). The windows (2020 to 2036) are a known blind spot for a new 10 or
+/// 13 digit project number that falls inside one of them and sits in such a context.
 const SECONDS_WINDOW: std::ops::Range<u64> = 1_600_000_000..2_100_000_000;
 const MILLIS_WINDOW: std::ops::Range<u64> = 1_600_000_000_000..2_100_000_000_000;
+const TIME_KEYS: [&[u8]; 4] = [b"\"iat\":", b"\"exp\":", b"\"nbf\":", b"\"auth_time\":"];
 
-fn is_instant(digits: &[u8]) -> bool {
+fn is_instant(before: &[u8], digits: &[u8], after: &[u8]) -> bool {
     let value = || {
         digits
             .iter()
             .fold(0u64, |acc, digit| acc * 10 + u64::from(digit - b'0'))
     };
     match digits.len() {
-        10 => SECONDS_WINDOW.contains(&value()),
-        13 => MILLIS_WINDOW.contains(&value()),
+        10 => {
+            let before = before.strip_suffix(b" ").unwrap_or(before);
+            SECONDS_WINDOW.contains(&value()) && TIME_KEYS.iter().any(|key| before.ends_with(key))
+        }
+        13 => {
+            MILLIS_WINDOW.contains(&value())
+                && before.ends_with(b"operation-")
+                && after.first() == Some(&b'-')
+        }
         _ => false,
     }
 }
 
+/// An X.509 `UTCTime`: twelve digits `YYMMDDHHMMSS` that form a date and a time, then `Z`.
+fn is_utc_time(digits: &[u8], after: &[u8]) -> bool {
+    let part =
+        |from: usize| u32::from(digits[from] - b'0') * 10 + u32::from(digits[from + 1] - b'0');
+    digits.len() == 12
+        && after.first() == Some(&b'Z')
+        && (1..=12).contains(&part(2))
+        && (1..=31).contains(&part(4))
+        && part(6) < 24
+        && part(8) < 60
+        && part(10) < 60
+}
+
+/// A letter beside the digits counts as part of an identifier (a hex id that starts with digits, `65d1609...`)
+/// only if that letter has another letter or digit on its far side. A letter that stands alone beside the
+/// digits is a delimiter byte: the tag of the next protobuf field after a string field is one for 28 of the
+/// 60 tags of fields 1 to 15, and `A`, `B`, `Z`, `a`, `b`, `z` and the like are among them.
+fn inside_identifier(bytes: &[u8], at: usize, end: usize) -> bool {
+    let left =
+        at >= 2 && bytes[at - 1].is_ascii_alphabetic() && bytes[at - 2].is_ascii_alphanumeric();
+    let right = bytes.get(end).is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(end + 1).is_some_and(u8::is_ascii_alphanumeric);
+    left || right
+}
+
 /// The numbers that the base64 runs of `text` carry as ASCII decimal digits (a GCF v2 `sourceToken` held the
-/// events project number this way): a whole run of 10 to 13 digits, with no letter next to it (a hex
-/// id that starts with digits and an X.509 `UTCTime` such as `261015000000Z` are not numbers), that is not an
-/// instant, and does not start with a zero. The mask is returned as the mask. A run is decoded from each of
-/// its first four characters, so that every byte alignment and a word glued to the front of the token
-/// (`pageToken/<token>`) is covered.
+/// events project number this way): a whole run of 10 to 13 digits that does not start with a zero, that is
+/// not inside an identifier, an `UTCTime` or an instant in the context of a time claim or an operation name.
+/// The mask is returned as the mask. A run is decoded from each of its first four characters, so that every
+/// byte alignment and a word glued to the front of the token (`pageToken/<token>`) is covered.
 fn ascii_numbers_in(text: &[u8]) -> Vec<String> {
     let mut numbers = Vec::new();
     for run in base64_runs(text, MIN_ASCII_RUN) {
@@ -229,12 +286,11 @@ fn ascii_numbers_in(text: &[u8]) -> Vec<String> {
                     .position(|byte| !byte.is_ascii_digit())
                     .map_or(bytes.len(), |length| at + length);
                 let digits = &bytes[at..end];
-                let flanked = (at > 0 && bytes[at - 1].is_ascii_alphabetic())
-                    || bytes.get(end).is_some_and(u8::is_ascii_alphabetic);
                 if ASCII_DIGITS.contains(&digits.len())
                     && digits[0] != b'0'
-                    && !flanked
-                    && !is_instant(digits)
+                    && !inside_identifier(&bytes, at, end)
+                    && !is_utc_time(digits, &bytes[end..])
+                    && !is_instant(&bytes[..at], digits, &bytes[end..])
                 {
                     numbers.push(String::from_utf8_lossy(digits).into_owned());
                 }
@@ -334,7 +390,11 @@ fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_
         "the scan found the repository: {} files",
         all.len()
     );
-    let corpus = scan(&all);
+    assert_corpus_clean(&scan(&all));
+}
+
+/// The assertions on what the scan made of the corpus: nothing refused, and both forms saw the mask.
+fn assert_corpus_clean(corpus: &Corpus) {
     assert!(
         corpus.refused.is_empty(),
         "an encoded number that is not the mask is in (the number is not printed): {:?}",
@@ -352,6 +412,45 @@ fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_
         "files with base64 naming the mask in ASCII digits: {}",
         corpus.ascii_masks
     );
+}
+
+#[test]
+fn a_clean_corpus_that_saw_the_mask_in_both_forms_passes() {
+    assert_corpus_clean(&Corpus {
+        refused: vec![],
+        varint_masks: 1,
+        ascii_masks: 1,
+    });
+}
+
+#[test]
+#[should_panic(expected = "an encoded number that is not the mask is in")]
+fn a_corpus_with_a_refused_number_fails() {
+    assert_corpus_clean(&Corpus {
+        refused: vec!["a.json (ASCII digits)".to_string()],
+        varint_masks: 1,
+        ascii_masks: 1,
+    });
+}
+
+#[test]
+#[should_panic(expected = "files with a token naming the mask: 0")]
+fn a_corpus_that_never_saw_the_mask_as_a_varint_fails() {
+    assert_corpus_clean(&Corpus {
+        refused: vec![],
+        varint_masks: 0,
+        ascii_masks: 1,
+    });
+}
+
+#[test]
+#[should_panic(expected = "files with base64 naming the mask in ASCII digits: 0")]
+fn a_corpus_that_never_saw_the_mask_in_ascii_digits_fails() {
+    assert_corpus_clean(&Corpus {
+        refused: vec![],
+        varint_masks: 1,
+        ascii_masks: 0,
+    });
 }
 
 #[test]
@@ -484,12 +583,26 @@ fn the_scan_sees_a_number_inside_a_token_in_any_context_and_ignores_what_is_not_
     assert_eq!(project_numbers_in(standard.as_bytes()), [111_111_111_111]);
     // The mask is found as the mask.
     assert_eq!(project_numbers_in(token_of(MASK).as_bytes()), [MASK]);
-    // A timestamp (10 digits in seconds, 13 in milliseconds), a short number, words and a hash are not numbers.
+    // 12 and 13 digits are numbers (no instant is exempt as a varint: there is no context to tell it by);
+    // 10 and 11 digits and 14 digits are not.
+    for number in [
+        100_000_000_000,
+        999_999_999_999,
+        1_000_000_000_000,
+        1_791_200_000_000,
+        9_999_999_999_999,
+    ] {
+        assert_eq!(
+            project_numbers_in(token_of(number).as_bytes()),
+            [number],
+            "{number}"
+        );
+    }
     for number in [
         1_791_200_000,
-        1_791_200_000_000,
         99_999_999_999,
-        1_000_000_000_000,
+        10_000_000_000_000,
+        99_999_999,
     ] {
         assert!(
             project_numbers_in(token_of(number).as_bytes()).is_empty(),
@@ -577,53 +690,132 @@ fn the_scan_finds_the_mask_as_the_mask() {
     assert_eq!(ascii_numbers_in(token.as_bytes()), ["123456789012"]);
 }
 
+/// `text` as the decoded bytes of a base64 token, so that the scan sees what precedes and follows the number.
+fn numbers_in_text(text: &str) -> Vec<String> {
+    ascii_numbers_in(encode(text.as_bytes(), true, false).as_bytes())
+}
+
 #[test]
-fn the_scan_ignores_timestamps_inside_their_window_and_finds_them_just_outside() {
-    // 10 digits as epoch seconds and 13 as epoch milliseconds, from 2020 up to 2036 (fixtures hold recent
-    // instants: a JWT iat and exp, the time in an operation name).
-    for (value, found) in [
-        ("1599999999", true),
-        ("1600000000", false),
-        ("1791200000", false),
-        ("2099999999", false),
-        ("2100000000", true),
-        ("1599999999999", true),
-        ("1600000000000", false),
-        ("1791200000000", false),
-        ("2099999999999", false),
-        ("2100000000000", true),
-        // 11 and 12 digits have no reading as an instant of that window.
-        ("16000000000", true),
-        ("160000000000", true),
+fn the_scan_ignores_an_instant_only_in_the_context_the_corpus_holds_it_in() {
+    // Epoch seconds as the value of a JWT time claim, and epoch milliseconds as the time segment of an
+    // operation name, from 2020 up to 2036; the edges of the windows.
+    for (value, exempt) in [
+        ("1599999999", false),
+        ("1600000000", true),
+        ("1791200000", true),
+        ("2099999999", true),
+        ("2100000000", false),
     ] {
-        let token = ascii_token(0, value, true, false);
-        assert_eq!(
-            !ascii_numbers_in(token.as_bytes()).is_empty(),
-            found,
-            "{value}"
-        );
+        for key in ["iat", "exp", "nbf", "auth_time"] {
+            for text in [
+                format!("{{\"{key}\":{value},\"z\":1}}"),
+                format!("{{\"{key}\": {value},\"z\":1}}"),
+            ] {
+                assert_eq!(numbers_in_text(&text).is_empty(), exempt, "{text}");
+            }
+        }
     }
-    let jwt_payload = encode(
-        br#"{"iat":1791200000,"exp":1791203600,"auth_time":1791200000}"#,
-        true,
-        false,
-    );
-    assert!(ascii_numbers_in(jwt_payload.as_bytes()).is_empty());
+    for (value, exempt) in [
+        ("1599999999999", false),
+        ("1600000000000", true),
+        ("1791200000000", true),
+        ("2099999999999", true),
+        ("2100000000000", false),
+    ] {
+        let text = format!("operations/operation-{value}-65d29513a209a");
+        assert_eq!(numbers_in_text(&text).is_empty(), exempt, "{text}");
+    }
+    // The same values anywhere else are numbers: another key, no key, a bare value, a different segment, the
+    // wrong digit count for the context, a missing closing hyphen.
+    for text in [
+        "{\"t\":1791200000,\"z\":1}",
+        "{\"iat\":[1791200000],\"z\":1}",
+        "{\"iat\":\"1791200000\",\"z\":1}",
+        "{\"iat\":  1791200000,\"z\":1}",
+        "/1791200000/",
+        "{\"exp\":1791200000000,\"z\":1}",
+        "operations/operation-1791200000-65d29513a209a",
+        "operations/op-1791200000000-65d29513a209a",
+        "operations/operation-1791200000000/65d29513a209a",
+        "operations/operation-1791200000000",
+        "operations/operation-1791200000000 65d29513a209a",
+    ] {
+        assert_eq!(numbers_in_text(text).len(), 1, "{text}");
+    }
+    // 11 and 12 digits have no reading as an instant.
+    for text in [
+        "{\"iat\":16000000000,\"z\":1}",
+        "{\"iat\":160000000000,\"z\":1}",
+    ] {
+        assert_eq!(numbers_in_text(text).len(), 1, "{text}");
+    }
+    // A whole JWT payload.
+    assert!(numbers_in_text(
+        r#"{"iat":1791200000,"exp":1791203600,"auth_time":1791200000,"x":"y"}"#
+    )
+    .is_empty());
+}
+
+#[test]
+fn the_scan_ignores_an_x509_utc_time_and_nothing_that_only_looks_like_one() {
+    // YYMMDDHHMMSS then Z, as in a certificate's validity (the tag and length bytes around it are not alnum).
+    for text in [
+        "\u{17}\r261015000000Z\u{18}\u{f}",
+        "261015235959Z\u{1}",
+        "260101000000Z\u{1}",
+    ] {
+        assert!(numbers_in_text(text).is_empty(), "{text:?}");
+    }
+    // Not a date, not a time, not followed by Z, or not 12 digits.
+    for text in [
+        "\u{17}\r261315000000Z\u{18}", // month 13
+        "\u{17}\r260015000000Z\u{18}", // month 00
+        "\u{17}\r261032000000Z\u{18}", // day 32
+        "\u{17}\r261000000000Z\u{18}", // day 00
+        "\u{17}\r261015240000Z\u{18}", // hour 24
+        "\u{17}\r261015006000Z\u{18}", // minute 60
+        "\u{17}\r261015000060Z\u{18}", // second 60
+        "\u{17}\r261015000000Y\u{18}",
+        "\u{17}\r261015000000\u{18}",
+        "\u{17}\r2610150000000Z\u{18}", // 13 digits
+    ] {
+        assert_eq!(numbers_in_text(text).len(), 1, "{text:?}");
+    }
+    // Every part at its edge is still a date.
+    for text in [
+        "261231235959Z\u{1}",
+        "260101000000Z\u{1}",
+        "260228000059Z\u{1}",
+    ] {
+        assert!(numbers_in_text(text).is_empty(), "{text:?}");
+    }
 }
 
 #[test]
 fn the_scan_ignores_a_digit_run_inside_a_longer_identifier() {
-    // A hex id that starts with digits, an X.509 UTCTime (YYMMDDHHMMSSZ), and a word that ends in digits.
+    // A letter beside the digits is part of an identifier only when it has a letter or a digit on its far side.
     for text in [
         "id-65d1609123456-b91bb",
         "\"requestId\": \"8586123456789de3\"",
-        "validity 261015000000Z end",
-        "CANARY0123456789abcd",
-        "x407182936504/b",
-        "a/407182936504z",
+        "CANARY1987654321abcd",
+        "q-ab407182936504/b",
+        "a/407182936504zy",
+        "id/ab407182936504",
+        "407182936504zy/id",
+        "x1a407182936504",
     ] {
         let token = encode(text.as_bytes(), true, false);
         assert!(ascii_numbers_in(token.as_bytes()).is_empty(), "{text}");
+    }
+    // A letter on its own beside the digits is a delimiter (a protobuf tag), at either side or at an edge.
+    for text in [
+        "x407182936504/b",
+        "a/407182936504z",
+        "z407182936504",
+        "407182936504z",
+        "Z407182936504A/",
+    ] {
+        assert_eq!(numbers_in_text(text), ["407182936504"], "{text}");
     }
     // Any delimiter, or the edge of the data, still counts.
     for (text, number) in [
@@ -640,6 +832,115 @@ fn the_scan_ignores_a_digit_run_inside_a_longer_identifier() {
         let token = encode(text.as_bytes(), false, true);
         assert_eq!(ascii_numbers_in(token.as_bytes()), [number], "{text}");
     }
+}
+
+#[test]
+fn a_number_in_a_protobuf_string_field_is_found_before_the_tag_of_any_next_field() {
+    // `0a 0c <12 digits>`, then the tag of the next field (fields 1 to 15, every wire type but groups) and a
+    // short payload. 28 of the 60 tags are ASCII letters (fields 8 to 15), which must not hide the number.
+    let number = "407182936504";
+    let mut letters = 0;
+    for field in 1u8..=15 {
+        for wire in [0u8, 1, 2, 5] {
+            let tag = field << 3 | wire;
+            let payload: &[u8] = match wire {
+                0 => &[1],
+                1 => &[0; 8],
+                2 => &[3, 0, 0, 0],
+                _ => &[0; 4],
+            };
+            let mut bytes = vec![0x0a, 0x0c];
+            bytes.extend_from_slice(number.as_bytes());
+            bytes.push(tag);
+            bytes.extend_from_slice(payload);
+            for (url_safe, padded) in [(false, false), (true, true)] {
+                let found = ascii_numbers_in(encode(&bytes, url_safe, padded).as_bytes());
+                assert_eq!(found.len(), 1, "field {field}, wire {wire}: {found:?}");
+                // A tag that is a digit (fields 6 and 7) makes the run one digit longer.
+                assert!(found[0].starts_with(number), "field {field}, wire {wire}");
+            }
+            letters += usize::from(tag.is_ascii_alphabetic());
+        }
+    }
+    assert_eq!(letters, 28);
+}
+
+#[test]
+fn the_number_in_the_committed_source_token_shape_is_found_when_it_is_not_the_mask() {
+    // The shape of the issue: a recorded GCF v2 `sourceToken` that holds the number as ASCII digits. Put
+    // another number in the place of the mask in the committed fixture and the scan must refuse it, in
+    // either alphabet, padded or not, glued to a word or not.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let path = root.join("conformance/src/eventarc-production/fixtures/h-fe/h-readiness.json");
+    let text = std::fs::read(path).expect("the committed fixture");
+    let mut replaced = 0;
+    for run in base64_runs(&text, MIN_ASCII_RUN) {
+        for offset in 0..4 {
+            let bytes = decode(&run[offset..]);
+            let mask = MASK.to_string();
+            let Some(at) = bytes
+                .windows(mask.len())
+                .position(|window| window == mask.as_bytes())
+            else {
+                continue;
+            };
+            let mut other = bytes.clone();
+            other[at..at + mask.len()].copy_from_slice(b"407182936504");
+            for (url_safe, padded) in [(false, false), (false, true), (true, false), (true, true)] {
+                for glue in ["", "pageToken/"] {
+                    let token = format!("{glue}{}", encode(&other, url_safe, padded));
+                    assert!(
+                        ascii_numbers_in(token.as_bytes()).contains(&"407182936504".to_string()),
+                        "url_safe {url_safe}, padded {padded}, glue {glue:?}"
+                    );
+                }
+            }
+            replaced += 1;
+        }
+    }
+    assert!(replaced >= 1, "the fixture names the mask in ASCII digits");
+}
+
+#[test]
+fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
+    for run in [
+        "sha512-r1w81DpR".as_bytes(),
+        b"sha1-x",
+        b"sha256-",
+        b"a_snake_case_identifier_9",
+        b"___",
+        b"0123456789",
+    ] {
+        assert!(
+            is_digest_or_identifier(run),
+            "{}",
+            String::from_utf8_lossy(run)
+        );
+    }
+    for run in [
+        "shasum-r1w81DpR".as_bytes(),
+        b"sha-r1w81DpR",
+        b"sha512r1w81DpR",
+        b"xsha512-r1w81DpR",
+        b"a_snake_Case_identifier_9",
+        b"a_snake_case-identifier_9",
+        b"a_snake_case+identifier_9",
+        b"A_SNAKE",
+    ] {
+        assert!(
+            !is_digest_or_identifier(run),
+            "{}",
+            String::from_utf8_lossy(run)
+        );
+    }
+    // A token behind a digest prefix is not scanned; the same token alone, or glued to another word, is.
+    let token = token_of(111_111_111_111);
+    assert!(project_numbers_in(format!("sha512-{token}").as_bytes()).is_empty());
+    assert_eq!(
+        project_numbers_in(format!("shasum-{token}").as_bytes()),
+        [111_111_111_111]
+    );
+    assert_eq!(project_numbers_in(token.as_bytes()), [111_111_111_111]);
 }
 
 #[test]
@@ -719,20 +1020,17 @@ mod properties {
     use super::*;
     use proptest::prelude::*;
 
-    /// A 10 to 13 digit number that is not the mask and is not an instant in the timestamp window.
+    /// A 10 to 13 digit number that is not the mask.
     fn project_like_digits() -> impl Strategy<Value = String> {
         (10usize..=13, 1u8..=9).prop_flat_map(|(len, lead)| {
             proptest::collection::vec(0u8..=9, len - 1).prop_filter_map(
-                "not an instant, not the mask",
+                "not the mask",
                 move |tail| {
                     let digits: String = std::iter::once(lead)
                         .chain(tail)
                         .map(|d| char::from(b'0' + d))
                         .collect();
-                    let value: u64 = digits.parse().expect("digits");
-                    let instant = (len == 10 && (1_600_000_000..2_100_000_000).contains(&value))
-                        || (len == 13 && (1_600_000_000_000..2_100_000_000_000).contains(&value));
-                    (!instant && digits != "123456789012").then_some(digits)
+                    (digits != "123456789012").then_some(digits)
                 },
             )
         })
@@ -761,37 +1059,42 @@ mod properties {
             prop_assert!(ascii_numbers_in(text.as_bytes()).contains(&digits));
         }
 
-        /// The same digits flanked by a letter or digit on either side are an identifier, never a number.
+        /// The same digits beside a letter that has a letter or a digit behind it are an identifier, never a number.
         #[test]
         fn digits_inside_an_identifier_are_not_found(
             digits in project_like_digits(),
             letter in prop::sample::select(b"abcdefABCDEFZxyz".to_vec()),
+            behind in prop::sample::select(b"abcXYZ019".to_vec()),
             on_left in any::<bool>(),
             url_safe in any::<bool>(),
         ) {
+            let (letter, behind) = (char::from(letter), char::from(behind));
             let text = if on_left {
-                format!("id/{}{digits}/end", char::from(letter))
+                format!("id/{behind}{letter}{digits}/end")
             } else {
-                format!("id/{digits}{}/end", char::from(letter))
+                format!("id/{digits}{letter}{behind}/end")
             };
             let token = encode(text.as_bytes(), url_safe, false);
             prop_assert!(ascii_numbers_in(token.as_bytes()).is_empty());
         }
 
-        /// An instant of the window, as seconds or milliseconds, is not a number.
+        /// An instant of the window, in its context (a time claim for seconds, an operation name for
+        /// milliseconds), is not a number; the same value in the other context is.
         #[test]
-        fn instants_in_the_window_are_not_found(
+        fn instants_in_their_context_are_not_found(
             seconds in 1_600_000_000u64..2_100_000_000,
-            millis in any::<bool>(),
+            sub_second in 0u64..1000,
+            key in prop::sample::select(vec!["iat", "exp", "nbf", "auth_time"]),
             url_safe in any::<bool>(),
         ) {
-            let text = if millis {
-                format!("{{\"t\":{}}}", seconds * 1000 + 999)
-            } else {
-                format!("{{\"t\":{seconds}}}")
-            };
-            let token = encode(text.as_bytes(), url_safe, false);
-            prop_assert!(ascii_numbers_in(token.as_bytes()).is_empty());
+            let millis = seconds * 1000 + sub_second;
+            let claim = format!("{{\"{key}\":{seconds},\"z\":1}}");
+            let name = format!("operations/operation-{millis}-65d29513a209a");
+            let crossed = format!("{{\"{key}\":{millis},\"z\":1}}");
+            let encoded = |text: &str| encode(text.as_bytes(), url_safe, false);
+            prop_assert!(ascii_numbers_in(encoded(&claim).as_bytes()).is_empty());
+            prop_assert!(ascii_numbers_in(encoded(&name).as_bytes()).is_empty());
+            prop_assert_eq!(ascii_numbers_in(encoded(&crossed).as_bytes()), [millis.to_string()]);
         }
 
         /// Binary noise that holds no digit run is never a number (the test is not a lottery).

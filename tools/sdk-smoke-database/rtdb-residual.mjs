@@ -64,6 +64,37 @@ export const ADC_ARGS = ['auth', 'application-default', 'print-access-token'];
 /** Every management and data request carries the token as a Bearer header (never in the URL) and the quota project. */
 export const productionHeaders = (token, projectId) => ({ authorization: `Bearer ${token}`, 'x-goog-user-project': projectId });
 
+// RTDB REST accepts an OAuth token only with one of these scopes (production-1 and production-2, 2026-10-26: an ADC
+// login with cloud-platform and androidpublisher only answered 401 "Unauthorized request." on the instance host).
+export const RTDB_SCOPES = ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/firebase.database'];
+export const TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
+
+/**
+ * One tokeninfo request before any admin request: the token travels in the POST body (never in the URL), nothing of
+ * the answer is kept but its scope list. Fails closed: an answer that cannot be read is 'adc-scopes-unverified'.
+ */
+export async function adcPreflight(fetchImpl, token) {
+  let scopes;
+  try {
+    const res = await fetchImpl(TOKENINFO_URL, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ access_token: token }).toString(), signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const doc = res.status === 200 ? JSON.parse(await res.text()) : undefined;
+    if (typeof doc?.scope === 'string') scopes = doc.scope.split(/\s+/).filter(Boolean);
+  } catch { /* unverified */ }
+  if (!scopes) return { ok: false, reason: 'adc-scopes-unverified', scopes: [] };
+  return RTDB_SCOPES.some((x) => scopes.includes(x)) ? { ok: true, scopes } : { ok: false, reason: 'adc-scopes-missing', scopes };
+}
+
+/** Runs the preflight and writes preflight.json (and result.json when it stops). Returns the exit code, 0 to go on. */
+export async function runPreflight(out, token, fetchImpl, secrets = []) {
+  const pre = await adcPreflight(fetchImpl, token);
+  const write = (f, v) => writeFileSync(path.join(out, f), assertNoSecrets(`${JSON.stringify(v, null, 2)}\n`, secrets));
+  write('preflight.json', pre);
+  if (pre.ok) return 0;
+  write('result.json', { status: 'stopped', reason: pre.reason, scopes: pre.scopes, changed: 'nothing: no admin request was sent' });
+  console.log(`production: ${pre.reason}`);
+  return 4;
+}
+
 /** Chromium may reach loopback and Firebase hosts only: the page and SDK bundles are served locally. */
 export const hostRules = () => '--host-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE *.firebaseio.com';
 
@@ -421,6 +452,8 @@ async function main(argv) {
       const token = execFileSync(packet.gcloud, ADC_ARGS, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
       if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');
       secrets.push(token);
+      const stopped = await runPreflight(out, token, fetch, secrets);
+      if (stopped) return stopped;
       const browser = browserRunner({ modules: packet.modules, stop, page: { projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com`, allowHost: (h) => /^[a-z0-9-]+\.firebaseio\.com$/.test(h) } });
       o = { mode, packet, headers: productionHeaders(token, packet.projectId), browser, ...common };
     }

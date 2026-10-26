@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LAUNCH } from './cv11-genuine-auth.mjs';
-import { ADC_ARGS, CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, productionHeaders, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
+import { ADC_ARGS, RTDB_SCOPES, TOKENINFO_URL, adcPreflight, runPreflight, CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, productionHeaders, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}', PREFIX = 'parity1/rr1';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
@@ -555,4 +555,58 @@ test('the token is asked of gcloud ADC with no scopes argument, and travels only
   const own = readFileSync(new URL('./rtdb-residual.mjs', import.meta.url), 'utf8');
   assert.ok(own.includes('execFileSync(packet.gcloud, ADC_ARGS,') && own.includes('headers: productionHeaders(token, packet.projectId)'), 'main() uses them for the production run');
   assert.ok(cv11.includes("['auth', 'application-default', 'print-access-token']") && cv11.includes("headers: { authorization: `Bearer ${token}`, 'x-goog-user-project': packet.projectId }"), 'the CV11 recorder that got 200 builds the same token request');
+});
+
+// Preflight of the ADC scopes (production-1 and production-2 stopped on a token with cloud-platform and
+// androidpublisher only: RTDB REST answered 401 on the instance host).
+const tokeninfo = (status, doc) => async (url, init) => ({ status, text: async () => (typeof doc === 'string' ? doc : JSON.stringify(doc)) });
+const TOK = 'ya29.TESTTOKEN-not-real';
+test('preflight: one POST to tokeninfo with the token in the body only; the scopes decide', async () => {
+  const seen = [];
+  const f = async (url, init) => { seen.push({ url, init }); return tokeninfo(200, { scope: 'https://www.googleapis.com/auth/androidpublisher https://www.googleapis.com/auth/cloud-platform', email: 'someone@example.com', aud: 'x' })(); };
+  const r = await adcPreflight(f, TOK);
+  assert.deepEqual(r, { ok: false, reason: 'adc-scopes-missing', scopes: ['https://www.googleapis.com/auth/androidpublisher', 'https://www.googleapis.com/auth/cloud-platform'] });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, 'https://oauth2.googleapis.com/tokeninfo'); assert.equal(seen[0].url, TOKENINFO_URL);
+  assert.equal(seen[0].init.method, 'POST'); assert.equal(seen[0].init.redirect, 'manual');
+  assert.equal(seen[0].init.body, `access_token=${encodeURIComponent(TOK)}`);
+  assert.deepEqual(seen[0].init.headers, { 'content-type': 'application/x-www-form-urlencoded' });
+  assert.ok(!JSON.stringify(r).includes('example.com') && !JSON.stringify(r).includes(TOK), 'nothing of the answer but the scopes');
+  for (const scope of RTDB_SCOPES) {
+    const ok = await adcPreflight(tokeninfo(200, { scope: `openid https://www.googleapis.com/auth/cloud-platform ${scope}` }), TOK);
+    assert.deepEqual([ok.ok, ok.reason], [true, undefined]);
+  }
+  assert.deepEqual(RTDB_SCOPES, ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/firebase.database']);
+});
+
+test('preflight: near misses are missing, and an answer that cannot be read is unverified (fail closed)', async () => {
+  const missing = ['https://www.googleapis.com/auth/userinfo.email.readonly', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/firebase', 'https://www.googleapis.com/auth/firebase.database.readonly', 'userinfo.email', ''];
+  for (const scope of missing) assert.equal((await adcPreflight(tokeninfo(200, { scope }), TOK)).reason, 'adc-scopes-missing', scope);
+  assert.equal((await adcPreflight(tokeninfo(200, { scope: 'x\nhttps://www.googleapis.com/auth/userinfo.email' }), TOK)).ok, true, 'any whitespace separates scopes');
+  const unverified = [tokeninfo(400, { error: 'invalid_token' }), tokeninfo(302, ''), tokeninfo(500, ''), tokeninfo(200, 'not json'), tokeninfo(200, {}), tokeninfo(200, { scope: 5 }), tokeninfo(200, 'null'), tokeninfo(500, { scope: 'https://www.googleapis.com/auth/userinfo.email' }), tokeninfo(403, { scope: 'https://www.googleapis.com/auth/firebase.database' }), async () => { throw new Error('network'); }];
+  for (const f of unverified) assert.deepEqual(await adcPreflight(f, TOK), { ok: false, reason: 'adc-scopes-unverified', scopes: [] });
+});
+
+test('preflight: a failure writes preflight.json and result.json, returns 4, and a pass writes preflight.json only', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rr-pre-'));
+  const bad = path.join(dir, 'bad'); mkdirSync(bad);
+  assert.equal(await runPreflight(bad, TOK, tokeninfo(200, { scope: 'https://www.googleapis.com/auth/cloud-platform' }), [TOK]), 4);
+  const result = JSON.parse(readFileSync(path.join(bad, 'result.json'), 'utf8'));
+  assert.deepEqual([result.status, result.reason], ['stopped', 'adc-scopes-missing']);
+  assert.match(result.changed, /nothing/);
+  assert.equal(JSON.parse(readFileSync(path.join(bad, 'preflight.json'), 'utf8')).ok, false);
+  const unknown = path.join(dir, 'unknown'); mkdirSync(unknown);
+  assert.equal(await runPreflight(unknown, TOK, tokeninfo(500, ''), [TOK]), 4);
+  assert.equal(JSON.parse(readFileSync(path.join(unknown, 'result.json'), 'utf8')).reason, 'adc-scopes-unverified');
+  const good = path.join(dir, 'good'); mkdirSync(good);
+  assert.equal(await runPreflight(good, TOK, tokeninfo(200, { scope: 'https://www.googleapis.com/auth/firebase.database' }), [TOK]), 0);
+  assert.equal(JSON.parse(readFileSync(path.join(good, 'preflight.json'), 'utf8')).ok, true);
+  assert.throws(() => readFileSync(path.join(good, 'result.json')), /ENOENT/);
+});
+
+test('preflight: main() runs it right after the token and before any admin request', () => {
+  const own = readFileSync(new URL('./rtdb-residual.mjs', import.meta.url), 'utf8');
+  const at = (x) => own.indexOf(x);
+  assert.ok(at('const token = execFileSync') > 0 && at('const token = execFileSync') < at('await runPreflight(out, token, fetch, secrets)') && at('await runPreflight(out, token, fetch, secrets)') < at('await runScenario(o)'));
+  assert.ok(own.includes('if (stopped) return stopped;'));
 });
